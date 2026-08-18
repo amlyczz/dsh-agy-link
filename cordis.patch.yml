@@ -1,0 +1,14 @@
+# dsh-agy-link bundle patch — inserts the antigravity (agy CLI) provider
+# plugin entry into the composition. Users install via:
+#   dsh plugin --profile web add dsh-agy-link
+- insert:
+    - id: agy-link
+      name: 'dsh-agy-link'
+      config:
+        enabled: !!js "process.env.DSH_AGY_ENABLED ?? 'true'"
+        agyBin: !!js "process.env.DSH_AGY_BIN ?? ''"
+        # permissionMode: skip | plan | accept-edits  (skip passes
+        # --dangerously-skip-permissions; see README security notes)
+        permissionMode: !!js "process.env.DSH_AGY_MODE ?? 'skip'"
+        defaultModel: !!js "process.env.DSH_AGY_DEFAULT_MODEL ?? ''"
+        defaultEffort: !!js "process.env.DSH_AGY_DEFAULT_EFFORT ?? ''"
