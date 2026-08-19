@@ -210,13 +210,20 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     }),
   )
 
-  // ---- agy_ask tool (optional) ----
-  const toolsSvc = ctx.get('tools') as { register: (t: unknown) => unknown } | undefined
+  // ---- tool registrations (agy_ask + the agy_tool mirror) ----
+  // The tools service is reached through a reactive ctx.inject sub-fiber:
+  // at plugin load time it may not exist yet (the same load-order race the
+  // webServer routes hit), and headless compositions never start it. A
+  // one-shot ctx.get('tools') silently loses every registration when it
+  // races startup — which left the mirror unregistered and every span cut
+  // failing with `unknown tool "agy_tool"`.
+  const toolsSvcRef: { current: { register: (t: unknown) => unknown } | null } = { current: null }
   const askToolDispose = { current: null as null | (() => void) }
+  const mirrorToolDispose = { current: null as null | (() => void) }
   const syncAskTool = (): void => {
     const want = getConfig().askTool && bin() !== null
-    if (want && askToolDispose.current === null && toolsSvc) {
-      const reg = toolsSvc.register(
+    if (want && askToolDispose.current === null && toolsSvcRef.current) {
+      const reg = toolsSvcRef.current.register(
         defineAgyAskTool({ cfg: getConfig, bin, catalog: () => catalog.get() }),
       ) as unknown as () => void
       askToolDispose.current = typeof reg === 'function' ? reg : null
@@ -225,25 +232,33 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       askToolDispose.current = null
     }
   }
-  syncAskTool()
-
-  // ---- agy_tool mirror (native tool-card rendering) ----
-  // Registered whenever the provider route is live: the adapter's spans cut
-  // on completed agy tool steps with finish:tool-calls addressed here, and
-  // the agent loop's dispatch writes the real tool/call + tool/result events
-  // DSH's tool-card UI renders from.
-  const mirrorToolDispose = { current: null as null | (() => void) }
+  // The mirror rides the agent loop for native tool-card rendering: the
+  // adapter's spans cut on completed agy tool steps with finish:tool-calls
+  // addressed here, and the loop's dispatch writes the real tool/call +
+  // tool/result events DSH's tool-card UI renders from.
   const syncMirrorTool = (): void => {
     const want = getConfig().enabled && bin() !== null
-    if (want && mirrorToolDispose.current === null && toolsSvc) {
-      const reg = toolsSvc.register(defineAgyMirrorTool({ runs })) as unknown as () => void
+    if (want && mirrorToolDispose.current === null && toolsSvcRef.current) {
+      const reg = toolsSvcRef.current.register(defineAgyMirrorTool({ runs })) as unknown as () => void
       mirrorToolDispose.current = typeof reg === 'function' ? reg : null
+      if (mirrorToolDispose.current !== null) log('agy_tool mirror registered with the tools service')
     } else if (!want && mirrorToolDispose.current !== null) {
       mirrorToolDispose.current()
       mirrorToolDispose.current = null
     }
   }
-  syncMirrorTool()
+  ctx.inject(['tools'], (sub) => {
+    toolsSvcRef.current = sub.get('tools') as { register: (t: unknown) => unknown }
+    syncAskTool()
+    syncMirrorTool()
+    return () => {
+      if (askToolDispose.current !== null) askToolDispose.current()
+      askToolDispose.current = null
+      if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
+      mirrorToolDispose.current = null
+      toolsSvcRef.current = null
+    }
+  })
 
   // ---- HTTP surface for the client half ----
   // Registered through a reactive ctx.inject sub-fiber: at plugin load time

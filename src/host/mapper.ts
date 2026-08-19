@@ -112,13 +112,18 @@ export class EventMapper {
         // agy ≥1.1.15 thinking turns: agent_response steps with usage but no
         // text_delta. The thoughts themselves are not streamed in print mode,
         // so surface the turn honestly as a token-annotated reasoning line.
+        //
+        // Covers every arrival shape: a thinking-only turn (text empty), a
+        // one-shot answer (a single DONE envelope carrying text AND usage —
+        // trivial questions never get a separate thinking step, which is why
+        // first turns used to show no thinking at all), and a streamed
+        // answer whose DONE tail carries the final usage.
         const thoughtTokens = ev.usage?.thinking_tokens ?? 0
-        if (ev.text === '' && thoughtTokens > 0 && !this.thinkingAnnounced.has(ev.stepKey)) {
+        if (thoughtTokens > 0 && !this.thinkingAnnounced.has(ev.stepKey)) {
           this.thinkingAnnounced.add(ev.stepKey)
           yield* this.ensureBlock('reasoning')
           const d = this.appendDelta('[agy thinking turn · ' + thoughtTokens + ' thinking tokens]\n')
           if (d) yield d
-          return
         }
         if (ev.text === '' && !ev.fragment) return
         this.sawTextStep = true

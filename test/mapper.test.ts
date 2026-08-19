@@ -184,6 +184,40 @@ test('agy 1.1.15 stream maps onto spans: thinking turn, tool cuts, fragments, re
   assert.equal(asFinish(lastChunk(c3)).reason.kind, 'stop')
 })
 
+test('one-shot answer step (text + usage together) still annotates thinking', () => {
+  // agy answers trivial questions in a single DONE envelope: no separate
+  // thinking-only step ever arrives. Regression (v0.3.2): these turns used
+  // to show no thinking at all.
+  const m = newSpan('r-oneshot')
+  const chunks = mapAll(m, [
+    { kind: 'step', stepKey: '2', stepKind: 'text', text: '1 + 1 等于 2。', usage: { input_tokens: 100, output_tokens: 50, thinking_tokens: 154 } },
+    { kind: 'result', conversationId: 'c9', ok: true, response: '1 + 1 等于 2。', usage: {} },
+  ])
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.ok(reasoning.includes('[agy thinking turn · 154 thinking tokens]'), reasoning)
+  const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(text, '1 + 1 等于 2。')
+  // protocol order: the reasoning annotation precedes the answer text
+  const types = chunks.map((c) => c.type)
+  const rIdx = types.indexOf('reasoning-delta')
+  const tIdx = types.indexOf('text-delta')
+  assert.ok(rIdx >= 0 && tIdx > rIdx, 'reasoning annotation precedes the answer text')
+})
+
+test('streamed answer whose DONE tail carries usage annotates thinking too', () => {
+  const m = newSpan('r-tail')
+  const chunks = mapAll(m, [
+    { kind: 'step', stepKey: '5', stepKind: 'text', text: 'There are ', fragment: true },
+    { kind: 'step', stepKey: '5', stepKind: 'text', text: '2 files.', fragment: true, usage: { thinking_tokens: 15 } },
+    { kind: 'result', conversationId: 'c9', ok: true, response: 'There are 2 files.', usage: {} },
+  ])
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.ok(reasoning.includes('[agy thinking turn · 15 thinking tokens]'), reasoning)
+  const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(text, 'There are 2 files.')
+  assert.equal(asFinish(lastChunk(chunks)).reason.kind, 'stop')
+})
+
 test('emitFailure closes blocks and finishes with error', () => {
   const m = newSpan()
   const chunks = mapAll(m, [
