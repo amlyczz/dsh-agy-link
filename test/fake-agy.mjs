@@ -9,6 +9,9 @@ const mode = process.env.FAKE_AGY_MODE ?? 'ok'
 if (process.env.FAKE_AGY_ARGS_FILE) {
   try { writeFileSync(process.env.FAKE_AGY_ARGS_FILE, JSON.stringify(argv)) } catch {}
 }
+if (process.env.FAKE_AGY_CWD_FILE) {
+  try { writeFileSync(process.env.FAKE_AGY_CWD_FILE, process.cwd()) } catch {}
+}
 
 if (argv[0] === '--version') {
   process.stdout.write('agy version 1.1.13-fake\n')

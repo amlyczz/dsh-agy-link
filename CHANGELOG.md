@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.7 (2026-08-19)
+
+- Visible agy status in DSH: conversation header `AGY` pill, Settings → Antigravity status page, and sidebar footer label.
+- Workspace auto-binding: agy now runs in the DSH session's `cwd` when `workspaceRoot` is not configured.
+- New `/agy workspace [path]` command and `DSH_AGY_WORKSPACE_ROOT` env.
+- README language switcher at the top (中文 / English).
+
 ## 0.2.2 (2026-08-19)
 
 - README: dedicated Prerequisites section (DSH, Node >= 24, the agy CLI with Google's official install guide link, first-run login, subscription note), a "how it works" intro paragraph, and an honest "what it cannot do" list in both languages - onboarding now covers first-time users.

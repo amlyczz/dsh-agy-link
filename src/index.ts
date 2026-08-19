@@ -108,9 +108,13 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     bin,
     acquire: () => semaphore.acquire(),
     log,
-    toolOutput: (name, args, output) => {
+    toolOutput: (name, args, output, cwd) => {
       const ws = getConfig().workspaceRoot
-      return renderToolActivity(name, args, output, ws !== '' ? ws : process.cwd())
+      return renderToolActivity(name, args, output, cwd ?? (ws !== '' ? ws : process.cwd()))
+    },
+    sessionCwd: (sessionId) => {
+      const sessions = ctx.get('sessions') as { get(id: unknown): { header?: { cwd?: string } } | undefined } | undefined
+      return sessions?.get(sessionId)?.header?.cwd
     },
     onRun: (info) => {
       lastRun = info
@@ -261,6 +265,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         dormantReason,
         enabled: cfg.enabled,
         permissionMode: cfg.permissionMode,
+        workspaceRoot: cfg.workspaceRoot,
         defaultModel: cfg.defaultModel,
         defaultEffort: cfg.defaultEffort,
         askTool: cfg.askTool,
@@ -306,7 +311,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
-        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool']
+        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot']
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
           return

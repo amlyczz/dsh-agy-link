@@ -11,6 +11,12 @@
   <img src="https://img.shields.io/badge/node-%3E%3D24-green" alt="node"/>
 </p>
 
+<p align="center">
+  <b>🌐 Language / 语言：</b>
+  <a href="#中文">中文</a> ·
+  <a href="#english">English</a>
+</p>
+
 ---
 
 # 中文
@@ -31,9 +37,10 @@
 | 🌊 **完整流式** | 文本、思考、agy 工具活动（注记为 reasoning 块）全部映射到 DSH 原生流协议 |
 | 🔗 **会话连续** | 每个 DSH 会话绑定原生 agy 会话（`--conversation`），多轮上下文由 agy 历史承载，不重发全量 |
 | 📊 **token 用量** | 输入/输出/思考/缓存 token 全部进入 DSH 用量统计 |
+| ⚙️ **设置页状态** | DSH 设置 → Antigravity 页面显示 agy 连接/登录/工作区/绑定数/最近运行状态 |
 | 🔐 **GUI 内 Google 登录** | `/agy auth` 打印授权 URL；侧栏面板提供二维码 + 授权码粘贴框 |
 | 🤝 **`agy_ask` 工具** | 任何 DSH 模型都可以把一次性任务委托给 Antigravity 模型（AskAntigravity 模式） |
-| ⌨️ **`/agy` 命令族** | `status` / `auth` / `auth-code` / `models` / `mode` / `effort` / `clear` / `doctor` / `help` |
+| ⌨️ **`/agy` 命令族** | `status` / `auth` / `auth-code` / `models` / `mode` / `effort` / `workspace` / `clear` / `doctor` / `help` |
 | 🖼 **图片多模态（v0.2）** | 图片落盘到本地媒体目录（TTL 清理），prompt 以绝对路径引用 + `--add-dir` 授权，agy 用自己的工具看图 |
 | 📎 **文件内联 + 结构化输出（v0.2）** | `agy_ask` 新增 `readPaths`（文本文件内联）与 `schema`（`--json-schema` 强约束答案） |
 | 🌉 **MCP 反向桥（v0.2 实验）** | `mcpBridge: true` 开启后 agy 可直接调 DSH 侧工具（回环 + token 守卫端点 + 零依赖 stdio MCP 服务器，`.mcp.json` 合并写入/禁用还原） |
@@ -90,6 +97,7 @@ dsh plugin --profile web add dsh-agy-link
 | defaultEffort | `DSH_AGY_DEFAULT_EFFORT` | `(模型默认)` | `low` / `medium` / `high` |
 | timeoutMs | `DSH_AGY_TIMEOUT_MS` | `600000` | 单轮看门狗 |
 | extraArgs | `DSH_AGY_EXTRA_ARGS` | — | 附加 agy 参数（空格分隔） |
+| workspaceRoot | `DSH_AGY_WORKSPACE_ROOT` | 会话 cwd | agy 工作区；显式配置优先，未设置时自动使用 DSH 会话的 cwd |
 
 ### ⚠️ 权限模式——必读
 
@@ -140,9 +148,10 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** — chat, thinki
 | 🌊 **Full streaming** | Text, thinking (reasoning), and agy tool activity (annotated reasoning blocks) mapped onto DSH's native chunk protocol |
 | 🔗 **Session continuity** | Each DSH session binds to a native agy conversation (`--conversation`); multi-turn context rides agy history instead of re-sending everything |
 | 📊 **Token usage** | Input/output/thinking/cache tokens surface in DSH usage accounting |
+| ⚙️ **Settings status** | DSH Settings → Antigravity page shows agy connection/login/workspace/bindings/last-run state |
 | 🔐 **In-GUI Google login** | `/agy auth` prints the consent URL; the sidebar panel adds a QR code and a paste box for the authorization code |
 | 🤝 **`agy_ask` tool** | Let any DSH model delegate a one-shot task to an Antigravity model (the AskAntigravity pattern) |
-| ⌨️ **`/agy` commands** | `status`, `auth`, `auth-code`, `models`, `mode`, `effort`, `clear`, `doctor`, `help` |
+| ⌨️ **`/agy` commands** | `status`, `auth`, `auth-code`, `models`, `mode`, `effort`, `workspace`, `clear`, `doctor`, `help` |
 | 😴 **Dormant-safe** | No agy binary? Not signed in? The plugin loads anyway and tells you what to fix |
 | 🖼 **Image multimodal (v0.2)** | image attachments staged to a TTL-swept local dir, referenced by absolute path with `--add-dir`; agy views them with its own tools |
 | 📎 **File inlining + structured output (v0.2)** | `agy_ask` gains `readPaths` (inline text files) and `schema` (enforced via `--json-schema`) |
@@ -199,6 +208,7 @@ Config lives in the `agy-link` plugin entry (edit via `/plugin` or the profile p
 | defaultEffort | `DSH_AGY_DEFAULT_EFFORT` | `(model default)` | `low` / `medium` / `high` |
 | timeoutMs | `DSH_AGY_TIMEOUT_MS` | `600000` | per-turn watchdog |
 | extraArgs | `DSH_AGY_EXTRA_ARGS` | — | extra agy flags, space-separated |
+| workspaceRoot | `DSH_AGY_WORKSPACE_ROOT` | session cwd | agy workspace; explicit config wins, otherwise the DSH session's cwd is used |
 
 ### ⚠️ Permission modes — read this
 

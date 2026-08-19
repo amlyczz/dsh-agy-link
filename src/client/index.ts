@@ -1,9 +1,12 @@
 // dsh-agy-link client half (browser). The DSH Web GUI stays untouched;
-// this client adds one surface — a sidebar footer action whose popover is a
-// small state machine over (dormant / needs-auth / ok):
-//   dormant      -> install guidance for the agy CLI
-//   needs-auth   -> Google login: QR + consent URL + code paste box
-//   ok           -> mode/effort quick controls and live bridge status
+// this client adds two surfaces:
+//   1. A sidebar footer action whose popover is a small state machine over
+//      (dormant / needs-auth / ok) — QR login, mode/effort quick controls.
+//   2. A conversation header pill (`AGY`) so the current session always shows
+//      whether the bridge is ready/needs login/dormant.
+//   3. A settings.section page under DSH Settings -> Antigravity, showing
+//      whether agy is installed/signed in, the active workspace, model count,
+//      conversation bindings, and last run state.
 // State comes from the host route /plugins/agy-link/status (JSON); QR is a
 // host-served PNG at /plugins/agy-link/qr. The popover renders through a
 // React portal to document.body so peer footer-slot plugins can never
@@ -52,6 +55,7 @@ interface StatusPayload {
 	dormantReason?: string | null;
 	enabled?: boolean;
 	permissionMode?: string;
+	workspaceRoot?: string;
 	defaultModel?: string;
 	defaultEffort?: string;
 	auth?: { phase: string; url?: string; message?: string };
@@ -118,7 +122,8 @@ const S: Record<string, Record<string, unknown>> = {
 };
 
 export function apply(ctx: ClientContext): void {
-	const AgyPanel = (): unknown => {
+	const AgyPanel = (props?: unknown): unknown => {
+		const { wide = false } = (props ?? {}) as { wide?: boolean }
 		const [open, setOpen] = useState(false)
 		const [status, setStatus] = useState<StatusPayload | null>(null)
 		const [code, setCode] = useState('')
@@ -188,6 +193,7 @@ export function apply(ctx: ClientContext): void {
 				title: 'Antigravity (agy) bridge',
 			},
 			h('span', { style: { display: 'inline-block', width: '9px', height: '9px', borderRadius: '50%', background: dot } }),
+			wide ? h('span', { style: { marginLeft: '6px', fontSize: '12px', lineHeight: 1 } }, 'AGY') : null,
 		)
 
 		if (!open) return badge
@@ -206,6 +212,7 @@ export function apply(ctx: ClientContext): void {
 			h('div', null, 'agy: ', status?.bin ?? 'not found', ' — v', status?.version ?? '?'),
 			h('div', null, 'auth: ', status?.auth?.phase ?? 'unknown'),
 			h('div', null, 'models: ', String(status?.catalog?.count ?? 0), ' — ', status?.catalog?.source ?? ''),
+			h('div', null, 'workspace: ', status?.workspaceRoot ? status.workspaceRoot : '(session cwd / process cwd)'),
 			h('div', null, 'bindings: ', String(status?.bindings ?? 0)),
 			h('div', null, 'last run: ', status?.lastRun ? (status.lastRun.ok ? 'ok' : status.lastRun.code) + ' — ' + status.lastRun.model : 'none'),
 		)
@@ -290,6 +297,108 @@ export function apply(ctx: ClientContext): void {
 		return h('div', { style: { display: 'contents' } }, badge, portalToBody(popover))
 	}
 
+	const AgySettingsSection = (): unknown => {
+		const [status, setStatus] = useState<StatusPayload | null>(null)
+		useEffect(() => {
+			let alive = true
+			const tick = async () => {
+				const st = await getStatus()
+				if (alive) setStatus(st)
+			}
+			void tick()
+			const timer = setInterval(tick, 3000)
+			return () => {
+				alive = false
+				clearInterval(timer)
+			}
+		}, [])
+		const summary =
+			status === null
+				? 'Loading…'
+				: status.dormantReason
+					? 'Not ready — ' + status.dormantReason
+					: status.auth?.phase === 'ok'
+						? 'Ready — agy is connected'
+						: 'Needs Google login — open the sidebar dot or run /agy auth'
+		const color =
+			status === null
+				? '#9aa0a6'
+				: status.dormantReason
+					? '#f5a623'
+					: status.auth?.phase === 'ok'
+						? '#30a46c'
+						: '#f5a623'
+		return h('div', { style: { lineHeight: 1.6 } },
+			h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px' } },
+				h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: color } }),
+				'Antigravity (agy CLI)'),
+			h('div', { style: { ...S.muted, margin: '6px 0 12px' } }, summary),
+			h('div', { style: { ...S.muted, lineHeight: 1.6 } },
+				h('div', null, 'agy binary: ', status?.bin ?? 'not found', status?.version ? ' — v' + status.version : ''),
+				h('div', null, 'auth: ', status?.auth?.phase ?? 'unknown'),
+				h('div', null, 'workspace: ', status?.workspaceRoot ? status.workspaceRoot : '(session cwd / process cwd)'),
+				h('div', null, 'models: ', String(status?.catalog?.count ?? 0), ' — ', status?.catalog?.source ?? ''),
+				h('div', null, 'bindings: ', String(status?.bindings ?? 0)),
+				h('div', null, 'last run: ', status?.lastRun ? (status.lastRun.ok ? 'ok' : status.lastRun.code) + ' — ' + status.lastRun.model : 'none'),
+			),
+			h('div', { style: S.muted }, 'Run `/agy status` for full diagnostics, or use the sidebar dot for quick login/controls.'),
+		)
+	}
+
+	const AgySessionStatus = (): unknown => {
+		const [status, setStatus] = useState<StatusPayload | null>(null)
+		useEffect(() => {
+			let alive = true
+			const tick = async () => {
+				const st = await getStatus()
+				if (alive) setStatus(st)
+			}
+			void tick()
+			const timer = setInterval(tick, 3000)
+			return () => {
+				alive = false
+				clearInterval(timer)
+			}
+		}, [])
+		const color =
+			status === null
+				? '#9aa0a6'
+				: status.dormantReason
+					? '#f5a623'
+					: status.auth?.phase === 'ok'
+						? '#30a46c'
+						: '#f5a623'
+		const title =
+			status === null
+				? 'Antigravity (agy) status…'
+				: status.dormantReason
+					? 'Antigravity not ready: ' + status.dormantReason
+					: status.auth?.phase === 'ok'
+						? 'Antigravity ready — agy is connected'
+						: 'Antigravity needs Google login'
+		return h('button',
+			{
+				type: 'button',
+				title,
+				style: {
+					background: 'transparent',
+					border: '1px solid rgba(128,128,128,0.3)',
+					borderRadius: '999px',
+					cursor: 'default',
+					padding: '2px 8px',
+					fontSize: '11px',
+					lineHeight: 1.5,
+					color: 'inherit',
+					display: 'inline-flex',
+					alignItems: 'center',
+					gap: '5px',
+				},
+			},
+			h('span', { style: { display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: color } }),
+			'AGY',
+		)
+	}
+
 	ctx.slots.inject('sidebar.footer.action', () => {
 		const dispose = ctx.slots.register(
 			{
@@ -299,6 +408,32 @@ export function apply(ctx: ClientContext): void {
 				label: 'Antigravity',
 			},
 			AgyPanel,
+		)
+		return dispose
+	})
+
+	ctx.slots.inject('conversation.session.header.actions', () => {
+		const dispose = ctx.slots.register(
+			{
+				name: 'conversation.session.header.actions',
+				id: 'agy-link-status',
+				order: 10,
+				label: 'Antigravity',
+			},
+			AgySessionStatus,
+		)
+		return dispose
+	})
+
+	ctx.slots.inject('settings.section', () => {
+		const dispose = ctx.slots.register(
+			{
+				name: 'settings.section',
+				id: 'agy-link',
+				order: 20,
+				label: 'Antigravity',
+			},
+			AgySettingsSection,
 		)
 		return dispose
 	})

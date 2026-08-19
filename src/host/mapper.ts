@@ -9,7 +9,7 @@ import type { StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { AgyEvent, RawUsage } from '../common/types.ts'
 
 export type ToolAnnounceRenderer = (name: string, args: unknown) => string
-export type ToolOutputRenderer = (name: string, args: unknown, output: unknown) => string | null
+export type ToolOutputRenderer = (name: string, args: unknown, output: unknown, cwd?: string) => string | null
 
 function briefArgs(args: unknown): string {
   if (args === undefined || args === null) return ''

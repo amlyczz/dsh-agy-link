@@ -3,11 +3,11 @@
 // and argv assembly.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { LlmError } from '@deepseek-ai/dsh-llm'
@@ -21,7 +21,7 @@ function msg(role: 'user' | 'assistant', text: string): Message {
   return { role, content: [{ type: 'text', text }] } as unknown as Message
 }
 
-function makeAdapter(cfgOverrides: Partial<PluginConfig> = {}) {
+function makeAdapter(cfgOverrides: Partial<PluginConfig> = {}, deps: Partial<AgyAdapterDeps> = {}) {
   const cfg: PluginConfig = { ...defaultConfig(), permissionMode: 'plan', timeoutMs: 20_000, ...cfgOverrides }
   const store = new SessionStore(join(workDir, 'sessions.json'))
   const catalog = new ModelCatalog(
@@ -36,6 +36,7 @@ function makeAdapter(cfgOverrides: Partial<PluginConfig> = {}) {
     store,
     bin: () => fakeBin,
     acquire: () => Promise.resolve(() => {}),
+    ...deps,
   })
   return { adapter, store, argsFile }
 }
@@ -262,6 +263,39 @@ test('unspawnable binary maps to PROCESS_EXIT without hanging', async () => {
   assert.equal(finish.type, 'finish')
   assert.equal(finish.reason.kind, 'error')
   assert.equal(finish.reason.failure?.code, Err.PROCESS_EXIT)
+})
+
+
+test('adapter spawns agy in the DSH session cwd when workspaceRoot is not configured', async () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'agy-adapter-session-cwd-'))
+  const { adapter } = makeAdapter({ workspaceRoot: '' }, {
+    sessionCwd: () => sessionDir,
+  })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-cwd-session.json')
+  const cwdFile = join(workDir, 'cwd-session.txt')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  process.env.FAKE_AGY_CWD_FILE = cwdFile
+  await collect(adapter.stream(opts([msg('user', 'hi')], { sessionId: 'sess-cwd' as never })))
+  assert.equal(readFileSync(cwdFile, 'utf8'), realpathSync(sessionDir))
+  rmSync(sessionDir, { recursive: true, force: true })
+})
+
+test('explicit workspaceRoot wins over the DSH session cwd', async () => {
+  const explicitDir = mkdtempSync(join(tmpdir(), 'agy-adapter-explicit-ws-'))
+  const sessionDir = mkdtempSync(join(tmpdir(), 'agy-adapter-ignored-session-cwd-'))
+  const { adapter } = makeAdapter({ workspaceRoot: explicitDir }, {
+    sessionCwd: () => sessionDir,
+  })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-cwd-explicit.json')
+  const cwdFile = join(workDir, 'cwd-explicit.txt')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  process.env.FAKE_AGY_CWD_FILE = cwdFile
+  await collect(adapter.stream(opts([msg('user', 'hi')], { sessionId: 'sess-cwd-explicit' as never })))
+  assert.equal(readFileSync(cwdFile, 'utf8'), realpathSync(explicitDir))
+  rmSync(explicitDir, { recursive: true, force: true })
+  rmSync(sessionDir, { recursive: true, force: true })
 })
 
 test.after(() => {

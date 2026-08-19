@@ -62,6 +62,12 @@ export interface AgyAdapterDeps {
   acquire: () => Promise<() => void>
   log?: (msg: string) => void
   toolOutput?: ToolOutputRenderer
+  /**
+   * Resolve the DSH session's working directory. Called with the raw
+   * session id; return an absolute path to run agy inside that workspace.
+   * Explicit config `workspaceRoot` still wins over this value.
+   */
+  sessionCwd?: (sessionId: string) => string | undefined
   /** Last-run telemetry surfaced by /agy status. */
   onRun?: (info: { ok: boolean; code: string; durationMs: number; model: string }) => void
   /** Reads image bytes from DSH attachment storage (multimodal staging). */
@@ -203,6 +209,7 @@ export class AgyAdapter extends LlmAdapter {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
     const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
+    const workspaceRoot = cfg.workspaceRoot !== '' ? cfg.workspaceRoot : this.deps.sessionCwd?.(sessionKey) || process.cwd()
     const catalog = this.deps.catalog.get()
     const model = options.model
     const entry = findEntry(catalog, model)
@@ -306,7 +313,12 @@ export class AgyAdapter extends LlmAdapter {
 
     // ---- spawn + map (ADR-3) ----
     const before = snapshotConversations()
-    const mapper = new EventMapper({ toolOutput: this.deps.toolOutput })
+    const toolOutput = this.deps.toolOutput
+    const mapper = new EventMapper({
+      toolOutput: toolOutput
+        ? (name, args, output) => toolOutput(name, args, output, workspaceRoot)
+        : undefined,
+    })
     const parser = new StreamJsonParser()
     this.deps.onParser?.(parser)
     const queue = new ChunkQueue()
@@ -333,7 +345,7 @@ export class AgyAdapter extends LlmAdapter {
       proc = startAgyProcess({
       bin,
       args,
-      cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
+      cwd: workspaceRoot,
       timeoutMs: cfg.timeoutMs,
       signal: options.signal,
       onLine: (line) => {

@@ -1,5 +1,6 @@
 // /agy command family (spec section 6). One registered command dispatches
 // on its first token; every handler answers with GUI-renderable markdown.
+import { isAbsolute } from 'node:path'
 import type { CommandDefinition, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { PluginConfig } from '../common/types.ts'
 import type { AuthHelper } from './auth.ts'
@@ -26,6 +27,7 @@ const HELP = [
   '- `/agy models` — refresh and list discovered models',
   '- `/agy mode <skip|plan|accept-edits>` — permission mode (next turn)',
   '- `/agy effort <low|medium|high|default>` — default reasoning effort',
+  '- `/agy workspace [path]` — set the agy working directory (absolute path; omit to show)',
   '- `/agy clear` — drop the most recent conversation binding',
   '- `/agy doctor` — write a diagnostic report and return its path',
   '- `/agy help` — this text',
@@ -92,6 +94,16 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
       deps.setOverride('defaultEffort', arg === 'default' ? '' : arg)
       return ok('Default effort set to **' + (arg === 'default' ? 'model default' : arg) + '**.')
     }
+    if (sub === 'workspace') {
+      if (arg === '') return ok('Current workspace: ' + (deps.cfg().workspaceRoot !== '' ? deps.cfg().workspaceRoot : '(session cwd / process cwd)'))
+      if (arg === 'default' || arg === 'clear') {
+        deps.setOverride('workspaceRoot', '')
+        return ok('Workspace reset to session cwd / process cwd.')
+      }
+      if (!isAbsolute(arg)) return err('workspace must be an absolute path (or `default` to clear)')
+      deps.setOverride('workspaceRoot', arg)
+      return ok('Workspace set to **' + arg + '** — effective next turn.')
+    }
     if (sub === 'clear') {
       const all = deps.store().all()
       const keys = Object.keys(all)
@@ -125,6 +137,7 @@ function renderStatus(deps: CommandDeps): string {
     '- version: ' + (deps.version() ?? 'unknown'),
     '- auth: ' + (auth ? auth.phase + (auth.message ? ' — ' + auth.message : '') : 'unknown'),
     '- permission mode: ' + cfg.permissionMode + (cfg.permissionMode === 'skip' ? ' — WARNING: agy runs tools without approval' : ''),
+    '- workspace: ' + (cfg.workspaceRoot !== '' ? cfg.workspaceRoot : '(session cwd / process cwd)'),
     '- default model: ' + (cfg.defaultModel === '' ? '(agy default)' : cfg.defaultModel),
     '- default effort: ' + (cfg.defaultEffort === '' ? '(model default)' : cfg.defaultEffort),
     '- catalog: ' + cat.models.length + ' models — ' + cat.source + (cat.lastError === undefined ? '' : ' — last error: ' + cat.lastError),

@@ -126,6 +126,7 @@ export function resolveConfig(
   if (env.DSH_AGY_EXTRA_ARGS) {
     cfg.extraArgs = env.DSH_AGY_EXTRA_ARGS.split(/\s+/).filter(Boolean)
   }
+  if (env.DSH_AGY_WORKSPACE_ROOT) cfg.workspaceRoot = env.DSH_AGY_WORKSPACE_ROOT
   if (env.DSH_AGY_MEDIA_DIR) cfg.mediaDir = env.DSH_AGY_MEDIA_DIR
   if (env.DSH_AGY_MEDIA_TTL_MS) {
     const t = asNum(env.DSH_AGY_MEDIA_TTL_MS)

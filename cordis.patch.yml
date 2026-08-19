@@ -10,5 +10,6 @@
         # permissionMode: skip | plan | accept-edits  (skip passes
         # --dangerously-skip-permissions; see README security notes)
         permissionMode: !!js "process.env.DSH_AGY_MODE ?? 'skip'"
+        workspaceRoot: !!js "process.env.DSH_AGY_WORKSPACE_ROOT ?? ''"
         defaultModel: !!js "process.env.DSH_AGY_DEFAULT_MODEL ?? ''"
         defaultEffort: !!js "process.env.DSH_AGY_DEFAULT_EFFORT ?? ''"
