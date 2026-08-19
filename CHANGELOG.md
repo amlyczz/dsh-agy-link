@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.1 (2026-08-19)
+
+- Cross-platform hardening (Linux / macOS / Windows):
+  - binary discovery is platform-aware: agy / agy.exe / .cmd / .bat across
+    PATH, ~/.local/bin, /usr/local/bin, /opt/homebrew/bin,
+    %LOCALAPPDATA%\Programs, and the npm shim dir; a real executable is
+    always preferred over a cmd shim
+  - Windows .cmd/.bat shims spawn through cmd.exe with cross-spawn-style
+    argument quoting (unit-tested)
+  - tree-kill uses taskkill /T /F on Windows (Unix process groups do not
+    exist there); detached sessions are POSIX-only so no console window
+    flashes on Windows
+  - CRLF stdout is normalized (trailing \r stripped per line)
+  - the MCP bridge script path resolves via fileURLToPath (URL.pathname
+    would yield /C:/... on Windows and break the spawn)
+- 5 new cross-platform tests (56 total).
+
 ## 0.2.0 (2026-08-19)
 
 - Multimodal (path-based): DSH image attachments are staged to a local media
@@ -25,4 +42,3 @@
 - README restructured into a single bilingual page: Chinese first, then
   English (README.zh.md removed; package files list updated).
 - Releases now publish to npm automatically (NPM_TOKEN secret configured).
-

@@ -20,6 +20,7 @@ import { SessionStore } from './host/sessions.ts'
 import { StreamJsonParser } from './host/parser.ts'
 import { defaultMediaDir, sweepDir, type ImageRefLike } from './host/media.ts'
 import { startMcpBridge, writeMcpConfig, type McpBridge, type ToolsServiceLike } from './host/mcp-bridge.ts'
+import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-agy-link'
 // webServer and tools are optional: the plugin loads headless too.
@@ -362,7 +363,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     if (want && bridgeState.bridge === null) {
       void (async () => {
         try {
-          const script = new URL('./bridge.mjs', import.meta.url).pathname
+          // fileURLToPath resolves file:/// URLs correctly on Windows
+          // (URL.pathname would yield /C:/... there and break the spawn).
+          const script = fileURLToPath(new URL('./bridge.mjs', import.meta.url))
           const toolsSvc = ctx.get('tools') as ToolsServiceLike | undefined
           const bridge = await startMcpBridge({
             bridgeScript: script,

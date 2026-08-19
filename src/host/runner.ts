@@ -8,6 +8,27 @@ import { delimiter, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { PluginConfig } from '../common/types.ts'
 
+const IS_WIN = process.platform === 'win32'
+
+/** Executable candidates for one PATH entry, per-platform. Exported for tests. */
+export function binCandidates(dir: string, platform: string = process.platform): string[] {
+  const exts = platform === 'win32' ? ['.exe', '.cmd', '.bat'] : ['']
+  return exts.map((e) => join(dir, 'agy' + e))
+}
+
+/** True when the resolved bin is a Windows cmd shim (needs shell wrapping). */
+export function isCmdShim(bin: string): boolean {
+  return /\.(cmd|bat)$/i.test(bin)
+}
+
+/** cmd.exe argument quoting (cross-spawn rules). Exported for tests. */
+export function windowsQuote(arg: string): string {
+  if (/[ \t\n\v"]/.test(arg) === false) return arg
+  let escaped = arg.replace(/(\\+)\"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')
+  escaped = '"' + escaped.replace(/"/g, '\\"') + '"'
+  return escaped
+}
+
 export const MIN_AGY_VERSION = '1.1.8'
 
 export function resolveAgyBin(cfg: PluginConfig): string | null {
@@ -15,19 +36,31 @@ export function resolveAgyBin(cfg: PluginConfig): string | null {
   if (cfg.agyBin !== '') candidates.push(cfg.agyBin);
   const pathEnv = process.env.PATH ?? '';
   for (const dir of pathEnv.split(delimiter)) {
-    if (dir !== '') candidates.push(join(dir, 'agy'))
+    if (dir !== '') candidates.push(...binCandidates(dir))
   }
-  candidates.push(join(homedir(), '.local', 'bin', 'agy'))
-  candidates.push('/usr/local/bin/agy')
+  // Per-platform default install locations (agy ships as a native binary).
+  if (IS_WIN) {
+    const local = process.env.LOCALAPPDATA ?? ''
+    if (local !== '') candidates.push(join(local, 'Programs', 'agy', 'agy.exe'))
+    candidates.push(join(homedir(), '.local', 'bin', 'agy.exe'))
+    candidates.push(join(homedir(), 'AppData', 'Roaming', 'npm', 'agy.cmd'))
+  } else {
+    candidates.push(join(homedir(), '.local', 'bin', 'agy'))
+    candidates.push('/usr/local/bin/agy')
+    candidates.push('/opt/homebrew/bin/agy')
+  }
+  // Prefer a real executable over a cmd shim: keep the first hit of each
+  // PATH dir but rank .exe/extensionless before .cmd/.bat.
+  const hits: string[] = [];
   for (const c of candidates) {
     try {
-      accessSync(c, constants.X_OK);
-      return c;
+      accessSync(c, constants.F_OK);
+      hits.push(c);
     } catch {
       continue;
     }
   }
-  return null;
+  return hits.find((h) => !isCmdShim(h)) ?? hits[0] ?? null;
 }
 
 export function compareVersions(a: string, b: string): number {
@@ -78,25 +111,44 @@ const GRACE_MS = 5000;
 
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
+  if (IS_WIN) {
+    // No Unix process groups on Windows: kill the whole tree via taskkill.
+    try {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    } catch {
+      try { child.kill() } catch { /* already gone */ }
+    }
+    return;
+  }
   try {
     process.kill(-child.pid, 'SIGTERM');
   } catch {
     try {
       child.kill('SIGTERM');
     } catch {
-      // already gone
+      // already gone'
     }
   }
 }
 
 export function startAgyProcess(opts: RunOptions): RunningProcess {
   const started = Date.now();
-  const child = spawn(opts.bin, opts.args, {
-    cwd: opts.cwd,
-    env: process.env,
-    detached: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const viaCmd = IS_WIN && isCmdShim(opts.bin)
+  const child = viaCmd
+    ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', [opts.bin, ...opts.args].map(windowsQuote).join(' ')], {
+        cwd: opts.cwd,
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsVerbatimArguments: true,
+        windowsHide: true,
+      })
+    : spawn(opts.bin, opts.args, {
+        cwd: opts.cwd,
+        env: process.env,
+        detached: !IS_WIN,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
   let stdout = '';
   let stderr = '';
   let timedOut = false;
@@ -126,7 +178,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     pending += chunk;
     let nl: number;
     while ((nl = pending.indexOf('\n')) >= 0) {
-      const line = pending.slice(0, nl);
+      const line = pending.slice(0, nl).replace(/\r$/, '');
       pending = pending.slice(nl + 1);
       opts.onLine?.(line);
     }

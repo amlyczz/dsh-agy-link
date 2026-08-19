@@ -59,6 +59,8 @@ dsh plugin --profile web add dsh-agy-link
 
 > 插件绝不读取/复制/移动 `~/.gemini/antigravity-cli/antigravity-oauth-token`；登录完全通过官方 CLI 自己的流程完成。
 
+> 🖥 **跨平台**：Linux / macOS / Windows 均受支持——bin 探测按平台查找 `agy`/`agy.exe`（PATH、`~/.local/bin`、`/usr/local/bin`、`/opt/homebrew/bin`、`%LOCALAPPDATA%\Programs`，npm `.cmd` shim 自动经 cmd.exe 安全引号包裹启动）；中断/超时杀树在 Windows 走 `taskkill /T /F`；CRLF 输出统一剥离；媒体目录与 MCP 桥路径全部 `fileURLToPath`/`join` 构造。
+
 ## ⚙️ 配置
 
 配置在 `agy-link` 插件条目里（`/plugin` 或 profile patch 层编辑），环境变量优先：
@@ -144,6 +146,8 @@ dsh plugin --profile web add dsh-agy-link
 ```
 
 > The plugin never reads, copies, or moves `~/.gemini/antigravity-cli/antigravity-oauth-token`; login is driven entirely through the official CLI's own flow.
+
+> 🖥 **Cross-platform**: Linux / macOS / Windows — platform-aware binary discovery (`agy` / `agy.exe` across PATH, `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, `%LOCALAPPDATA%\Programs`; npm `.cmd` shims spawn through cmd.exe with safe quoting), tree-kill via `taskkill /T /F` on Windows, CRLF output normalized, media and bridge paths built with `fileURLToPath`/`join`.
 
 ## ⚙️ Configuration
 
