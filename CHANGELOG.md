@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 (2026-08-19)
+
+- README restructured into a single bilingual page: Chinese first, then
+  English (README.zh.md removed; package files list updated).
+- Releases now publish to npm automatically (NPM_TOKEN secret configured).
+
 ## 0.1.4 (2026-08-19)
 
 - READMEs: added the author promo block (Chinese first, then English).

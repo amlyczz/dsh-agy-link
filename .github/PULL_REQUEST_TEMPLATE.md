@@ -10,7 +10,7 @@
 
 - [ ] Implementation
 - [ ] Tests (node --test; fixtures under test/)
-- [ ] Docs updated (README.md / README.zh.md / docs/)
+- [ ] Docs updated (README.md — bilingual, 中文 first / docs/)
 - [ ] `npm run check` + `npm test` + `npm run build` green
 
 ## Safety check
