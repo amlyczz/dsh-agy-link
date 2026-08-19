@@ -91,6 +91,7 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
       return view
     }
     case 'read_file':
+    case 'view_file':
     case 'read':
     case 'open_file': {
       const path = asString(input.path) ?? asString(input.file_path) ?? asString(input.filename) ?? ''
@@ -107,9 +108,23 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'glob':
     case 'search_files':
     case 'search':
+    case 'search_file_content':
     case 'grep': {
       const q = asString(input.pattern) ?? asString(input.query) ?? asString(input.regex) ?? ''
       const view: GenericCallView = { card: 'generic', title: q !== '' ? 'Search ' + q : 'Search', kind: 'search' }
+      return view
+    }
+    case 'list_dir':
+    case 'ls': {
+      const path = asString(input.path) ?? asString(input.directory) ?? ''
+      const view: GenericCallView = { card: 'generic', title: path !== '' ? 'List ' + path : 'List directory' }
+      return view
+    }
+    case 'delete_file':
+    case 'remove_file':
+    case 'rm': {
+      const path = asString(input.path) ?? asString(input.file_path) ?? ''
+      const view: GenericCallView = { card: 'generic', title: 'Delete ' + path, kind: 'delete' }
       return view
     }
     default: {

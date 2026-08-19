@@ -85,6 +85,25 @@ test('presentMirrorCall maps the agy vocabulary onto native cards', () => {
   } else {
     assert.fail('expected generic search card')
   }
+  const view = presentMirrorCall({ tool: 'view_file', input: { path: 'a.ts', offset: 3 } })
+  if (view?.card === 'generic') {
+    assert.equal(view.kind, 'read')
+    assert.deepEqual(view.locations, [{ path: 'a.ts', line: 4 }])
+  } else {
+    assert.fail('expected generic read card for view_file')
+  }
+  const listing = presentMirrorCall({ tool: 'list_dir', input: { path: '/tmp/x' } })
+  if (listing?.card === 'generic') {
+    assert.equal(listing.title, 'List /tmp/x')
+  } else {
+    assert.fail('expected generic card for list_dir')
+  }
+  const del = presentMirrorCall({ tool: 'delete_file', input: { path: 'old.ts' } })
+  if (del?.card === 'generic') {
+    assert.equal(del.kind, 'delete')
+  } else {
+    assert.fail('expected delete card for delete_file')
+  }
   const fallback = presentMirrorCall({ tool: 'something_new', input: { a: 1 } })
   assert.equal(fallback?.card, 'generic')
   // JSON-string inputs (agy serializes some tool args) still project
