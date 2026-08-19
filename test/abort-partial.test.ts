@@ -6,10 +6,10 @@ import { EventMapper } from '../src/host/mapper.ts'
 // model already produced — emitFailure closes the open block first, so
 // partial text/thinking is never dropped when the caller hits stop.
 test('emitFailure(aborted) preserves already-emitted deltas', () => {
-  const m = new EventMapper()
+  const m = new EventMapper({ runId: 'r-abort', cutOnTool: true })
   const chunks: unknown[] = []
   const feed = (ev: Parameters<EventMapper['map']>[0]): void => {
-    for (const ch of m.map(ev) as Generator<object>) chunks.push(ch)
+    for (const ch of m.map(ev, 0) as Generator<object>) chunks.push(ch)
   }
   feed({ kind: 'step', stepKind: 'text', stepKey: 's1', text: 'Hello ' } as Parameters<EventMapper['map']>[0])
   feed({ kind: 'step', stepKind: 'text', stepKey: 's1', text: 'Hello world' } as Parameters<EventMapper['map']>[0])

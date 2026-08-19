@@ -53,33 +53,40 @@ function collect(chunks: Generator<object>): unknown[] {
 }
 
 test('every emitted chunk is lossless JSON (no undefined fields)', () => {
-  const m = new EventMapper()
+  // Span 1 ends on the completed tool cut; span 2 carries the result.
+  const m1 = new EventMapper({ runId: 'r-lossless', cutOnTool: true })
   const chunks: unknown[] = []
-  const feed = (ev: Parameters<EventMapper['map']>[0]): void => {
-    for (const ch of m.map(ev) as Generator<object>) chunks.push(ch)
+  const feed = (mapper: EventMapper, ev: Parameters<EventMapper['map']>[0], i: number): void => {
+    for (const ch of mapper.map(ev, i) as Generator<object>) chunks.push(ch)
   }
-  feed({ kind: 'step', stepKind: 'thinking', stepKey: 's1', text: 'let me think' } as never)
-  feed({ kind: 'step', stepKind: 'text', stepKey: 's2', text: 'Hello ' } as never)
-  feed({ kind: 'step', stepKind: 'text', stepKey: 's2', text: 'Hello world' } as never)
-  feed({ kind: 'step', stepKind: 'tool', stepKey: 's3', text: '', tool: { name: 'bash', args: { c: 'x' }, output: 'ok' } } as never)
-  feed({ kind: 'result', conversationId: 'cid-1', ok: true, response: '', error: undefined, usage: { input_tokens: 1, output_tokens: 2 } } as never)
+  feed(m1, { kind: 'step', stepKind: 'thinking', stepKey: 's1', text: 'let me think' } as never, 0)
+  feed(m1, { kind: 'step', stepKind: 'text', stepKey: 's2', text: 'Hello ' } as never, 1)
+  feed(m1, { kind: 'step', stepKind: 'text', stepKey: 's2', text: 'Hello world' } as never, 2)
+  feed(m1, { kind: 'step', stepKind: 'tool', stepKey: 's3', text: '', tool: { name: 'bash', args: { c: 'x' }, output: 'ok' } } as never, 3)
+  const m2 = new EventMapper({ runId: 'r-lossless', cutOnTool: true, initialSawText: true })
+  feed(m2, { kind: 'result', conversationId: 'cid-1', ok: true, response: '', error: undefined, usage: { input_tokens: 1, output_tokens: 2 } } as never, 4)
   for (const ch of chunks) {
     assert.equal(isLosslessJson(ch), true, 'chunk must survive the lossless-JSON boundary: ' + JSON.stringify(ch))
   }
-  // usage chunk: optional counters must be omitted (not undefined)
+  // tool-cut finish is reason tool-calls with no replayState
+  const toolFinish = chunks.find((c) => (c as { type?: string; reason?: { kind?: string } }).type === 'finish' && (c as { reason: { kind: string } }).reason.kind === 'tool-calls') as Record<string, unknown>
+  assert.ok(toolFinish, 'tool-calls finish present')
+  assert.ok(!('replayState' in toolFinish), 'cut finish carries no replayState')
+  // usage chunk from the cut span is zeroed
   const usageChunk = chunks.find((c) => (c as { type?: string }).type === 'usage') as { usage: Record<string, unknown> }
   assert.ok(!('cacheReadTokens' in usageChunk.usage), 'absent cache counter omitted')
   assert.ok(!('reasoningTokens' in usageChunk.usage))
-  assert.equal(usageChunk.usage.inputTokens, 1)
-  // finish chunk: replayState present (conversationId non-empty)
-  const finish = chunks.find((c) => (c as { type?: string }).type === 'finish') as { replayState?: unknown; reason: { kind: string } }
+  assert.equal(usageChunk.usage.inputTokens, 0)
+  // final finish: replayState present (conversationId non-empty)
+  const finish = chunks.filter((c) => (c as { type?: string }).type === 'finish').pop() as { replayState?: unknown; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
   assert.ok(finish.replayState, 'replayState attached when conversation id known')
   assert.deepEqual(finish.replayState, { response: { conversationId: 'cid-1' } })
 })
 
 test('finish without conversation id omits replayState entirely', () => {
-  const m = new EventMapper()
-  const chunks = collect(m.map({ kind: 'result', conversationId: '', ok: true, response: 'x', error: undefined, usage: {} } as never) as Generator<object>)
+  const m = new EventMapper({ runId: 'r2', cutOnTool: true })
+  const chunks = collect(m.map({ kind: 'result', conversationId: '', ok: true, response: 'x', error: undefined, usage: {} } as never, 0) as Generator<object>)
   const finish = chunks.find((c) => (c as { type?: string }).type === 'finish') as Record<string, unknown>
   assert.ok(!('replayState' in finish), 'replayState omitted')
   assert.equal(isLosslessJson(finish), true)

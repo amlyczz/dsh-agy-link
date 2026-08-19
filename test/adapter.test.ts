@@ -1,15 +1,18 @@
-// End-to-end adapter tests against the fake agy binary. Covers the chunk
-// protocol, conversation binding reuse, auth-failure mapping, aux-call gate,
-// and argv assembly.
+// End-to-end adapter tests against the fake agy binary. Covers the span
+// protocol (native tool mirroring via finish:tool-calls + continuation),
+// conversation binding reuse, auth-failure mapping, aux-call gate, and
+// argv assembly.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, detectContinuation, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
 import { SessionStore } from '../src/host/sessions.ts'
+import { RunRegistry } from '../src/host/recording.ts'
+import { defineAgyMirrorTool } from '../src/host/mirror-tool.ts'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { defaultConfig, Err, type PluginConfig } from '../src/common/types.ts'
 
@@ -30,15 +33,17 @@ function makeAdapter(cfgOverrides: Partial<PluginConfig> = {}, deps: Partial<Agy
     300_000,
   )
   const argsFile = join(workDir, 'args.json')
+  const runs = new RunRegistry()
   const adapter = new AgyAdapter({
     getConfig: () => cfg,
     catalog,
     store,
     bin: () => fakeBin,
     acquire: () => Promise.resolve(() => {}),
+    runs,
     ...deps,
   })
-  return { adapter, store, argsFile }
+  return { adapter, store, argsFile, runs }
 }
 
 function opts(messages: Message[], extra: Partial<GenerateOptions> = {}): GenerateOptions {
@@ -56,39 +61,108 @@ async function collect(gen: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> 
   return out
 }
 
-test('ok run streams the full protocol and persists the binding', async () => {
-  const { adapter, store, argsFile } = makeAdapter()
+async function waitFor<T>(f: () => T | undefined, ms = 3_000): Promise<T> {
+  const t0 = Date.now()
+  for (;;) {
+    const v = f()
+    if (v !== undefined) return v
+    if (Date.now() - t0 > ms) throw new Error('waitFor timeout')
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
+type MirrorArgs = { run: string; step: number; tool: string; input?: unknown }
+
+/**
+ * Drive one full agy turn the way DSH's agent loop would: collect a span,
+ * and whenever it finishes with tool-calls, append the assistant tool-call
+ * message plus the mirrored tool-result message and call stream() again.
+ */
+async function runTurn(
+  adapter: AgyAdapter,
+  base: Message[],
+  extra: Partial<GenerateOptions> = {},
+  maxHops = 12,
+): Promise<{ chunks: StreamChunk[]; toolCalls: Array<{ id: string; args: MirrorArgs }>; messages: Message[] }> {
+  const messages = [...base]
+  const all: StreamChunk[] = []
+  const toolCalls: Array<{ id: string; args: MirrorArgs }> = []
+  for (let hop = 0; hop < maxHops; hop++) {
+    // Pass a copy: the adapter's outcome handler captures the array it was
+    // given, and the watermark it records must reflect this hop's view.
+    const chunks = await collect(adapter.stream(opts([...messages], extra)))
+    all.push(...chunks)
+    const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } } | undefined
+    if (finish === undefined || finish.type !== 'finish') throw new Error('span ended without a finish chunk')
+    if (finish.reason.kind !== 'tool-calls') return { chunks: all, toolCalls, messages }
+    const end = chunks.find(
+      (c) => c.type === 'block-end' && (c as { block: { type: string } }).block.type === 'tool-call',
+    ) as unknown as { block: { id: string; name: string; arguments: string } } | undefined
+    if (end === undefined) throw new Error('tool-calls finish without a tool-call block')
+    const args = JSON.parse(end.block.arguments) as MirrorArgs
+    toolCalls.push({ id: end.block.id, args })
+    messages.push({ role: 'assistant', content: [end.block] } as unknown as Message)
+    messages.push({
+      role: 'user',
+      content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: 'replayed' }] }],
+      source: { kind: 'tool', callId: end.block.id },
+    } as unknown as Message)
+  }
+  throw new Error('runTurn exceeded the hop budget')
+}
+
+test('ok run mirrors tools natively, streams text, and persists the binding', async () => {
+  const { adapter, store, argsFile, runs } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'
   process.env.FAKE_AGY_ARGS_FILE = argsFile
-  const chunks = await collect(adapter.stream(opts([msg('user', 'hello there')], { sessionId: 'sess-1' as never })))
+  const { chunks, toolCalls } = await runTurn(adapter, [msg('user', 'hello there')], { sessionId: 'sess-1' as never })
   const types = chunks.map((c) => c.type)
-  assert.equal(types[types.length - 1], 'finish')
-  assert.equal(types[types.length - 2], 'usage')
-  assert.ok(types.includes('reasoning-delta'))
-  assert.ok(types.includes('text-delta'))
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
   assert.equal(finish.type, 'finish')
   assert.equal(finish.reason.kind, 'stop')
+  assert.equal(types[types.length - 2], 'usage')
+  assert.ok(types.includes('reasoning-delta'))
+  assert.ok(types.includes('text-delta'))
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
-  assert.ok(text.includes('[agy tool: read_file]'), 'tool annotation visible in the text body: ' + text)
+  assert.ok(!text.includes('[agy tool:'), 'no text-body tool annotations in v0.3: ' + text)
   assert.ok(text.endsWith('Hello from fake agy'), text)
+  // the read_file step became exactly one native tool-call span
+  assert.equal(toolCalls.length, 1)
+  assert.equal(toolCalls[0]?.args.tool, 'read_file')
+  assert.equal(toolCalls[0]?.args.run.length > 0, true)
+  // the mirror replays the recorded output for that callId
+  const mirror = defineAgyMirrorTool({ runs })
+  const replayed = await mirror.execute(toolCalls[0]?.args as never, { signal: new AbortController().signal } as never)
+  assert.equal(replayed, 'file contents here')
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   assert.ok(argv.includes('--output-format'))
   assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json')
   assert.ok(argv.includes('--mode'))
   assert.ok(!argv.includes('--conversation'))
-  const b = store.get('sess-1')
-  assert.equal(b?.conversationId, 'conv-fresh-1')
-  assert.equal(b?.lastMessageCount, 1)
+  const b = await waitFor(() => store.get('sess-1'))
+  assert.equal(b.conversationId, 'conv-fresh-1')
+  assert.equal(b.lastMessageCount, 1)
+})
+
+test('detectContinuation keys off the trailing mirror tool-result only', () => {
+  const toolResult = (callId: string): Message =>
+    ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7')]),
+    { runId: 'run-1', eventIndex: 7 },
+  )
+  assert.equal(detectContinuation([msg('user', 'q')]), null)
+  assert.equal(detectContinuation([msg('user', 'q'), toolResult('bash-9')]), null)
 })
 
 test('second turn reuses the bound conversation id', async () => {
-  const { adapter } = makeAdapter()
+  const { adapter, store } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'
   const argsFile = join(workDir, 'args2.json')
   process.env.FAKE_AGY_ARGS_FILE = argsFile
-  await collect(adapter.stream(opts([msg('user', 'one')], { sessionId: 'sess-2' as never })))
-  await collect(adapter.stream(opts([msg('assistant', 'one'), msg('user', 'two')], { sessionId: 'sess-2' as never })))
+  await runTurn(adapter, [msg('user', 'one')], { sessionId: 'sess-2' as never })
+  await waitFor(() => store.get('sess-2'))
+  await runTurn(adapter, [msg('assistant', 'one'), msg('user', 'two')], { sessionId: 'sess-2' as never })
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   assert.equal(argv[argv.indexOf('--conversation') + 1], 'conv-fresh-1')
 })
@@ -98,43 +172,54 @@ test('unbound follow-up turn gets a history digest prefix', async () => {
   process.env.FAKE_AGY_MODE = 'ok'
   const argsFile = join(workDir, 'args3.json')
   process.env.FAKE_AGY_ARGS_FILE = argsFile
-  await collect(adapter.stream(opts([msg('assistant', 'earlier answer'), msg('user', 'follow up')])))
+  await runTurn(adapter, [msg('assistant', 'earlier answer'), msg('user', 'follow up')])
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   const prompt = argv[argv.indexOf('-p') + 1] ?? ''
   assert.ok(prompt.includes('[conversation so far]'))
   assert.ok(prompt.includes('follow up'))
 })
 
-test('agy 1.1.15 stream format maps thinking turns, tool activity and fragments', async () => {
-  const { adapter } = makeAdapter()
+test('agy 1.1.15 stream mirrors tools as native cards across spans', async () => {
+  const { adapter, runs } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'real'
-  const chunks = await collect(adapter.stream(opts([msg('user', 'count the files')])))
+  const { chunks, toolCalls } = await runTurn(adapter, [msg('user', 'count the files')])
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
   assert.equal(finish.reason.kind, 'stop')
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as unknown as { text: string }).text).join('')
   assert.ok(reasoning.includes('[agy thinking turn · 80 thinking tokens]'), reasoning)
-  assert.ok(!reasoning.includes('[agy tool:'), 'tool annotations belong in the text body')
+  assert.ok(!reasoning.includes('[agy tool:'), 'no tool annotations in reasoning')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
-  assert.ok(text.includes('[agy tool: run_command]'), text)
-  assert.ok(text.includes('note1.txt'), text)
-  assert.ok(text.includes('[agy tool error: find_by_name] Find command timed out.'), text)
+  assert.ok(!text.includes('note1.txt'), 'tool output no longer pasted into the text body')
   assert.ok(text.includes('There are 2 files, 6 words total.'), text)
+  // both tool steps became mirrored native calls, in order
+  assert.deepEqual(toolCalls.map((t) => t.args.tool), ['run_command', 'find_by_name'])
+  // the mirror replays run_command's recorded output and surfaces the errored tool
+  const mirror = defineAgyMirrorTool({ runs })
+  const out = await mirror.execute(toolCalls[0]?.args as never, { signal: new AbortController().signal } as never)
+  assert.equal(out, 'note1.txt\nnote2.txt\n')
+  await assert.rejects(
+    () => mirror.execute(toolCalls[1]?.args as never, { signal: new AbortController().signal } as never),
+    (e: unknown) => String(e).includes('Find command timed out'),
+  )
+  // pending-card projection: run_command renders as a terminal card
+  const card = mirror.presentCall?.(toolCalls[0]?.args)
+  assert.equal((card as { card: string } | undefined)?.card, 'terminal')
 })
 
 test('agy 1.1.15 result ERROR with response still finishes stop', async () => {
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'real-error'
-  const chunks = await collect(adapter.stream(opts([msg('user', 'count the files')])))
+  const { chunks } = await runTurn(adapter, [msg('user', 'count the files')])
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
   assert.equal(finish.reason.kind, 'stop')
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as unknown as { text: string }).text).join('')
   assert.ok(reasoning.includes('[agy finished with error] Find command timed out'), reasoning)
 })
 
-test('agy 1.1.15 bare result error maps to AGY_ERROR', async () => {
+test('agy 1.1.15 bare result error maps to AGY_ERROR after the tool spans', async () => {
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'real-fail'
-  const chunks = await collect(adapter.stream(opts([msg('user', 'hi')])))
+  const { chunks } = await runTurn(adapter, [msg('user', 'hi')])
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
   assert.equal(finish.reason.kind, 'error')
   assert.equal(finish.reason.failure?.code, Err.AGY_ERROR)
@@ -155,7 +240,7 @@ test('auth failure maps to an AUTH error finish', async () => {
 test('garbage-noise run still finishes clean', async () => {
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'noise'
-  const chunks = await collect(adapter.stream(opts([msg('user', 'hi')])))
+  const { chunks } = await runTurn(adapter, [msg('user', 'hi')])
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
   assert.equal(finish.type, 'finish')
   assert.equal(finish.reason.kind, 'stop')
@@ -245,19 +330,25 @@ function msgSrc(role: 'user' | 'assistant', text: string, provider?: string): Me
 }
 
 test('returning session digests only foreign turns since the watermark', async () => {
-  const { adapter } = makeAdapter()
+  const { adapter, store } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'
   const argsFile = join(workDir, 'args-w1.json')
   process.env.FAKE_AGY_ARGS_FILE = argsFile
   // Turn 1 binds the session (watermark = 1 message).
-  await collect(adapter.stream(opts([msg('user', 'one')], { sessionId: 'sess-w' as never })))
+  await runTurn(adapter, [msg('user', 'one')], { sessionId: 'sess-w' as never })
+  await waitFor(() => store.get('sess-w'))
   // Turn 2: our own agy reply + a foreign (deepseek) interjection in between.
-  await collect(adapter.stream(opts([
+  await runTurn(adapter, [
     msgSrc('assistant', 'one', 'antigravity'),
     msg('user', 'two'),
     msgSrc('assistant', 'deepseek said Z', 'deepseek-official'),
     msg('user', 'final question'),
-  ], { sessionId: 'sess-w' as never })))
+  ], { sessionId: 'sess-w' as never })
+  // wait for turn 2's watermark (4 messages) before asserting/driving turn 3
+  await waitFor(() => {
+    const b = store.get('sess-w')
+    return b !== undefined && b.lastMessageCount >= 4 ? b : undefined
+  })
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   const prompt = argv[argv.indexOf('-p') + 1] ?? ''
   assert.ok(prompt.includes('final question'))
@@ -269,14 +360,14 @@ test('returning session digests only foreign turns since the watermark', async (
   // Turn 3 (clean, only our own replies since watermark): no digest at all.
   const argsFile2 = join(workDir, 'args-w2.json')
   process.env.FAKE_AGY_ARGS_FILE = argsFile2
-  await collect(adapter.stream(opts([
+  await runTurn(adapter, [
     msgSrc('assistant', 'one', 'antigravity'),
     msg('user', 'two'),
     msgSrc('assistant', 'deepseek said Z', 'deepseek-official'),
     msg('user', 'final question'),
     msgSrc('assistant', 'final answer', 'antigravity'),
     msg('user', 'third'),
-  ], { sessionId: 'sess-w' as never })))
+  ], { sessionId: 'sess-w' as never })
   const argv2 = JSON.parse(readFileSync(argsFile2, 'utf8')) as string[]
   const prompt2 = argv2[argv2.indexOf('-p') + 1] ?? ''
   assert.ok(!prompt2.includes('[conversation so far]'), 'clean follow-up carries no digest')
@@ -293,6 +384,7 @@ test('unspawnable binary maps to PROCESS_EXIT without hanging', async () => {
     store: new SessionStore(join(workDir, 'sessions-x.json')),
     bin: () => '/nonexistent/agy-binary-x',
     acquire: () => Promise.resolve(() => {}),
+    runs: new RunRegistry(),
   })
   void adapter
   const chunks = await collect(broken.stream(opts([msg('user', 'hi')])))

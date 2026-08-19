@@ -8,7 +8,8 @@
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Err, looksLikeAuthFailure, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
-import { EventMapper, type ToolOutputRenderer } from './mapper.ts'
+import { EventMapper } from './mapper.ts'
+import { parseMirrorCallId, type RunRecording, type RunRegistry } from './recording.ts'
 import { defaultEffortFor, findEntry, ModelCatalog } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
@@ -61,7 +62,8 @@ export interface AgyAdapterDeps {
   /** Shared semaphore for cross-session concurrency (ADR-12). */
   acquire: () => Promise<() => void>
   log?: (msg: string) => void
-  toolOutput?: ToolOutputRenderer
+  /** Recordings shared with the agy_tool mirror (native tool-card mirroring). */
+  runs: RunRegistry
   /**
    * Resolve the DSH session's working directory. Called with the raw
    * session id; return an absolute path to run agy inside that workspace.
@@ -210,6 +212,33 @@ export class AgyAdapter extends LlmAdapter {
     }
     const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
     const workspaceRoot = cfg.workspaceRoot !== '' ? cfg.workspaceRoot : this.deps.sessionCwd?.(sessionKey) || process.cwd()
+
+    // ---- native tool mirroring: continuation spans (v0.3) ----
+    // When the previous span cut on a completed agy tool step, DSH dispatched
+    // the agy_tool mirror (which replayed the recorded output) and is now
+    // calling us again to continue the SAME run. Resume the recording from
+    // the cursor encoded in the trailing tool-result callId — no new process,
+    // no prompt assembly, no digest.
+    const continuation = detectContinuation(options.messages)
+    if (continuation !== null) {
+      const rec = this.deps.runs.get(continuation.runId)
+      if (rec === undefined) {
+        yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
+        yield {
+          type: 'finish',
+          reason: {
+            kind: 'error',
+            failure: {
+              message: 'agy run ' + continuation.runId + ' is no longer available (server restarted?) — please resend your message',
+              code: Err.AGY_ERROR,
+            },
+          },
+        }
+        return
+      }
+      yield* this.driveSpan(rec, continuation.eventIndex + 1, true)
+      return
+    }
     const catalog = this.deps.catalog.get()
     const model = options.model
     const entry = findEntry(catalog, model)
@@ -311,17 +340,11 @@ export class AgyAdapter extends LlmAdapter {
       throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
     }
 
-    // ---- spawn + map (ADR-3) ----
+    // ---- spawn + record (v0.3: spans consume a shared recording) ----
     const before = snapshotConversations()
-    const toolOutput = this.deps.toolOutput
-    const mapper = new EventMapper({
-      toolOutput: toolOutput
-        ? (name, args, output) => toolOutput(name, args, output, workspaceRoot)
-        : undefined,
-    })
+    const rec = this.deps.runs.create()
     const parser = new StreamJsonParser()
     this.deps.onParser?.(parser)
-    const queue = new ChunkQueue()
     let streamCid: string | null = null
     const args = this.buildArgs({
       prompt,
@@ -352,7 +375,7 @@ export class AgyAdapter extends LlmAdapter {
         for (const ev of parser.feed(line + '\n')) {
           if (ev.kind === 'init' && ev.conversationId) streamCid = ev.conversationId
           if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
-          for (const ch of mapper.map(ev)) queue.push(ch)
+          rec.append(ev)
         }
       },
       })
@@ -366,10 +389,15 @@ export class AgyAdapter extends LlmAdapter {
       releaseOnce()
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
-        for (const ch of mapper.map(ev)) queue.push(ch)
+        rec.append(ev)
       }
       const diffed = diffConversations(before).conversationId
       const conversationId = streamCid ?? diffed
+      // A result envelope the mapper will finish on: ok, or an error that
+      // still carries a usable response. Anything else leaves the live span
+      // un-finished, so the failure below reaches it through the recording.
+      const r = rec.getResultEvent()
+      const consumable = r !== null && (r.ok || r.response !== '')
       let failure: { kind: 'error' | 'aborted'; code: string; message: string } | null = null
       if (outcome.aborted) {
         failure = { kind: 'aborted', code: 'ABORTED', message: 'agy run aborted by caller' }
@@ -377,7 +405,7 @@ export class AgyAdapter extends LlmAdapter {
         failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run exceeded the watchdog budget (' + cfg.timeoutMs + 'ms)' }
       } else if (sawAuthFailure(parser, outcome)) {
         failure = { kind: 'error', code: Err.AUTH, message: 'agy is not signed in — run /agy auth (or run agy once in a terminal) to login' }
-      } else if (!mapper.isFinished) {
+      } else if (!consumable) {
         if (outcome.code !== 0) {
           failure = { kind: 'error', code: Err.PROCESS_EXIT, message: 'agy exited with code ' + outcome.code + (outcome.stderrTail !== '' ? ': ' + brief(outcome.stderrTail) : '') }
         } else if (parser.stats.lastResultError) {
@@ -386,9 +414,7 @@ export class AgyAdapter extends LlmAdapter {
           failure = { kind: 'error', code: Err.INVALID_OUTPUT, message: 'agy produced no result event (' + parser.stats.garbage + ' unparseable lines)' }
         }
       }
-      if (failure !== null) {
-        for (const ch of mapper.emitFailure(failure.kind, failure.code, failure.message)) queue.push(ch)
-      }
+      rec.settle(failure)
       if (!isAux && sessionKey !== '' && failure === null) {
         const finalId = binding !== undefined ? binding.conversationId : conversationId
         if (finalId) {
@@ -406,13 +432,64 @@ export class AgyAdapter extends LlmAdapter {
         durationMs: outcome.durationMs,
         model,
       })
-      queue.close()
     })().catch((err) => {
       releaseOnce()
-      for (const ch of mapper.emitFailure('error', Err.PROCESS_EXIT, 'internal error: ' + brief(String(err)))) queue.push(ch)
-      queue.close()
+      rec.settle({ kind: 'error', code: Err.PROCESS_EXIT, message: 'internal error: ' + brief(String(err)) })
     })
 
+    // First span of the run: stream recorded events until the first
+    // completed tool step cuts it (or the result finishes it).
+    yield* this.driveSpan(rec, 0, !isAux)
+  }
+
+  /**
+   * Stream one span of a recording: map events from `from` until the mapper
+   * finishes (tool-calls cut or result stop), then let the queue drain. When
+   * the recording settles without a consumable result, surface its failure
+   * as this span's terminal chunk — the turn ends exactly like a native
+   * provider error.
+   */
+  private async *driveSpan(rec: RunRecording, from: number, cutOnTool: boolean): AsyncIterable<StreamChunk> {
+    const queue = new ChunkQueue()
+    void (async () => {
+      const mapper = new EventMapper({
+        runId: rec.runId,
+        cutOnTool,
+        initialSawText: rec.sawTextBefore(from),
+      })
+      let i = from
+      try {
+        for await (const ev of rec.eventsFrom(from)) {
+          for (const ch of mapper.map(ev, i)) queue.push(ch)
+          i++
+          if (mapper.isFinished) break
+        }
+        if (!mapper.isFinished) {
+          const f = rec.failureInfo
+          if (f !== null) {
+            for (const ch of mapper.emitFailure(f.kind, f.code, f.message)) queue.push(ch)
+          } else {
+            for (const ch of mapper.emitFailure('error', Err.INVALID_OUTPUT, 'agy stream ended without a result event')) queue.push(ch)
+          }
+        }
+      } catch (err) {
+        for (const ch of mapper.emitFailure('error', Err.PROCESS_EXIT, 'internal error: ' + brief(String(err)))) queue.push(ch)
+      }
+      queue.close()
+    })()
     yield* queue.drain()
   }
+}
+
+/**
+ * Detect a continuation span: the request's LAST message is the tool result
+ * of one of our mirrored agy tool calls. Its callId encodes the recording
+ * run and the event index to resume after.
+ */
+export function detectContinuation(messages: readonly Message[]): { runId: string; eventIndex: number } | null {
+  const last = messages[messages.length - 1]
+  if (last === undefined || last.role !== 'user') return null
+  const src = (last as unknown as { source?: { kind?: string; callId?: string } }).source
+  if (src === undefined || src.kind !== 'tool' || typeof src.callId !== 'string') return null
+  return parseMirrorCallId(src.callId)
 }

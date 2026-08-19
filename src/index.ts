@@ -13,8 +13,9 @@ import { defineAgyAskTool } from './host/ask-tool.ts'
 import { AuthHelper } from './host/auth.ts'
 import { agyCommandDefinition } from './host/commands.ts'
 import { writeDoctorReport } from './host/diagnostics.ts'
-import { renderToolActivity } from './host/diff-render.ts'
+import { defineAgyMirrorTool } from './host/mirror-tool.ts'
 import { ModelCatalog } from './host/models.ts'
+import { RunRegistry } from './host/recording.ts'
 import { MIN_AGY_VERSION, compareVersions, parseVersion, probeProcess, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
 import { StreamJsonParser } from './host/parser.ts'
@@ -100,6 +101,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     300_000,
   )
   const auth = new AuthHelper(bin)
+  const runs = new RunRegistry()
 
   const adapter = new AgyAdapter({
     getConfig,
@@ -108,10 +110,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     bin,
     acquire: () => semaphore.acquire(),
     log,
-    toolOutput: (name, args, output, cwd) => {
-      const ws = getConfig().workspaceRoot
-      return renderToolActivity(name, args, output, cwd ?? (ws !== '' ? ws : process.cwd()))
-    },
+    runs,
     sessionCwd: (sessionId) => {
       const sessions = ctx.get('sessions') as { get(id: unknown): { header?: { cwd?: string } } | undefined } | undefined
       return sessions?.get(sessionId)?.header?.cwd
@@ -228,6 +227,24 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   }
   syncAskTool()
 
+  // ---- agy_tool mirror (native tool-card rendering) ----
+  // Registered whenever the provider route is live: the adapter's spans cut
+  // on completed agy tool steps with finish:tool-calls addressed here, and
+  // the agent loop's dispatch writes the real tool/call + tool/result events
+  // DSH's tool-card UI renders from.
+  const mirrorToolDispose = { current: null as null | (() => void) }
+  const syncMirrorTool = (): void => {
+    const want = getConfig().enabled && bin() !== null
+    if (want && mirrorToolDispose.current === null && toolsSvc) {
+      const reg = toolsSvc.register(defineAgyMirrorTool({ runs })) as unknown as () => void
+      mirrorToolDispose.current = typeof reg === 'function' ? reg : null
+    } else if (!want && mirrorToolDispose.current !== null) {
+      mirrorToolDispose.current()
+      mirrorToolDispose.current = null
+    }
+  }
+  syncMirrorTool()
+
   // ---- HTTP surface for the client half ----
   // Registered through a reactive ctx.inject sub-fiber: at plugin load time
   // the webServer service may not exist yet (load-order race observed on
@@ -330,6 +347,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         setOverride(key, body.value)
         syncAskTool()
+        syncMirrorTool()
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
       })()
     }})
@@ -420,6 +438,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   ctx.effect(() => {
     auth.dispose()
     if (askToolDispose.current !== null) askToolDispose.current()
+    if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
     bridgeState.restore?.()
     void bridgeState.bridge?.close()
     return () => undefined

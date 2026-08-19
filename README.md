@@ -145,7 +145,8 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** — chat, thinki
 | Capability | Description |
 | ---- | ---- |
 | 🔌 **A model route, not a proxy** | Registers the `antigravity` provider in DSH's model config; pick any Antigravity model (Gemini / Claude / GPT-OSS) from the `/model` picker |
-| 🌊 **Full streaming** | Text, thinking (reasoning), and agy tool activity (annotated reasoning blocks) mapped onto DSH's native chunk protocol |
+| 🌊 **Full streaming** | Text, thinking (reasoning), and token usage mapped onto DSH's native chunk protocol |
+| 🃏 **Native tool cards (v0.3)** | agy's tool activity renders with DSH's own tool-card UI — terminal cards for `run_command`, inline diffs for file writes — via the internal `agy_tool` mirror riding the real agent loop |
 | 🔗 **Session continuity** | Each DSH session binds to a native agy conversation (`--conversation`); multi-turn context rides agy history instead of re-sending everything |
 | 📊 **Token usage** | Input/output/thinking/cache tokens surface in DSH usage accounting |
 | ⚙️ **Settings status** | DSH Settings → Antigravity page shows agy connection/login/workspace/bindings/last-run state |
@@ -222,7 +223,7 @@ DSH-side tools and permissions are unaffected — this only governs what the spa
 
 ## 🧩 How it works
 
-One DSH model call = one short-lived `agy -p --output-format stream-json` process. The NDJSON event stream is parsed, normalized, and mapped to DSH StreamChunks: thinking → reasoning blocks, text → text blocks, tool activity → annotated reasoning blocks, and the result envelope → usage + finish. Conversation ids come from the stream itself, with a conversations-directory snapshot diff as fallback. **No reverse-engineered database scraping, no protobuf decoding, no token-file access** — only the official unmodified agy binary is spawned.
+One DSH turn = one short-lived `agy -p --output-format stream-json` process. The NDJSON event stream is parsed, normalized, and recorded. Spans of that recording are mapped to DSH StreamChunks — thinking → reasoning blocks, text → text blocks, result envelope → usage + finish — and each **completed agy tool step cuts the span** with a `tool-calls` finish addressed to the internal `agy_tool` mirror. DSH's agent loop dispatches the mirror (it instantly replays the recorded output), writes real `tool/call` + `tool/result` session events, and re-calls the provider to continue the run — so tool activity renders with DSH's **native tool-card UI** (terminal cards, diffs, read/search icons) instead of text annotations. Conversation ids come from the stream itself, with a conversations-directory snapshot diff as fallback. **No reverse-engineered database scraping, no protobuf decoding, no token-file access** — only the official unmodified agy binary is spawned.
 
 ## 📋 What it cannot do (honest list)
 

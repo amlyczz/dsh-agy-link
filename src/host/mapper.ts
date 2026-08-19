@@ -2,42 +2,21 @@
 // section 3.3). Contract obligations honored here: usage precedes finish
 // and nothing follows it; one content block open at a time; repeated step
 // updates grow text by suffix-delta so both snapshot and delta payload
-// styles stream correctly. agy tool activity surfaces as reasoning
-// annotations (ADR-6): there is no toolUse stopReason to honor because agy
-// runs its own closed tool loop.
-import type { StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { Err, type AgyEvent, type RawUsage } from '../common/types.ts'
-
-export type ToolAnnounceRenderer = (name: string, args: unknown) => string
-export type ToolOutputRenderer = (name: string, args: unknown, output: unknown, cwd?: string) => string | null
-
-function briefArgs(args: unknown): string {
-  if (args === undefined || args === null) return ''
-  try {
-    const s = typeof args === 'string' ? args : JSON.stringify(args)
-    return s.length > 300 ? s.slice(0, 300) + '...' : s
-  } catch {
-    return String(args).slice(0, 120)
-  }
-}
-
-function defaultAnnounce(name: string, args: unknown): string {
-  const brief = briefArgs(args)
-  return brief === '' ? '[agy tool: ' + name + ']\n' : '[agy tool: ' + name + '] ' + brief + '\n'
-}
-
-function defaultOutput(output: unknown): string | null {
-  if (output === undefined || output === null) return null
-  let s: string
-  try {
-    s = typeof output === 'string' ? output : JSON.stringify(output)
-  } catch {
-    s = String(output)
-  }
-  if (s === '') return null
-  const trimmed = s.length > 2048 ? s.slice(0, 2048) + '... (+' + (s.length - 2048) + ' chars)' : s
-  return '-> ' + trimmed + '\n'
-}
+// styles stream correctly.
+//
+// v0.3 native tool mirroring: a COMPLETED agy tool step cuts the span —
+// the mapper emits a tool-call block addressed to the registered agy_tool
+// mirror and finishes with reason "tool-calls". DSH's agent loop then
+// dispatches the mirror, records real tool/call + tool/result session
+// events, and renders the activity with its native tool-card UI. The
+// mirror returns instantly with the output agy already recorded, and the
+// adapter's next span (a new stream() call) resumes from the message-
+// derived cursor. Text/reasoning streaming and the result envelope behave
+// as before; thinking-only turns stay token-annotated because agy print
+// mode never streams the thoughts themselves.
+import { CallId, type StreamChunk, type TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { AgyEvent, RawUsage } from '../common/types.ts'
+import { mirrorCallId } from './recording.ts'
 
 export function usageFromRaw(raw: RawUsage): TokenUsage {
   // The DSH session layer rejects chunks carrying undefined-valued fields
@@ -61,22 +40,28 @@ export function suffixDelta(prev: string, next: string): string {
   return '\n' + next
 }
 
+export interface EventMapperOptions {
+  /** Run whose event indices mint mirror callIds. */
+  runId: string
+  /** Cut spans on completed tool steps (main turns). False for auxiliary calls. */
+  cutOnTool: boolean
+  /** Whether an earlier span of this run already streamed assistant text. */
+  initialSawText?: boolean
+}
+
 export class EventMapper {
   private blockIdx = 0
   private openType: 'text' | 'reasoning' | null = null
   private openAcc = ''
   private readonly emittedByKey = new Map<string, string>()
-  private readonly toolPhaseSeen = new Set<string>()
+  private readonly announcedTools = new Set<string>()
   private readonly thinkingAnnounced = new Set<string>()
-  private sawTextStep = false
+  private sawTextStep: boolean
   private finished = false
 
-  constructor(
-    private readonly opts: {
-      announce?: ToolAnnounceRenderer
-      toolOutput?: ToolOutputRenderer
-    } = {},
-  ) {}
+  constructor(private readonly opts: EventMapperOptions) {
+    this.sawTextStep = opts.initialSawText === true
+  }
 
   /** Whether a terminal finish chunk has been emitted. */
   get isFinished(): boolean {
@@ -113,7 +98,12 @@ export class EventMapper {
       : { type: 'reasoning-delta', index: this.blockIdx, text: delta }
   }
 
-  *map(ev: AgyEvent): Generator<StreamChunk> {
+  /**
+   * Map one event. `absIndex` is the event's position in the run recording;
+   * it mints the mirror callId and is what continuation detection parses
+   * back out of the DSH message list.
+   */
+  *map(ev: AgyEvent, absIndex: number): Generator<StreamChunk> {
     if (this.finished) return
     if (ev.kind === 'init') return
     if (ev.kind === 'garbage') return
@@ -164,38 +154,41 @@ export class EventMapper {
         return
       }
       if (ev.stepKind === 'tool' && ev.tool) {
-        // Tool activity renders in the visible reply body, not the thinking
-        // panel: agy executes tools inside its own closed loop and DSH can
-        // never run them natively (a finish:tool-calls would make the DSH
-        // agent try to execute an unregistered tool), so body annotations
-        // are the only honest way the user sees what agy actually did.
-        // sawTextStep stays untouched so the result-envelope fallback still
-        // fires when agy never streamed a text_delta.
-        yield* this.ensureBlock('text')
-        const announceKey = ev.stepKey + ':a'
-        if (!this.toolPhaseSeen.has(announceKey)) {
-          this.toolPhaseSeen.add(announceKey)
-          const line = (this.opts.announce ?? defaultAnnounce)(ev.tool.name, ev.tool.args)
-          const d = this.appendDelta('\u{1f527} ' + line)
-          if (d) yield d
+        // Only a COMPLETED step (output or error recorded) becomes a card.
+        // ACTIVE envelopes arrive first with name/args only; the span waits
+        // for the DONE update that carries the payload.
+        if (!(ev.tool.output !== undefined || ev.tool.error !== undefined)) return
+        if (this.announcedTools.has(ev.stepKey)) return
+        this.announcedTools.add(ev.stepKey)
+        if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
+        // Cut the span: close any open block, then one tool-call block
+        // addressed to the mirror, zero usage, finish:tool-calls.
+        const close = this.closeOpen()
+        if (close) yield close
+        const idx = this.blockIdx
+        const input =
+          ev.tool.args === undefined ? {} : { input: ev.tool.args }
+        const argumentsJson = JSON.stringify({
+          run: this.opts.runId,
+          step: absIndex,
+          tool: ev.tool.name,
+          ...input,
+        })
+        yield { type: 'block-start', index: idx, blockType: 'tool-call' }
+        yield {
+          type: 'block-end',
+          index: idx,
+          block: {
+            type: 'tool-call',
+            id: CallId(mirrorCallId(this.opts.runId, absIndex)),
+            name: 'agy_tool',
+            arguments: argumentsJson,
+          },
         }
-        const outKey = ev.stepKey + ':o'
-        const errKey = ev.stepKey + ':e'
-        if (ev.tool.error !== undefined && !this.toolPhaseSeen.has(errKey)) {
-          this.toolPhaseSeen.add(errKey)
-          const d = this.appendDelta('\u{26a0} [agy tool error: ' + ev.tool.name + '] ' + ev.tool.error + '\n')
-          if (d) yield d
-        }
-        if (ev.tool.output !== undefined && !this.toolPhaseSeen.has(outKey)) {
-          this.toolPhaseSeen.add(outKey)
-          const rendered = this.opts.toolOutput
-            ? this.opts.toolOutput(ev.tool.name, ev.tool.args, ev.tool.output)
-            : defaultOutput(ev.tool.output)
-          if (rendered !== null) {
-            const d = this.appendDelta(rendered)
-            if (d) yield d
-          }
-        }
+        this.blockIdx++
+        yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        this.finished = true
         return
       }
       // title / user-input / unknown: ignored (forward compatibility).
