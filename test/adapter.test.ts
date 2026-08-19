@@ -200,6 +200,70 @@ test('buildDigest bounds output and keeps newest turns', () => {
   assert.ok(full.includes('turn-three'))
 })
 
+function msgSrc(role: 'user' | 'assistant', text: string, provider?: string): Message {
+  const m: Record<string, unknown> = { role, content: [{ type: 'text', text }] }
+  if (provider !== undefined) m.source = { provider }
+  return m as unknown as Message
+}
+
+test('returning session digests only foreign turns since the watermark', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-w1.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  // Turn 1 binds the session (watermark = 1 message).
+  await collect(adapter.stream(opts([msg('user', 'one')], { sessionId: 'sess-w' as never })))
+  // Turn 2: our own agy reply + a foreign (deepseek) interjection in between.
+  await collect(adapter.stream(opts([
+    msgSrc('assistant', 'one', 'antigravity'),
+    msg('user', 'two'),
+    msgSrc('assistant', 'deepseek said Z', 'deepseek-official'),
+    msg('user', 'final question'),
+  ], { sessionId: 'sess-w' as never })))
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt.includes('final question'))
+  assert.ok(prompt.includes('deepseek said Z'), 'foreign turn digested')
+  assert.ok(prompt.includes('two'), 'interleaved user turn digested')
+  assert.ok(!prompt.includes('User: one'), 'pre-watermark history not re-sent')
+  assert.equal(argv[argv.indexOf('--conversation') + 1], 'conv-fresh-1')
+
+  // Turn 3 (clean, only our own replies since watermark): no digest at all.
+  const argsFile2 = join(workDir, 'args-w2.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile2
+  await collect(adapter.stream(opts([
+    msgSrc('assistant', 'one', 'antigravity'),
+    msg('user', 'two'),
+    msgSrc('assistant', 'deepseek said Z', 'deepseek-official'),
+    msg('user', 'final question'),
+    msgSrc('assistant', 'final answer', 'antigravity'),
+    msg('user', 'third'),
+  ], { sessionId: 'sess-w' as never })))
+  const argv2 = JSON.parse(readFileSync(argsFile2, 'utf8')) as string[]
+  const prompt2 = argv2[argv2.indexOf('-p') + 1] ?? ''
+  assert.ok(!prompt2.includes('[conversation so far]'), 'clean follow-up carries no digest')
+  assert.equal(prompt2, 'third')
+})
+
+test('unspawnable binary maps to PROCESS_EXIT without hanging', async () => {
+  const { adapter } = makeAdapter()
+  const argsFile = join(workDir, 'args-x.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const broken = new AgyAdapter({
+    getConfig: () => ({ ...defaultConfig(), permissionMode: 'plan', timeoutMs: 10_000 }),
+    catalog: new ModelCatalog(async () => { throw new Error('x') }, defaultConfig().fallbackModels, 300_000),
+    store: new SessionStore(join(workDir, 'sessions-x.json')),
+    bin: () => '/nonexistent/agy-binary-x',
+    acquire: () => Promise.resolve(() => {}),
+  })
+  void adapter
+  const chunks = await collect(broken.stream(opts([msg('user', 'hi')])))
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string } } }
+  assert.equal(finish.type, 'finish')
+  assert.equal(finish.reason.kind, 'error')
+  assert.equal(finish.reason.failure?.code, Err.PROCESS_EXIT)
+})
+
 test.after(() => {
   rmSync(workDir, { recursive: true, force: true })
 })

@@ -25,14 +25,17 @@ export async function runAgyOnce(
   const cfg = deps.cfg()
   const bin = deps.bin()
   if (!bin) return { ok: false, text: '', conversationId: null, error: 'agy binary not found', durationMs: 0 }
-  const args: string[] = ['--output-format', 'stream-json']
+  const timeoutMs = req.timeoutMs ?? cfg.timeoutMs
+  const args: string[] = [
+    '--output-format', 'stream-json',
+    '--print-timeout', Math.max(1, Math.ceil(timeoutMs / 60_000)) + 'm',
+  ]
   const mode = req.mode ?? cfg.permissionMode
   if (mode === 'skip') args.push('--dangerously-skip-permissions')
   else args.push('--mode', mode)
   if (req.model) args.push('--model', req.model)
   if (req.effort) args.push('--effort', req.effort)
   args.push('-p', req.prompt)
-  const timeoutMs = req.timeoutMs ?? cfg.timeoutMs
   const parser = new StreamJsonParser()
   const textParts: string[] = []
   let resultText = ''

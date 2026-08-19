@@ -62,6 +62,8 @@ export interface AgyAdapterDeps {
   toolOutput?: ToolOutputRenderer
   /** Last-run telemetry surfaced by /agy status. */
   onRun?: (info: { ok: boolean; code: string; durationMs: number; model: string }) => void
+  /** Called with each run's parser so the host can keep the last stdout ring for /agy doctor. */
+  onParser?: (parser: StreamJsonParser) => void
 }
 
 // ---- stream() -------------------------------------------------------------
@@ -219,7 +221,10 @@ export class AgyAdapter extends LlmAdapter {
     let lastAssistantIdx = -1
     for (let i = messages.length - 1; i >= 0; i--) {
       const mm = messages[i]
-      if (mm !== undefined && mm.role === 'assistant') lastAssistantIdx = i
+      if (mm !== undefined && mm.role === 'assistant') {
+        lastAssistantIdx = i
+        break
+      }
     }
     const trailingUser = messages.slice(lastAssistantIdx + 1).filter((m) => m.role === 'user')
     const binding = sessionKey !== '' ? this.deps.store.get(sessionKey) : undefined
@@ -244,11 +249,17 @@ export class AgyAdapter extends LlmAdapter {
         // First contact: bring agy up to speed with a bounded digest.
         prompt = buildDigest(messages, 0, cfg.digestMaxChars) + prompt
       } else if (binding !== undefined) {
-        // Returning session: digest foreign turns since our watermark.
+        // Returning session: digest only the foreign turns since our
+        // watermark (the user may have talked to another model in between).
+        // Our own agy replies ride the native conversation history, and the
+        // trailing user run is already the live prompt below.
         const from = Math.min(binding.lastMessageCount, messages.length)
-        const foreignSpan = messages.slice(0, from).filter(isForeignAssistant)
-        if (foreignSpan.length > 0) {
-          prompt = buildDigest(messages, Math.max(0, from - 20), cfg.digestMaxChars) + prompt
+        const end = Math.max(from, lastAssistantIdx + 1)
+        const span = messages
+          .slice(from, end)
+          .filter((m) => m.role !== 'assistant' || isForeignAssistant(m))
+        if (span.some((m) => m.role === 'assistant')) {
+          prompt = buildDigest(span, 0, cfg.digestMaxChars) + prompt
         }
       }
     }
@@ -260,10 +271,10 @@ export class AgyAdapter extends LlmAdapter {
     }
 
     // ---- spawn + map (ADR-3) ----
-    const release = await this.deps.acquire()
     const before = snapshotConversations()
     const mapper = new EventMapper({ toolOutput: this.deps.toolOutput })
     const parser = new StreamJsonParser()
+    this.deps.onParser?.(parser)
     const queue = new ChunkQueue()
     let streamCid: string | null = null
     const args = this.buildArgs({
@@ -275,7 +286,16 @@ export class AgyAdapter extends LlmAdapter {
       timeoutMs: cfg.timeoutMs,
       extraArgs: cfg.extraArgs,
     })
-    const proc = startAgyProcess({
+    const release = await this.deps.acquire()
+    let released = false
+    const releaseOnce = (): void => {
+      if (released) return
+      released = true
+      release()
+    }
+    let proc: ReturnType<typeof startAgyProcess>
+    try {
+      proc = startAgyProcess({
       bin,
       args,
       cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
@@ -288,11 +308,15 @@ export class AgyAdapter extends LlmAdapter {
           for (const ch of mapper.map(ev)) queue.push(ch)
         }
       },
-    })
+      })
+    } catch (e) {
+      releaseOnce()
+      throw new LlmError('failed to spawn agy: ' + brief(String(e)), Err.PROCESS_EXIT)
+    }
 
     void (async () => {
       const outcome = await proc.outcome
-      release()
+      releaseOnce()
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
         for (const ch of mapper.map(ev)) queue.push(ch)
@@ -334,7 +358,11 @@ export class AgyAdapter extends LlmAdapter {
         model,
       })
       queue.close()
-    })()
+    })().catch((err) => {
+      releaseOnce()
+      for (const ch of mapper.emitFailure('error', Err.PROCESS_EXIT, 'internal error: ' + brief(String(err)))) queue.push(ch)
+      queue.close()
+    })
 
     yield* queue.drain()
   }

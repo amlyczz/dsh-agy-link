@@ -71,7 +71,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   let versionCache: string | null = null
   let dormantReason: string | null = null
   let lastRun: { ok: boolean; code: string; durationMs: number; model: string } | null = null
-  const lastParser = new StreamJsonParser()
+  let lastParser = new StreamJsonParser()
 
   const getConfig = (): PluginConfig => resolveConfig(entryConfig)
   const bin = (): string | null => {
@@ -109,6 +109,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     },
     onRun: (info) => {
       lastRun = info
+    },
+    onParser: (p) => {
+      lastParser = p
     },
   })
 
