@@ -206,5 +206,9 @@ export function findEntry(catalog: Catalog, id: string): CatalogEntry | undefine
 export function defaultEffortFor(entry: CatalogEntry, cfg: PluginConfig): string | undefined {
   if (!entry.efforts) return undefined
   if (cfg.defaultEffort !== '' && entry.efforts.includes(cfg.defaultEffort)) return cfg.defaultEffort
-  return entry.efforts.includes('medium') ? 'medium' : entry.efforts[entry.efforts.length - 1];
+  // Default to the highest reasoning effort (high), then fall back down.
+  for (const pref of ['high', 'medium', 'low']) {
+    if (entry.efforts.includes(pref)) return pref
+  }
+  return entry.efforts[entry.efforts.length - 1];
 }

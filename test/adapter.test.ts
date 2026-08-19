@@ -43,7 +43,7 @@ function makeAdapter(cfgOverrides: Partial<PluginConfig> = {}) {
 function opts(messages: Message[], extra: Partial<GenerateOptions> = {}): GenerateOptions {
   return {
     provider: 'antigravity',
-    model: 'gemini-3-6-flash',
+    model: 'gemini-3.7-flash',
     messages,
     ...extra,
   } as GenerateOptions
@@ -170,7 +170,7 @@ test('buildArgs assembles flags per ADR-3/8/10', () => {
   const { adapter } = makeAdapter()
   const args = adapter.buildArgs({
     prompt: 'do it',
-    model: 'gemini-3-6-flash',
+    model: 'gemini-3.7-flash',
     effort: 'high',
     conversationId: 'c9',
     permissionMode: 'skip',
@@ -179,7 +179,7 @@ test('buildArgs assembles flags per ADR-3/8/10', () => {
   })
   assert.ok(args.includes('--dangerously-skip-permissions'))
   assert.ok(!args.includes('--mode'))
-  assert.equal(args[args.indexOf('--model') + 1], 'gemini-3-6-flash')
+  assert.equal(args[args.indexOf('--model') + 1], 'gemini-3.7-flash')
   assert.equal(args[args.indexOf('--effort') + 1], 'high')
   assert.equal(args[args.indexOf('--conversation') + 1], 'c9')
   assert.equal(args[args.indexOf('--print-timeout') + 1], '2m')

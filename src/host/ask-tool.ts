@@ -4,6 +4,7 @@
 // gpt-oss plus exact slugs, newest version wins, effort nearest-match).
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Catalog } from './models.ts'
+import { defaultEffortFor, findEntry } from './models.ts'
 import type { OneShotDeps } from './oneshot.ts'
 import { runAgyOnce } from './oneshot.ts'
 
@@ -115,10 +116,13 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
       const readPaths = typeof args.readPaths === 'string' && args.readPaths.trim() !== ''
         ? args.readPaths.split(/[ ,]+/).filter(Boolean)
         : []
+      // Effort defaults to the bridge default (high-first) for effort models.
+      const entry = findEntry(deps.catalog(), model)
+      const effort = args.effort ?? (entry?.efforts ? defaultEffortFor(entry, cfg) : undefined)
       const res = await runAgyOnce(deps, {
         prompt: args.prompt,
         model: model === '' ? undefined : model,
-        effort: args.effort,
+        effort,
         mode: args.mode,
         timeoutMs: args.timeoutMinutes ? args.timeoutMinutes * 60_000 : undefined,
         signal: exec.signal,

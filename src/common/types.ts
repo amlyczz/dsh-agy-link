@@ -54,10 +54,28 @@ export interface PluginConfig {
   mcpToolAllowlist: string
 }
 
+// Full fallback line-up, mined from the agy 1.1.13 binary. Serves the
+// picker when agy models cannot run (signed out / offline); the live list
+// always comes from `agy models` once signed in.
 export const DEFAULT_FALLBACK_MODELS: readonly FallbackModelDef[] = [
-  { id: 'gemini-3-6-flash', name: 'Gemini 3.6 Flash', efforts: ['low', 'medium', 'high'] },
-  { id: 'gemini-3-1-pro', name: 'Gemini 3.1 Pro', efforts: ['low', 'high'] },
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', efforts: ['low', 'medium', 'high'] },
+  { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', efforts: ['low', 'medium', 'high'] },
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', efforts: ['low', 'medium', 'high'] },
+  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', efforts: ['low', 'high'] },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', efforts: ['low', 'high'] },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', efforts: ['low', 'medium', 'high'] },
+  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite' },
+  { id: 'claude-opus-4-8', name: 'Claude Opus 4.8 (Thinking)' },
+  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6 (Thinking)' },
+  { id: 'claude-opus-4-5', name: 'Claude Opus 4.5 (Thinking)' },
+  { id: 'claude-opus-4', name: 'Claude Opus 4 (Thinking)' },
   { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)' },
+  { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5 (Thinking)' },
+  { id: 'claude-sonnet-4', name: 'Claude Sonnet 4 (Thinking)' },
+  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+  { id: 'gpt-oss-120b', name: 'GPT-OSS 120B' },
+  { id: 'gpt-oss-20b', name: 'GPT-OSS 20B' },
 ]
 
 export function defaultConfig(): PluginConfig {

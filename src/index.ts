@@ -88,7 +88,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     async (signal) => {
       const b = bin()
       if (!b) throw new Error('agy binary not found')
-      const out = await probeProcess(b, ['models', '--output-format', 'json'], 30_000, signal)
+      // agy models has no --output-format flag (verified against 1.1.13);
+      // it prints a two-column text table. parseModelsOutput handles both.
+      const out = await probeProcess(b, ['models'], 30_000, signal)
       if (out.code !== 0 && out.stdout.trim() === '') {
         throw new Error('agy models failed: ' + (out.stderrTail.trim() !== '' ? out.stderrTail.trim().slice(-200) : 'exit ' + String(out.code)))
       }
@@ -176,17 +178,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       log('adapter registration failed: ' + String(e))
     }
   }
-  try {
-    ctx.llm.registerConfigurableProviders([{
-      provider: PROVIDER_ID,
-      displayName: 'Antigravity (agy CLI)',
-      settingsNs: PLUGIN_ID,
-      settingsPath: [],
-      declared: false,
-    }])
-  } catch {
-    // directory entry is best-effort
-  }
+  // NOTE: no registerConfigurableProviders call. This plugin configures
+  // through its own cordis entry (enabled/agyBin/mode/...), not the llm
+  // settings directory; registering here would put an unconfigured
+  // antigravity into the provider-add list and confuse the UI state.
 
   // ---- /agy command ----
   ctx.commands.register(
