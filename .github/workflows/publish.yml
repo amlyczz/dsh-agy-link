@@ -25,9 +25,10 @@ jobs:
 
       - run: npm run check
 
-      - run: npm test
-
+      # build before test: the MCP bridge E2E test spawns dist/bridge.mjs
       - run: npm run build
+
+      - run: npm test
 
       - run: npm publish --access public
         env:
