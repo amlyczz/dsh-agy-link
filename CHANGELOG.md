@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 (2026-08-19)
+
+- Fixed the client slot registration: the sidebar footer slot entry must
+  register under the slot name `sidebar.footer.action` (not `ui-sidebar`),
+  matching the ui-sidebar slot table - the wrong name failed plugin loading
+  with: slot ui-sidebar is not declared.
+
 ## 0.1.2 (2026-08-18)
 
 - Fixed prompt assembly for returning sessions: the last-assistant scan now

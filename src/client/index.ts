@@ -293,8 +293,8 @@ export function apply(ctx: ClientContext): void {
 	ctx.slots.inject('sidebar.footer.action', () => {
 		const dispose = ctx.slots.register(
 			{
-				name: 'ui-sidebar',
-				id: 'agy-link',
+				name: 'sidebar.footer.action',
+				id: 'agy-link-entry',
 				order: 30,
 				label: 'Antigravity',
 			},
