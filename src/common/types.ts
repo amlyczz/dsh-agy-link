@@ -40,6 +40,18 @@ export interface PluginConfig {
   workspaceRoot: string
   fallbackModels: readonly FallbackModelDef[]
   askTool: boolean
+  /** Directory where inbound images are staged for agy (path-based multimodal). */
+  mediaDir: string
+  /** Images older than this are swept from mediaDir. */
+  mediaTtlMs: number
+  /** Per-image byte cap for staging; larger images are skipped with a note. */
+  mediaMaxBytes: number
+  /** Max images staged per model call. */
+  mediaMaxImages: number
+  /** Experimental: expose DSH tools to agy over a local MCP bridge. */
+  mcpBridge: boolean
+  /** Comma-separated tool-name allowlist for the MCP bridge (empty = all non-internal). */
+  mcpToolAllowlist: string
 }
 
 export const DEFAULT_FALLBACK_MODELS: readonly FallbackModelDef[] = [
@@ -68,6 +80,12 @@ export function defaultConfig(): PluginConfig {
     workspaceRoot: '',
     fallbackModels: DEFAULT_FALLBACK_MODELS,
     askTool: false,
+    mediaDir: '',
+    mediaTtlMs: 86_400_000,
+    mediaMaxBytes: 10 * 1024 * 1024,
+    mediaMaxImages: 8,
+    mcpBridge: false,
+    mcpToolAllowlist: '',
   }
 }
 

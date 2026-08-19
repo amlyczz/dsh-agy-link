@@ -34,6 +34,9 @@
 | 🔐 **GUI 内 Google 登录** | `/agy auth` 打印授权 URL；侧栏面板提供二维码 + 授权码粘贴框 |
 | 🤝 **`agy_ask` 工具** | 任何 DSH 模型都可以把一次性任务委托给 Antigravity 模型（AskAntigravity 模式） |
 | ⌨️ **`/agy` 命令族** | `status` / `auth` / `auth-code` / `models` / `mode` / `effort` / `clear` / `doctor` / `help` |
+| 🖼 **图片多模态（v0.2）** | 图片落盘到本地媒体目录（TTL 清理），prompt 以绝对路径引用 + `--add-dir` 授权，agy 用自己的工具看图 |
+| 📎 **文件内联 + 结构化输出（v0.2）** | `agy_ask` 新增 `readPaths`（文本文件内联）与 `schema`（`--json-schema` 强约束答案） |
+| 🌉 **MCP 反向桥（v0.2 实验）** | `mcpBridge: true` 开启后 agy 可直接调 DSH 侧工具（回环 + token 守卫端点 + 零依赖 stdio MCP 服务器，`.mcp.json` 合并写入/禁用还原） |
 | 😴 **休眠安全** | 没装 agy？没登录？插件照常加载并告诉你怎么修 |
 
 ## 🚀 快速开始
@@ -118,6 +121,9 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** — chat, thinki
 | 🤝 **`agy_ask` tool** | Let any DSH model delegate a one-shot task to an Antigravity model (the AskAntigravity pattern) |
 | ⌨️ **`/agy` commands** | `status`, `auth`, `auth-code`, `models`, `mode`, `effort`, `clear`, `doctor`, `help` |
 | 😴 **Dormant-safe** | No agy binary? Not signed in? The plugin loads anyway and tells you what to fix |
+| 🖼 **Image multimodal (v0.2)** | image attachments staged to a TTL-swept local dir, referenced by absolute path with `--add-dir`; agy views them with its own tools |
+| 📎 **File inlining + structured output (v0.2)** | `agy_ask` gains `readPaths` (inline text files) and `schema` (enforced via `--json-schema`) |
+| 🌉 **MCP reverse bridge (v0.2, experimental)** | with `mcpBridge: true`, agy calls DSH-side tools directly (loopback token-guarded endpoint + zero-dep stdio MCP server merged into `.mcp.json`, restored on disable) |
 
 ## 🚀 Quick start
 

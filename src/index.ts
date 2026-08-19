@@ -18,6 +18,8 @@ import { ModelCatalog } from './host/models.ts'
 import { MIN_AGY_VERSION, compareVersions, parseVersion, probeProcess, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
 import { StreamJsonParser } from './host/parser.ts'
+import { defaultMediaDir, sweepDir, type ImageRefLike } from './host/media.ts'
+import { startMcpBridge, writeMcpConfig, type McpBridge, type ToolsServiceLike } from './host/mcp-bridge.ts'
 
 export const name = 'dsh-agy-link'
 // webServer and tools are optional: the plugin loads headless too.
@@ -112,6 +114,16 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     },
     onParser: (p) => {
       lastParser = p
+    },
+    readImage: async (ref: ImageRefLike) => {
+      const svc = (ctx as unknown as { attachments?: { readImage?: (r: ImageRefLike) => Promise<{ data?: Uint8Array } | null> } }).attachments
+      if (!svc || typeof svc.readImage !== 'function') return null
+      try {
+        const stored = await svc.readImage(ref)
+        return stored?.data ?? null
+      } catch {
+        return null
+      }
     },
   })
 
@@ -331,9 +343,55 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     }})
   }
 
+  // ---- v0.2: media TTL sweep + optional MCP reverse bridge ----
+  const mediaDir = (): string => {
+    const cfg = getConfig()
+    return cfg.mediaDir !== '' ? cfg.mediaDir : defaultMediaDir(stateDir())
+  }
+  ctx.effect(() => {
+    const timer = setInterval(() => {
+      void sweepDir(mediaDir(), getConfig().mediaTtlMs).catch(() => undefined)
+    }, Math.max(60_000, Math.min(getConfig().mediaTtlMs, 3_600_000)))
+    return () => clearInterval(timer)
+  })
+
+  const bridgeState: { bridge: Awaited<ReturnType<typeof startMcpBridge>> | null; restore: (() => void) | null } = { bridge: null, restore: null }
+  const syncMcpBridge = (): void => {
+    const cfg = getConfig()
+    const want = cfg.mcpBridge && cfg.enabled
+    if (want && bridgeState.bridge === null) {
+      void (async () => {
+        try {
+          const script = new URL('./bridge.mjs', import.meta.url).pathname
+          const toolsSvc = ctx.get('tools') as ToolsServiceLike | undefined
+          const bridge = await startMcpBridge({
+            bridgeScript: script,
+            tools: () => (ctx.get('tools') as ToolsServiceLike | undefined),
+            allowlist: () => getConfig().mcpToolAllowlist,
+            log,
+          })
+          bridgeState.bridge = bridge
+          const root = cfg.workspaceRoot !== '' ? cfg.workspaceRoot : process.cwd()
+          bridgeState.restore = writeMcpConfig(root, bridge)
+          log('mcp bridge ready at ' + bridge.url + (toolsSvc ? '' : ' (tools service not yet available)'))
+        } catch (e) {
+          log('mcp bridge failed to start: ' + String(e))
+        }
+      })()
+    } else if (!want && bridgeState.bridge !== null) {
+      bridgeState.restore?.()
+      void bridgeState.bridge.close()
+      bridgeState.bridge = null
+      bridgeState.restore = null
+    }
+  }
+  syncMcpBridge()
+
   ctx.effect(() => {
     auth.dispose()
     if (askToolDispose.current !== null) askToolDispose.current()
+    bridgeState.restore?.()
+    void bridgeState.bridge?.close()
     return () => undefined
   })
 }

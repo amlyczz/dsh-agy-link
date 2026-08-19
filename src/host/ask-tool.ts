@@ -86,6 +86,14 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
         type: 'number',
         description: 'Optional timeout budget in minutes (default 10).',
       },
+      readPaths: {
+        type: 'string',
+        description: 'Optional space/comma-separated text files to inline into the prompt (workspace-relative or absolute; binaries are skipped with a note).',
+      },
+      schema: {
+        type: 'string',
+        description: 'Optional JSON Schema (as a JSON string) enforcing the final answer via agy --json-schema.',
+      },
     },
     output: {
       schema: { type: 'string' },
@@ -96,6 +104,17 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
       void exec.signal;
       const cfg = deps.cfg()
       const model = resolveAskModel(args.model ?? '', deps.catalog(), cfg.defaultModel)
+      let parsedSchema: unknown
+      if (typeof args.schema === 'string' && args.schema.trim() !== '') {
+        try {
+          parsedSchema = JSON.parse(args.schema)
+        } catch (e) {
+          throw new Error('agy_ask: schema is not valid JSON: ' + String(e))
+        }
+      }
+      const readPaths = typeof args.readPaths === 'string' && args.readPaths.trim() !== ''
+        ? args.readPaths.split(/[ ,]+/).filter(Boolean)
+        : []
       const res = await runAgyOnce(deps, {
         prompt: args.prompt,
         model: model === '' ? undefined : model,
@@ -103,6 +122,8 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
         mode: args.mode,
         timeoutMs: args.timeoutMinutes ? args.timeoutMinutes * 60_000 : undefined,
         signal: exec.signal,
+        readPaths,
+        schema: parsedSchema,
       })
       if (!res.ok) {
         throw new Error('agy_ask failed: ' + (res.error ?? 'unknown error'))

@@ -99,6 +99,12 @@ export function resolveConfig(
         )
       : base.fallbackModels,
     askTool: asBool(get('askTool')) ?? base.askTool,
+    mediaDir: asString(get('mediaDir')) ?? base.mediaDir,
+    mediaTtlMs: asNum(get('mediaTtlMs')) ?? base.mediaTtlMs,
+    mediaMaxBytes: asNum(get('mediaMaxBytes')) ?? base.mediaMaxBytes,
+    mediaMaxImages: asNum(get('mediaMaxImages')) ?? base.mediaMaxImages,
+    mcpBridge: asBool(get('mcpBridge')) ?? base.mcpBridge,
+    mcpToolAllowlist: asString(get('mcpToolAllowlist')) ?? base.mcpToolAllowlist,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -120,5 +126,15 @@ export function resolveConfig(
   if (env.DSH_AGY_EXTRA_ARGS) {
     cfg.extraArgs = env.DSH_AGY_EXTRA_ARGS.split(/\s+/).filter(Boolean)
   }
+  if (env.DSH_AGY_MEDIA_DIR) cfg.mediaDir = env.DSH_AGY_MEDIA_DIR
+  if (env.DSH_AGY_MEDIA_TTL_MS) {
+    const t = asNum(env.DSH_AGY_MEDIA_TTL_MS)
+    if (t && t > 0) cfg.mediaTtlMs = t
+  }
+  if (env.DSH_AGY_MCP_BRIDGE !== undefined) {
+    const b = asBool(env.DSH_AGY_MCP_BRIDGE)
+    if (b !== undefined) cfg.mcpBridge = b
+  }
+  if (env.DSH_AGY_MCP_TOOL_ALLOWLIST) cfg.mcpToolAllowlist = env.DSH_AGY_MCP_TOOL_ALLOWLIST
   return cfg
 }

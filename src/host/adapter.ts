@@ -11,7 +11,9 @@ import { diffConversations, snapshotConversations } from './discovery.ts'
 import { EventMapper, type ToolOutputRenderer } from './mapper.ts'
 import { defaultEffortFor, findEntry, ModelCatalog } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
+import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
 import { startAgyProcess } from './runner.ts'
+import { stateDir } from '../common/config.ts'
 import type { SessionStore } from './sessions.ts'
 
 type ForeignSource = { source?: { kind?: string; provider?: string } }
@@ -62,6 +64,8 @@ export interface AgyAdapterDeps {
   toolOutput?: ToolOutputRenderer
   /** Last-run telemetry surfaced by /agy status. */
   onRun?: (info: { ok: boolean; code: string; durationMs: number; model: string }) => void
+  /** Reads image bytes from DSH attachment storage (multimodal staging). */
+  readImage?: (ref: ImageRefLike) => Promise<Uint8Array | null>
   /** Called with each run's parser so the host can keep the last stdout ring for /agy doctor. */
   onParser?: (parser: StreamJsonParser) => void
 }
@@ -176,6 +180,7 @@ export class AgyAdapter extends LlmAdapter {
     permissionMode: PluginConfig['permissionMode']
     timeoutMs: number
     extraArgs: readonly string[]
+    addDirs?: readonly string[]
   }): string[] {
     const args: string[] = ['--output-format', 'stream-json', '--print-timeout', Math.max(1, Math.ceil(opts.timeoutMs / 60_000)) + 'm']
     if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
@@ -183,6 +188,7 @@ export class AgyAdapter extends LlmAdapter {
     if (opts.model !== '') args.push('--model', opts.model)
     if (opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
     if (opts.conversationId) args.push('--conversation', opts.conversationId)
+    for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
     args.push(...opts.extraArgs)
     args.push('-p', opts.prompt)
     return args
@@ -263,11 +269,39 @@ export class AgyAdapter extends LlmAdapter {
         }
       }
     }
-    if (prompt.trim() === '') {
-      throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
-    }
     if (cfg.forwardSystemPrompt && options.system) {
       prompt = 'System instructions:\n' + options.system + '\n\n' + prompt;
+    }
+
+    // ---- multimodal staging (v0.2): images ride as staged files ----
+    let stagedDirs: string[] = []
+    if (!isAux) {
+      const imageRefs: ImageRefLike[] = []
+      for (const m of trailingUser) {
+        for (const b of (m as { content?: readonly unknown[] }).content ?? []) {
+          const blk = b as { type?: string; attachment?: ImageRefLike }
+          if (blk && blk.type === 'image' && blk.attachment) imageRefs.push(blk.attachment)
+        }
+      }
+      if (imageRefs.length > 0 && this.deps.readImage) {
+        const dir = cfg.mediaDir !== '' ? cfg.mediaDir : defaultMediaDir(stateDir())
+        const key = (sessionKey !== '' ? sessionKey.replace(/[^a-zA-Z0-9_-]+/g, '_') : 'anon') + '-' + messages.length
+        const res = await stageImages({
+          dir,
+          key,
+          images: imageRefs,
+          readImage: this.deps.readImage,
+          maxImages: cfg.mediaMaxImages,
+          maxBytes: cfg.mediaMaxBytes,
+        })
+        if (res.promptSuffix !== '') prompt = prompt === '' ? res.promptSuffix : prompt + '\n\n' + res.promptSuffix
+        if (res.staged.length > 0) stagedDirs = [dir]
+      }
+      if (prompt.trim() === '') {
+        throw new LlmError('request carries no user text or images to forward to agy', Err.AGY_ERROR)
+      }
+    } else if (prompt.trim() === '') {
+      throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
     }
 
     // ---- spawn + map (ADR-3) ----
@@ -285,6 +319,7 @@ export class AgyAdapter extends LlmAdapter {
       permissionMode: isAux ? 'plan' : cfg.permissionMode,
       timeoutMs: cfg.timeoutMs,
       extraArgs: cfg.extraArgs,
+      addDirs: stagedDirs,
     })
     const release = await this.deps.acquire()
     let released = false

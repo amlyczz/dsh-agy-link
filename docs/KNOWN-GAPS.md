@@ -4,13 +4,21 @@ Deliberate v1 boundaries and upstream-behavior notes.
 
 ## Not forwarded to agy
 
-- **Images / attachments** — agy print mode (`-p`) accepts text only.
-  Image blocks in DSH messages are skipped silently.
-- **DSH tools** — agy runs its own closed tool loop; DSH tool schemas are
-  not exported to it. The reverse direction (agy calling DSH tools over MCP)
-  is tracked as future work.
-- **Structured outputs** — `--json-schema` exists on agy but is not wired
-  through DSH tool-call generation in v1.
+- **Images as true multimodal blocks** - agy print mode (`-p`) has no image
+  input flag. Since v0.2 the bridge stages DSH image attachments to a local
+  media directory (`mediaDir`, TTL-swept) and references them by absolute
+  path in the prompt, granting `--add-dir` so agy can view them with its own
+  file/vision tools. Same approach as the pi extension.
+- **DSH tools to agy (reverse MCP bridge)** - available since v0.2 behind the
+  `mcpBridge` config flag (experimental): the plugin runs a loopback-only,
+  token-guarded HTTP endpoint and registers a zero-dependency stdio MCP
+  server (`dsh-tools`) in the workspace `.mcp.json` (merged in, restored on
+  disable). `run_code` and `agy_ask` are never bridged; `mcpToolAllowlist`
+  restricts the set further.
+- **Structured outputs** - `agy_ask` accepts a `schema` parameter (JSON
+  Schema as a JSON string) enforced via `--json-schema` since v0.2. Wiring
+  schema enforcement into DSH-native tool-call generation remains future
+  work: DSH `GenerateOptions` has no schema field to map onto.
 
 ## Mapping choices
 

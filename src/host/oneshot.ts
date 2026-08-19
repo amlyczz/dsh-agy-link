@@ -4,6 +4,67 @@
 import { looksLikeAuthFailure, type PluginConfig } from '../common/types.ts'
 import { StreamJsonParser } from './parser.ts'
 import { startAgyProcess } from './runner.ts'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, resolve } from 'node:path'
+
+/** Per-file inline cap; larger files are truncated. */
+const INLINE_MAX_BYTES = 256 * 1024
+
+/** Text-detection: anything that is very likely not binary. */
+function looksTextual(head: string): boolean {
+  if (head === '') return true
+  let suspicious = 0
+  const n = Math.min(head.length, 2000)
+  for (let i = 0; i < n; i++) {
+    const c = head.charCodeAt(i)
+    if (c === 0 || (c < 9 && c !== 0) || (c > 13 && c < 32)) suspicious++
+  }
+  return suspicious / n < 0.05
+}
+
+/**
+ * Inline text files into the prompt (v0.2): each readable textual file
+ * becomes a fenced section. Paths resolve against the oneshot cwd;
+ * absolute paths pass through.
+ */
+export async function inlineFiles(
+  prompt: string,
+  paths: readonly string[],
+  cwd: string,
+): Promise<string> {
+  if (paths.length === 0) return prompt
+  const sections: string[] = []
+  for (const raw of paths) {
+    const p = isAbsolute(raw) ? raw : resolve(cwd, raw)
+    let note = ''
+    let body = ''
+    try {
+      const buf = await readFile(p)
+      if (!looksTextual(buf.subarray(0, Math.min(buf.length, 4096)).toString('utf8'))) {
+        note = '(skipped: binary file - reference it by path and let agy read it with its own tools)'
+      } else if (buf.byteLength > INLINE_MAX_BYTES) {
+        note = '(truncated to the first ' + INLINE_MAX_BYTES + ' bytes)'
+        body = buf.subarray(0, INLINE_MAX_BYTES).toString('utf8')
+      } else {
+        body = buf.toString('utf8')
+      }
+    } catch {
+      note = '(skipped: unreadable - ' + raw + ')'
+    }
+    sections.push('--- file: ' + p + ' ' + note + ' ---' + '\n' + body)
+  }
+  return prompt + '\n\n' + sections.join('\n\n')
+}
+
+/** Write a JSON schema to a temp file; returns the --json-schema argv tail. */
+export async function schemaArgs(schema: unknown): Promise<{ args: string[]; cleanup: () => Promise<void> }> {
+  const text = JSON.stringify(schema)
+  const dir = await mkdtemp(join(tmpdir(), 'agy-schema-'))
+  const file = join(dir, 'schema.json')
+  await writeFile(file, text, 'utf8')
+  return { args: ['--json-schema', file], cleanup: () => rm(dir, { recursive: true, force: true }) }
+}
 
 export interface OneShotResult {
   ok: boolean
@@ -20,7 +81,18 @@ export interface OneShotDeps {
 
 export async function runAgyOnce(
   deps: OneShotDeps,
-  req: { prompt: string; model?: string; effort?: string; mode?: string; timeoutMs?: number; signal?: AbortSignal },
+  req: {
+    prompt: string
+    model?: string
+    effort?: string
+    mode?: string
+    timeoutMs?: number
+    signal?: AbortSignal
+    /** Workspace-relative or absolute text files to inline into the prompt. */
+    readPaths?: readonly string[]
+    /** JSON schema enforcing the final result (--json-schema). */
+    schema?: unknown
+  },
 ): Promise<OneShotResult> {
   const cfg = deps.cfg()
   const bin = deps.bin()
@@ -35,7 +107,17 @@ export async function runAgyOnce(
   else args.push('--mode', mode)
   if (req.model) args.push('--model', req.model)
   if (req.effort) args.push('--effort', req.effort)
-  args.push('-p', req.prompt)
+  let prompt = req.prompt
+  if (req.readPaths && req.readPaths.length > 0) {
+    prompt = await inlineFiles(prompt, req.readPaths, cfg.workspaceRoot !== '' ? cfg.workspaceRoot : process.cwd())
+  }
+  let cleanup: (() => Promise<void>) | null = null
+  if (req.schema !== undefined && req.schema !== null) {
+    const sa = await schemaArgs(req.schema)
+    args.push(...sa.args)
+    cleanup = sa.cleanup
+  }
+  args.push('-p', prompt)
   const parser = new StreamJsonParser()
   const textParts: string[] = []
   let resultText = ''
@@ -58,6 +140,7 @@ export async function runAgyOnce(
     },
   })
   const outcome = await proc.outcome
+  if (cleanup) void cleanup().catch(() => {})
   for (const ev of parser.flush()) {
     if (ev.kind === 'result') {
       if (ev.conversationId !== '') conversationId = ev.conversationId
