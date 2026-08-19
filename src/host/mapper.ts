@@ -149,7 +149,7 @@ export class EventMapper {
         if (d) yield d
         return
       }
-      if (ev.stepKind === 'thinking' || ev.stepKind === 'tool' || ev.stepKind === 'subagent') {
+      if (ev.stepKind === 'thinking' || ev.stepKind === 'subagent') {
         yield* this.ensureBlock('reasoning')
         if (ev.stepKind === 'thinking') {
           const prev = this.emittedByKey.get(ev.stepKey) ?? ''
@@ -157,34 +157,44 @@ export class EventMapper {
           this.emittedByKey.set(ev.stepKey, ev.text)
           const d = this.appendDelta(delta)
           if (d) yield d
-        } else if (ev.stepKind === 'tool' && ev.tool) {
-          const announceKey = ev.stepKey + ':a'
-          if (!this.toolPhaseSeen.has(announceKey)) {
-            this.toolPhaseSeen.add(announceKey)
-            const line = (this.opts.announce ?? defaultAnnounce)(ev.tool.name, ev.tool.args)
-            const d = this.appendDelta(line)
-            if (d) yield d
-          }
-          const outKey = ev.stepKey + ':o'
-          const errKey = ev.stepKey + ':e'
-          if (ev.tool.error !== undefined && !this.toolPhaseSeen.has(errKey)) {
-            this.toolPhaseSeen.add(errKey)
-            const d = this.appendDelta('[agy tool error: ' + ev.tool.name + '] ' + ev.tool.error + '\n')
-            if (d) yield d
-          }
-          if (ev.tool.output !== undefined && !this.toolPhaseSeen.has(outKey)) {
-            this.toolPhaseSeen.add(outKey)
-            const rendered = this.opts.toolOutput
-              ? this.opts.toolOutput(ev.tool.name, ev.tool.args, ev.tool.output)
-              : defaultOutput(ev.tool.output)
-            if (rendered !== null) {
-              const d = this.appendDelta(rendered)
-              if (d) yield d
-            }
-          }
-        } else if (ev.stepKind === 'subagent') {
+        } else {
           const d = this.appendDelta('[agy subagent] ' + ev.text + '\n')
           if (d) yield d
+        }
+        return
+      }
+      if (ev.stepKind === 'tool' && ev.tool) {
+        // Tool activity renders in the visible reply body, not the thinking
+        // panel: agy executes tools inside its own closed loop and DSH can
+        // never run them natively (a finish:tool-calls would make the DSH
+        // agent try to execute an unregistered tool), so body annotations
+        // are the only honest way the user sees what agy actually did.
+        // sawTextStep stays untouched so the result-envelope fallback still
+        // fires when agy never streamed a text_delta.
+        yield* this.ensureBlock('text')
+        const announceKey = ev.stepKey + ':a'
+        if (!this.toolPhaseSeen.has(announceKey)) {
+          this.toolPhaseSeen.add(announceKey)
+          const line = (this.opts.announce ?? defaultAnnounce)(ev.tool.name, ev.tool.args)
+          const d = this.appendDelta('\u{1f527} ' + line)
+          if (d) yield d
+        }
+        const outKey = ev.stepKey + ':o'
+        const errKey = ev.stepKey + ':e'
+        if (ev.tool.error !== undefined && !this.toolPhaseSeen.has(errKey)) {
+          this.toolPhaseSeen.add(errKey)
+          const d = this.appendDelta('\u{26a0} [agy tool error: ' + ev.tool.name + '] ' + ev.tool.error + '\n')
+          if (d) yield d
+        }
+        if (ev.tool.output !== undefined && !this.toolPhaseSeen.has(outKey)) {
+          this.toolPhaseSeen.add(outKey)
+          const rendered = this.opts.toolOutput
+            ? this.opts.toolOutput(ev.tool.name, ev.tool.args, ev.tool.output)
+            : defaultOutput(ev.tool.output)
+          if (rendered !== null) {
+            const d = this.appendDelta(rendered)
+            if (d) yield d
+          }
         }
         return
       }

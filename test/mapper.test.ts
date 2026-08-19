@@ -73,7 +73,7 @@ test('tool steps announce once and render output once', () => {
     { kind: 'step', stepKey: '2', stepKind: 'tool', tool: { name: 'read_file', args: { path: '/x' }, output: 'data' } },
     { kind: 'step', stepKey: '2', stepKind: 'tool', tool: { name: 'read_file', args: { path: '/x' }, output: 'data' } },
   ])
-  const all = chunks.map((c) => (c.type === 'reasoning-delta' ? (c as unknown as { text: string }).text : '')).join('')
+  const all = chunks.map((c) => (c.type === 'text-delta' ? (c as unknown as { text: string }).text : '')).join('')
   assert.equal(all.match(/\[agy tool: read_file\]/g)?.length, 1)
   assert.equal(all.match(/-> data/g)?.length, 1)
 })
@@ -124,15 +124,17 @@ test('agy 1.1.15 stream: thinking turns, tool announce/output/error, text fragme
     .filter((c) => c.type === 'text-delta')
     .map((c) => (c as { text: string }).text)
     .join('')
-  assert.equal(text, 'There are 2 files.')
+  // tool activity lives in the visible text body now
+  assert.ok(text.includes('[agy tool: run_command]'), text)
+  assert.ok(text.includes('-> note1.txt'), text)
+  assert.ok(text.includes('[agy tool error: find_by_name] Find command timed out.'), text)
+  assert.ok(text.includes('There are 2 files.'), text)
   const reasoning = chunks
     .filter((c) => c.type === 'reasoning-delta')
     .map((c) => (c as { text: string }).text)
     .join('')
   assert.ok(reasoning.includes('[agy thinking turn · 80 thinking tokens]'), reasoning)
-  assert.ok(reasoning.includes('[agy tool: run_command]'), reasoning)
-  assert.ok(reasoning.includes('-> note1.txt'), reasoning)
-  assert.ok(reasoning.includes('[agy tool error: find_by_name] Find command timed out.'), reasoning)
+  assert.ok(!reasoning.includes('[agy tool:'), 'tool annotations must not be in reasoning')
   const finish = asFinish(lastChunk(chunks))
   assert.equal(finish.reason.kind, 'stop')
   assert.equal(m.isFinished, true)

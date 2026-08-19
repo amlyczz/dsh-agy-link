@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.9 (2026-08-19)
+
+- **Tool activity moved out of the thinking panel into the reply body.**
+  User feedback on 0.2.8: tool annotations hidden inside the DSH thinking
+  fold were invisible and felt wrong. agy tools now render as visible
+  `🔧 [agy tool: name] args -> output` lines in the message body (they
+  cannot become native DSH tool cards: a finish:tool-calls would make the
+  DSH agent try to execute tools it does not own — agy runs its own closed
+  tool loop). The thinking panel keeps only what is genuinely thinking
+  signal: `[agy thinking turn · N thinking tokens]` turn annotations
+  (agy print mode never streams thinking text) and terminal error notes.
+
 ## 0.2.8 (2026-08-19)
 
 - **Fix: real agy 1.1.15 stream-json parsing.** The parser only understood

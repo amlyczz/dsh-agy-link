@@ -70,7 +70,8 @@ test('ok run streams the full protocol and persists the binding', async () => {
   assert.equal(finish.type, 'finish')
   assert.equal(finish.reason.kind, 'stop')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
-  assert.equal(text, 'Hello from fake agy')
+  assert.ok(text.includes('[agy tool: read_file]'), 'tool annotation visible in the text body: ' + text)
+  assert.ok(text.endsWith('Hello from fake agy'), text)
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   assert.ok(argv.includes('--output-format'))
   assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json')
@@ -112,11 +113,12 @@ test('agy 1.1.15 stream format maps thinking turns, tool activity and fragments'
   assert.equal(finish.reason.kind, 'stop')
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as unknown as { text: string }).text).join('')
   assert.ok(reasoning.includes('[agy thinking turn · 80 thinking tokens]'), reasoning)
-  assert.ok(reasoning.includes('[agy tool: run_command]'), reasoning)
-  assert.ok(reasoning.includes('note1.txt'), reasoning)
-  assert.ok(reasoning.includes('[agy tool error: find_by_name] Find command timed out.'), reasoning)
+  assert.ok(!reasoning.includes('[agy tool:'), 'tool annotations belong in the text body')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
-  assert.equal(text, 'There are 2 files, 6 words total.')
+  assert.ok(text.includes('[agy tool: run_command]'), text)
+  assert.ok(text.includes('note1.txt'), text)
+  assert.ok(text.includes('[agy tool error: find_by_name] Find command timed out.'), text)
+  assert.ok(text.includes('There are 2 files, 6 words total.'), text)
 })
 
 test('agy 1.1.15 result ERROR with response still finishes stop', async () => {
