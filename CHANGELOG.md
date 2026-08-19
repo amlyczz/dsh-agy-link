@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2 (2026-08-18)
+
+- Fixed prompt assembly for returning sessions: the last-assistant scan now
+  stops at the newest assistant message, and the history digest covers exactly
+  the foreign turns since the watermark (previously it could re-send stale
+  history or swallow intermediate turns into the trailing prompt).
+- Hardened the stream loop: spawn failures release the concurrency slot and
+  surface as `PROCESS_EXIT` instead of hanging; the collector is fail-safe.
+- `/agy doctor` now exports the real last-run stdout ring (parser wiring).
+- `agy_ask` one-shot runs pass `--print-timeout` consistent with the watchdog.
+
 ## 0.1.1 (2026-08-18)
 
 - Fixed cordis activation in app-less profiles (optional services are now
