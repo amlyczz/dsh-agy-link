@@ -23,6 +23,8 @@
 `agy` CLI 驱动，完整支持对话输出、思考（thinking）、工具活动与 token
 用量，全部走你的 Antigravity 订阅。
 
+**它是怎么工作的**：在 `/model` 选择器里挑一个 Antigravity 模型，之后每一轮对话，插件都会在你的工作区启动一个短生命周期的官方 `agy` 进程（`agy -p --output-format stream-json`），解析它输出的 NDJSON 事件流，把文本、思考、工具活动逐块映射回 DSH。多轮对话通过把 DSH 会话绑定到 agy 原生会话（`--conversation`）实现——agy 自己保存历史，每轮只发最新消息。**插件只启动官方未修改的 agy 二进制**：不逆向它的数据库、不解码 protobuf、不碰你的 OAuth token。
+
 ## ✨ 你能得到什么
 
 | 能力 | 说明 |
@@ -39,18 +41,34 @@
 | 🌉 **MCP 反向桥（v0.2 实验）** | `mcpBridge: true` 开启后 agy 可直接调 DSH 侧工具（回环 + token 守卫端点 + 零依赖 stdio MCP 服务器，`.mcp.json` 合并写入/禁用还原） |
 | 😴 **休眠安全** | 没装 agy？没登录？插件照常加载并告诉你怎么修 |
 
+## 📋 前置要求
+
+装插件**之前**，先把这三样备齐（缺一样插件也能装，但会休眠并提示你补什么）：
+
+| 前置 | 怎么装 / 怎么验证 |
+| --- | --- |
+| **1. DeepSeek Harness（DSH）** | 你正在用的就是；`dsh --version` 可验证 |
+| **2. Node.js ≥ 24** | DSH 本身就要求 Node 24+，通常已满足；`node --version` 验证 |
+| **3. Google Antigravity 的 `agy` CLI** | 按 [Google 官方安装指南](https://antigravity.google/docs/cli/install)装（Linux / macOS / Windows 都有），然后**在终端跑一次 `agy`**，按提示完成 Google 登录。`agy --version` 能出版本号、`agy models` 能列模型就算就绪 |
+
+> **什么是 agy？** Google Antigravity 的官方命令行智能体（类似 Claude Code / Gemini CLI）。本插件不替代它，而是驱动它——所以你需要一份有效的 **Antigravity 订阅**（免费额度也行）。
+>
+> 没登录也能先装：插件自带的 `/agy auth` 会给你授权 URL + 二维码，在 GUI 里完成登录。
+
 ## 🚀 快速开始
 
 ```bash
-# 1. 安装（npm 官方包，预构建产物，无需构建许可）：
+# 0. 确认前置要求满足（见上一节）：agy --version 有输出
+
+# 1. 安装插件（npm 官方包，预构建产物，无需构建许可）：
 dsh plugin --profile web add dsh-agy-link
 #   升级：
 #   dsh plugin --profile web update dsh-agy-link --latest
 
 # 2. 重启 DSH Web GUI，输入框执行：
-#   /agy status     ← 确认 agy 已被检测到
+#   /agy status     ← 应显示 agy 版本号；没装好会告诉你缺什么
 
-# 3. 登录（一次性）：
+# 3. 登录（一次性；终端里已经跑过 agy 登录过的可跳过）：
 #   /agy auth               ← 打开授权 URL，批准并复制授权码
 #   /agy auth-code <授权码>  ← 或直接用侧栏面板的二维码 + 粘贴框
 
@@ -89,9 +107,14 @@ DSH 侧的工具与权限不受影响——这里只约束 agy 子进程在自�
 
 一次 DSH 模型调用 = 一个短生命周期 `agy -p --output-format stream-json` 进程。NDJSON 事件流被解析、归一化并映射为 DSH StreamChunk：思考 → reasoning 块，文本 → text 块，工具活动 → 注记 reasoning 块，结果信封 → usage + finish。会话 id 优先取自流本身，conversations 目录快照对比兜底。**不逆向数据库、不解码 protobuf、不碰 token 文件**——只启动官方未修改的 agy 二进制。
 
-## 📋 已知差距
+## 📋 它做不到什么（诚实清单）
 
-见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。要点：图片不转发（agy print 模式纯文本）；DSH 工具不暴露给 agy（MCP 反向桥接是后续工作）。
+- **图片不是真多模态**——agy 的 print 模式没有图片入参，插件走的是“落盘 + 路径引用”方案（v0.2 起）：图片写进本地媒体目录，prompt 里给绝对路径，agy 用它自己的看图工具查看。能用，但和原生多模态不同。
+- **agy 的文件编辑不经过 DSH 审批**——它直接落盘，DSH 的 inline diff 审查不介入（想要只读就 `/agy mode plan`）。
+- **DSH 工具默认不暴露给 agy**——agy 跑自己的封闭工具循环；v0.2 的 MCP 反向桥（实验性，`mcpBridge: true`）可以打通，但有递归/扇出成本。
+- **结构化输出只在 `agy_ask` 里**——`schema` 参数走 `--json-schema`；DSH 原生工具调用生成还没接（上游没有对应字段）。
+
+完整清单见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。
 
 ## ⚠️ 免责与风险提示
 
@@ -111,6 +134,8 @@ MIT
 
 Bring **Google Antigravity models into DeepSeek Harness (DSH)** — chat, thinking, tool activity, and token usage from your Antigravity subscription, driven by the official `agy` CLI.
 
+**How it works**: pick an Antigravity model in the `/model` picker; for every turn the plugin spawns a short-lived, official `agy` process in your workspace (`agy -p --output-format stream-json`), parses its NDJSON event stream, and maps text, thinking, and tool activity back into DSH chunk by chunk. Multi-turn rides a binding between the DSH session and a native agy conversation (`--conversation`) — agy keeps its own history, so only the latest message is sent each turn. **The plugin only ever spawns the official, unmodified agy binary**: no database reverse-engineering, no protobuf decoding, no touching your OAuth token.
+
 ## ✨ What you get
 
 | Capability | Description |
@@ -127,18 +152,34 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** — chat, thinki
 | 📎 **File inlining + structured output (v0.2)** | `agy_ask` gains `readPaths` (inline text files) and `schema` (enforced via `--json-schema`) |
 | 🌉 **MCP reverse bridge (v0.2, experimental)** | with `mcpBridge: true`, agy calls DSH-side tools directly (loopback token-guarded endpoint + zero-dep stdio MCP server merged into `.mcp.json`, restored on disable) |
 
+## 📋 Prerequisites
+
+Before installing, have these three ready (the plugin installs fine without them, but stays dormant and tells you what to fix):
+
+| Requirement | How to install / verify |
+| --- | --- |
+| **1. DeepSeek Harness (DSH)** | You are using it; `dsh --version` verifies |
+| **2. Node.js ≥ 24** | DSH already requires Node 24+; `node --version` verifies |
+| **3. Google Antigravity's `agy` CLI** | Follow [Google's official install guide](https://antigravity.google/docs/cli/install) (Linux / macOS / Windows), then **run `agy` once in a terminal** and complete the Google login. `agy --version` printing a version and `agy models` listing models means you are ready |
+
+> **What is agy?** Google Antigravity's official command-line agent (think Claude Code / Gemini CLI). This plugin does not replace it — it drives it, so you need an active **Antigravity subscription** (the free tier works).
+>
+> Not logged in yet? Install anyway: the built-in `/agy auth` gives you a consent URL + QR code to finish login inside the GUI.
+
 ## 🚀 Quick start
 
 ```bash
+# 0. Confirm the prerequisites (previous section): agy --version prints something
+
 # 1. Install (npm, prebuilt — no build approval needed):
 dsh plugin --profile web add dsh-agy-link
 #   Upgrade:
 #   dsh plugin --profile web update dsh-agy-link --latest
 
 # 2. Restart the DSH Web GUI, then in the composer:
-#   /agy status     <- confirm agy was detected
+#   /agy status     <- should show the agy version; tells you what is missing otherwise
 
-# 3. Login (one time):
+# 3. Login (one time; skip if you already ran agy in a terminal):
 #   /agy auth               <- open the consent URL, approve, copy the code
 #   /agy auth-code <code>   <- or use the sidebar panel (QR + paste box)
 
@@ -177,9 +218,14 @@ DSH-side tools and permissions are unaffected — this only governs what the spa
 
 One DSH model call = one short-lived `agy -p --output-format stream-json` process. The NDJSON event stream is parsed, normalized, and mapped to DSH StreamChunks: thinking → reasoning blocks, text → text blocks, tool activity → annotated reasoning blocks, and the result envelope → usage + finish. Conversation ids come from the stream itself, with a conversations-directory snapshot diff as fallback. **No reverse-engineered database scraping, no protobuf decoding, no token-file access** — only the official unmodified agy binary is spawned.
 
-## 📋 Known gaps
+## 📋 What it cannot do (honest list)
 
-See [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md). Notably: images are not forwarded (agy print mode is text-only), and DSH tools are not exposed to agy (its MCP reverse bridge is future work).
+- **Images are not true multimodal** — agy print mode has no image input flag; since v0.2 the bridge stages images to a local media directory and references them by absolute path, with agy viewing them via its own tools. Workable, but not native multimodality.
+- **agy's file edits bypass DSH review** — they land directly on disk; DSH's inline diff review does not engage (`/agy mode plan` for read-only).
+- **DSH tools are not exposed to agy by default** — agy runs its own closed tool loop; the v0.2 MCP reverse bridge (experimental, `mcpBridge: true`) can bridge that, at a recursion/fan-out cost.
+- **Structured output only inside `agy_ask`** — the `schema` parameter rides `--json-schema`; DSH-native tool-call generation is not wired (no upstream field to map onto).
+
+Full list in [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md).
 
 ## ⚠️ Disclaimer & risk note
 
