@@ -209,10 +209,11 @@ test('one-shot answer step (text + usage together) still annotates thinking', ()
   assert.ok(rIdx >= 0 && tIdx > rIdx, 'reasoning annotation precedes the answer text')
 })
 
-test('streamed answer whose DONE tail carries usage gets NO mid-text annotation', () => {
-  // v0.3.2 regression: the DONE tail carries thinking_tokens after fragments
-  // already streamed, and the annotation wedged itself mid-text (reported:
-  // "think appears in the middle of the message"). Such turns now stay clean.
+test('streamed answer: DONE-tail usage annotates AFTER the complete text', () => {
+  // v0.3.2 wedged the chip mid-sentence (annotated at DONE arrival, between
+  // fragments); v0.3.3 then dropped it entirely (first turn showed no
+  // thinking). Now the annotation is deferred to the step's text completion:
+  // present, but strictly after the last fragment.
   const m = newSpan('r-tail')
   const chunks = mapAll(m, [
     { kind: 'step', stepKey: '5', stepKind: 'text', text: 'There are ', fragment: true },
@@ -220,13 +221,28 @@ test('streamed answer whose DONE tail carries usage gets NO mid-text annotation'
     { kind: 'result', conversationId: 'c9', ok: true, response: 'There are 2 files.', usage: {} },
   ])
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.equal(reasoning, '', 'no annotation once this step already streamed text')
+  assert.ok(reasoning.includes('[agy thinking turn · 15 thinking tokens]'), reasoning)
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
   assert.equal(text, 'There are 2 files.')
+  // the annotation trails the LAST text delta — never between fragments
   const types = chunks.map((c) => c.type)
-  assert.equal(types.filter((t) => t === 'text-delta').length >= 2, true)
-  assert.equal(types.some((t) => t === 'reasoning-delta'), false)
+  const lastTextIdx = types.lastIndexOf('text-delta')
+  const reasoningIdx = types.indexOf('reasoning-delta')
+  assert.ok(lastTextIdx >= 0 && reasoningIdx > lastTextIdx, 'annotation trails the step text')
   assert.equal(asFinish(lastChunk(chunks)).reason.kind, 'stop')
+})
+
+test('DONE tail with usage but no text still annotates after streamed text', () => {
+  const m = newSpan('r-tail2')
+  const chunks = mapAll(m, [
+    { kind: 'step', stepKey: '7', stepKind: 'text', text: 'Answer.', fragment: true },
+    { kind: 'step', stepKey: '7', stepKind: 'text', text: '', usage: { thinking_tokens: 9 } },
+    { kind: 'result', conversationId: 'c9', ok: true, response: 'Answer.', usage: {} },
+  ])
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.ok(reasoning.includes('[agy thinking turn · 9 thinking tokens]'), reasoning)
+  const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(text, 'Answer.')
 })
 
 test('emitFailure closes blocks and finishes with error', () => {

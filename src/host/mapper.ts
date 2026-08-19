@@ -99,6 +99,13 @@ export class EventMapper {
       : { type: 'reasoning-delta', index: this.blockIdx, text: delta }
   }
 
+  /** The honest thinking signal agy exposes: a token-count line. */
+  private *emitThinkingLine(thoughtTokens: number): Generator<StreamChunk> {
+    yield* this.ensureBlock('reasoning')
+    const d = this.appendDelta('[agy thinking turn · ' + thoughtTokens + ' thinking tokens]\n')
+    if (d) yield d
+  }
+
   /**
    * Map one event. `absIndex` is the event's position in the run recording;
    * it mints the mirror callId and is what continuation detection parses
@@ -114,25 +121,31 @@ export class EventMapper {
         // text_delta. The thoughts themselves are not streamed in print mode,
         // so surface the turn honestly as a token-annotated reasoning line.
         //
-        // Covers every arrival shape: a thinking-only turn (text empty), a
-        // one-shot answer (a single DONE envelope carrying text AND usage —
-        // trivial questions never get a separate thinking step, which is why
-        // first turns used to show no thinking at all), and a streamed
-        // answer whose DONE tail carries the final usage.
-        //
-        // Placement guard: annotate only while THIS step has not yet
-        // streamed any text. A streamed answer's DONE tail carries usage
-        // after fragments already went out — annotating there wedged the
-        // chip mid-text (reported on v0.3.2); those turns get no annotation.
+        // Placement: agy attaches usage (and with it thinking_tokens) to the
+        // step's DONE tail — AFTER the text fragments already streamed. So:
+        //  - nothing of this step streamed yet (thinking-only turn, one-shot
+        //    envelope) -> annotate FIRST, then the text;
+        //  - fragments already went out -> DEFER the annotation until the
+        //    step's text is complete, then emit it as a trailing reasoning
+        //    block. Emitting at arrival would wedge the chip mid-sentence
+        //    (v0.3.2 regression); dropping it hid the first turn's thinking
+        //    entirely (v0.3.3 regression). Both fixed by deferral.
         const thoughtTokens = ev.usage?.thinking_tokens ?? 0
         const stepTextEmitted = (this.emittedByKey.get(ev.stepKey) ?? '') !== ''
         if (thoughtTokens > 0 && !stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)) {
           this.thinkingAnnounced.add(ev.stepKey)
-          yield* this.ensureBlock('reasoning')
-          const d = this.appendDelta('[agy thinking turn · ' + thoughtTokens + ' thinking tokens]\n')
-          if (d) yield d
+          yield* this.emitThinkingLine(thoughtTokens)
         }
-        if (ev.text === '' && !ev.fragment) return
+        const deferred = thoughtTokens > 0 && stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)
+        if (ev.text === '' && !ev.fragment) {
+          // DONE tail carrying usage with no text: the step is already
+          // complete — flush the deferred annotation now.
+          if (deferred) {
+            this.thinkingAnnounced.add(ev.stepKey)
+            yield* this.emitThinkingLine(thoughtTokens)
+          }
+          return
+        }
         this.sawTextStep = true
         yield* this.ensureBlock('text')
         let d: StreamChunk | null
@@ -149,6 +162,12 @@ export class EventMapper {
           d = this.appendDelta(delta)
         }
         if (d) yield d
+        if (deferred) {
+          // This DONE closed the step's text: the chip lands after the
+          // complete sentence, never between two of its fragments.
+          this.thinkingAnnounced.add(ev.stepKey)
+          yield* this.emitThinkingLine(thoughtTokens)
+        }
         return
       }
       if (ev.stepKind === 'thinking' || ev.stepKind === 'subagent') {
