@@ -8,6 +8,17 @@ driven by the official `agy` CLI.
 
 English | [简体中文](README.zh.md)
 
+---
+
+> 全网统一昵称：**小斯syzs** · B站 [@小斯syzs](https://space.bilibili.com/390211071) · 抖音 · 小红书 · 快手（全网同名）
+>
+> 💬 **小斯syzs 邀请你加入飞书群** —— [点此一键加入](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=553i2f4a-5cc8-487f-95d3-3c4095bec0d9)
+
+> Known online as **小斯syzs** — Bilibili [@小斯syzs](https://space.bilibili.com/390211071) · Douyin · Xiaohongshu · Kuaishou (same handle on every platform).
+>
+> 💬 **Join the Feishu community group** hosted by 小斯syzs — [one-click invite](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=553i2f4a-5cc8-487f-95d3-3c4095bec0d9)
+
+
 ## What you get
 
 - **A model route, not a proxy** — registers the `antigravity` provider in
