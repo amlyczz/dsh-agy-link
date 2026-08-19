@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.2 (2026-08-19)
+
+- README: dedicated Prerequisites section (DSH, Node >= 24, the agy CLI with Google's official install guide link, first-run login, subscription note), a "how it works" intro paragraph, and an honest "what it cannot do" list in both languages - onboarding now covers first-time users.
 ## 0.2.1 (2026-08-19)
 
 - Cross-platform hardening (Linux / macOS / Windows):
