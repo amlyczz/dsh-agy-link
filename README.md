@@ -62,8 +62,8 @@
 
 # 1. 安装插件（npm 官方包，预构建产物，无需构建许可）：
 dsh plugin --profile web add dsh-agy-link
-#   升级：
-#   dsh plugin --profile web update dsh-agy-link --latest
+#   升级（每次新版本发布后执行；镜像标签可能滞后，指定官方源最稳）：
+#   dsh plugin --profile web add dsh-agy-link@latest --registry https://registry.npmjs.org
 
 # 2. 重启 DSH Web GUI，输入框执行：
 #   /agy status     ← 应显示 agy 版本号；没装好会告诉你缺什么
@@ -173,8 +173,8 @@ Before installing, have these three ready (the plugin installs fine without them
 
 # 1. Install (npm, prebuilt — no build approval needed):
 dsh plugin --profile web add dsh-agy-link
-#   Upgrade:
-#   dsh plugin --profile web update dsh-agy-link --latest
+#   Upgrade (run after every release; mirror tags can lag, so pin the official registry):
+#   dsh plugin --profile web add dsh-agy-link@latest --registry https://registry.npmjs.org
 
 # 2. Restart the DSH Web GUI, then in the composer:
 #   /agy status     <- should show the agy version; tells you what is missing otherwise
