@@ -40,13 +40,17 @@ function defaultOutput(output: unknown): string | null {
 }
 
 export function usageFromRaw(raw: RawUsage): TokenUsage {
-  return {
+  // The DSH session layer rejects chunks carrying undefined-valued fields
+  // (lossless-JSON boundary), so optional counters are omitted, not set to
+  // undefined.
+  const usage: TokenUsage = {
     inputTokens: raw.input_tokens ?? 0,
     outputTokens: raw.output_tokens ?? 0,
-    cacheReadTokens: raw.cache_read_tokens ?? undefined,
-    cacheWriteTokens: raw.cache_write_tokens ?? undefined,
-    reasoningTokens: raw.thinking_tokens ?? undefined,
   }
+  if (raw.cache_read_tokens !== undefined) usage.cacheReadTokens = raw.cache_read_tokens
+  if (raw.cache_write_tokens !== undefined) usage.cacheWriteTokens = raw.cache_write_tokens
+  if (raw.thinking_tokens !== undefined) usage.reasoningTokens = raw.thinking_tokens
+  return usage
 }
 
 /** Suffix-delta: emit only what grew; fall back to a newline + full text. */
@@ -172,7 +176,7 @@ export class EventMapper {
     yield {
       type: 'finish',
       reason: { kind: 'stop' },
-      replayState: ev.conversationId !== '' ? { response: { conversationId: ev.conversationId } } : undefined,
+      ...(ev.conversationId !== '' ? { replayState: { response: { conversationId: ev.conversationId } } } : {}),
     }
     this.finished = true
   }

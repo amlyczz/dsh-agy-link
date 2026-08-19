@@ -79,14 +79,21 @@ function parseUsage(v: unknown): RawUsage {
   if (!v || typeof v !== 'object') return {}
   const o = v as Record<string, unknown>
   const num = (x: unknown): number | undefined => (typeof x === 'number' && Number.isFinite(x) ? x : undefined)
-  return {
-    input_tokens: num(o.input_tokens),
-    output_tokens: num(o.output_tokens),
-    thinking_tokens: num(o.thinking_tokens),
-    cache_read_tokens: num(o.cache_read_tokens),
-    cache_write_tokens: num(o.cache_write_tokens),
-    total_tokens: num(o.total_tokens),
-  }
+  // Lossless-JSON boundary: never assign undefined-valued properties.
+  const out: RawUsage = {}
+  const inT = num(o.input_tokens)
+  const outT = num(o.output_tokens)
+  if (inT !== undefined) out.input_tokens = inT
+  if (outT !== undefined) out.output_tokens = outT
+  const t = num(o.thinking_tokens)
+  if (t !== undefined) out.thinking_tokens = t
+  const cr = num(o.cache_read_tokens)
+  if (cr !== undefined) out.cache_read_tokens = cr
+  const cw = num(o.cache_write_tokens)
+  if (cw !== undefined) out.cache_write_tokens = cw
+  const tot = num(o.total_tokens)
+  if (tot !== undefined) out.total_tokens = tot
+  return out
 }
 
 /** Parse one decoded JSON object into a typed event; undefined = ignore. */
@@ -99,8 +106,8 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
     const model = pick(o, ['model', 'model_name', 'modelName'])
     return {
       kind: 'init',
-      conversationId: typeof cid === 'string' && cid !== '' ? cid : undefined,
-      model: typeof model === 'string' ? model : undefined,
+      ...(typeof cid === 'string' && cid !== '' ? { conversationId: cid } : {}),
+      ...(typeof model === 'string' ? { model } : {}),
       raw: o,
     };
   }
@@ -109,12 +116,13 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
     const keyPart = typeof idxV === 'number' || typeof idxV === 'string' ? String(idxV) : String(seq)
     const stepKey = keyPart
     const stepKind = normalizeStepKind(pick(o, ['step_type', 'stepType', 'type']))
+    const toolInfo = stepKind === 'tool' ? extractTool(o) : undefined
     return {
       kind: 'step',
       stepKey,
       stepKind,
       text: extractText(o),
-      tool: stepKind === 'tool' ? extractTool(o) : undefined,
+      ...(toolInfo !== undefined ? { tool: toolInfo } : {}),
       raw: o,
     };
   }
@@ -131,7 +139,7 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
       conversationId: typeof cid === 'string' ? cid : '',
       ok,
       response: typeof response === 'string' ? response : '',
-      error: typeof error === 'string' ? error : undefined,
+      ...(typeof error === 'string' ? { error } : {}),
       usage: parseUsage(inner.usage),
       raw: o,
     };
