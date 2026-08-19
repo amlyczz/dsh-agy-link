@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 (2026-08-19)
+
+- READMEs: added the author promo block (Chinese first, then English).
+- Housekeeping: internal spec documents are no longer part of the repo.
+
 ## 0.1.3 (2026-08-19)
 
 - Fixed the client slot registration: the sidebar footer slot entry must
