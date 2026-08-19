@@ -46,7 +46,7 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
   const sub = parts[0] ?? 'help'
   const arg = parts[1] ?? ''
   try {
-    if (sub === 'status') return ok(renderStatus(deps))
+    if (sub === 'status') return ok(await renderStatus(deps))
     if (sub === 'auth') {
       const auth = deps.auth()
       if (!auth) return err('agy binary not found — install the CLI first')
@@ -124,10 +124,11 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
   }
 }
 
-function renderStatus(deps: CommandDeps): string {
+async function renderStatus(deps: CommandDeps): Promise<string> {
   const cfg = deps.cfg()
   const bin = deps.bin()
-  const auth = deps.auth()?.status()
+  const authHelper = deps.auth()
+  const auth = authHelper ? await authHelper.resolvedStatus() : undefined
   const cat = deps.catalog().get()
   const bindings = Object.keys(deps.store().all()).length
   const last = deps.lastRun()

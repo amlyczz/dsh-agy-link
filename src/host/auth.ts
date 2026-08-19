@@ -4,9 +4,9 @@
 // the client panel and pipe the code back. We never read, write, copy, or
 // move the OAuth token file itself — the official binary owns credentials.
 import { extractAuthUrl, looksLikeAuthFailure } from '../common/types.ts'
-import { startAgyProcess, type RunningProcess } from './runner.ts'
+import { probeProcess, startAgyProcess, type RunningProcess } from './runner.ts'
 
-export type AuthPhase = 'idle' | 'pending' | 'submitting' | 'ok' | 'failed'
+export type AuthPhase = 'idle' | 'pending' | 'submitting' | 'ok' | 'failed' | 'signed-out'
 
 export interface AuthStatus {
   phase: AuthPhase;
@@ -27,10 +27,57 @@ export class AuthHelper {
   private urlWaiter: ((url: string) => void) | null = null;
   private urlTimer: NodeJS.Timeout | null = null;
 
+  private signedInCache: { value: boolean | null; at: number } | null = null
+  private signedInFlight: Promise<boolean | null> | null = null
+
   constructor(private readonly bin: () => string | null) {}
 
   status(): AuthStatus {
     return { ...this.state };
+  }
+
+  /**
+   * Ground-truth login probe: `agy models` succeeds only when signed in and
+   * prints a sign-in error otherwise. Cached for 60s; in-flight calls share
+   * one spawn. Returns true/false, or null when undeterminable (no binary,
+   * spawn failure, ambiguous output). While a login flow is active the
+   * in-memory phase wins and the probe is skipped.
+   */
+  async probeSignedIn(force = false): Promise<boolean | null> {
+    if (this.state.phase === 'pending' || this.state.phase === 'submitting') return null
+    if (this.state.phase === 'ok') return true
+    const now = Date.now()
+    if (!force && this.signedInCache !== null && now - this.signedInCache.at < 60_000) {
+      return this.signedInCache.value
+    }
+    if (this.signedInFlight !== null) return this.signedInFlight
+    const bin = this.bin()
+    if (!bin) return null
+    this.signedInFlight = (async () => {
+      let value: boolean | null = null
+      try {
+        const out = await probeProcess(bin, ['models'], 15_000)
+        const tail = out.stderrTail + '\n' + out.stdout.slice(0, 2000)
+        if (out.code === 0 && !looksLikeAuthFailure(out.stdout)) value = true
+        else if (out.code !== 0 && looksLikeAuthFailure(tail)) value = false
+      } catch {
+        value = null
+      }
+      this.signedInCache = { value, at: Date.now() }
+      this.signedInFlight = null
+      return value
+    })()
+    return this.signedInFlight
+  }
+
+  /** status() enriched with a lazily probed login state for idle phases. */
+  async resolvedStatus(): Promise<AuthStatus> {
+    const st = this.status()
+    if (st.phase !== 'idle') return st
+    const signedIn = await this.probeSignedIn()
+    if (signedIn === true) return { phase: 'ok', message: 'signed in (probed via agy models)' }
+    if (signedIn === false) return { phase: 'signed-out', message: 'agy is not signed in — run /agy auth' }
+    return st
   }
 
   private startProbe(): RunningProcess | null {

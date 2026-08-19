@@ -380,6 +380,8 @@ export class AgyAdapter extends LlmAdapter {
       } else if (!mapper.isFinished) {
         if (outcome.code !== 0) {
           failure = { kind: 'error', code: Err.PROCESS_EXIT, message: 'agy exited with code ' + outcome.code + (outcome.stderrTail !== '' ? ': ' + brief(outcome.stderrTail) : '') }
+        } else if (parser.stats.lastResultError) {
+          failure = { kind: 'error', code: Err.AGY_ERROR, message: 'agy reported an error: ' + parser.stats.lastResultError }
         } else {
           failure = { kind: 'error', code: Err.INVALID_OUTPUT, message: 'agy produced no result event (' + parser.stats.garbage + ' unparseable lines)' }
         }

@@ -155,6 +155,18 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
   let aborted = false;
   let settled = false;
 
+  // agy reads stdin when it is a pipe and never sees EOF (observed on
+  // 1.1.15: `agy models` hangs forever with an open pipe stdin, which is
+  // why model discovery silently timed out). Close stdin immediately for
+  // every spawn that does not explicitly need to write to it.
+  if (!opts.keepStdin) {
+    try {
+      child.stdin?.end();
+    } catch {
+      // ignore — child may have exited already
+    }
+  }
+
   const watchdog =
     opts.timeoutMs && opts.timeoutMs > 0
       ? setTimeout(() => {
@@ -196,13 +208,6 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
       if (pending !== '') {
         opts.onLine?.(pending);
         pending = '';
-      }
-      if (!opts.keepStdin) {
-        try {
-          child.stdin?.end();
-        } catch {
-          // ignore
-        }
       }
       resolve({
         code,

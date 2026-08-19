@@ -6,7 +6,10 @@
 // spellings observed in the agy binary strings.
 import { extractAuthUrl, looksLikeAuthFailure, type AgyEvent, type AgyStepKind, type AgyToolInfo, type RawUsage } from '../common/types.ts'
 
-const TEXT_STEP_TYPES = new Set(['agent_text', 'agenttext', 'text', 'model_response', 'modelresponse', 'message', 'response_text'])
+// agy 1.1.15 stream-json vocabulary (verified against a live binary):
+// user_input, checkpoint, agent_response, tool, system_message, title.
+// agent_response carries text_delta fragments; usage reports thinking tokens.
+const TEXT_STEP_TYPES = new Set(['agent_text', 'agenttext', 'text', 'model_response', 'modelresponse', 'message', 'response_text', 'agent_response', 'agentresponse'])
 const THINKING_STEP_TYPES = new Set(['thinking', 'thought', 'reasoning'])
 const TOOL_STEP_TYPES = new Set(['tool_call', 'toolcall', 'tool', 'tool_use', 'tooluse', 'tool_run', 'toolrun', 'function_call'])
 const TITLE_STEP_TYPES = new Set(['title'])
@@ -64,6 +67,12 @@ function extractText(obj: Record<string, unknown>): string {
   return ''
 }
 
+/** agy ≥1.1.15 streams assistant text as `text_delta` fragments. */
+function extractTextDelta(obj: Record<string, unknown>): string | undefined {
+  const v = obj.text_delta ?? obj.textDelta
+  return typeof v === 'string' ? v : undefined
+}
+
 function extractTool(obj: Record<string, unknown>): AgyToolInfo | undefined {
   const info = pick(obj, ['tool_info', 'toolInfo', 'tool', 'tool_call', 'toolCall'])
   const src: Record<string, unknown> =
@@ -72,7 +81,15 @@ function extractTool(obj: Record<string, unknown>): AgyToolInfo | undefined {
   if (typeof name !== 'string' || name === '') return undefined
   const args = pick(src, ['parameters', 'params', 'input', 'args', 'input_json', 'inputJson'])
   const output = pick(src, ['output', 'result', 'output_text'])
-  return { name, args, output }
+  // agy 1.1.15: tool_info.error = { type: 'TOOL_ERROR', message: '...' }
+  const errObj = src.error
+  let error: string | undefined
+  if (typeof errObj === 'string') error = errObj
+  else if (errObj && typeof errObj === 'object') {
+    const msg = (errObj as Record<string, unknown>).message
+    if (typeof msg === 'string' && msg !== '') error = msg
+  }
+  return { name, args, output, ...(error !== undefined ? { error } : {}) }
 }
 
 function parseUsage(v: unknown): RawUsage {
@@ -103,26 +120,52 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
   const evt = typeof o.event === 'string' ? o.event : typeof o.type === 'string' ? o.type : ''
   if (evt === 'init' || evt === 'initialized') {
     const cid = pick(o, ['conversation_id', 'conversationId', 'session_id', 'sessionId'])
-    const model = pick(o, ['model', 'model_name', 'modelName'])
+    // agy 1.1.15 nests details: {event:'init', conversation_id, init:{model, cwd, tools}}
+    const initObj = o.init
+    const initSrc: Record<string, unknown> =
+      initObj && typeof initObj === 'object' && !Array.isArray(initObj)
+        ? (initObj as Record<string, unknown>)
+        : {}
+    const model = pick(o, ['model', 'model_name', 'modelName']) ?? pick(initSrc, ['model', 'model_name', 'modelName'])
+    let convId: string | undefined = typeof cid === 'string' && cid !== '' ? cid : undefined
+    if (convId === undefined) {
+      const nested = pick(initSrc, ['conversation_id', 'conversationId'])
+      if (typeof nested === 'string' && nested !== '') convId = nested
+    }
     return {
       kind: 'init',
-      ...(typeof cid === 'string' && cid !== '' ? { conversationId: cid } : {}),
+      ...(convId !== undefined ? { conversationId: convId } : {}),
       ...(typeof model === 'string' ? { model } : {}),
       raw: o,
     };
   }
   if (evt === 'step_update' || evt === 'step' || evt === 'stepUpdate') {
-    const idxV = pick(o, ['idx', 'index', 'step_idx', 'stepIdx', 'id', 'step_id', 'stepId'])
+    // agy ≥1.1.15 nests the payload: {event:'step_update', step_update:{...}}.
+    // Read from the nested object first, fall back to flat (older/spec shapes).
+    const nested = o.step_update ?? o.stepUpdate ?? o.step
+    const su: Record<string, unknown> =
+      nested && typeof nested === 'object' && !Array.isArray(nested)
+        ? (nested as Record<string, unknown>)
+        : {}
+    const src: Record<string, unknown> = Object.keys(su).length > 0 ? su : o
+    const idxV = pick(src, ['step_index', 'stepIndex', 'idx', 'index', 'step_idx', 'stepIdx', 'id', 'step_id', 'stepId'])
     const keyPart = typeof idxV === 'number' || typeof idxV === 'string' ? String(idxV) : String(seq)
     const stepKey = keyPart
-    const stepKind = normalizeStepKind(pick(o, ['step_type', 'stepType', 'type']))
-    const toolInfo = stepKind === 'tool' ? extractTool(o) : undefined
+    const stepKind = normalizeStepKind(pick(src, ['step_type', 'stepType', 'type']))
+    const toolInfo = stepKind === 'tool' ? extractTool(src) : undefined
+    const delta = extractTextDelta(src)
+    const text = delta !== undefined ? delta : extractText(src)
+    const stateV = pick(src, ['state'])
+    const usageRaw = pick(src, ['usage'])
     return {
       kind: 'step',
       stepKey,
       stepKind,
-      text: extractText(o),
+      text,
+      ...(delta !== undefined ? { fragment: true } : {}),
       ...(toolInfo !== undefined ? { tool: toolInfo } : {}),
+      ...(typeof stateV === 'string' ? { state: stateV } : {}),
+      ...(usageRaw && typeof usageRaw === 'object' ? { usage: parseUsage(usageRaw) } : {}),
       raw: o,
     };
   }
@@ -151,6 +194,15 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
   if (o.step_type !== undefined || o.stepType !== undefined) {
     return classifyEvent({ event: 'step_update', ...o }, seq)
   }
+  // Bare nested payload without an event discriminator (agy ≥1.1.15 shape
+  // where a line is just the step_update object).
+  if (
+    (o.step_update !== undefined || o.stepUpdate !== undefined) &&
+    (o.step_update ?? o.stepUpdate) !== null &&
+    typeof (o.step_update ?? o.stepUpdate) === 'object'
+  ) {
+    return classifyEvent({ event: 'step_update', step_update: o.step_update ?? o.stepUpdate }, seq)
+  }
   return undefined
 }
 
@@ -161,12 +213,14 @@ export interface ParserStats {
   consecutiveGarbage: number
   authUrl: string | undefined
   sawAuthFailure: boolean
+  /** Error text from the last result envelope, if any (adapter maps it to AGY_ERROR). */
+  lastResultError: string | undefined
 }
 
 export class StreamJsonParser {
   private buffer = ''
   private seq = 0
-  readonly stats: ParserStats = { lines: 0, garbage: 0, consecutiveGarbage: 0, authUrl: undefined, sawAuthFailure: false }
+  readonly stats: ParserStats = { lines: 0, garbage: 0, consecutiveGarbage: 0, authUrl: undefined, sawAuthFailure: false, lastResultError: undefined }
   /** Ring buffer of raw stdout lines for /agy doctor export. */
   readonly recentLines: string[] = []
   private readonly maxRecent = 2000
@@ -217,6 +271,9 @@ export class StreamJsonParser {
       this.stats.garbage++
       this.stats.consecutiveGarbage++
       return { kind: 'garbage', line }
+    }
+    if (ev.kind === 'result') {
+      this.stats.lastResultError = ev.error ?? undefined
     }
     this.stats.consecutiveGarbage = 0
     return ev

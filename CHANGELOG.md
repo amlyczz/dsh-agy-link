@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.2.8 (2026-08-19)
+
+- **Fix: real agy 1.1.15 stream-json parsing.** The parser only understood
+  flat, hypothesized event shapes; the live CLI nests every step payload
+  under a `step_update` envelope and uses a different vocabulary
+  (`agent_response` + `text_delta` fragments, `tool` with `tool_name` /
+  `tool_info` with `parameters` / `output` / `error`). As a result thinking
+  and tool activity were silently dropped and only the final result text
+  survived. Both shapes are now parsed (legacy aliases kept).
+- **New: visible thinking turns + tool activity.** agy does not stream
+  thinking text in print mode (only `thinking_tokens` usage), so each
+  thinking-only `agent_response` turn surfaces as an annotated reasoning
+  block (`[agy thinking turn · N thinking tokens]`), tool calls render as
+  `[agy tool: name] args -> output` reasoning annotations, and failed tools
+  render `[agy tool error: name] message`.
+- **Fix: `result.status=ERROR` with a usable response** (e.g. a tool timed
+  out mid-run) no longer discards the answer — the response streams, the
+  error is annotated, the turn finishes normally. A bare envelope error
+  now maps to a precise `AGY_ERROR` finish instead of INVALID_OUTPUT.
+- **Fix: `agy models` deadlock — stdin pipe never closed.** agy reads stdin
+  when it is a pipe and waits for EOF; every non-auth spawn kept the pipe
+  open, so model discovery silently timed out and the catalog always fell
+  back to the bundled list. Stdin now closes right after spawn (auth probes
+  keep it open).
+- **Fix: auth phase was always `idle`** until someone ran `/agy auth`, so
+  the settings page claimed "needs Google login" for signed-in users.
+  Status surfaces now lazily probe the real login state via `agy models`
+  (60s cache) and report `ok` / `signed-out` truthfully.
+- **Fix: `/plugins/agy-link/*` routes never registered on dsh web** (settings
+  page stuck on `binary: not found / auth: unknown / models: 0`). Routes are
+  now registered through a reactive `ctx.inject(['webServer'])` sub-fiber,
+  so they attach whenever the service appears instead of racing it. The
+  settings page also renders an honest "endpoint unreachable" state instead
+  of misleading placeholders when the route is missing.
+- **Removed: sidebar footer AGY button** (user request). Login (QR +
+  authorization code) and mode/effort quick controls moved to Settings →
+  Antigravity; the conversation header `AGY` pill stays.
+- Tests: real-1.1.15 fixture modes (`real`, `real-error`, `real-fail`) and
+  parser/mapper/adapter coverage for the nested format (73 tests).
+
 ## 0.2.7 (2026-08-19)
 
 - Visible agy status in DSH: conversation header `AGY` pill, Settings → Antigravity status page, and sidebar footer label.

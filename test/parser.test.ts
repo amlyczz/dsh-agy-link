@@ -74,6 +74,47 @@ test('infers shapes without an event discriminator', () => {
   assert.equal(asResult(evs[1]).ok, true)
 })
 
+test('agy 1.1.15 nested step_update envelopes classify correctly', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed([
+    '{"event":"init","conversation_id":"c15","init":{"model":"gemini-3-7-flash","cwd":"/tmp"}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":0,"state":"DONE","step_type":"user_input"}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":2,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":500,"thinking_tokens":80}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"ls"}}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":4,"state":"ERROR","step_type":"tool","tool_name":"find_by_name","tool_info":{"name":"find_by_name","parameters":{"Pattern":"x"},"error":{"type":"TOOL_ERROR","message":"timed out"}}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":5,"state":"ACTIVE","step_type":"agent_response","text_delta":"There are "}}',
+  ].join('\n') + '\n')
+  assert.equal(evs[0]?.kind, 'init')
+  assert.ok(evs[0] !== undefined && evs[0].kind === 'init' && evs[0].model === 'gemini-3-7-flash')
+  const user = asStep(evs[1])
+  assert.equal(user.stepKind, 'user-input')
+  const think = asStep(evs[2])
+  assert.equal(think.stepKind, 'text')
+  assert.equal(think.usage?.thinking_tokens, 80)
+  const tool = asStep(evs[3])
+  assert.equal(tool.stepKind, 'tool')
+  assert.equal(tool.tool?.name, 'run_command')
+  assert.deepEqual(tool.tool?.args, { CommandLine: 'ls' })
+  assert.equal(tool.state, 'ACTIVE')
+  const toolErr = asStep(evs[4])
+  assert.equal(toolErr.tool?.error, 'timed out')
+  const frag = asStep(evs[5])
+  assert.equal(frag.stepKind, 'text')
+  assert.equal(frag.fragment, true)
+  assert.equal(frag.text, 'There are ')
+  assert.equal(p.stats.garbage, 0)
+})
+
+test('agy 1.1.15 result envelope keeps ERROR-with-response usable', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed('{"event":"result","result":{"conversation_id":"c15","status":"ERROR","response":"partial answer","error":"find timed out","usage":{"input_tokens":9,"output_tokens":8,"thinking_tokens":4}}}' + '\n')
+  const res = asResult(evs[0])
+  assert.equal(res.ok, false)
+  assert.equal(res.response, 'partial answer')
+  assert.equal(res.error, 'find timed out')
+  assert.equal(res.usage.thinking_tokens, 4)
+})
+
 test('numeric step_type map (14=thinking, 15=text, 5=tool)', () => {
   const p = new StreamJsonParser()
   const evs = p.feed('{"event":"step_update","idx":1,"step_type":14,"text":"deep"}\n{"event":"step_update","idx":2,"step_type":15,"text":"out"}\n{"event":"step_update","idx":3,"step_type":5,"tool_info":{"name":"bash","parameters":{"cmd":"ls"}}}\n')

@@ -146,6 +146,8 @@ export interface AgyToolInfo {
   /** Raw arguments: JSON string when agy serializes them, else object. */
   args?: unknown
   output?: unknown
+  /** Tool-side failure text (agy 1.1.15: tool_info.error.message on state=ERROR). */
+  error?: string
 }
 
 export type AgyEvent =
@@ -155,7 +157,13 @@ export type AgyEvent =
       stepKey: string
       stepKind: AgyStepKind
       text: string
+      /** text is a sequential fragment to append, not a cumulative snapshot (agy ≥1.1.15 text_delta). */
+      fragment?: boolean
       tool?: AgyToolInfo
+      /** Step lifecycle as reported by agy: ACTIVE / DONE / ERROR. */
+      state?: string
+      /** Per-step usage (agy ≥1.1.15 reports usage on agent_response steps). */
+      usage?: RawUsage
       raw: unknown
     }
   | {

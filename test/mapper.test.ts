@@ -104,6 +104,65 @@ test('emitFailure closes blocks and finishes with error', () => {
   assert.ok(chunks.slice(endIdx + 1).every((d) => d.type === 'usage' || d.type === 'finish'))
 })
 
+test('agy 1.1.15 stream: thinking turns, tool announce/output/error, text fragments', () => {
+  const m = new EventMapper()
+  const chunks = mapAll(m, [
+    { kind: 'init', conversationId: 'c15' },
+    // thinking-only turn (usage, no text)
+    { kind: 'step', stepKey: '2', stepKind: 'text', text: '', usage: { thinking_tokens: 80 } },
+    // tool call with output
+    { kind: 'step', stepKey: '3', stepKind: 'tool', state: 'ACTIVE', text: '', tool: { name: 'run_command', args: { CommandLine: 'ls' } } },
+    { kind: 'step', stepKey: '3', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'run_command', args: { CommandLine: 'ls' }, output: 'note1.txt' } },
+    // failed tool call
+    { kind: 'step', stepKey: '4', stepKind: 'tool', state: 'ERROR', text: '', tool: { name: 'find_by_name', args: { Pattern: 'x' }, error: 'Find command timed out.' } },
+    // streamed answer fragments
+    { kind: 'step', stepKey: '5', stepKind: 'text', text: 'There are ', fragment: true },
+    { kind: 'step', stepKey: '5', stepKind: 'text', text: '2 files.', fragment: true },
+    { kind: 'result', conversationId: 'c15', ok: true, response: 'There are 2 files.', usage: { input_tokens: 9, output_tokens: 8, thinking_tokens: 95 } },
+  ])
+  const text = chunks
+    .filter((c) => c.type === 'text-delta')
+    .map((c) => (c as { text: string }).text)
+    .join('')
+  assert.equal(text, 'There are 2 files.')
+  const reasoning = chunks
+    .filter((c) => c.type === 'reasoning-delta')
+    .map((c) => (c as { text: string }).text)
+    .join('')
+  assert.ok(reasoning.includes('[agy thinking turn · 80 thinking tokens]'), reasoning)
+  assert.ok(reasoning.includes('[agy tool: run_command]'), reasoning)
+  assert.ok(reasoning.includes('-> note1.txt'), reasoning)
+  assert.ok(reasoning.includes('[agy tool error: find_by_name] Find command timed out.'), reasoning)
+  const finish = asFinish(lastChunk(chunks))
+  assert.equal(finish.reason.kind, 'stop')
+  assert.equal(m.isFinished, true)
+})
+
+test('result ERROR with usable response soft-finishes and annotates the error', () => {
+  const m = new EventMapper()
+  const chunks = mapAll(m, [
+    { kind: 'step', stepKey: '5', stepKind: 'text', text: 'There are 2 files.', fragment: true },
+    { kind: 'result', conversationId: 'c15', ok: false, response: 'There are 2 files.', error: 'find timed out', usage: { input_tokens: 9, output_tokens: 8 } },
+  ])
+  const reasoning = chunks
+    .filter((c) => c.type === 'reasoning-delta')
+    .map((c) => (c as { text: string }).text)
+    .join('')
+  assert.ok(reasoning.includes('[agy finished with error] find timed out'), reasoning)
+  const finish = asFinish(lastChunk(chunks))
+  assert.equal(finish.reason.kind, 'stop')
+  assert.equal(m.isFinished, true)
+})
+
+test('result ERROR without response stays passive for the adapter', () => {
+  const m = new EventMapper()
+  const chunks = mapAll(m, [
+    { kind: 'result', conversationId: 'c15', ok: false, response: '', error: 'explosion', usage: {} },
+  ])
+  assert.equal(chunks.length, 0)
+  assert.equal(m.isFinished, false)
+})
+
 test('usageFromRaw maps snake_case fields', () => {
   const u = usageFromRaw({ input_tokens: 1, output_tokens: 2, thinking_tokens: 3, cache_read_tokens: 4, cache_write_tokens: 5 })
   assert.equal(u.inputTokens, 1)

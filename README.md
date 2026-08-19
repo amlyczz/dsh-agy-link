@@ -38,7 +38,7 @@
 | 🔗 **会话连续** | 每个 DSH 会话绑定原生 agy 会话（`--conversation`），多轮上下文由 agy 历史承载，不重发全量 |
 | 📊 **token 用量** | 输入/输出/思考/缓存 token 全部进入 DSH 用量统计 |
 | ⚙️ **设置页状态** | DSH 设置 → Antigravity 页面显示 agy 连接/登录/工作区/绑定数/最近运行状态 |
-| 🔐 **GUI 内 Google 登录** | `/agy auth` 打印授权 URL；侧栏面板提供二维码 + 授权码粘贴框 |
+| 🔐 **GUI 内 Google 登录** | `/agy auth` 打印授权 URL；设置 → Antigravity 页面提供二维码 + 授权码粘贴框 |
 | 🤝 **`agy_ask` 工具** | 任何 DSH 模型都可以把一次性任务委托给 Antigravity 模型（AskAntigravity 模式） |
 | ⌨️ **`/agy` 命令族** | `status` / `auth` / `auth-code` / `models` / `mode` / `effort` / `workspace` / `clear` / `doctor` / `help` |
 | 🖼 **图片多模态（v0.2）** | 图片落盘到本地媒体目录（TTL 清理），prompt 以绝对路径引用 + `--add-dir` 授权，agy 用自己的工具看图 |
@@ -75,7 +75,7 @@ dsh plugin --profile web add dsh-agy-link
 
 # 3. 登录（一次性；终端里已经跑过 agy 登录过的可跳过）：
 #   /agy auth               ← 打开授权 URL，批准并复制授权码
-#   /agy auth-code <授权码>  ← 或直接用侧栏面板的二维码 + 粘贴框
+#   /agy auth-code <授权码>  ← 或直接用设置 → Antigravity 页面的二维码 + 粘贴框
 
 # 4. /model 选择器里选 antigravity 模型，开聊
 ```
@@ -111,7 +111,7 @@ DSH 侧的工具与权限不受影响——这里只约束 agy 子进程在自�
 
 ## 🧩 工作原理
 
-一次 DSH 模型调用 = 一个短生命周期 `agy -p --output-format stream-json` 进程。NDJSON 事件流被解析、归一化并映射为 DSH StreamChunk：思考 → reasoning 块，文本 → text 块，工具活动 → 注记 reasoning 块，结果信封 → usage + finish。会话 id 优先取自流本身，conversations 目录快照对比兜底。**不逆向数据库、不解码 protobuf、不碰 token 文件**——只启动官方未修改的 agy 二进制。
+一次 DSH 模型调用 = 一个短生命周期 `agy -p --output-format stream-json` 进程。NDJSON 事件流被解析、归一化并映射为 DSH StreamChunk：文本 → text 块，工具活动 → 注记 reasoning 块（含失败注记），结果信封 → usage + finish。agy 的 print 模式**不输出思考文本**（只有 `thinking_tokens` 计数），因此每个思考轮次以 `[agy thinking turn · N thinking tokens]` 注记呈现，思考 token 也进入用量统计。会话 id 优先取自流本身，conversations 目录快照对比兜底。**不逆向数据库、不解码 protobuf、不碰 token 文件**——只启动官方未修改的 agy 二进制。
 
 ## 📋 它做不到什么（诚实清单）
 
@@ -149,7 +149,7 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** — chat, thinki
 | 🔗 **Session continuity** | Each DSH session binds to a native agy conversation (`--conversation`); multi-turn context rides agy history instead of re-sending everything |
 | 📊 **Token usage** | Input/output/thinking/cache tokens surface in DSH usage accounting |
 | ⚙️ **Settings status** | DSH Settings → Antigravity page shows agy connection/login/workspace/bindings/last-run state |
-| 🔐 **In-GUI Google login** | `/agy auth` prints the consent URL; the sidebar panel adds a QR code and a paste box for the authorization code |
+| 🔐 **In-GUI Google login** | `/agy auth` prints the consent URL; Settings → Antigravity adds a QR code and a paste box for the authorization code |
 | 🤝 **`agy_ask` tool** | Let any DSH model delegate a one-shot task to an Antigravity model (the AskAntigravity pattern) |
 | ⌨️ **`/agy` commands** | `status`, `auth`, `auth-code`, `models`, `mode`, `effort`, `workspace`, `clear`, `doctor`, `help` |
 | 😴 **Dormant-safe** | No agy binary? Not signed in? The plugin loads anyway and tells you what to fix |
@@ -186,7 +186,7 @@ dsh plugin --profile web add dsh-agy-link
 
 # 3. Login (one time; skip if you already ran agy in a terminal):
 #   /agy auth               <- open the consent URL, approve, copy the code
-#   /agy auth-code <code>   <- or use the sidebar panel (QR + paste box)
+#   /agy auth-code <code>   <- or use Settings -> Antigravity (QR + paste box)
 
 # 4. Pick an antigravity model in /model and chat
 ```

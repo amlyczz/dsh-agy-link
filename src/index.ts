@@ -229,12 +229,23 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   syncAskTool()
 
   // ---- HTTP surface for the client half ----
-  const webServer = ctx.get('webServer') as WebServerLike | undefined
-  const sendJson = (res: RawRes, status: number, body: unknown): void => {
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify(body))
-  };
-  const readBody = (req: unknown): Promise<Record<string, unknown>> => {
+  // Registered through a reactive ctx.inject sub-fiber: at plugin load time
+  // the webServer service may not exist yet (load-order race observed on
+  // dsh web), and in headless compositions it never does. The sub-fiber
+  // starts whenever the service appears and tears the routes down when it
+  // goes away — no more silent one-shot ctx.get() that permanently loses
+  // the /plugins/agy-link/* routes when it races the server startup.
+  const registerRoutes = (webServer: WebServerLike): (() => void) => {
+    const disposers: Array<() => void> = []
+    const reg = (route: { kind: string; path: string; handler: (req: unknown, res: unknown) => void }): void => {
+      const d = webServer.register(route) as unknown as () => void | undefined
+      if (typeof d === 'function') disposers.push(d)
+    }
+    const sendJson = (res: RawRes, status: number, body: unknown): void => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify(body))
+    }
+    const readBody = (req: unknown): Promise<Record<string, unknown>> => {
     const r = req as { on?: (e: string, cb: (c: Buffer) => void) => void }
     return new Promise((resolve) => {
       const chunks: Buffer[] = []
@@ -254,28 +265,29 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     return typeof m === 'string' ? m.toUpperCase() : 'GET'
   };
 
-  if (webServer) {
-    webServer.register({ kind: 'exact', path: '/plugins/agy-link/status', handler: (_req, res) => {
-      const cfg = getConfig()
-      const cat = catalog.get()
-      sendJson(res as RawRes, 200, {
-        plugin: 'dsh-agy-link',
-        bin: bin(),
-        version: versionCache,
-        dormantReason,
-        enabled: cfg.enabled,
-        permissionMode: cfg.permissionMode,
-        workspaceRoot: cfg.workspaceRoot,
-        defaultModel: cfg.defaultModel,
-        defaultEffort: cfg.defaultEffort,
-        askTool: cfg.askTool,
-        auth: auth.status(),
-        catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
-        bindings: Object.keys(store.all()).length,
-        lastRun,
-      })
+    reg({ kind: 'exact', path: '/plugins/agy-link/status', handler: (_req, res) => {
+      void (async () => {
+        const cfg = getConfig()
+        const cat = catalog.get()
+        sendJson(res as RawRes, 200, {
+          plugin: 'dsh-agy-link',
+          bin: bin(),
+          version: versionCache,
+          dormantReason,
+          enabled: cfg.enabled,
+          permissionMode: cfg.permissionMode,
+          workspaceRoot: cfg.workspaceRoot,
+          defaultModel: cfg.defaultModel,
+          defaultEffort: cfg.defaultEffort,
+          askTool: cfg.askTool,
+          auth: await auth.resolvedStatus(),
+          catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
+          bindings: Object.keys(store.all()).length,
+          lastRun,
+        })
+      })()
     }})
-    webServer.register({ kind: 'exact', path: '/plugins/agy-link/auth', handler: (req, res) => {
+    reg({ kind: 'exact', path: '/plugins/agy-link/auth', handler: (req, res) => {
       void (async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -286,7 +298,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         sendJson(res as RawRes, 200, st)
       })()
     }})
-    webServer.register({ kind: 'exact', path: '/plugins/agy-link/auth-code', handler: (req, res) => {
+    reg({ kind: 'exact', path: '/plugins/agy-link/auth-code', handler: (req, res) => {
       void (async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -303,7 +315,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         sendJson(res as RawRes, 200, st)
       })()
     }})
-    webServer.register({ kind: 'exact', path: '/plugins/agy-link/config', handler: (req, res) => {
+    reg({ kind: 'exact', path: '/plugins/agy-link/config', handler: (req, res) => {
       void (async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -321,7 +333,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
       })()
     }})
-    webServer.register({ kind: 'exact', path: '/plugins/agy-link/qr', handler: (_req, res) => {
+    reg({ kind: 'exact', path: '/plugins/agy-link/qr', handler: (_req, res) => {
       void (async () => {
         const st = auth.status()
         const url = st.phase === 'pending' ? st.url : undefined
@@ -342,7 +354,22 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
       })()
     }})
+    return () => {
+      for (const d of disposers) {
+        try {
+          d()
+        } catch {
+          // route already gone (server teardown) — nothing to do
+        }
+      }
+    }
   }
+
+  ctx.inject(['webServer'], (sub) => {
+    const webServer = sub.get('webServer') as WebServerLike | undefined
+    if (!webServer) return
+    return registerRoutes(webServer)
+  })
 
   // ---- v0.2: media TTL sweep + optional MCP reverse bridge ----
   const mediaDir = (): string => {

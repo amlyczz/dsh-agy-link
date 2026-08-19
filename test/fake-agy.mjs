@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // Fake agy CLI for offline tests. Modes via FAKE_AGY_MODE env:
-//   ok | auth | noise | exit12
+//   ok | auth | noise | exit12 | real | real-error
+//   ok            — legacy flat event shapes (kept for compat coverage)
+//   real          — real agy 1.1.15 stream-json shapes (nested step_update
+//                   envelopes, agent_response text_delta fragments,
+//                   thinking-only turns, tool ACTIVE/DONE/ERROR)
+//   real-error    — same as real, but the result envelope carries
+//                   status=ERROR together with a usable response
 // Records its argv (JSON) to FAKE_AGY_ARGS_FILE when set.
 import { writeFileSync } from 'node:fs'
 
@@ -57,6 +63,32 @@ if (mode === 'noise') {
   process.stdout.write('\u26a0 fetching model catalog\n')
   emit({ event: 'init', conversation_id: conv, model: 'gemini-3-6-flash' })
   process.stdout.write('some progress noise\n')
+} else if (mode === 'real' || mode === 'real-error' || mode === 'real-fail') {
+  // Shapes captured from a live agy 1.1.15 binary
+  // (`--output-format stream-json --mode plan --model ... --effort ...`).
+  emit({ event: 'init', conversation_id: conv, init: { model: 'gemini-3-7-flash', cwd: '/tmp', tools: ['run_command', 'read_file'] } })
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 0, state: 'DONE', step_type: 'user_input' } })
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 1, state: 'DONE', step_type: 'checkpoint', duration_seconds: 0.1 } })
+  // thinking-only turn: usage with thinking tokens, no text_delta
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 2, state: 'DONE', step_type: 'agent_response', duration_seconds: 1.2, usage: { input_tokens: 500, output_tokens: 40, thinking_tokens: 80, total_tokens: 540 } } })
+  // tool call: ACTIVE announces parameters, DONE carries output
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 3, state: 'ACTIVE', step_type: 'tool', tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { CommandLine: 'ls' } } } })
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 3, state: 'DONE', step_type: 'tool', duration_seconds: 0.3, tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { CommandLine: 'ls' }, output: 'note1.txt\nnote2.txt\n' } } })
+  // failed tool call: state ERROR with tool_info.error
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 4, state: 'ACTIVE', step_type: 'tool', tool_name: 'find_by_name', tool_info: { name: 'find_by_name', parameters: { Pattern: 'note*.txt' } } } })
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 4, state: 'ERROR', step_type: 'tool', duration_seconds: 30, tool_name: 'find_by_name', tool_info: { name: 'find_by_name', parameters: { Pattern: 'note*.txt' }, error: { type: 'TOOL_ERROR', message: 'Find command timed out.' } } } })
+  // streamed answer: sequential text_delta fragments across ACTIVE -> DONE
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'There are ' } })
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: '2 files, ' } })
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'DONE', step_type: 'agent_response', text_delta: '6 words total.', duration_seconds: 2, usage: { input_tokens: 900, output_tokens: 60, thinking_tokens: 15, cache_read_tokens: 200, total_tokens: 960 } } })
+  if (mode === 'real-fail') {
+    emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: '', error: 'model overloaded', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 100, output_tokens: 0 } } })
+  } else if (mode === 'real') {
+    emit({ event: 'result', result: { conversation_id: conv, status: 'DONE', response: 'There are 2 files, 6 words total.', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 900, output_tokens: 100, thinking_tokens: 95, cache_read_tokens: 200, total_tokens: 1000 } } })
+  } else {
+    emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: 'There are 2 files, 6 words total.', error: 'Find command timed out. Use a more targeted search directory or pattern.: context deadline exceeded', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 900, output_tokens: 100, thinking_tokens: 95, cache_read_tokens: 200, total_tokens: 1000 } } })
+  }
+  process.exit(0)
 } else {
   emit({ event: 'init', conversation_id: conv, model: 'gemini-3-6-flash' })
 }

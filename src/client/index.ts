@@ -1,16 +1,14 @@
 // dsh-agy-link client half (browser). The DSH Web GUI stays untouched;
 // this client adds two surfaces:
-//   1. A sidebar footer action whose popover is a small state machine over
-//      (dormant / needs-auth / ok) — QR login, mode/effort quick controls.
-//   2. A conversation header pill (`AGY`) so the current session always shows
+//   1. A conversation header pill (`AGY`) so the current session always shows
 //      whether the bridge is ready/needs login/dormant.
-//   3. A settings.section page under DSH Settings -> Antigravity, showing
-//      whether agy is installed/signed in, the active workspace, model count,
-//      conversation bindings, and last run state.
+//   2. A settings.section page under DSH Settings -> Antigravity: bridge
+//      status (binary / auth / models / bindings / last run), Google OAuth
+//      login (QR + authorization code), and mode/effort quick controls.
+// The old sidebar footer button was removed by user request; all of its
+// function now lives on the settings page.
 // State comes from the host route /plugins/agy-link/status (JSON); QR is a
-// host-served PNG at /plugins/agy-link/qr. The popover renders through a
-// React portal to document.body so peer footer-slot plugins can never
-// displace it (dsh-lark-link GH issue #3 lesson).
+// host-served PNG at /plugins/agy-link/qr.
 
 import type { Context } from '@deepseek-ai/cordis';
 
@@ -21,20 +19,11 @@ type ReactApi = {
 };
 const R = require('react') as ReactApi;
 const { createElement: h, useState, useEffect } = R;
-const reactDom = require('react-dom') as {
-	createPortal?: (node: unknown, container: unknown) => unknown;
-};
 
 const win = globalThis as unknown as {
 	location?: { origin?: string };
 	fetch?: (url: string, init?: Record<string, unknown>) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
-	document?: { body?: unknown } | null;
 };
-const bodyEl = win.document?.body;
-const portalToBody =
-	bodyEl != null && reactDom.createPortal
-		? (node: unknown) => reactDom.createPortal!(node, bodyEl)
-		: (node: unknown) => node;
 
 export const name = 'dsh-agy-link-client';
 export const inject = ['slots'];
@@ -122,16 +111,13 @@ const S: Record<string, Record<string, unknown>> = {
 };
 
 export function apply(ctx: ClientContext): void {
-	const AgyPanel = (props?: unknown): unknown => {
-		const { wide = false } = (props ?? {}) as { wide?: boolean }
-		const [open, setOpen] = useState(false)
+	const AgySettingsSection = (): unknown => {
 		const [status, setStatus] = useState<StatusPayload | null>(null)
 		const [code, setCode] = useState('')
 		const [busy, setBusy] = useState(false)
 		const [notice, setNotice] = useState('')
 
 		useEffect(() => {
-			if (!open) return
 			let alive = true
 			const tick = async () => {
 				const st = await getStatus()
@@ -143,25 +129,17 @@ export function apply(ctx: ClientContext): void {
 				alive = false
 				clearInterval(timer)
 			}
-		}, [open])
+		}, [])
 
-		const dot =
-			status === null
-				? '#9aa0a6'
-				: status.dormantReason
-					? '#f5a623'
-					: status.auth?.phase === 'pending' || status.auth?.phase === 'failed' || status.auth?.phase === 'submitting'
-						? '#f5a623'
-						: status.lastRun && !status.lastRun.ok
-							? '#e5484d'
-							: '#30a46c'
+		const refresh = async (): Promise<void> => {
+			setStatus(await getStatus())
+		}
 
 		const startAuth = async (): Promise<void> => {
 			setBusy(true)
 			setNotice('')
 			await postJson('/plugins/agy-link/auth', {})
-			const st = await getStatus()
-			setStatus(st)
+			await refresh()
 			setBusy(false)
 		}
 
@@ -179,40 +157,39 @@ export function apply(ctx: ClientContext): void {
 		const setCfg = async (key: string, value: unknown): Promise<void> => {
 			setBusy(true)
 			await postJson('/plugins/agy-link/config', { key, value })
-			const st = await getStatus()
-			setStatus(st)
+			await refresh()
 			setBusy(false)
 		}
 
-		const badge = h(
-			'button',
-			{
-				type: 'button',
-				onClick: () => setOpen(!open),
-				style: { background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 6px', fontSize: '14px', lineHeight: 1 },
-				title: 'Antigravity (agy) bridge',
-			},
-			h('span', { style: { display: 'inline-block', width: '9px', height: '9px', borderRadius: '50%', background: dot } }),
-			wide ? h('span', { style: { marginLeft: '6px', fontSize: '12px', lineHeight: 1 } }, 'AGY') : null,
-		)
-
-		if (!open) return badge
-
-		const needsAuth =
-			status !== null &&
-			!status.dormantReason &&
-			status.auth !== undefined &&
-			status.auth.phase !== 'ok'
-
-		const dormantLine = h('div', null, 'Bridge dormant: ', status?.dormantReason ?? '')
+		// status === null means the /plugins/agy-link/status route answered
+		// non-200 or the fetch failed — that is a host-side routing problem,
+		// NOT "agy is not installed". Render it honestly instead of the old
+		// misleading "agy binary: not found" placeholders.
+		const reachable = status !== null
+		const summary =
+			!reachable
+				? 'Status endpoint unreachable — the plugin host did not answer /plugins/agy-link/status. Restart the DSH web server and check its logs.'
+				: status.dormantReason
+					? 'Not ready — ' + status.dormantReason
+					: status.auth?.phase === 'ok'
+						? 'Ready — agy is connected'
+						: 'Needs Google login — start the login flow below, or run /agy auth'
+		const color =
+			!reachable
+				? '#e5484d'
+				: status.dormantReason
+					? '#f5a623'
+					: status.auth?.phase === 'ok'
+						? '#30a46c'
+						: '#f5a623'
 
 		const infoBlock = h(
 			'div',
-			{ style: { ...S.muted, lineHeight: 1.5 } },
-			h('div', null, 'agy: ', status?.bin ?? 'not found', ' — v', status?.version ?? '?'),
+			{ style: { ...S.muted, lineHeight: 1.6, margin: '6px 0 12px' } },
+			h('div', null, 'agy binary: ', status?.bin ?? 'not found', status?.version ? ' — v' + status.version : ''),
 			h('div', null, 'auth: ', status?.auth?.phase ?? 'unknown'),
-			h('div', null, 'models: ', String(status?.catalog?.count ?? 0), ' — ', status?.catalog?.source ?? ''),
 			h('div', null, 'workspace: ', status?.workspaceRoot ? status.workspaceRoot : '(session cwd / process cwd)'),
+			h('div', null, 'models: ', String(status?.catalog?.count ?? 0), ' — ', status?.catalog?.source ?? ''),
 			h('div', null, 'bindings: ', String(status?.bindings ?? 0)),
 			h('div', null, 'last run: ', status?.lastRun ? (status.lastRun.ok ? 'ok' : status.lastRun.code) + ' — ' + status.lastRun.model : 'none'),
 		)
@@ -238,7 +215,7 @@ export function apply(ctx: ClientContext): void {
 
 		const skipWarn = h(
 			'div',
-			{ style: S.muted },
+			{ style: { ...S.muted, marginBottom: '8px' } },
 			'skip runs agy tools with --dangerously-skip-permissions (no approval prompts). plan is the safe read-only default.',
 		)
 
@@ -259,89 +236,28 @@ export function apply(ctx: ClientContext): void {
 			notice !== '' ? h('div', null, notice) : null,
 		)
 
-		const body = status?.dormantReason
-			? dormantLine
-			: needsAuth
-				? authBlock
-				: h('div', null, infoBlock, modeRow, effortRow, skipWarn)
+		const needsAuth =
+			reachable &&
+			!status.dormantReason &&
+			status.auth !== undefined &&
+			status.auth.phase !== 'ok'
 
-		const header = h(
-			'div',
-			{ style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
-			h('span', { style: { fontWeight: 600, fontSize: '13px' } }, 'Antigravity bridge'),
-			h('button', { type: 'button', style: S.btn, onClick: () => setOpen(false) }, 'close'),
-		)
-
-		const popover = h(
-			'div',
-			{
-				style: {
-					position: 'fixed',
-					bottom: '56px',
-					left: '16px',
-					width: '300px',
-					maxHeight: '70vh',
-					overflowY: 'auto',
-					padding: '12px 14px',
-					borderRadius: '10px',
-					border: '1px solid rgba(128,128,128,0.35)',
-					background: 'rgba(28,28,32,0.98)',
-					boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-					zIndex: 1000,
-				},
-			},
-			header,
-			body,
-		)
-
-		return h('div', { style: { display: 'contents' } }, badge, portalToBody(popover))
-	}
-
-	const AgySettingsSection = (): unknown => {
-		const [status, setStatus] = useState<StatusPayload | null>(null)
-		useEffect(() => {
-			let alive = true
-			const tick = async () => {
-				const st = await getStatus()
-				if (alive) setStatus(st)
-			}
-			void tick()
-			const timer = setInterval(tick, 3000)
-			return () => {
-				alive = false
-				clearInterval(timer)
-			}
-		}, [])
-		const summary =
-			status === null
-				? 'Loading…'
+		const controls =
+			!reachable
+				? null
 				: status.dormantReason
-					? 'Not ready — ' + status.dormantReason
-					: status.auth?.phase === 'ok'
-						? 'Ready — agy is connected'
-						: 'Needs Google login — open the sidebar dot or run /agy auth'
-		const color =
-			status === null
-				? '#9aa0a6'
-				: status.dormantReason
-					? '#f5a623'
-					: status.auth?.phase === 'ok'
-						? '#30a46c'
-						: '#f5a623'
+					? h('div', { style: S.muted }, 'Bridge dormant: ', status.dormantReason)
+					: needsAuth
+						? authBlock
+						: h('div', null, infoBlock, modeRow, effortRow, skipWarn)
+
 		return h('div', { style: { lineHeight: 1.6 } },
 			h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px' } },
 				h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: color } }),
 				'Antigravity (agy CLI)'),
 			h('div', { style: { ...S.muted, margin: '6px 0 12px' } }, summary),
-			h('div', { style: { ...S.muted, lineHeight: 1.6 } },
-				h('div', null, 'agy binary: ', status?.bin ?? 'not found', status?.version ? ' — v' + status.version : ''),
-				h('div', null, 'auth: ', status?.auth?.phase ?? 'unknown'),
-				h('div', null, 'workspace: ', status?.workspaceRoot ? status.workspaceRoot : '(session cwd / process cwd)'),
-				h('div', null, 'models: ', String(status?.catalog?.count ?? 0), ' — ', status?.catalog?.source ?? ''),
-				h('div', null, 'bindings: ', String(status?.bindings ?? 0)),
-				h('div', null, 'last run: ', status?.lastRun ? (status.lastRun.ok ? 'ok' : status.lastRun.code) + ' — ' + status.lastRun.model : 'none'),
-			),
-			h('div', { style: S.muted }, 'Run `/agy status` for full diagnostics, or use the sidebar dot for quick login/controls.'),
+			controls,
+			h('div', { style: S.muted }, 'Run `/agy status` for full diagnostics, `/agy doctor` to export a report.'),
 		)
 	}
 
@@ -398,19 +314,6 @@ export function apply(ctx: ClientContext): void {
 			'AGY',
 		)
 	}
-
-	ctx.slots.inject('sidebar.footer.action', () => {
-		const dispose = ctx.slots.register(
-			{
-				name: 'sidebar.footer.action',
-				id: 'agy-link-entry',
-				order: 30,
-				label: 'Antigravity',
-			},
-			AgyPanel,
-		)
-		return dispose
-	})
 
 	ctx.slots.inject('conversation.session.header.actions', () => {
 		const dispose = ctx.slots.register(

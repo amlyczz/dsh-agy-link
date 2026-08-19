@@ -6,7 +6,7 @@
 // annotations (ADR-6): there is no toolUse stopReason to honor because agy
 // runs its own closed tool loop.
 import type { StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import type { AgyEvent, RawUsage } from '../common/types.ts'
+import { Err, type AgyEvent, type RawUsage } from '../common/types.ts'
 
 export type ToolAnnounceRenderer = (name: string, args: unknown) => string
 export type ToolOutputRenderer = (name: string, args: unknown, output: unknown, cwd?: string) => string | null
@@ -67,6 +67,7 @@ export class EventMapper {
   private openAcc = ''
   private readonly emittedByKey = new Map<string, string>()
   private readonly toolPhaseSeen = new Set<string>()
+  private readonly thinkingAnnounced = new Set<string>()
   private sawTextStep = false
   private finished = false
 
@@ -118,12 +119,33 @@ export class EventMapper {
     if (ev.kind === 'garbage') return
     if (ev.kind === 'step') {
       if (ev.stepKind === 'text') {
+        // agy ≥1.1.15 thinking turns: agent_response steps with usage but no
+        // text_delta. The thoughts themselves are not streamed in print mode,
+        // so surface the turn honestly as a token-annotated reasoning line.
+        const thoughtTokens = ev.usage?.thinking_tokens ?? 0
+        if (ev.text === '' && thoughtTokens > 0 && !this.thinkingAnnounced.has(ev.stepKey)) {
+          this.thinkingAnnounced.add(ev.stepKey)
+          yield* this.ensureBlock('reasoning')
+          const d = this.appendDelta('[agy thinking turn · ' + thoughtTokens + ' thinking tokens]\n')
+          if (d) yield d
+          return
+        }
+        if (ev.text === '' && !ev.fragment) return
         this.sawTextStep = true
         yield* this.ensureBlock('text')
-        const prev = this.emittedByKey.get(ev.stepKey) ?? ''
-        const delta = suffixDelta(prev, ev.text)
-        this.emittedByKey.set(ev.stepKey, ev.text)
-        const d = this.appendDelta(delta)
+        let d: StreamChunk | null
+        if (ev.fragment === true) {
+          // Sequential fragment (text_delta): append in arrival order.
+          const acc = (this.emittedByKey.get(ev.stepKey) ?? '') + ev.text
+          this.emittedByKey.set(ev.stepKey, acc)
+          d = this.appendDelta(ev.text)
+        } else {
+          // Cumulative snapshot: emit only the grown suffix.
+          const prev = this.emittedByKey.get(ev.stepKey) ?? ''
+          const delta = suffixDelta(prev, ev.text)
+          this.emittedByKey.set(ev.stepKey, ev.text)
+          d = this.appendDelta(delta)
+        }
         if (d) yield d
         return
       }
@@ -144,6 +166,12 @@ export class EventMapper {
             if (d) yield d
           }
           const outKey = ev.stepKey + ':o'
+          const errKey = ev.stepKey + ':e'
+          if (ev.tool.error !== undefined && !this.toolPhaseSeen.has(errKey)) {
+            this.toolPhaseSeen.add(errKey)
+            const d = this.appendDelta('[agy tool error: ' + ev.tool.name + '] ' + ev.tool.error + '\n')
+            if (d) yield d
+          }
           if (ev.tool.output !== undefined && !this.toolPhaseSeen.has(outKey)) {
             this.toolPhaseSeen.add(outKey)
             const rendered = this.opts.toolOutput
@@ -164,7 +192,35 @@ export class EventMapper {
       return;
     }
     // result
-    if (!ev.ok) return // error finish is emitted by the adapter via emitFailure
+    if (!ev.ok) {
+      // agy reports status=ERROR even when a usable response exists (e.g. a
+      // tool timed out mid-run). Keep the answer, surface the error as a
+      // reasoning annotation, and finish normally. A bare error with no
+      // response stays passive here — the adapter owns terminal failures
+      // (auth / process / invalid-output) and reads the envelope error from
+      // the parser.
+      if (ev.response === '') return
+      if (!this.sawTextStep) {
+        yield* this.ensureBlock('text')
+        const d = this.appendDelta(ev.response)
+        if (d) yield d
+      }
+      if (ev.error !== undefined && ev.error !== '') {
+        yield* this.ensureBlock('reasoning')
+        const d = this.appendDelta('[agy finished with error] ' + ev.error + '\n')
+        if (d) yield d
+      }
+      const closeErr = this.closeOpen()
+      if (closeErr) yield closeErr
+      yield { type: 'usage', usage: usageFromRaw(ev.usage) }
+      yield {
+        type: 'finish',
+        reason: { kind: 'stop' },
+        ...(ev.conversationId !== '' ? { replayState: { response: { conversationId: ev.conversationId } } } : {}),
+      }
+      this.finished = true
+      return
+    }
     if (!this.sawTextStep && ev.response !== '') {
       yield* this.ensureBlock('text')
       const d = this.appendDelta(ev.response)

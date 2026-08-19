@@ -38,7 +38,9 @@ export function parseModelsOutput(stdout: string): RawModel[] {
   for (const line of text.split(/\n/)) {
     const t = line.trim();
     if (t === '' || t.startsWith('Fetching') || t.startsWith('Error')) continue
-    const m = t.match(/^(\S+)\s{2,}(.+)$/)
+    // agy 1.1.15 prints a TAB-separated two-column table; older builds and
+    // some locales use two-or-more spaces.
+    const m = t.match(/^(\S+)(?:\t+|\s{2,})(.+)$/)
     if (m && m[1] !== undefined && m[2] !== undefined) out.push({ slug: m[1], label: m[2].trim() });
     else if (/^\S+$/.test(t)) out.push({ slug: t, label: t });
   }

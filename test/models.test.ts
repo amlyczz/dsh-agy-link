@@ -14,6 +14,25 @@ test('parseModelsOutput reads the JSON array shape', () => {
   assert.equal(out[0]?.label, 'Gemini 3.6 Flash')
 })
 
+test('parseModelsOutput reads the TAB-separated agy 1.1.15 table and folds efforts', () => {
+  // Captured verbatim from a live `agy models` (1.1.15, signed in)
+  const table = [
+    'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
+    'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)',
+    'gemini-3.7-flash-low\tGemini 3.7 Flash (Low)',
+    'gemini-3.6-flash-high\tGemini 3.6 Flash (High)',
+    'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+  ].join('\n')
+  const out = parseModelsOutput(table)
+  assert.equal(out.length, 5)
+  assert.equal(out[0]?.slug, 'gemini-3.7-flash-high')
+  assert.equal(out[0]?.label, 'Gemini 3.7 Flash (High)')
+  const folded = foldEfforts(out)
+  const base = findEntry({ source: 'discovered', models: folded, discoveredAt: 0 }, 'gemini-3.7-flash')
+  assert.ok(base, 'gemini-3.7-flash base exists after folding')
+  assert.deepEqual(base?.efforts, ['low', 'medium', 'high'])
+})
+
 test('parseModelsOutput reads the two-column text shape', () => {
   const out = parseModelsOutput('gemini-3-6-flash    Gemini 3.6 Flash\nclaude-sonnet-4-6    Claude Sonnet 4.6\n')
   assert.equal(out.length, 2)

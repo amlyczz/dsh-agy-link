@@ -104,6 +104,41 @@ test('unbound follow-up turn gets a history digest prefix', async () => {
   assert.ok(prompt.includes('follow up'))
 })
 
+test('agy 1.1.15 stream format maps thinking turns, tool activity and fragments', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'real'
+  const chunks = await collect(adapter.stream(opts([msg('user', 'count the files')])))
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as unknown as { text: string }).text).join('')
+  assert.ok(reasoning.includes('[agy thinking turn · 80 thinking tokens]'), reasoning)
+  assert.ok(reasoning.includes('[agy tool: run_command]'), reasoning)
+  assert.ok(reasoning.includes('note1.txt'), reasoning)
+  assert.ok(reasoning.includes('[agy tool error: find_by_name] Find command timed out.'), reasoning)
+  const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
+  assert.equal(text, 'There are 2 files, 6 words total.')
+})
+
+test('agy 1.1.15 result ERROR with response still finishes stop', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'real-error'
+  const chunks = await collect(adapter.stream(opts([msg('user', 'count the files')])))
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as unknown as { text: string }).text).join('')
+  assert.ok(reasoning.includes('[agy finished with error] Find command timed out'), reasoning)
+})
+
+test('agy 1.1.15 bare result error maps to AGY_ERROR', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'real-fail'
+  const chunks = await collect(adapter.stream(opts([msg('user', 'hi')])))
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
+  assert.equal(finish.reason.kind, 'error')
+  assert.equal(finish.reason.failure?.code, Err.AGY_ERROR)
+  assert.ok(finish.reason.failure?.message.includes('model overloaded'))
+})
+
 test('auth failure maps to an AUTH error finish', async () => {
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'auth'
