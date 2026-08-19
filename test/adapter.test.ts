@@ -12,7 +12,7 @@ import { AgyAdapter, buildDigest, detectContinuation, type AgyAdapterDeps } from
 import { ModelCatalog } from '../src/host/models.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
-import { defineAgyMirrorTool } from '../src/host/mirror-tool.ts'
+import { defineAgyMirrorTool, parseMirrorInvocation } from '../src/host/mirror-tool.ts'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { defaultConfig, Err, type PluginConfig } from '../src/common/types.ts'
 
@@ -99,7 +99,13 @@ async function runTurn(
       (c) => c.type === 'block-end' && (c as { block: { type: string } }).block.type === 'tool-call',
     ) as unknown as { block: { id: string; name: string; arguments: string } } | undefined
     if (end === undefined) throw new Error('tool-calls finish without a tool-call block')
-    const args = JSON.parse(end.block.arguments) as MirrorArgs
+    if (end.block.name !== 'run_code') throw new Error('tool-call block must address run_code, got ' + end.block.name)
+    // The deployment only dispatches run_code directly; the embedded program
+    // invokes the mirror with a (run, step) cursor — that is what executes.
+    const wrapper = JSON.parse(end.block.arguments) as { code: string; description: string }
+    const inv = parseMirrorInvocation(wrapper.code)
+    if (inv === null) throw new Error('run_code wrapper lacks the agy_tool invocation')
+    const args = { run: inv.run, step: inv.step, tool: '' } as unknown as MirrorArgs
     toolCalls.push({ id: end.block.id, args })
     messages.push({ role: 'assistant', content: [end.block] } as unknown as Message)
     messages.push({
@@ -126,10 +132,13 @@ test('ok run mirrors tools natively, streams text, and persists the binding', as
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
   assert.ok(!text.includes('[agy tool:'), 'no text-body tool annotations in v0.3: ' + text)
   assert.ok(text.endsWith('Hello from fake agy'), text)
-  // the read_file step became exactly one native tool-call span
+  // the read_file step became exactly one native tool-call span; the block
+  // carries only the (run, step) cursor — the tool name lives in the recording
   assert.equal(toolCalls.length, 1)
-  assert.equal(toolCalls[0]?.args.tool, 'read_file')
-  assert.equal(toolCalls[0]?.args.run.length > 0, true)
+  const first = toolCalls[0] as { args: { run: string; step: number } }
+  assert.equal(first.args.run.length > 0, true)
+  const t = runs.get(first.args.run)?.toolEventAt(first.args.step)
+  assert.equal(t?.name, 'read_file')
   // the mirror replays the recorded output for that callId
   const mirror = defineAgyMirrorTool({ runs })
   const replayed = await mirror.execute(toolCalls[0]?.args as never, { signal: new AbortController().signal } as never)
@@ -191,17 +200,20 @@ test('agy 1.1.15 stream mirrors tools as native cards across spans', async () =>
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
   assert.ok(!text.includes('note1.txt'), 'tool output no longer pasted into the text body')
   assert.ok(text.includes('There are 2 files, 6 words total.'), text)
-  // both tool steps became mirrored native calls, in order
-  assert.deepEqual(toolCalls.map((t) => t.args.tool), ['run_command', 'find_by_name'])
-  // the mirror replays run_command's recorded output and surfaces the errored tool
+  // both tool steps became mirrored native calls, in order — the wrapper
+  // carries cursor-only args; resolve the names from the recording
   const mirror = defineAgyMirrorTool({ runs })
+  const names = toolCalls.map((t) => runs.get(t.args.run)?.toolEventAt(t.args.step)?.name)
+  assert.deepEqual(names, ['run_command', 'find_by_name'])
+  // the mirror replays run_command's recorded output and surfaces the errored tool
   const out = await mirror.execute(toolCalls[0]?.args as never, { signal: new AbortController().signal } as never)
   assert.equal(out, 'note1.txt\nnote2.txt\n')
   await assert.rejects(
     () => mirror.execute(toolCalls[1]?.args as never, { signal: new AbortController().signal } as never),
     (e: unknown) => String(e).includes('Find command timed out'),
   )
-  // pending-card projection: run_command renders as a terminal card
+  // pending-card projection enriches cursor-only args from the recording:
+  // run_command renders as a terminal card
   const card = mirror.presentCall?.(toolCalls[0]?.args)
   assert.equal((card as { card: string } | undefined)?.card, 'terminal')
 })

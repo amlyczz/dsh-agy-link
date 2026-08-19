@@ -17,6 +17,7 @@
 import { CallId, type StreamChunk, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { AgyEvent, RawUsage } from '../common/types.ts'
 import { mirrorCallId } from './recording.ts'
+import { buildMirrorRunCode, WRAPPER_TOOL_NAME } from './mirror-tool.ts'
 
 export function usageFromRaw(raw: RawUsage): TokenUsage {
   // The DSH session layer rejects chunks carrying undefined-valued fields
@@ -118,8 +119,14 @@ export class EventMapper {
         // trivial questions never get a separate thinking step, which is why
         // first turns used to show no thinking at all), and a streamed
         // answer whose DONE tail carries the final usage.
+        //
+        // Placement guard: annotate only while THIS step has not yet
+        // streamed any text. A streamed answer's DONE tail carries usage
+        // after fragments already went out — annotating there wedged the
+        // chip mid-text (reported on v0.3.2); those turns get no annotation.
         const thoughtTokens = ev.usage?.thinking_tokens ?? 0
-        if (thoughtTokens > 0 && !this.thinkingAnnounced.has(ev.stepKey)) {
+        const stepTextEmitted = (this.emittedByKey.get(ev.stepKey) ?? '') !== ''
+        if (thoughtTokens > 0 && !stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)) {
           this.thinkingAnnounced.add(ev.stepKey)
           yield* this.ensureBlock('reasoning')
           const d = this.appendDelta('[agy thinking turn · ' + thoughtTokens + ' thinking tokens]\n')
@@ -167,18 +174,17 @@ export class EventMapper {
         this.announcedTools.add(ev.stepKey)
         if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
         // Cut the span: close any open block, then one tool-call block
-        // addressed to the mirror, zero usage, finish:tool-calls.
+        // addressed to run_code — the only tool the deployment's dispatch
+        // policy lets a model call directly — wrapping a generated program
+        // whose single statement invokes the registered agy_tool mirror.
+        // The inner dispatch renders the native tool card; the callId still
+        // encodes the (run, eventIndex) cursor for continuation detection.
         const close = this.closeOpen()
         if (close) yield close
         const idx = this.blockIdx
-        const input =
-          ev.tool.args === undefined ? {} : { input: ev.tool.args }
-        const argumentsJson = JSON.stringify({
-          run: this.opts.runId,
-          step: absIndex,
-          tool: ev.tool.name,
-          ...input,
-        })
+        const argumentsJson = JSON.stringify(
+          buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name),
+        )
         yield { type: 'block-start', index: idx, blockType: 'tool-call' }
         yield {
           type: 'block-end',
@@ -186,7 +192,7 @@ export class EventMapper {
           block: {
             type: 'tool-call',
             id: CallId(mirrorCallId(this.opts.runId, absIndex)),
-            name: 'agy_tool',
+            name: WRAPPER_TOOL_NAME,
             arguments: argumentsJson,
           },
         }

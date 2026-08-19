@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { EventMapper, suffixDelta, usageFromRaw } from '../src/host/mapper.ts'
 import { mirrorCallId, parseMirrorCallId } from '../src/host/recording.ts'
+import { parseMirrorInvocation } from '../src/host/mirror-tool.ts'
 
 type FinishChunk = Extract<StreamChunk, { type: 'finish' }>
 type UsageChunk = Extract<StreamChunk, { type: 'usage' }>
@@ -93,13 +94,17 @@ test('completed tool step cuts the span into a native tool-call + finish:tool-ca
     { kind: 'step', stepKey: '9', stepKind: 'text', text: 'after the cut' },
   ])
   const end = toolCallEnd(chunks)
-  assert.equal(end.block.name, 'agy_tool')
+  // The block addresses run_code (the only directly dispatchable tool); the
+  // generated program inside carries the agy_tool cursor.
+  assert.equal(end.block.name, 'run_code')
   assert.equal(end.block.id, mirrorCallId('run-abc', 2))
-  const args = JSON.parse(end.block.arguments) as { run: string; step: number; tool: string; input: { command: string } }
-  assert.equal(args.run, 'run-abc')
-  assert.equal(args.step, 2)
-  assert.equal(args.tool, 'run_command')
-  assert.deepEqual(args.input, { command: 'ls' })
+  const args = JSON.parse(end.block.arguments) as { code: string; description: string }
+  const inv = parseMirrorInvocation(args.code)
+  assert.ok(inv !== null, 'code embeds the agy_tool invocation')
+  assert.equal(inv.run, 'run-abc')
+  assert.equal(inv.step, 2)
+  assert.ok(args.description.includes('run_command'), args.description)
+  assert.ok(args.code.includes("tools['agy_tool']"), 'program calls the mirror tool')
   const finish = asFinish(lastChunk(chunks))
   assert.equal(finish.reason.kind, 'tool-calls')
   assert.equal(m.isFinished, true)
@@ -114,8 +119,8 @@ test('erroring tool step cuts exactly like a successful one', () => {
     { kind: 'step', stepKey: '4', stepKind: 'tool', state: 'ERROR', text: '', tool: { name: 'find_by_name', args: { pattern: 'x' }, error: 'timed out' } },
   ])
   const end = toolCallEnd(chunks)
-  const args = JSON.parse(end.block.arguments) as { tool: string }
-  assert.equal(args.tool, 'find_by_name')
+  const args = JSON.parse(end.block.arguments) as { description: string }
+  assert.ok(args.description.includes('find_by_name'), args.description)
   assert.equal(asFinish(lastChunk(chunks)).reason.kind, 'tool-calls')
 })
 
@@ -204,7 +209,10 @@ test('one-shot answer step (text + usage together) still annotates thinking', ()
   assert.ok(rIdx >= 0 && tIdx > rIdx, 'reasoning annotation precedes the answer text')
 })
 
-test('streamed answer whose DONE tail carries usage annotates thinking too', () => {
+test('streamed answer whose DONE tail carries usage gets NO mid-text annotation', () => {
+  // v0.3.2 regression: the DONE tail carries thinking_tokens after fragments
+  // already streamed, and the annotation wedged itself mid-text (reported:
+  // "think appears in the middle of the message"). Such turns now stay clean.
   const m = newSpan('r-tail')
   const chunks = mapAll(m, [
     { kind: 'step', stepKey: '5', stepKind: 'text', text: 'There are ', fragment: true },
@@ -212,9 +220,12 @@ test('streamed answer whose DONE tail carries usage annotates thinking too', () 
     { kind: 'result', conversationId: 'c9', ok: true, response: 'There are 2 files.', usage: {} },
   ])
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.ok(reasoning.includes('[agy thinking turn · 15 thinking tokens]'), reasoning)
+  assert.equal(reasoning, '', 'no annotation once this step already streamed text')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
   assert.equal(text, 'There are 2 files.')
+  const types = chunks.map((c) => c.type)
+  assert.equal(types.filter((t) => t === 'text-delta').length >= 2, true)
+  assert.equal(types.some((t) => t === 'reasoning-delta'), false)
   assert.equal(asFinish(lastChunk(chunks)).reason.kind, 'stop')
 })
 

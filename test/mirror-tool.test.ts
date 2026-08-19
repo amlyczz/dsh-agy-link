@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { RunRecording, RunRegistry } from '../src/host/recording.ts'
-import { defineAgyMirrorTool, presentMirrorCall } from '../src/host/mirror-tool.ts'
+import { defineAgyMirrorTool, presentMirrorCall, buildMirrorRunCode, parseMirrorInvocation } from '../src/host/mirror-tool.ts'
 
 function fakeSignal(): AbortSignal {
   return new AbortController().signal
@@ -55,6 +55,41 @@ test('mirror execute replays recorded output and errors honestly', async () => {
     () => mirror.execute({ run: 'missing', step: 0, tool: 'x' } as never, { signal: fakeSignal() } as never),
     (e: unknown) => String(e).includes('no recorded agy run'),
   )
+})
+
+test('cursor-only invocations: execute + presenters resolve detail from the recording', async () => {
+  // The run_code wrapper embeds only {run, step}; schema marks tool/input
+  // optional and the registered presenters enrich from the recording.
+  const reg = new RunRegistry()
+  const rec = reg.create()
+  rec.append({ kind: 'step', stepKey: 't1', stepKind: 'tool', text: '', tool: { name: 'run_command', args: { command: 'ls -la' }, output: 'x' } } as never)
+  const mirror = defineAgyMirrorTool({ runs: reg })
+  const cursor = { run: rec.runId, step: 0 }
+  assert.equal(await mirror.execute(cursor as never, { signal: fakeSignal() } as never), 'x')
+  const card = mirror.presentCall?.(cursor)
+  assert.equal((card as { card: string } | undefined)?.card, 'terminal')
+  assert.equal((card as { title?: string } | undefined)?.title, 'ls -la')
+})
+
+test('run_code wrapper round-trip: build -> parse recovers the cursor', () => {
+  const built = buildMirrorRunCode('7d246c00-c0d1-4e3c-a25b-848881b81042', 15, 'run_command')
+  assert.equal(built.description, 'replay agy tool step 15 · run_command')
+  assert.ok(built.code.includes("tools['agy_tool']({\"run\":\"7d246c00-c0d1-4e3c-a25b-848881b81042\",\"step\":15})"), built.code)
+  assert.deepEqual(parseMirrorInvocation(built.code), { run: '7d246c00-c0d1-4e3c-a25b-848881b81042', step: 15 })
+  assert.equal(parseMirrorInvocation('unrelated code'), null)
+})
+
+test('cards read PascalCase agy arg keys (CommandLine, AbsolutePath, …)', () => {
+  const term = presentMirrorCall({ tool: 'run_command', input: { CommandLine: 'ls -la', WorkingDirectory: '/tmp' } })
+  assert.equal(term?.card, 'terminal')
+  if (term?.card === 'terminal') {
+    assert.equal(term.title, 'ls -la')
+    assert.equal(term.cwd, '/tmp')
+  }
+  const read = presentMirrorCall({ tool: 'view_file', input: { AbsolutePath: '/tmp/a.txt' } })
+  if (read?.card === 'generic') assert.equal(read.title, 'Read /tmp/a.txt')
+  const search = presentMirrorCall({ tool: 'find_by_name', input: { Pattern: '*.ts', SearchDirectory: '/src' } })
+  if (search?.card === 'generic') assert.equal(search.title, 'Search *.ts')
 })
 
 test('presentMirrorCall maps the agy vocabulary onto native cards', () => {

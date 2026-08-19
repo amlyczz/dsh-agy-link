@@ -24,6 +24,50 @@ import type { RunRegistry } from './recording.ts'
 
 export const MIRROR_TOOL_NAME = 'agy_tool'
 
+/** The only tool this DSH deployment lets a model call directly. */
+export const WRAPPER_TOOL_NAME = 'run_code'
+
+/**
+ * Build the run_code tool-call arguments that replay one recorded agy tool
+ * step. The deployment's tool-dispatch policy only allows `run_code` as a
+ * direct model call (everything else must be invoked from inside a
+ * program), so the span cut addresses run_code with a generated program
+ * whose single statement calls the registered mirror tool — the inner
+ * dispatch is what renders the native tool card.
+ */
+export function buildMirrorRunCode(
+  runId: string,
+  eventIndex: number,
+  toolName: string,
+): { code: string; description: string } {
+  const invocation = JSON.stringify({ run: runId, step: eventIndex })
+  return {
+    code:
+      '// dsh-agy-link mirror: replay recorded agy tool step ' +
+      eventIndex +
+      ' (' +
+      toolName +
+      ')\n' +
+      "return await tools['agy_tool'](" +
+      invocation +
+      ')',
+    description: 'replay agy tool step ' + eventIndex + ' · ' + toolName,
+  }
+}
+
+/** Extract the (run, step) cursor embedded by buildMirrorRunCode. */
+export function parseMirrorInvocation(code: string): { run: string; step: number } | null {
+  const m = /tools\['agy_tool'\]\((\{"run":.*?,"step":\d+\})\)/.exec(code)
+  if (m === null) return null
+  try {
+    const v = JSON.parse(m[1] as string) as { run?: unknown; step?: unknown }
+    if (typeof v.run === 'string' && typeof v.step === 'number') return { run: v.run, step: v.step }
+    return null
+  } catch {
+    return null
+  }
+}
+
 /** agy serializes some tool args as a JSON string; presenters get an object. */
 function toolInput(args: { input?: unknown }): Record<string, unknown> {
   const raw = args.input
@@ -40,8 +84,17 @@ function toolInput(args: { input?: unknown }): Record<string, unknown> {
   return { value: raw }
 }
 
-function asString(v: unknown): string | undefined {
-  return typeof v === 'string' ? v : undefined
+/**
+ * agy serializes tool args with PascalCase keys (CommandLine, AbsolutePath,
+ * SearchDirectory, …); pick() accepts both spellings so cards always read
+ * the real field instead of falling back to raw JSON.
+ */
+function pick(input: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = input[k]
+    if (typeof v === 'string') return v
+  }
+  return undefined
 }
 
 /** Native pending-card projection for one mirrored agy tool call. */
@@ -53,20 +106,20 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'run_command':
     case 'bash':
     case 'execute_command': {
-      const command = asString(input.command) ?? asString(input.cmd) ?? JSON.stringify(input)
+      const command = pick(input, 'command', 'cmd', 'CommandLine', 'Cmd') ?? JSON.stringify(input)
       const view: TerminalCallView = {
         card: 'terminal',
         title: command,
-        ...(asString(input.description) !== undefined ? { description: asString(input.description) as string } : {}),
-        ...(asString(input.cwd) !== undefined ? { cwd: asString(input.cwd) as string } : {}),
+        ...(pick(input, 'description', 'Description') !== undefined ? { description: pick(input, 'description', 'Description') as string } : {}),
+        ...(pick(input, 'cwd', 'Cwd', 'WorkingDirectory') !== undefined ? { cwd: pick(input, 'cwd', 'Cwd', 'WorkingDirectory') as string } : {}),
       }
       return view
     }
     case 'write_to_file':
     case 'write_file':
     case 'create_file': {
-      const path = asString(input.path) ?? asString(input.file_path) ?? asString(input.filename) ?? 'file'
-      const content = asString(input.content) ?? ''
+      const path = pick(input, 'path', 'file_path', 'filename', 'Path', 'FilePath', 'FileName', 'AbsolutePath') ?? 'file'
+      const content = pick(input, 'content', 'Content', 'FileContents', 'contents') ?? ''
       const view: DiffCallView = {
         card: 'diff',
         title: 'Write ' + path,
@@ -78,10 +131,10 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'edit_file':
     case 'replace_in_file':
     case 'edit': {
-      const path = asString(input.path) ?? asString(input.file_path) ?? 'file'
+      const path = pick(input, 'path', 'file_path', 'Path', 'FilePath', 'AbsolutePath') ?? 'file'
       const newText =
-        asString(input.new_string) ?? asString(input.newText) ?? asString(input.content) ?? ''
-      const oldText = asString(input.old_string) ?? asString(input.oldText) ?? null
+        pick(input, 'new_string', 'newText', 'content', 'NewString', 'NewText', 'Content') ?? ''
+      const oldText = pick(input, 'old_string', 'oldText', 'OldString', 'OldText') ?? null
       const view: DiffCallView = {
         card: 'diff',
         title: 'Edit ' + path,
@@ -94,8 +147,8 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'view_file':
     case 'read':
     case 'open_file': {
-      const path = asString(input.path) ?? asString(input.file_path) ?? asString(input.filename) ?? ''
-      const offset = typeof input.offset === 'number' ? input.offset : undefined
+      const path = pick(input, 'path', 'file_path', 'filename', 'Path', 'FilePath', 'FileName', 'AbsolutePath') ?? ''
+      const offset = typeof input.offset === 'number' ? input.offset : typeof input.Offset === 'number' ? input.Offset : undefined
       const view: GenericCallView = {
         card: 'generic',
         title: 'Read ' + path,
@@ -110,20 +163,20 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'search':
     case 'search_file_content':
     case 'grep': {
-      const q = asString(input.pattern) ?? asString(input.query) ?? asString(input.regex) ?? ''
+      const q = pick(input, 'pattern', 'query', 'regex', 'Pattern', 'Query', 'Regex', 'QueryString') ?? ''
       const view: GenericCallView = { card: 'generic', title: q !== '' ? 'Search ' + q : 'Search', kind: 'search' }
       return view
     }
     case 'list_dir':
     case 'ls': {
-      const path = asString(input.path) ?? asString(input.directory) ?? ''
+      const path = pick(input, 'path', 'directory', 'Path', 'Directory', 'SearchDirectory', 'AbsolutePath') ?? ''
       const view: GenericCallView = { card: 'generic', title: path !== '' ? 'List ' + path : 'List directory' }
       return view
     }
     case 'delete_file':
     case 'remove_file':
     case 'rm': {
-      const path = asString(input.path) ?? asString(input.file_path) ?? ''
+      const path = pick(input, 'path', 'file_path', 'Path', 'FilePath', 'AbsolutePath') ?? ''
       const view: GenericCallView = { card: 'generic', title: 'Delete ' + path, kind: 'delete' }
       return view
     }
@@ -178,6 +231,22 @@ function clip(s: string, max: number): string {
 }
 
 export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
+  // Presenter-side enrichment: when the invocation carries only the
+  // (run, step) cursor — which is all the generated run_code wrapper
+  // embeds — resolve the tool name/input from the recording so cards still
+  // render with full detail. Keeps replayed sessions identical to live ones.
+  const enrichArgs = (args: Record<string, unknown>): Record<string, unknown> => {
+    if (typeof args.tool === 'string' && args.tool !== '') return args
+    const runId = typeof args.run === 'string' ? args.run : ''
+    const step = typeof args.step === 'number' ? args.step : -1
+    const t = deps.runs.get(runId)?.toolEventAt(step) ?? null
+    if (t === null) return args
+    return {
+      ...args,
+      tool: t.name,
+      ...(args.input === undefined && t.args !== undefined ? { input: t.args } : {}),
+    }
+  }
   return defineTool({
     name: MIRROR_TOOL_NAME,
     description:
@@ -185,15 +254,15 @@ export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
     parameters: {
       run: { type: 'string', required: true, description: 'Recording run id.' },
       step: { type: 'number', required: true, description: 'Recorded event index of the tool step.' },
-      tool: { type: 'string', required: true, description: 'agy tool name that ran.' },
-      input: { type: 'json', description: 'agy tool arguments as recorded.' },
+      tool: { type: 'string', description: 'agy tool name that ran (optional — resolved from the recording).' },
+      input: { type: 'json', description: 'agy tool arguments as recorded (optional — resolved from the recording).' },
     },
     output: {
       schema: { type: 'string' },
       render: (_args, value) => [{ type: 'text', text: value }],
     },
-    presentCall: (args) => presentMirrorCall(args),
-    presentResult: (args, result) => presentMirrorResult(args, result),
+    presentCall: (args) => presentMirrorCall(enrichArgs(args as Record<string, unknown>)),
+    presentResult: (args, result) => presentMirrorResult(enrichArgs(args as Record<string, unknown>), result),
     async execute(args, exec) {
       void exec.signal
       const runId = typeof args.run === 'string' ? args.run : ''
