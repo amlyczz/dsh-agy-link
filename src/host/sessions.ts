@@ -44,6 +44,11 @@ export class SessionStore {
     this.persist();
   }
 
+  clear(): void {
+    this.data = {};
+    this.persist();
+  }
+
   all(): Readonly<Record<string, SessionBinding>> {
     return this.data;
   }

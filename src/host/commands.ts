@@ -68,7 +68,11 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
       const auth = deps.auth()
       if (!auth) return err('agy binary not found')
       const st = await auth.submitCode(arg)
-      return st.phase === 'ok' ? ok('Logged in to Antigravity.') : err(st.message ?? 'login failed')
+      if (st.phase === 'ok') {
+        deps.store().clear()
+        return ok('Logged in to Antigravity. Session bindings refreshed.')
+      }
+      return err(st.message ?? 'login failed')
     }
     if (sub === 'models') {
       const cat = await deps.catalog().forceRefresh()

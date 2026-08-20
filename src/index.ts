@@ -343,7 +343,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           return
         }
         const st = await auth.submitCode(code)
-        if (st.phase === 'ok') void catalog.forceRefresh().catch(() => undefined)
+        if (st.phase === 'ok') {
+          store.clear()
+          void catalog.forceRefresh().catch(() => undefined)
+        }
         sendJson(res as RawRes, 200, st)
       })()
     }})

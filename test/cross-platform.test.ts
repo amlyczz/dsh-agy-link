@@ -59,36 +59,40 @@ test('runner strips trailing CR from CRLF output', async () => {
 })
 
 test('startAgyProcess activity watchdog refreshes on output chunks', async () => {
-  // timeoutMs is 1000ms, but child outputs 5 times across ~1600ms (total duration > timeoutMs).
-  // A fixed watchdog would kill at 1000ms; sliding activity watchdog refreshes on each chunk.
+  // timeoutMs is 600ms, child emits 4 chunks across 600ms+ (total duration > timeoutMs).
+  // A fixed watchdog would kill at 600ms; sliding activity watchdog refreshes on each chunk.
   const script = `
-    console.log('chunk1');
-    setTimeout(() => console.log('chunk2'), 400);
-    setTimeout(() => console.log('chunk3'), 800);
-    setTimeout(() => console.log('chunk4'), 1200);
-    setTimeout(() => console.log('chunk5'), 1600);
+    const fs = require('node:fs');
+    let i = 0;
+    const t = setInterval(() => {
+      fs.writeSync(1, Buffer.from('chunk' + (++i) + '\\n'));
+      if (i >= 4) clearInterval(t);
+    }, 200);
   `
   const lines: string[] = []
   const proc = startAgyProcess({
     bin: process.execPath,
     args: ['-e', script],
-    timeoutMs: 1000,
+    timeoutMs: 600,
     onLine: (l) => lines.push(l),
   })
   const outcome = await proc.outcome
   assert.equal(outcome.timedOut, false)
   assert.equal(outcome.code, 0)
-  assert.deepEqual(lines, ['chunk1', 'chunk2', 'chunk3', 'chunk4', 'chunk5'])
+  assert.deepEqual(lines, ['chunk1', 'chunk2', 'chunk3', 'chunk4'])
 })
 
 test('startAgyProcess times out if child is completely silent', async () => {
   // timeoutMs is 500ms, child sleeps for 2500ms silently without any stdout/stderr
   const script = `setTimeout(() => {}, 2500)`
+  const lines: string[] = []
   const proc = startAgyProcess({
     bin: process.execPath,
     args: ['-e', script],
     timeoutMs: 500,
+    onLine: (l) => lines.push(l),
   })
   const outcome = await proc.outcome
   assert.equal(outcome.timedOut, true)
+  assert.equal(lines.length, 0)
 })

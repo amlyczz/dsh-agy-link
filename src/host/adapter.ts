@@ -424,15 +424,23 @@ export class AgyAdapter extends LlmAdapter {
         }
       }
       rec.settle(failure)
-      if (!isAux && sessionKey !== '' && failure === null) {
-        const finalId = binding !== undefined ? binding.conversationId : conversationId
-        if (finalId) {
-          this.deps.store.set(sessionKey, {
-            conversationId: finalId,
-            lastMessageCount: messages.length,
-            updatedAt: Date.now(),
-            model,
-          })
+      if (!isAux && sessionKey !== '') {
+        if (failure === null) {
+          const finalId = binding !== undefined ? binding.conversationId : conversationId
+          if (finalId) {
+            this.deps.store.set(sessionKey, {
+              conversationId: finalId,
+              lastMessageCount: messages.length,
+              updatedAt: Date.now(),
+              model,
+            })
+          }
+        } else if (
+          failure.code === Err.AUTH ||
+          (failure.message && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
+        ) {
+          // If auth expired or agy rejected the previous conversation ID, drop the stale binding
+          this.deps.store.delete(sessionKey)
         }
       }
       this.deps.onRun?.({
