@@ -1,209 +1,251 @@
-# Feature Spec: Multi-Account Pool & Sequential Drain (号池系统规范)
+# Comprehensive Specification: Multi-Account Pool & Sequential Drain for dsh-agy-link
 
-> **Version**: 1.0.0  
-> **Status**: Specification (Ready for Implementation)  
-> **Related ADR**: [ADR-012: Multi-Account Pool & Sequential Drain Architecture](./adr-012-account-pool.md)
-
----
-
-## 1. Executive Summary & Goals
-
-### 1.1 Background & Motivation
-In heavy agentic coding workflows (complex refactoring, subagent spawning, deep reasoning turns), users can trigger Google Antigravity rate limits (`429 Too Many Requests`, `RESOURCE_EXHAUSTED`, or upstream capacity warnings). 
-
-For users who own multiple Google accounts (e.g. Account A, Account B, Account C), this specification defines a **Multi-Account Pool (号池系统)** that provides:
-1. **Multi-Profile Isolation**: Local process-level isolation via dedicated `HOME` directories, requiring zero Docker containers or background daemons.
-2. **Sticky Sequential Drain (按模型家族顺次耗尽)**: By default, always use Account A until its quota for a specific model family is exhausted, then transparently fail over to Account B, then Account C.
-3. **Family-Scoped Cooldown (家族级精准冷却)**: A 429 on Claude models only cools down the account for Claude (`anthropic` family); Gemini models (`google` family) remain active on the same account.
-4. **In-Flight Transparent Fallback (零感知自动重试)**: When an active request hits 429, the bridge automatically retries on the next available healthy account in the same turn without throwing an error to the user.
-5. **Per-Account Proxy (防关联独立代理)**: Optional per-account proxy configuration (`ALL_PROXY`) to protect multi-account safety if desired.
-6. **Unified Web & CLI Management**: Visual account cards, QR-code login per slot, and cooldown timers in the DSH settings panel.
-
-### 1.2 Non-Goals
-- **No Token Scraping / Reverse-Engineering**: All execution runs through the official `agy` CLI binary to preserve 100% official compliance, zero ban risk, and native tool execution.
-- **No Heavy Containerization**: No Docker daemon requirements; isolation is purely file-system and environment-variable based.
+> **Document Type**: Technical Specification & Architecture Design  
+> **Status**: Approved for Implementation  
+> **Scope**: Host Backend, Account Engine, Transparent Retry Pipeline, DSH Attached WebUI, CLI Family
 
 ---
 
-## 2. Architecture & Domain Model
+## 1. Overview & Core Tenets
 
-### 2.1 Directory Structure & Process Isolation
+### 1.1 Problem Statement
+In agentic coding workflows using Google Antigravity models (Gemini 3.7 Flash, Claude 4.6 Sonnet/Opus, GPT-OSS 120B), users can exhaust per-model rate limits (`429 Too Many Requests`, `RESOURCE_EXHAUSTED`, or upstream capacity warnings). 
+
+Single-account setups halt the entire workflow upon hitting a limit. This specification details a **Multi-Account Pool (号池系统)** that enables pooling multiple Google accounts (e.g. Accounts A, B, C) with **Sticky Sequential Drain (按模型家族顺次耗尽)**, **Zero-Interruption In-Flight Fallback (零感知自动重试)**, and full integration into the **DSH Built-in Settings WebUI**.
+
+### 1.2 Core Architectural Principles
+1. **Zero Ban Risk via Official CLI Execution**: We execute the official `agy` binary (`agy -p ...`). No reverse-engineered HTTP requests, no fragile Protobuf schema translation, no spoofed fingerprinting. Full access to agy's 50+ native Agent tools.
+2. **Zero-Config Proxy Inheritance (零配置开箱即用)**: All accounts default to inheriting the active system/terminal proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) from DSH. Single-proxy-port users (e.g. Clash on 7890) can use 3+ accounts seamlessly without configuring proxy settings.
+3. **Multi-Profile Process Isolation**: Physical credential isolation via isolated `HOME` directories (`~/.dsh/agy-accounts/<id>/`). Zero Docker containers or background daemons.
+4. **Family-Scoped Precise Cooldown (按模型家族精准冷却)**: Cooldowns are tracked per model family (`google`, `anthropic`, `openai`). A 429 on Claude only cools down Claude; Gemini requests remain active on that same account.
+5. **Sticky Sequential Drain**: Always prioritize Account A until a specific model family is exhausted, then fail over to Account B, then C. Minimizes context thrashing and maximizes session token cache hits.
+6. **Native DSH WebUI Attachment**: Fully integrated into the native DSH Web interface via `settings.section` slot — zero external ports or separate web servers needed.
+
+---
+
+## 2. Proxy & Network Architecture (Zero-Config Assurance)
+
+### 2.1 Why Zero-Config Works 100% in DSH
+When DSH runs (CLI or Web profile), it inherits standard proxy environment variables. When `dsh-agy-link` spawns `agy` for any account, it merges the environment:
 
 ```
+┌────────────────────────────────────────────────────────┐
+│ DSH Host Process (Node.js)                              │
+│ process.env: HTTP_PROXY / HTTPS_PROXY / ALL_PROXY      │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+       ┌───────────────────┴───────────────────┐
+       ▼                                       ▼
+ [ Account A Subprocess ]              [ Account B Subprocess ]
+  - HOME: ~/.dsh/agy-accounts/acc_1      - HOME: ~/.dsh/agy-accounts/acc_2
+  - ALL_PROXY: (Inherited 7890)          - ALL_PROXY: (Inherited 7890)
+```
+
+### 2.2 Environment Merge Priority
+For any spawned `agy` process:
+1. **Explicit Account Proxy** (if configured on this account): Overrides `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`.
+2. **Global Plugin Proxy** (if configured in DSH settings): Overrides if present.
+3. **Host System Environment** (`process.env.ALL_PROXY` / `HTTPS_PROXY`): Default fallback (covers 99% of user setups).
+
+---
+
+## 3. Storage & Multi-Profile Directory Model
+
+### 3.1 Directory Layout
+```
 ~/.dsh/agy-accounts/
-├── pool.json                         # Pool configuration and account registry
-├── acc_primary/                      # Default / primary account
+├── pool.json                         # Account registry & cooldown states
+├── acc_1700000000_a1/                # Account A (e.g. work@gmail.com)
 │   └── .gemini/
-│       └── oauth_credentials.json    # agy CLI auth storage
-├── acc_secondary/                    # Secondary account (Account B)
+│       └── oauth_credentials.json    # agy credentials managed by Google binary
+├── acc_1700000000_b2/                # Account B (e.g. personal@gmail.com)
 │   └── .gemini/
 │       └── oauth_credentials.json
-└── acc_tertiary/                     # Tertiary account (Account C)
+└── acc_1700000000_c3/                # Account C (e.g. backup@gmail.com)
     └── .gemini/
         └── oauth_credentials.json
 ```
 
-When spawning `agy` for a specific account `acc_id`, the process runner injects:
-```ts
-const env = {
-  ...process.env,
-  HOME: `/Users/zqy/.dsh/agy-accounts/${acc_id}`,
-  GEMINI_CLI_HOME: `/Users/zqy/.dsh/agy-accounts/${acc_id}/.gemini`,
-  // If account has dedicated proxy:
-  ...(account.proxyUrl ? {
-    ALL_PROXY: account.proxyUrl,
-    HTTPS_PROXY: account.proxyUrl,
-    HTTP_PROXY: account.proxyUrl,
-  } : {}),
-}
-```
-
-### 2.2 Domain Types (`src/common/pool-types.ts`)
-
+### 3.2 Data Schema (`pool.json`)
 ```ts
 export type ModelFamily = 'google' | 'anthropic' | 'openai' | 'unknown'
 
-export interface FamilyCooldown {
+export interface FamilyCooldownState {
   cooldownUntil: number
   reason: string
   consecutiveFailures: number
 }
 
-export interface ManagedAccount {
-  id: string
-  alias: string
-  email?: string
-  enabled: boolean
-  proxyUrl?: string
+export interface ManagedAccountRecord {
+  id: string                          // e.g. "acc_1740000000_a1b2"
+  alias: string                       // e.g. "Work Account", "Personal Account"
+  email?: string                      // Captured from user or OAuth
   createdAt: number
   lastUsedAt?: number
-  /** Cooldown tracked per model family */
-  cooldowns: Partial<Record<ModelFamily, FamilyCooldown>>
+  enabled: boolean
+  proxyUrl?: string                   // Optional custom proxy override
+  cooldowns: Partial<Record<ModelFamily, FamilyCooldownState>>
 }
 
-export interface AccountPoolConfig {
+export interface AccountPoolState {
+  version: 1
   mode: 'sequential' | 'round-robin'
-  defaultCooldownMs: number // Default 10 minutes (600,000ms)
-  maxCooldownMs: number     // Cap at 60 minutes (3,600,000ms)
-  accounts: ManagedAccount[]
+  defaultCooldownMs: number           // 10 minutes (600,000 ms)
+  maxCooldownMs: number               // 60 minutes (3,600,000 ms)
+  primaryAccountId?: string           // Explicit pinned primary account
+  accounts: ManagedAccountRecord[]
 }
 ```
 
 ---
 
-## 3. Scheduling & Sequential Drain Logic
+## 4. Scheduling & Transparent Fallback Engine
 
-### 3.1 Model Family Mapping
-Every model slug maps to a family:
+### 4.1 Model Family Classification
 - `gemini-*`, `gemma-*` $\rightarrow$ `'google'`
 - `claude-*` $\rightarrow$ `'anthropic'`
 - `gpt-*`, `openai/*` $\rightarrow$ `'openai'`
 - Others $\rightarrow$ `'unknown'`
 
-### 3.2 Account Selection Algorithm (Sequential Drain)
+### 4.2 Account Selection Algorithm (Sequential Drain)
 
 ```
-[ Incoming Request: model = "claude-sonnet-4-6" ]
-                       │
-                       ▼
-            Family: "anthropic"
-                       │
-                       ▼
-       Iterate accounts in priority order:
-       [ Account A, Account B, Account C ]
-                       │
-       ┌───────────────┴───────────────┐
-       ▼                               ▼
-Account A healthy?               Account A in cooldown?
-  ├── Yes: SELECT Account A        ├── Yes: Check Account B
-  └── No: Check next account       └── (Recovers when now > cooldownUntil)
+[ Request: model = "claude-sonnet-4-6", family = "anthropic" ]
+                            │
+                            ▼
+              Get candidate accounts in order:
+              [ Account A, Account B, Account C ]
+                            │
+              Filter: enabled === true
+                            │
+              Filter: cooldowns['anthropic'].cooldownUntil <= Date.now()
+                            │
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+      Candidates Available?       All in Cooldown?
+              │                           │
+              ├── Yes: Pick first         └── No: Throw POOL_EXHAUSTED
+              │   (Account A)                 (with earliest reset timer)
+              ▼
+    Spawn agy with Account A
 ```
 
-1. Given requested `model`, determine `family = modelFamilyOf(model)`.
-2. Filter `pool.accounts` where `enabled === true`.
-3. Filter out accounts where `cooldowns[family].cooldownUntil > Date.now()`.
-4. In `sequential` mode, pick the **first** healthy account in priority order (e.g. Account A).
-5. If all accounts are in cooldown for this family, throw `ALL_ACCOUNTS_IN_COOLDOWN` with the earliest recovery countdown (e.g. `All accounts are rate-limited for Claude. Next account resets in 4m 12s`).
+### 4.3 In-Flight Transparent Fallback (Zero User Error)
 
-### 3.3 In-Flight Transparent Fallback (429 Zero-Interruption Retry)
+```
+                       [ DSH User Turn Starts ]
+                                  │
+                                  ▼
+                   Attempt 1: Spawn Account A
+                                  │
+             ┌────────────────────┴────────────────────┐
+             ▼                                         ▼
+        [ 200 OK ]                             [ 429 / Quota Error ]
+    Stream to user                          Mark Account A Claude cooldown
+                                                       │
+                                                       ▼
+                                            Attempt 2: Spawn Account B
+                                            (with History Digest prefix)
+                                                       │
+                                                       ▼
+                                             Stream to user smoothly!
+```
 
-When `AgyAdapter.stream()` executes:
-1. Attempt 1 spawns `agy` using Account A.
-2. If `outcome.code !== 0` or stream output indicates rate-limiting (`429`, `RESOURCE_EXHAUSTED`, `overloaded`, `quota`):
-   - Mark Account A in cooldown for `family`:
-     ```ts
-     const baseCooldown = 10 * 60 * 1000 // 10 minutes
-     const failures = (account.cooldowns[family]?.consecutiveFailures ?? 0) + 1
-     const cooldownMs = Math.min(baseCooldown * failures, pool.config.maxCooldownMs)
-     account.cooldowns[family] = {
-       cooldownUntil: Date.now() + cooldownMs,
-       reason: '429 Rate Limit / Upstream Overloaded',
-       consecutiveFailures: failures,
-     }
-     ```
-   - Bridge automatically selects Account B.
-   - Spawns Account B with the conversation history digest.
-   - Pipes the stream directly into the active DSH stream chunk generator.
-   - **Result**: The end user sees normal continuous output without error modals!
+- If Account A throws rate limit / 429 / capacity error during turn initialization or stream header:
+  1. Record cooldown on Account A for requested family:
+     $$\text{cooldownMs} = \min(600\,000 \times \text{failures}, 3\,600\,000)$$
+  2. Select next healthy account (Account B).
+  3. Re-spawn agy under Account B with the conversation digest.
+  4. Stream chunks directly to the caller. The user experiences zero interruption or error modals.
 
 ---
 
-## 4. Cross-Account Session Continuity
+## 5. DSH Attached WebUI Specification
 
-When switching from Account A to Account B mid-session:
-- The DSH session ID `sess_123` is preserved.
-- `SessionStore` maps `[sessionId, accountId] -> conversationId`:
-  - Account A had `conv_aaa`.
-  - When switching to Account B, Account B has no `conv_aaa` on its Google profile.
-  - The adapter detects new account binding, builds a concise history digest prefix (`[conversation so far] ...`), and establishes `conv_bbb` on Account B.
-  - When Account A recovers from cooldown and resumes primary role in a later turn, Account A reuses its existing `conv_aaa` seamlessly.
+The WebUI is attached directly into DSH via `settings.section` slot (`dsh-agy-link-client`).
+
+### 5.1 Visual UI Layout Mockup
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 👥 Antigravity Account Pool (Google 多账号池)                           │
+│ 调度模式: [ 顺次耗尽 (Sequential Drain) ▾ ]  |  [ 🔄 刷新状态 ]          │
+│ 提示: 默认共用本地系统/代理环境，账号 A 额度耗尽自动无缝切换到账号 B    │
+├──────────────────────────────────────────────────────────────────────────┤
+│ 1. 🟢 Account A (work@gmail.com) [当前主用]                             │
+│    状态: 全部就绪 (Ready)                                                │
+│    代理: 默认跟随系统环境 (System Proxy)                                 │
+│    [ 🔍 探活测试 ] [ ⚙️ 代理设置 ] [ 🔄 重新认证 ]                      │
+├──────────────────────────────────────────────────────────────────────────┤
+│ 2. 🟡 Account B (personal@gmail.com)                                     │
+│    状态: Claude 冷却中 (剩余 7分12秒) · Gemini 就绪                      │
+│    代理: 默认跟随系统环境 (System Proxy)                                 │
+│    [ 🔍 探活测试 ] [ ⚙️ 代理设置 ] [ ⬆️ 上移 ] [ 🗑️ 移除 ]              │
+├──────────────────────────────────────────────────────────────────────────┤
+│ 3. ⚪ Account C (backup@gmail.com)                                       │
+│    状态: 全部就绪 (Ready)                                                │
+│    代理: 默认跟随系统环境 (System Proxy)                                 │
+│    [ 🔍 探活测试 ] [ ⚙️ 代理设置 ] [ ⬆️ 上移 ] [ 🗑️ 移除 ]              │
+├──────────────────────────────────────────────────────────────────────────┤
+│  [ ➕ 添加新 Google 账号 (Add Account) ]                                │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Interactive Add-Account Modal / Drawer
+When the user clicks **【➕ 添加新 Google 账号】**:
+1. Host creates a new account slot `acc_<timestamp>_<random>` and its directory.
+2. Starts the OAuth state machine scoped to this account directory:
+   - Displays **【👉 点击在浏览器中打开 Google 授权登录页面】**;
+   - Displays real-time **Base64 QR Code** (zero broken images);
+   - Displays authorization code input box.
+3. User pastes code and clicks **【提交激活】**.
+4. Account is verified, auto-named, and appended to the active pool.
+
+### 5.3 Live Cooldown Display
+- Each account card shows real-time badge status:
+  - 🟢 **Ready**: All models available.
+  - 🟡 **Claude Cooldown (8m 32s)**: Claude rate-limited, Gemini active.
+  - 🟡 **Gemini Cooldown (4m 10s)**: Gemini rate-limited, Claude active.
+  - 🔴 **Unauthenticated**: Token missing or revoked.
 
 ---
 
-## 5. Web GUI & User Interaction Spec
+## 6. Host Web Server Routes
 
-### 5.1 Account Cards in Settings Panel
-In the DSH Web settings drawer for `dsh-agy-link`:
+All host routes are namespaced under `/plugins/agy-link/`:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ 👥 Antigravity Account Pool (号池管理)                      │
-│ 模式: [ 顺次耗尽 (Sequential Drain) ▾ ]                     │
-├─────────────────────────────────────────────────────────────┤
-│ 1. 🟢 主账号 (Account A - work@gmail.com) [默认主用]        │
-│    状态: 就绪 (Ready)                                       │
-│    代理: 跟随系统环境 (System Proxy)                        │
-│    [ 测试连通性 ] [ 配置代理 ] [ 重新登录 ]                 │
-├─────────────────────────────────────────────────────────────┤
-│ 2. 🟡 备用账号 1 (Account B - personal@gmail.com)           │
-│    状态: Claude 冷却中 (剩余 6分30秒) · Gemini 就绪          │
-│    代理: socks5://127.0.0.1:7890                            │
-│    [ 测试连通性 ] [ 配置代理 ] [ 设为主用 ] [ 移除 ]        │
-├─────────────────────────────────────────────────────────────┤
-│ 3. ⚪ 备用账号 2 (Account C - backup@gmail.com)             │
-│    状态: 就绪 (Ready)                                       │
-│    代理: socks5://127.0.0.1:7891                            │
-│    [ 测试连通性 ] [ 配置代理 ] [ 设为主用 ] [ 移除 ]        │
-├─────────────────────────────────────────────────────────────┤
-│  [ ➕ 添加新 Google 账号 (Add Account) ]                    │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 5.2 Add Account Flow
-1. User clicks **【➕ 添加新 Google 账号】**.
-2. A new account slot `acc_<timestamp>` is allocated with its own directory.
-3. System triggers Google OAuth login state machine for this slot:
-   - Displays browser one-click link + Base64 QR code.
-4. User completes authorization and pastes code.
-5. Slot becomes active, joins the pool, and is immediately ready for sequential fallback!
-
----
-
-## 6. Implementation Roadmap
-
-| Phase | Milestone | Deliverables |
+| Method | Endpoint | Description |
 |---|---|---|
-| **Phase 1** | **Core Pool & Storage Engine** | `AccountPoolManager`, directory initialization, `accounts.json` CRUD, test suite. |
-| **Phase 2** | **Sequential Drain & Transparent Fallback** | Family mapping, cooldown tracking, in-flight automatic 429 retry in `adapter.ts`. |
-| **Phase 3** | **Per-Account Proxy & Isolation** | Child process env injection (`HOME`, `ALL_PROXY`), proxy validation. |
-| **Phase 4** | **Web GUI & CLI Family Commands** | Multi-account cards in settings UI, `/agy pool`, `/agy add-account`. |
+| `GET` | `/plugins/agy-link/pool` | Get all accounts, cooldown timers, active mode |
+| `POST` | `/plugins/agy-link/pool/add` | Initialize a new account slot and start OAuth |
+| `POST` | `/plugins/agy-link/pool/auth-code` | Submit OAuth code for a specific account slot |
+| `POST` | `/plugins/agy-link/pool/auth-cancel` | Cancel in-progress OAuth for a slot |
+| `POST` | `/plugins/agy-link/pool/remove` | Delete an account directory and its records |
+| `POST` | `/plugins/agy-link/pool/reorder` | Update account priority order |
+| `POST` | `/plugins/agy-link/pool/proxy` | Update optional proxy override for an account |
+| `POST` | `/plugins/agy-link/pool/test` | Test connectivity & health of an account slot |
+
+---
+
+## 7. CLI Family Commands
+
+In addition to the WebUI, the `/agy` command family is extended:
+
+- `/agy accounts` / `/agy pool`: Print status table of all pooled accounts and family cooldowns.
+- `/agy add-account [alias]`: Start terminal-guided OAuth login for a new account slot.
+- `/agy remove-account <id>`: Delete an account slot.
+- `/agy clear-cooldown [id]`: Manually reset cooldown timers for accounts.
+
+---
+
+## 8. Test & Verification Plan
+
+1. **Storage Unit Tests**: Multi-profile directory creation, `pool.json` serialization, corrupt state recovery.
+2. **Scheduling Unit Tests**:
+   - `gemini` request selects Account A;
+   - Account A 429 on Claude cools only `anthropic` family;
+   - Subsequent `claude` request selects Account B;
+   - Subsequent `gemini` request still selects Account A;
+   - Expired cooldown allows Account A to resume primary role.
+3. **Fallback Streaming Tests**: Mocked agy process exiting 429 triggers transparent retry on Account B without failing stream chunk generator.
+4. **Proxy Forwarding Tests**: Process spawn asserts `ALL_PROXY` / `HOME` correctness.
