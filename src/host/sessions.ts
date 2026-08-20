@@ -66,8 +66,10 @@ export class SessionStore {
   }
 }
 
-// tiny basename to avoid pulling node:path twice for one call
+// tiny basename to avoid pulling node:path twice for one call;
+// handles BOTH separators — a Windows path contains no '/' and would
+// otherwise turn the tmp filename into garbage (persist silently failed).
 function require$$basename(p: string): string {
-  const i = p.lastIndexOf('/');
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
   return i >= 0 ? p.slice(i + 1) : p;
 }

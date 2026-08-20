@@ -1,18 +1,36 @@
-// dsh-agy-link client half (browser). Integrated into native DSH settings & header.
+// dsh-agy-link client half (browser). Integrated into native DSH settings, sidebar footer, and header.
 import type { Context } from '@deepseek-ai/cordis';
-import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount } from '../common/pool-types.ts';
+import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount, ModelQuotaInfo } from '../common/pool-types.ts';
+import { BRAND_COLORS, BRAND_PATHS, UI_PATHS } from './brand-icons.ts';
 
 type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
 	useState: <S>(initial: S) => [S, (next: S | ((prev: S) => S)) => void];
 	useEffect: (setup: () => (() => void) | void, deps?: unknown[]) => void;
+	useRef: <S>(initial: S) => { current: S };
 };
 const R = require('react') as ReactApi;
-const { createElement: h, useState, useEffect } = R;
+const { createElement: h, useState, useEffect, useRef } = R;
+
+const reactDom = require('react-dom') as {
+	createPortal?: (node: unknown, container: unknown) => unknown;
+};
 
 const win = globalThis as unknown as {
 	location?: { origin?: string };
 	fetch?: (url: string, init?: Record<string, unknown>) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+	open?: (url: string, target?: string) => void;
+	document?: { body?: unknown } | null;
+	addEventListener?: (type: string, listener: (ev: any) => void, useCapture?: boolean) => void;
+	removeEventListener?: (type: string, listener: (ev: any) => void, useCapture?: boolean) => void;
+};
+
+const bodyEl = win.document?.body ?? null;
+const portalToBody = (node: unknown) => {
+	if (bodyEl && reactDom && typeof reactDom.createPortal === 'function') {
+		return reactDom.createPortal(node, bodyEl);
+	}
+	return node;
 };
 
 export const name = 'dsh-agy-link-client';
@@ -47,6 +65,15 @@ interface StatusPayload {
 		message?: string;
 	};
 	pool?: AccountPoolData;
+	poolAuth?: {
+		phase: 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed';
+		stagingId?: string;
+		alias?: string;
+		url?: string;
+		mode?: 'auto' | 'manual';
+		browserOpened?: boolean;
+		message?: string;
+	};
 	catalog?: { source: string; count: number; lastError: string | null };
 	bindings?: number;
 	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
@@ -60,37 +87,157 @@ interface ToastNotice {
 
 const base = win.location?.origin ?? '';
 
+// Module-level cache for instant remount rendering
+let statusCache: StatusPayload | null = null;
+
 async function getStatus(): Promise<StatusPayload | null> {
 	try {
 		const res = await win.fetch?.(base + '/plugins/agy-link/status');
 		if (!res || !res.ok) return null;
-		return (await res.json()) as StatusPayload;
+		const payload = (await res.json()) as StatusPayload;
+		statusCache = payload;
+		return payload;
 	} catch {
 		return null;
 	}
 }
 
-async function postJson(path: string, body: Record<string, unknown>): Promise<unknown> {
+async function postJson(path: string, body: Record<string, unknown>): Promise<any> {
 	try {
 		const res = await win.fetch?.(base + path, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
 		});
-		return res ?? null;
+		if (!res) return null;
+		try {
+			return await res.json();
+		} catch {
+			return { ok: res.ok };
+		}
 	} catch {
 		return null;
 	}
+}
+
+/** Global modal state for opening Antigravity console dialog from footer shortcut or header status */
+const agyModalStore = {
+	open: false,
+	listeners: new Set<() => void>(),
+	setOpen(v: boolean) {
+		agyModalStore.open = v;
+		agyModalStore.listeners.forEach((fn) => fn());
+	},
+	subscribe(fn: () => void) {
+		agyModalStore.listeners.add(fn);
+		return () => {
+			agyModalStore.listeners.delete(fn);
+		};
+	},
+};
+
+/**
+ * Format reset timestamp into readable date/time + relative countdown.
+ */
+function formatQuotaWindow(resetTimeStr?: string): {
+	resetText: string;
+} {
+	if (!resetTimeStr) return { resetText: '' };
+	try {
+		const d = new Date(resetTimeStr);
+		const diffMs = d.getTime() - Date.now();
+		if (diffMs <= 0) return { resetText: '' };
+
+		const totalMins = Math.ceil(diffMs / 60000);
+		const days = Math.floor(totalMins / 1440);
+		const hours = Math.floor((totalMins % 1440) / 60);
+		const mins = totalMins % 60;
+		const isWeekly = days >= 1;
+
+		const countdown = days > 0 ? `${days}d${hours}h` : hours > 0 ? `${hours}h${mins}m` : `${mins}m`;
+		const hh = d.getHours().toString().padStart(2, '0');
+		const mm = d.getMinutes().toString().padStart(2, '0');
+		const resetText = isWeekly
+			? `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm} (${countdown})`
+			: `${hh}:${mm} (${countdown})`;
+
+		return { resetText };
+	} catch {
+		return { resetText: '' };
+	}
+}
+
+type BrandKey = keyof typeof BRAND_PATHS;
+type UiIconKey = keyof typeof UI_PATHS;
+
+/** Inline brand logo (Gemini / Claude / OpenAI) as a crisp SVG mark. */
+function brandIcon(key: BrandKey, size = 13): unknown {
+	return h('svg', {
+		viewBox: '0 0 24 24',
+		width: size,
+		height: size,
+		'aria-hidden': true,
+		style: { display: 'inline-block', verticalAlign: '-2px', flexShrink: 0 },
+	}, h('path', { d: BRAND_PATHS[key], fill: BRAND_COLORS[key] }));
+}
+
+/** Clean outline/filled SVG icon (Lucide-style), zero emoji dependency. */
+function uiIcon(key: UiIconKey, size = 12, color = 'currentColor'): unknown {
+	const p = UI_PATHS[key];
+	const isFilled = key === 'star';
+	return h('svg', {
+		viewBox: '0 0 24 24',
+		width: size,
+		height: size,
+		'aria-hidden': true,
+		style: { display: 'inline-block', verticalAlign: '-1.5px', flexShrink: 0 },
+	}, h('path', {
+		d: p,
+		fill: isFilled ? color : 'none',
+		stroke: isFilled ? 'none' : color,
+		'stroke-width': isFilled ? undefined : 2,
+		'stroke-linecap': isFilled ? undefined : 'round',
+		'stroke-linejoin': isFilled ? undefined : 'round',
+	}));
+}
+
+const FAMILY_BRAND: Record<'google' | 'anthropic' | 'openai', BrandKey> = {
+	google: 'gemini',
+	anthropic: 'claude',
+	openai: 'openai',
+};
+
+let agyIconSeq = 0;
+
+/** Antigravity mark: gradient orb with an orbit ring (product has no public simple-icon). */
+function agyIcon(size = 14): unknown {
+	const gid = `agy-g${++agyIconSeq}`;
+	return h('svg', {
+		viewBox: '0 0 24 24',
+		width: size,
+		height: size,
+		'aria-hidden': true,
+		style: { display: 'inline-block', verticalAlign: '-2px', flexShrink: 0 },
+	},
+		h('defs', null,
+			h('linearGradient', { id: gid, x1: '0', y1: '0', x2: '1', y2: '1' },
+				h('stop', { offset: '0', 'stop-color': '#4C8DFF' }),
+				h('stop', { offset: '1', 'stop-color': '#A96BFF' }),
+			),
+		),
+		h('circle', { cx: 12, cy: 12, r: 6, fill: `url(#${gid})` }),
+		h('ellipse', {
+			cx: 12, cy: 12, rx: 10.4, ry: 3.9,
+			fill: 'none', stroke: `url(#${gid})`, 'stroke-width': 1.4,
+			transform: 'rotate(-18 12 12)',
+		}),
+	);
 }
 
 const GLOBAL_CSS = `
 @keyframes agy-spin {
 	0% { transform: rotate(0deg); }
 	100% { transform: rotate(360deg); }
-}
-@keyframes agy-pulse {
-	0%, 100% { opacity: 1; transform: scale(1); }
-	50% { opacity: 0.4; transform: scale(0.95); }
 }
 .agy-spinner {
 	display: inline-block;
@@ -108,7 +255,6 @@ const GLOBAL_CSS = `
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
-	animation: agy-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 .agy-card-hover {
 	transition: border-color 0.2s ease, box-shadow 0.2s ease;
@@ -129,12 +275,49 @@ const GLOBAL_CSS = `
 .agy-progress-fill {
 	transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
+.agy-modal-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+	background: rgba(0, 0, 0, 0.55);
+	backdrop-filter: blur(4px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	box-sizing: border-box;
+}
+.agy-modal-panel {
+	position: relative;
+	width: 100%;
+	max-width: 640px;
+	max-height: min(820px, calc(100vh - 48px));
+	background: var(--dsw-specific-menu, #1c1d22);
+	border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25));
+	border-radius: 12px;
+	box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	color: inherit;
+	font-family: inherit;
+}
+.agy-submodel-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 8px;
+	font-size: 11px;
+	border-radius: 5px;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid rgba(255, 255, 255, 0.06);
+	margin: 3px 0;
+}
 `;
 
-// Design system styles
 const S: Record<string, Record<string, unknown>> = {
 	container: {
-		lineHeight: 1.6,
+		lineHeight: 1.5,
 		fontSize: '13px',
 		fontFamily: 'inherit',
 		color: 'inherit',
@@ -143,21 +326,21 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'flex',
 		alignItems: 'center',
 		justifyContent: 'space-between',
-		padding: '12px 16px',
-		background: 'rgba(128,128,128,0.06)',
-		border: '1px solid rgba(128,128,128,0.18)',
-		borderRadius: '10px',
-		marginBottom: '14px',
+		padding: '12px 14px',
+		background: 'rgba(255, 255, 255, 0.04)',
+		border: '1px solid rgba(255, 255, 255, 0.12)',
+		borderRadius: '8px',
+		marginBottom: '12px',
 	},
 	badgePrimary: {
 		display: 'inline-flex',
 		alignItems: 'center',
-		gap: '4px',
-		background: 'rgba(59,130,246,0.15)',
-		color: '#3b82f6',
-		border: '1px solid rgba(59,130,246,0.35)',
-		padding: '2px 8px',
-		borderRadius: '6px',
+		gap: '3px',
+		background: 'rgba(59, 130, 246, 0.2)',
+		color: '#60a5fa',
+		border: '1px solid rgba(59, 130, 246, 0.45)',
+		padding: '1px 7px',
+		borderRadius: '5px',
 		fontSize: '11px',
 		fontWeight: 600,
 	},
@@ -165,40 +348,39 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		gap: '3px',
-		background: 'rgba(128,128,128,0.12)',
-		color: 'inherit',
-		border: '1px solid rgba(128,128,128,0.25)',
-		padding: '1px 7px',
-		borderRadius: '5px',
+		background: 'rgba(255, 255, 255, 0.06)',
+		color: 'var(--dsw-alias-text-primary, #e2e8f0)',
+		border: '1px solid rgba(255, 255, 255, 0.14)',
+		padding: '1px 6px',
+		borderRadius: '4px',
 		fontSize: '11px',
 	},
 	card: {
-		background: 'rgba(128,128,128,0.04)',
-		border: '1px solid rgba(128,128,128,0.2)',
-		borderRadius: '10px',
-		padding: '14px 16px',
-		marginBottom: '12px',
+		background: 'rgba(255, 255, 255, 0.03)',
+		border: '1px solid rgba(255, 255, 255, 0.12)',
+		borderRadius: '8px',
+		padding: '12px 14px',
+		marginBottom: '10px',
 	},
 	cardPrimary: {
-		background: 'rgba(59,130,246,0.03)',
-		border: '1px solid rgba(59,130,246,0.3)',
-		borderRadius: '10px',
-		padding: '14px 16px',
-		marginBottom: '12px',
+		background: 'rgba(59, 130, 246, 0.05)',
+		border: '1px solid rgba(59, 130, 246, 0.45)',
+		borderRadius: '8px',
+		padding: '12px 14px',
+		marginBottom: '10px',
 	},
 	quotaBox: {
-		background: 'rgba(0,0,0,0.15)',
-		border: '1px solid rgba(128,128,128,0.12)',
-		borderRadius: '8px',
-		padding: '10px 14px',
-		marginTop: '10px',
-		marginBottom: '6px',
+		background: 'rgba(0, 0, 0, 0.2)',
+		border: '1px solid rgba(255, 255, 255, 0.08)',
+		borderRadius: '7px',
+		padding: '8px 10px',
+		marginTop: '8px',
 	},
 	progressBarBg: {
 		flex: '1',
 		height: '7px',
 		borderRadius: '4px',
-		background: 'rgba(128,128,128,0.2)',
+		background: 'rgba(255, 255, 255, 0.1)',
 		overflow: 'hidden',
 		margin: '0 10px',
 	},
@@ -206,10 +388,10 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '5px 12px',
+		padding: '4px 10px',
 		borderRadius: '6px',
-		border: '1px solid rgba(128,128,128,0.3)',
-		background: 'rgba(128,128,128,0.1)',
+		border: '1px solid rgba(255, 255, 255, 0.16)',
+		background: 'rgba(255, 255, 255, 0.07)',
 		color: 'inherit',
 		cursor: 'pointer',
 		fontSize: '12px',
@@ -219,24 +401,11 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '6px 14px',
-		borderRadius: '6px',
-		border: '1px solid rgba(59,130,246,0.5)',
-		background: 'rgba(59,130,246,0.25)',
-		color: '#3b82f6',
-		cursor: 'pointer',
-		fontSize: '12px',
-		fontWeight: 600,
-	},
-	btnSuccess: {
-		display: 'inline-flex',
-		alignItems: 'center',
-		justifyContent: 'center',
 		padding: '5px 12px',
 		borderRadius: '6px',
-		border: '1px solid rgba(16,185,129,0.5)',
-		background: 'rgba(16,185,129,0.2)',
-		color: '#10b981',
+		border: '1px solid rgba(59, 130, 246, 0.6)',
+		background: 'rgba(59, 130, 246, 0.28)',
+		color: '#60a5fa',
 		cursor: 'pointer',
 		fontSize: '12px',
 		fontWeight: 600,
@@ -245,11 +414,11 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '4px 10px',
-		borderRadius: '6px',
-		border: '1px solid rgba(239,68,68,0.4)',
-		background: 'rgba(239,68,68,0.12)',
-		color: '#ef4444',
+		padding: '3px 8px',
+		borderRadius: '5px',
+		border: '1px solid rgba(239, 68, 68, 0.45)',
+		background: 'rgba(239, 68, 68, 0.15)',
+		color: '#f87171',
 		cursor: 'pointer',
 		fontSize: '11px',
 		fontWeight: 500,
@@ -258,10 +427,10 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '3px 9px',
+		padding: '3px 8px',
 		borderRadius: '5px',
-		border: '1px solid rgba(128,128,128,0.28)',
-		background: 'rgba(128,128,128,0.08)',
+		border: '1px solid rgba(255, 255, 255, 0.14)',
+		background: 'rgba(255, 255, 255, 0.06)',
 		color: 'inherit',
 		cursor: 'pointer',
 		fontSize: '11px',
@@ -271,89 +440,96 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '3px 9px',
+		padding: '3px 8px',
 		borderRadius: '5px',
-		border: '1px solid rgba(59,130,246,0.4)',
-		background: 'rgba(59,130,246,0.18)',
-		color: '#3b82f6',
+		border: '1px solid rgba(59, 130, 246, 0.45)',
+		background: 'rgba(59, 130, 246, 0.2)',
+		color: '#60a5fa',
 		cursor: 'pointer',
 		fontSize: '11px',
 		fontWeight: 600,
 	},
 	segGroup: {
 		display: 'inline-flex',
-		background: 'rgba(128,128,128,0.12)',
-		borderRadius: '7px',
+		background: 'rgba(255, 255, 255, 0.08)',
+		borderRadius: '6px',
 		padding: '2px',
-		border: '1px solid rgba(128,128,128,0.18)',
+		border: '1px solid rgba(255, 255, 255, 0.12)',
 	},
 	segBtn: {
-		padding: '4px 10px',
-		borderRadius: '5px',
+		padding: '3px 9px',
+		borderRadius: '4px',
 		border: 'none',
 		background: 'transparent',
 		color: 'inherit',
 		cursor: 'pointer',
 		fontSize: '11px',
 		fontWeight: 500,
-		opacity: 0.75,
+		opacity: 0.8,
 	},
 	segBtnActive: {
-		padding: '4px 10px',
-		borderRadius: '5px',
+		padding: '3px 9px',
+		borderRadius: '4px',
 		border: 'none',
-		background: 'rgba(59,130,246,0.3)',
-		color: '#3b82f6',
+		background: 'rgba(59, 130, 246, 0.35)',
+		color: '#60a5fa',
 		cursor: 'pointer',
 		fontSize: '11px',
 		fontWeight: 600,
-		boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
 		opacity: 1,
 	},
 	input: {
 		flex: '1',
-		padding: '7px 10px',
+		padding: '6px 10px',
 		borderRadius: '6px',
-		border: '1px solid rgba(128,128,128,0.35)',
-		background: 'rgba(0,0,0,0.1)',
+		border: '1px solid rgba(255, 255, 255, 0.2)',
+		background: 'rgba(0, 0, 0, 0.25)',
 		color: 'inherit',
 		fontSize: '12px',
 		outline: 'none',
 	},
-	muted: { color: '#9aa0a6', fontSize: '12px' },
+	muted: { color: 'var(--dsw-alias-text-secondary, #94a3b8)', fontSize: '11px' },
 	noticeBanner: {
 		display: 'flex',
 		alignItems: 'center',
 		justifyContent: 'space-between',
 		padding: '8px 12px',
-		borderRadius: '8px',
-		marginBottom: '12px',
+		borderRadius: '6px',
+		marginBottom: '10px',
 		fontSize: '12px',
 	},
-	authBox: {
-		background: 'rgba(59,130,246,0.06)',
-		border: '1px solid rgba(59,130,246,0.25)',
-		borderRadius: '10px',
-		padding: '14px',
-		margin: '12px 0',
+	authModal: {
+		background: 'rgba(59, 130, 246, 0.08)',
+		border: '1px solid rgba(59, 130, 246, 0.35)',
+		borderRadius: '8px',
+		padding: '12px 14px',
+		marginBottom: '12px',
 	},
 };
 
 export function apply(ctx: ClientContext): void {
-	const AgySettingsSection = (): unknown => {
-		const [status, setStatus] = useState<StatusPayload | null>(null);
+	const AgySettingsSection = (props?: any): unknown => {
+		const [status, setStatus] = useState<StatusPayload | null>(statusCache);
 		const [aliasInput, setAliasInput] = useState('');
 		const [proxyInputs, setProxyInputs] = useState<Record<string, string>>({});
 		const [editingProxyId, setEditingProxyId] = useState<string | null>(null);
 		const [addingAccount, setAddingAccount] = useState(false);
+		const [authCodeInput, setAuthCodeInput] = useState('');
 		const [loadingAction, setLoadingAction] = useState<string | null>(null);
 		const [toast, setToast] = useState<ToastNotice | null>(null);
+		const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
 
 		useEffect(() => {
 			let alive = true;
+			let lastJson = '';
 			const tick = async () => {
 				const st = await getStatus();
-				if (alive) setStatus(st);
+				if (!alive || !st) return;
+				const json = JSON.stringify(st);
+				if (json !== lastJson) {
+					lastJson = json;
+					setStatus(st);
+				}
 			};
 			void tick();
 			const timer = setInterval(tick, 3000);
@@ -363,27 +539,77 @@ export function apply(ctx: ClientContext): void {
 			};
 		}, []);
 
+		const flowStartedRef = useRef(false);
+		useEffect(() => {
+			if (!addingAccount || !flowStartedRef.current) return;
+			const pa = status?.poolAuth;
+			if (!pa) return;
+			if (pa.phase === 'done') {
+				flowStartedRef.current = false;
+				setAddingAccount(false);
+				setAuthCodeInput('');
+				setAliasInput('');
+				showToast(pa.message || '账号已激活入池', 'success');
+			} else if (pa.phase === 'failed') {
+				flowStartedRef.current = false;
+				showToast(pa.message || '授权失败', 'error');
+			}
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		}, [addingAccount, status?.poolAuth?.phase, status?.poolAuth?.message]);
+
 		const showToast = (text: string, type: ToastNotice['type'] = 'info') => {
 			setToast({ text, type, id: Date.now() });
 			setTimeout(() => {
 				setToast((prev) => (prev?.text === text ? null : prev));
-			}, 7000);
+			}, 6000);
 		};
 
 		const refresh = async (): Promise<void> => {
 			setStatus(await getStatus());
 		};
 
-		// Unified One-Step Add Account Flow
-		const handleCreateAndLoginAccount = async (): Promise<void> => {
-			setLoadingAction('pool:add');
+		const handleBeginAddAccount = async (): Promise<void> => {
+			setLoadingAction('pool:beginAdd');
 			const alias = aliasInput.trim() || `备用 Google 账号 ${(status?.pool?.accounts?.length ?? 1) + 1}`;
-			await postJson('/plugins/agy-link/pool/add', { alias, autoOpenTerminal: true });
+			const res = await postJson('/plugins/agy-link/pool/begin-add', { alias });
+			setLoadingAction(null);
+			if (res && res.ok) {
+				flowStartedRef.current = true;
+				await refresh();
+				if (res.browserOpened) {
+					showToast('浏览器已打开 Google 授权页，完成授权后将自动同步', 'info');
+				} else {
+					showToast('无法自动打开浏览器，请点击下方链接手动完成授权', 'warn');
+				}
+			} else {
+				showToast(`启动 Google 授权失败: ${res?.message || '请检查网络或代理配置'}`, 'error');
+			}
+		};
+
+		const handleCompleteAddAccount = async (): Promise<void> => {
+			if (!authCodeInput.trim()) return;
+			setLoadingAction('pool:completeAdd');
+			const res = await postJson('/plugins/agy-link/pool/complete-add', { code: authCodeInput.trim() });
+			setLoadingAction(null);
+			if (res && res.ok) {
+				flowStartedRef.current = false;
+				setAuthCodeInput('');
+				setAliasInput('');
+				setAddingAccount(false);
+				await refresh();
+				showToast(res.message || '成功添加并激活 Google 账号', 'success');
+			} else {
+				showToast(res?.message || res?.error || '授权码验证失败', 'error');
+			}
+		};
+
+		const handleCancelAddAccount = async (): Promise<void> => {
+			flowStartedRef.current = false;
+			await postJson('/plugins/agy-link/pool/cancel-add', {});
+			setAuthCodeInput('');
 			setAliasInput('');
 			setAddingAccount(false);
 			await refresh();
-			setLoadingAction(null);
-			showToast('💻 已自动调起系统终端！请在弹出的终端窗口中登录第二个 Google 账号，完成后点击【🔄 刷新额度】即可自动入池', 'success');
 		};
 
 		const setCfg = async (key: string, value: unknown): Promise<void> => {
@@ -391,7 +617,6 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/config', { key, value });
 			await refresh();
 			setLoadingAction(null);
-			showToast(`已更新参数配置: ${key} = ${String(value)}`, 'success');
 		};
 
 		const setPrimary = async (id: string): Promise<void> => {
@@ -399,7 +624,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/primary', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast('⭐ 已将该账号设为主用账号', 'success');
+			showToast('已设为主用账号', 'success');
 		};
 
 		const removeAccount = async (id: string, alias: string): Promise<void> => {
@@ -407,7 +632,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/remove', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast(`已从号池中移除账号: ${alias}`, 'info');
+			showToast(`已移除账号: ${alias}`, 'info');
 		};
 
 		const refreshQuota = async (id?: string): Promise<void> => {
@@ -415,14 +640,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/refresh-quota', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast(id ? '✅ 账号状态与额度已刷新' : '✅ 全部账号状态已同步刷新', 'success');
-		};
-
-		const openTerminal = async (id: string): Promise<void> => {
-			setLoadingAction(`terminal:${id}`);
-			await postJson('/plugins/agy-link/pool/open-terminal', { id });
-			setLoadingAction(null);
-			showToast('💻 已调起 macOS 终端！请在终端中完成 agy 登录，完成后点击【🔄 刷新额度】即可激活入池', 'info');
+			showToast('额度已刷新', 'success');
 		};
 
 		const saveProxy = async (id: string): Promise<void> => {
@@ -432,7 +650,7 @@ export function apply(ctx: ClientContext): void {
 			setEditingProxyId(null);
 			await refresh();
 			setLoadingAction(null);
-			showToast('💾 账号专属网络代理设置已保存', 'success');
+			showToast('代理已保存', 'success');
 		};
 
 		const setMode = async (mode: string): Promise<void> => {
@@ -440,7 +658,6 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/mode', { mode });
 			await refresh();
 			setLoadingAction(null);
-			showToast(`已切换号池调度模式为: ${mode === 'sequential' ? '顺次耗尽 (Sequential)' : '轮询均衡 (Round-Robin)'}`, 'success');
 		};
 
 		const clearCooldown = async (id?: string): Promise<void> => {
@@ -448,19 +665,21 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/clear-cooldown', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast('⚡ 已清除账号限流冷却状态', 'success');
+			showToast('已清除冷却', 'success');
+		};
+
+		const toggleExpand = (accId: string) => {
+			setExpandedModels((prev) => ({ ...prev, [accId]: !prev[accId] }));
 		};
 
 		const authPhase = status?.auth?.phase ?? 'unknown';
-		const isAuthed = authPhase === 'ok' || (status?.pool?.accounts?.length ?? 0) > 0;
 		const pool = status?.pool;
 		const accounts = pool?.accounts ?? [];
+		const isAuthed = authPhase === 'ok' || accounts.length > 0;
 		const isBusy = loadingAction !== null;
 
-		// Spinner icon helper
 		const renderSpinner = () => h('span', { className: 'agy-spinner' });
 
-		// Toast Banner renderer
 		const renderToastBanner = () => {
 			if (!toast) return null;
 			const typeStyles = {
@@ -469,220 +688,223 @@ export function apply(ctx: ClientContext): void {
 				warn: { background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.4)', color: '#f59e0b' },
 				error: { background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', color: '#ef4444' },
 			};
-			return h('div', { style: { ...S.noticeBanner, ...typeStyles[toast.type] } },
-				h('span', { style: { fontWeight: 500 } }, toast.text),
+			const style = typeStyles[toast.type];
+			return h('div', { style: { ...S.noticeBanner, ...style } },
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 500 } },
+					uiIcon(toast.type === 'success' ? 'check' : toast.type === 'error' || toast.type === 'warn' ? 'alert' : 'globe', 13, style.color),
+					h('span', null, toast.text),
+				),
 				h('button', {
 					type: 'button',
-					style: { background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '14px', padding: '0 4px', opacity: 0.8 },
+					style: { background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 4px', opacity: 0.8, display: 'inline-flex', alignItems: 'center' },
 					onClick: () => setToast(null),
-				}, '✕'),
+				}, uiIcon('x', 12)),
 			);
 		};
 
-		// Quota Progress Bar / Status Row Helper
-		const renderQuotaBar = (label: string, icon: string, info?: FamilyQuotaInfo, isKeychain = false): unknown => {
-			const fraction = typeof info?.remainingFraction === 'number' ? info.remainingFraction : null;
-			const percent = fraction !== null ? Math.round(fraction * 100) : null;
-			
-			if (percent !== null) {
-				let barGradient = 'linear-gradient(90deg, #10b981, #059669)';
-				let textColor = '#10b981';
-				let badgeBg = 'rgba(16,185,129,0.15)';
-				if (percent <= 20) {
-					barGradient = 'linear-gradient(90deg, #ef4444, #dc2626)';
-					textColor = '#ef4444';
-					badgeBg = 'rgba(239,68,68,0.15)';
-				} else if (percent <= 50) {
-					barGradient = 'linear-gradient(90deg, #f59e0b, #d97706)';
-					textColor = '#f59e0b';
-					badgeBg = 'rgba(245,158,11,0.15)';
-				}
+		const renderQuotaBar = (label: string, familyKey: 'google' | 'anthropic' | 'openai', acc: ManagedAccount): unknown => {
+			const info = acc.quotas[familyKey];
+			const cd = acc.cooldowns[familyKey];
+			const inCooldown = cd && cd.cooldownUntil > Date.now();
 
-				let resetTimeStr = '';
-				if (info?.resetTime) {
-					try {
-						const d = new Date(info.resetTime);
-						resetTimeStr = ` (${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')} 重置)`;
-					} catch {
-						// skip
-					}
-				}
+			// 5-Hour limit
+			const has5h = typeof info?.remainingFraction === 'number' && Number.isFinite(info.remainingFraction);
+			let pct5h = has5h ? Math.max(0, Math.min(100, Math.round(info!.remainingFraction! * 100))) : -1;
+			if (inCooldown) pct5h = 0;
+			const w5h = formatQuotaWindow(info?.resetTime);
 
-				return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11px', margin: '4px 0' } },
-					h('span', { style: { width: '85px', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 } },
-						h('span', null, icon),
-						label,
-					),
+			// Weekly limit
+			const hasWeekly = typeof info?.weeklyFraction === 'number' && Number.isFinite(info.weeklyFraction);
+			const pctWeekly = hasWeekly ? Math.max(0, Math.min(100, Math.round(info!.weeklyFraction! * 100))) : -1;
+			const wWeekly = formatQuotaWindow(info?.weeklyResetTime);
+
+			const getColors = (pct: number) => {
+				if (pct < 0) return { bar: 'rgba(255, 255, 255, 0.12)', text: '#94a3b8', badge: 'rgba(255, 255, 255, 0.08)' };
+				if (pct <= 20) return { bar: 'linear-gradient(90deg, #ef4444, #f87171)', text: '#f87171', badge: 'rgba(239, 68, 68, 0.22)' };
+				if (pct <= 50) return { bar: 'linear-gradient(90deg, #f59e0b, #fbbf24)', text: '#fbbf24', badge: 'rgba(245, 158, 11, 0.22)' };
+				return { bar: 'linear-gradient(90deg, #10b981, #34d399)', text: '#34d399', badge: 'rgba(16, 185, 129, 0.22)' };
+			};
+
+			const c5h = getColors(pct5h);
+			const cWeekly = getColors(pctWeekly);
+
+			const renderLine = (windowName: string, percent: number, c: { bar: string; text: string; badge: string }, resetStr: string) => {
+				return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11px', margin: '3px 0' } },
+					h('span', { style: { width: '50px', color: 'var(--dsw-alias-text-primary, #e2e8f0)', fontSize: '10.5px', fontWeight: 600, flexShrink: 0 } }, windowName),
 					h('div', { style: S.progressBarBg },
 						h('div', {
 							className: 'agy-progress-fill',
 							style: {
-								width: `${Math.min(100, Math.max(0, percent))}%`,
+								width: `${percent < 0 ? 100 : percent}%`,
 								height: '100%',
-								background: barGradient,
+								background: c.bar,
 								borderRadius: '4px',
 							},
 						}),
 					),
-					h('div', { style: { display: 'inline-flex', alignItems: 'center', minWidth: '55px', justifyContent: 'flex-end' } },
+					h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: '135px', justifyContent: 'flex-end', flexShrink: 0 } },
 						h('span', {
 							style: {
 								padding: '1px 6px',
 								borderRadius: '4px',
-								background: badgeBg,
-								color: textColor,
-								fontWeight: 600,
+								background: c.badge,
+								color: c.text,
+								fontWeight: 700,
 								fontSize: '11px',
 							},
-						}, `${percent}%`),
+						}, percent < 0 ? '—' : `${percent}%`),
+						resetStr ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #cbd5e1)', fontSize: '10.5px', fontWeight: 500 } }, `↻ ${resetStr}`) : null,
 					),
-					resetTimeStr ? h('span', { style: { ...S.muted, fontSize: '10px', marginLeft: '4px' } }, resetTimeStr) : null,
 				);
-			}
+			};
 
-			// Active Keychain native managed state
-			return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', margin: '3px 0' } },
-				h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 } },
-					h('span', null, icon),
-					label,
+			return h('div', { style: { margin: '6px 0', padding: '6px 8px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' } },
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '12px', marginBottom: '4px', color: 'var(--dsw-alias-text-primary, #f8fafc)' } },
+					brandIcon(FAMILY_BRAND[familyKey], 14),
+					h('span', null, label),
 				),
-				h('span', {
-					style: {
-						color: '#10b981',
-						background: 'rgba(16,185,129,0.12)',
-						padding: '1px 6px',
-						borderRadius: '4px',
-						fontSize: '10px',
-						fontWeight: 500,
-					},
-				}, '🟢 官方 CLI 实时调度正常'),
+				renderLine('5h 额度', pct5h, c5h, w5h.resetText),
+				renderLine('周额度', pctWeekly, cWeekly, wWeekly.resetText),
 			);
 		};
 
-		// Render Account Cards
-		const renderedAccountCards = accounts.map((acc: ManagedAccount, idx: number) => {
+		const renderedAccountCards = accounts.map((acc: ManagedAccount) => {
 			const isPrimary = acc.id === pool?.primaryAccountId;
 			const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
 			const dotColor = !acc.enabled ? '#9aa0a6' : hasCooldown ? '#f59e0b' : '#10b981';
 			const isEditingProxy = editingProxyId === acc.id;
-
-			const isRefreshing = loadingAction === `refresh:${acc.id}`;
-			const isOpeningTerminal = loadingAction === `terminal:${acc.id}`;
-			const isSettingPrimary = loadingAction === `primary:${acc.id}`;
-			const isRemoving = loadingAction === `remove:${acc.id}`;
-			const isClearingCooldown = loadingAction === `clearCooldown:${acc.id}`;
+			const isExpanded = expandedModels[acc.id] ?? false;
 
 			const cardStyle = isPrimary ? { ...S.cardPrimary } : { ...S.card };
-			const hasExplicitQuotas = !!(acc.quotas.google?.remainingFraction || acc.quotas.anthropic?.remainingFraction || acc.quotas.openai?.remainingFraction);
+
+			const googleModels = acc.quotas.google?.models ?? [];
+			const anthropicModels = acc.quotas.anthropic?.models ?? [];
+			const openaiModels = acc.quotas.openai?.models ?? [];
+			const allChildModels: { family: string; model: ModelQuotaInfo }[] = [
+				...googleModels.map((m) => ({ family: 'Google', model: m })),
+				...anthropicModels.map((m) => ({ family: 'Anthropic', model: m })),
+				...openaiModels.map((m) => ({ family: 'OpenAI', model: m })),
+			];
 
 			return h('div', { key: acc.id, className: 'agy-card-hover', style: cardStyle },
-				// Card Header
-				h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
+				h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' } },
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
 						h('span', {
 							className: 'agy-pulse-dot',
 							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}88` },
 						}),
-						h('span', { style: { fontWeight: 600, fontSize: '13px' } }, `${idx + 1}. ${acc.alias}`),
-						acc.email ? h('span', { style: { ...S.badgeTag, color: '#3b82f6', borderColor: 'rgba(59,130,246,0.3)' } }, `✉️ ${acc.email}`) : null,
-						isPrimary ? h('span', { style: S.badgePrimary }, '⭐ 主用账号') : null,
-						acc.systemHome ? h('span', { style: S.badgeTag }, '💻 Keychain') : null,
+						h('span', { style: { fontWeight: 600, fontSize: '13px' } }, acc.alias),
+						acc.email ? h('span', { style: { ...S.badgeTag, color: '#3b82f6', borderColor: 'rgba(59,130,246,0.3)', gap: '4px' } },
+							uiIcon('mail', 11, '#3b82f6'),
+							acc.email,
+						) : null,
+						isPrimary ? h('span', { style: { ...S.badgePrimary, gap: '4px' } },
+							uiIcon('star', 10, '#3b82f6'),
+							'主用',
+						) : null,
+						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, color: '#10b981', borderColor: 'rgba(16,185,129,0.3)', gap: '4px' } },
+							uiIcon('globe', 11, '#10b981'),
+							'代理',
+						) : null,
 					),
-					// Card Actions
-					h('div', { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
-						h('button', {
+					h('div', { style: { display: 'flex', gap: '5px', alignItems: 'center' } },
+						allChildModels.length > 0 ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
-							style: S.btnSm,
-							disabled: isBusy,
-							onClick: () => void refreshQuota(acc.id),
-						}, isRefreshing ? [renderSpinner(), '刷新中...'] : '🔄 刷新状态'),
-						!isPrimary && acc.dir ? h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: S.btnSmPrimary,
-							disabled: isBusy,
-							onClick: () => void openTerminal(acc.id),
-						}, isOpeningTerminal ? [renderSpinner(), '打开中...'] : '💻 打开终端登录') : null,
+							style: isExpanded ? { ...S.btnSmPrimary, gap: '3px' } : { ...S.btnSm, gap: '3px' },
+							onClick: () => toggleExpand(acc.id),
+						}, isExpanded ? [uiIcon('chevronUp', 11), ' 收起'] : [uiIcon('chevronDown', 11), ' 明细']) : null,
 						!isPrimary ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
-							style: S.btnSm,
+							style: { ...S.btnSm, gap: '4px' },
 							disabled: isBusy,
 							onClick: () => void setPrimary(acc.id),
-						}, isSettingPrimary ? [renderSpinner(), '设置中...'] : '⬆️ 设为主用') : null,
+						}, loadingAction === `primary:${acc.id}` ? [renderSpinner(), '设置中'] : [uiIcon('star', 11), ' 设为主用']) : null,
 						h('button', {
 							type: 'button',
 							className: 'agy-btn',
-							style: isEditingProxy ? S.btnSmPrimary : S.btnSm,
+							style: isEditingProxy ? { ...S.btnSmPrimary, gap: '4px' } : { ...S.btnSm, gap: '4px' },
 							disabled: isBusy,
 							onClick: () => setEditingProxyId(isEditingProxy ? null : acc.id),
-						}, '⚙️ 代理'),
+						}, [uiIcon('globe', 11), ' 代理']),
 						accounts.length > 1 ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
-							style: S.btnDanger,
+							style: { ...S.btnDanger, padding: '3px 7px' },
+							title: '移除此账号',
 							disabled: isBusy,
 							onClick: () => void removeAccount(acc.id, acc.alias),
-						}, isRemoving ? [renderSpinner(), '移除中...'] : '🗑️ 移除') : null,
+						}, loadingAction === `remove:${acc.id}` ? renderSpinner() : uiIcon('trash', 12, '#ef4444')) : null,
 					),
 				),
-
-				// Quota / Status Section
 				h('div', { style: S.quotaBox },
-					renderQuotaBar('Gemini', '✨', acc.quotas.google, acc.systemHome),
-					renderQuotaBar('Claude', '🧠', acc.quotas.anthropic, acc.systemHome),
-					renderQuotaBar('GPT-OSS', '⚡', acc.quotas.openai, acc.systemHome),
-					!hasExplicitQuotas
-						? h('div', { style: { ...S.muted, fontSize: '11px', marginTop: '6px', borderTop: '1px dashed rgba(128,128,128,0.15)', paddingTop: '4px' } },
-							acc.systemHome
-								? 'ℹ️ 凭据由 macOS 钥匙串托管，额度由 agy CLI 原生实时调度；触发 429 自动无缝切号'
-								: '💡 账号环境已就绪。点击上方【💻 打开终端登录】在终端中回车完成 Google 登录，完成后点击【🔄 刷新状态】即可入池'
-						)
-						: null,
+					renderQuotaBar('Gemini', 'google', acc),
+					renderQuotaBar('Claude', 'anthropic', acc),
+					renderQuotaBar('GPT-OSS', 'openai', acc),
+					isExpanded && allChildModels.length > 0 ? h('div', {
+						style: {
+							marginTop: '8px',
+							paddingTop: '8px',
+							borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+						},
+					},
+						h('div', { style: { color: 'var(--dsw-alias-text-secondary, #94a3b8)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, '单模型明细:'),
+						allChildModels.map(({ family, model }) => {
+							const frac = model.remainingFraction ?? 1;
+							const pct = Math.round(frac * 100);
+							const w = formatQuotaWindow(model.resetTime);
+							const pColor = pct <= 20 ? '#f87171' : pct <= 50 ? '#fbbf24' : '#34d399';
+							return h('div', { key: model.modelId, className: 'agy-submodel-row' },
+								h('span', { style: { fontWeight: 500, color: 'var(--dsw-alias-text-primary, #e2e8f0)' } }, `[${family}] ${model.displayName || model.modelId}`),
+								h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+									h('span', { style: { color: pColor, fontWeight: 700 } }, `${pct}%`),
+									w.resetText ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #cbd5e1)', fontSize: '10.5px' } }, `↻ ${w.resetText}`) : null,
+								),
+							);
+						}),
+					) : null,
 				),
-
-				// Cooldown Alert Banner if rate-limited
 				hasCooldown ? h('div', {
 					style: {
-						background: 'rgba(245,158,11,0.12)',
-						border: '1px solid rgba(245,158,11,0.35)',
+						background: 'rgba(245,158,11,0.1)',
+						border: '1px solid rgba(245,158,11,0.3)',
 						borderRadius: '6px',
-						padding: '6px 10px',
+						padding: '4px 8px',
 						color: '#f59e0b',
 						fontSize: '11px',
-						margin: '6px 0',
+						marginTop: '6px',
 						display: 'flex',
 						alignItems: 'center',
 						justifyContent: 'space-between',
 					},
 				},
-					h('span', null, '⚠️ 当前部分模型家族处于限流冷却中 (已自动顺次切换至下一个可用账号)'),
+					h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+						uiIcon('alert', 12, '#f59e0b'),
+						h('span', null, '部分模型限流中，已自动切换账号'),
+					),
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
-						style: { ...S.btnSm, color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.15)' },
+						style: { ...S.btnSm, color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.15)', gap: '3px' },
 						disabled: isBusy,
 						onClick: () => void clearCooldown(acc.id),
-					}, isClearingCooldown ? [renderSpinner(), '清除中...'] : '⚡ 清除冷却'),
+					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, '#f59e0b'), ' 清除冷却']),
 				) : null,
-
-				// Proxy setting inline editor
 				isEditingProxy ? h('div', {
 					style: {
-						marginTop: '8px',
+						marginTop: '6px',
 						padding: '8px 10px',
 						background: 'rgba(128,128,128,0.06)',
 						borderRadius: '6px',
 						border: '1px solid rgba(128,128,128,0.15)',
 					},
 				},
-					h('div', { style: { ...S.muted, fontSize: '11px', marginBottom: '4px' } }, '独立代理 URL（留空则继承当前系统/终端环境代理）:'),
 					h('div', { style: { display: 'flex', gap: '6px' } },
 						h('input', {
 							style: S.input,
 							value: proxyInputs[acc.id] !== undefined ? proxyInputs[acc.id] : (acc.proxyUrl ?? ''),
-							placeholder: '例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:7890',
+							placeholder: '专属代理 URL (如: http://127.0.0.1:7890，留空则使用全局)',
 							onChange: (e: { target: { value: string } }) => setProxyInputs({ ...proxyInputs, [acc.id]: e.target.value }),
 						}),
 						h('button', {
@@ -691,7 +913,7 @@ export function apply(ctx: ClientContext): void {
 							style: S.btnPrimary,
 							disabled: isBusy,
 							onClick: () => void saveProxy(acc.id),
-						}, loadingAction === `proxy:${acc.id}` ? [renderSpinner(), '保存中...'] : '保存代理'),
+						}, loadingAction === `proxy:${acc.id}` ? [renderSpinner(), '保存'] : '保存'),
 						h('button', {
 							type: 'button',
 							className: 'agy-btn',
@@ -703,194 +925,269 @@ export function apply(ctx: ClientContext): void {
 			);
 		});
 
-		// Add Account Drawer
+		const poolAuth = status?.poolAuth;
+		const flowPhase = poolAuth?.phase ?? 'idle';
+		const flowActive = flowPhase === 'waiting' || flowPhase === 'exchanging';
+
 		const addAccountSection = addingAccount
-			? h('div', { style: { ...S.authBox, marginTop: '10px' } },
-				h('div', { style: { fontWeight: 600, fontSize: '14px', marginBottom: '6px' } }, '➕ 添加新 Google 账号入池 (统一标准向导)'),
-				h('div', { style: { ...S.muted, marginBottom: '10px', lineHeight: 1.6 } },
-					'1. 为新账号命名（如“工作账号 / 备用账号2”）；\n2. 点击下方按钮，系统将自动创建隔离环境并自动调起 macOS 终端运行官方 agy；\n3. 终端自动调起系统浏览器完成 Google 登录授权；\n4. 登录完成后回到此页面点击【🔄 刷新状态】，账号即可自动激活入池！',
+			? h('div', { style: S.authModal },
+				h('div', { style: { fontWeight: 600, fontSize: '13px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' } },
+					uiIcon('plus', 13, '#3b82f6'),
+					'添加 Google 账号',
 				),
-				h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
-					h('input', {
-						style: S.input,
-						value: aliasInput,
-						placeholder: '账号别名 (例如: 备用 Google 账号 2)',
-						onChange: (e: { target: { value: string } }) => setAliasInput(e.target.value),
-					}),
-					h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: S.btnPrimary,
-						disabled: isBusy,
-						onClick: () => void handleCreateAndLoginAccount(),
-					}, loadingAction === 'pool:add' ? [renderSpinner(), '创建并调起中...'] : '🚀 创建并调起终端登录'),
-					h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: S.btn,
-						disabled: isBusy,
-						onClick: () => setAddingAccount(false),
-					}, '取消'),
-				),
+				!flowActive
+					? h('div', null,
+						h('div', { style: { display: 'flex', gap: '8px' } },
+							h('input', {
+								style: S.input,
+								value: aliasInput,
+								placeholder: '账号别名 (例如: 备用账号 2)',
+								onChange: (e: { target: { value: string } }) => setAliasInput(e.target.value),
+							}),
+							h('button', {
+								type: 'button',
+								className: 'agy-btn',
+								style: { ...S.btnPrimary, gap: '4px' },
+								disabled: isBusy,
+								onClick: () => void handleBeginAddAccount(),
+							}, loadingAction === 'pool:beginAdd' ? [renderSpinner(), '正在打开浏览器...'] : [uiIcon('externalLink', 12, '#3b82f6'), ' 打开浏览器登录']),
+							h('button', {
+								type: 'button',
+								className: 'agy-btn',
+								style: S.btn,
+								onClick: () => handleCancelAddAccount(),
+							}, '取消'),
+						),
+						flowPhase === 'failed' && poolAuth?.message ? h('div', {
+							style: { ...S.muted, color: '#ef4444', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px' },
+						}, uiIcon('alert', 12, '#ef4444'), poolAuth.message) : null,
+					)
+					: h('div', null,
+						h('div', { style: { display: 'flex', alignItems: 'center', ...S.muted, marginBottom: '8px', lineHeight: 1.5 } },
+							renderSpinner(),
+							flowPhase === 'exchanging'
+								? '正在验证授权并激活账号，请稍候...'
+								: '等待浏览器中完成 Google 授权，成功后将自动激活。',
+						),
+						poolAuth?.url ? h('div', { style: { marginBottom: '8px' } },
+							h('a', {
+								href: poolAuth.url,
+								target: '_blank',
+								style: { color: '#3b82f6', textDecoration: 'none', fontSize: '12px', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '4px' },
+							}, uiIcon('externalLink', 12, '#3b82f6'), '若浏览器未打开，请点击此处手动打开 Google 登录页'),
+						) : null,
+						h('div', { style: { ...S.muted, marginBottom: '6px', fontSize: '10px' } },
+							'未完成自动回调时，可粘贴授权码或回调 URL：',
+						),
+						h('div', { style: { display: 'flex', gap: '8px' } },
+							h('input', {
+								style: S.input,
+								value: authCodeInput,
+								placeholder: '授权码 或 http://localhost:51121/oauth-callback?code=... 完整链接',
+								onChange: (e: { target: { value: string } }) => setAuthCodeInput(e.target.value),
+							}),
+							h('button', {
+								type: 'button',
+								className: 'agy-btn',
+								style: { ...S.btnPrimary, gap: '4px' },
+								disabled: isBusy || !authCodeInput.trim(),
+								onClick: () => void handleCompleteAddAccount(),
+							}, loadingAction === 'pool:completeAdd' ? [renderSpinner(), '验证激活中...'] : [uiIcon('check', 12, '#3b82f6'), ' 手动激活']),
+							h('button', {
+								type: 'button',
+								className: 'agy-btn',
+								style: S.btn,
+								onClick: () => handleCancelAddAccount(),
+							}, '取消'),
+						),
+					),
 			)
-			: h('div', { style: { margin: '12px 0' } },
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: S.btnPrimary,
-					disabled: isBusy,
-					onClick: () => setAddingAccount(true),
-				}, '➕ 添加新 Google 账号 (Add Google Account)'),
+			: null;
+
+		if (status === null) {
+			return h('div', { style: { ...S.container, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+				h('style', null, GLOBAL_CSS),
+				h('span', { style: S.muted }, [renderSpinner(), '正在加载 Antigravity 状态...']),
 			);
-
-		// Global Pool Header & Mode Toggle
-		const poolHeader = h('div', {
-			style: {
-				display: 'flex',
-				alignItems: 'center',
-				justifyContent: 'space-between',
-				margin: '16px 0 10px',
-				flexWrap: 'wrap',
-				gap: '8px',
-			},
-		},
-			h('div', { style: { fontWeight: 600, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' } },
-				'👥 Google 多账号池',
-				h('span', { style: S.badgeTag }, `${accounts.length} 个账号`),
-			),
-			h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-				// Segmented Mode Switch
-				h('div', { style: S.segGroup },
-					h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: pool?.mode === 'sequential' || !pool?.mode ? S.segBtnActive : S.segBtn,
-						onClick: () => void setMode('sequential'),
-					}, '顺次耗尽 (Sequential)'),
-					h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: pool?.mode === 'round-robin' ? S.segBtnActive : S.segBtn,
-						onClick: () => void setMode('round-robin'),
-					}, '轮询均衡 (Round-Robin)'),
-				),
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: S.btn,
-					disabled: isBusy,
-					onClick: () => void refreshQuota(),
-				}, loadingAction === 'refresh:all' ? [renderSpinner(), '刷新中...'] : '🔄 刷新全部状态'),
-			),
-		);
-
-		// Parameters section (permission mode / reasoning effort)
-		const permissionRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '6px 0' } },
-			h('span', { style: { ...S.muted, width: '70px' } }, '权限模式:'),
-			h('div', { style: S.segGroup },
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: status?.permissionMode === 'plan' ? S.segBtnActive : S.segBtn,
-					onClick: () => void setCfg('permissionMode', 'plan'),
-				}, 'plan (只读)'),
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: status?.permissionMode === 'accept-edits' ? S.segBtnActive : S.segBtn,
-					onClick: () => void setCfg('permissionMode', 'accept-edits'),
-				}, 'accept-edits (自动改代码)'),
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: '#ef4444', background: 'rgba(239,68,68,0.2)' } : S.segBtn,
-					onClick: () => void setCfg('permissionMode', 'skip'),
-				}, 'skip (全自动免确认)'),
-			),
-		);
-
-		const effortRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '6px 0' } },
-			h('span', { style: { ...S.muted, width: '70px' } }, '思考强度:'),
-			h('div', { style: S.segGroup },
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: status?.defaultEffort === '' ? S.segBtnActive : S.segBtn,
-					onClick: () => void setCfg('defaultEffort', ''),
-				}, 'auto (自动)'),
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: status?.defaultEffort === 'low' ? S.segBtnActive : S.segBtn,
-					onClick: () => void setCfg('defaultEffort', 'low'),
-				}, 'low (低)'),
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: status?.defaultEffort === 'medium' ? S.segBtnActive : S.segBtn,
-					onClick: () => void setCfg('defaultEffort', 'medium'),
-				}, 'medium (中)'),
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: status?.defaultEffort === 'high' ? S.segBtnActive : S.segBtn,
-					onClick: () => void setCfg('defaultEffort', 'high'),
-				}, 'high (高)'),
-			),
-		);
+		}
 
 		return h('div', { style: S.container },
 			h('style', null, GLOBAL_CSS),
-			// Top Header Card
 			h('div', { style: S.headerCard },
-				h('div', null,
-					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '15px' } },
-						h('span', {
-							className: 'agy-pulse-dot',
-							style: { background: isAuthed ? '#10b981' : '#f59e0b', boxShadow: `0 0 10px ${isAuthed ? '#10b981' : '#f59e0b'}` },
-						}),
-						'Antigravity (agy CLI) 多账号号池与配额中心',
-					),
-					h('div', { style: { ...S.muted, marginTop: '4px', fontSize: '12px' } },
-						'多账号隔离与自动轮换 · 顺次耗尽调度 · 原生 57 Agent 工具 · 多模态图文支持',
-					),
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+					agyIcon(16),
+					h('span', { style: { fontWeight: 700, fontSize: '14px' } }, 'Antigravity'),
+					h('span', { style: isAuthed ? { ...S.badgePrimary, color: '#10b981', background: 'rgba(16,185,129,0.12)', borderColor: 'rgba(16,185,129,0.3)' } : S.badgePrimary }, isAuthed ? '就绪' : '待认证'),
 				),
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-					isAuthed
-						? h('span', { style: { ...S.badgePrimary, background: 'rgba(16,185,129,0.15)', color: '#10b981', borderColor: 'rgba(16,185,129,0.4)' } }, '🟢 正常就绪')
-						: h('span', { style: { ...S.badgePrimary, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)' } }, '🟡 待认证'),
+				h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+					!addingAccount ? h('button', {
+						type: 'button',
+						className: 'agy-btn',
+						style: { ...S.btnPrimary, gap: '4px' },
+						onClick: () => setAddingAccount(true),
+					}, [uiIcon('plus', 12, '#3b82f6'), ' 添加账号']) : null,
+					h('button', {
+						type: 'button',
+						className: 'agy-btn',
+						style: { ...S.btn, gap: '4px' },
+						disabled: isBusy,
+						onClick: () => void refreshQuota(),
+					}, loadingAction === 'refresh:all' ? [renderSpinner(), '刷新中'] : [uiIcon('refresh', 12), ' 刷新额度']),
 				),
 			),
-
-			// Toast Feedback
 			renderToastBanner(),
-
-			// Account Pool Section
-			poolHeader,
-			renderedAccountCards,
 			addAccountSection,
-
-			// Parameters & Execution Config
-			h('div', { style: { borderTop: '1px solid rgba(128,128,128,0.18)', margin: '18px 0 12px', paddingTop: '12px' } },
-				h('div', { style: { fontWeight: 600, fontSize: '13px', marginBottom: '10px' } }, '⚙️ 执行与权限参数'),
-				permissionRow,
-				effortRow,
-			),
-
-			// Footer tips
-			h('div', { style: { ...S.muted, fontSize: '11px', marginTop: '14px', borderTop: '1px dashed rgba(128,128,128,0.15)', paddingTop: '8px' } },
-				'💡 终端指令提示：聊天框输入 `/agy pool` 查看配额看板，`/agy refresh-quota` 刷新额度，`/agy doctor` 检查健康状态。',
+			renderedAccountCards,
+			h('div', { style: { marginTop: '14px', paddingTop: '10px', borderTop: '1px solid rgba(128,128,128,0.15)' } },
+				h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+						h('span', { style: S.muted }, '权限模式:'),
+						h('div', { style: S.segGroup },
+							h('button', {
+								type: 'button',
+								style: status?.permissionMode === 'plan' ? S.segBtnActive : S.segBtn,
+								onClick: () => void setCfg('permissionMode', 'plan'),
+							}, 'plan (只读)'),
+							h('button', {
+								type: 'button',
+								style: status?.permissionMode === 'accept-edits' ? S.segBtnActive : S.segBtn,
+								onClick: () => void setCfg('permissionMode', 'accept-edits'),
+							}, 'accept-edits (改代码)'),
+							h('button', {
+								type: 'button',
+								style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: '#ef4444', background: 'rgba(239,68,68,0.2)' } : S.segBtn,
+								onClick: () => void setCfg('permissionMode', 'skip'),
+							}, 'skip (全自动免确认)'),
+						),
+					),
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+						h('span', { style: S.muted }, '思考强度:'),
+						h('div', { style: S.segGroup },
+							h('button', {
+								type: 'button',
+								style: status?.defaultEffort === '' ? S.segBtnActive : S.segBtn,
+								onClick: () => void setCfg('defaultEffort', ''),
+							}, 'auto'),
+							h('button', {
+								type: 'button',
+								style: status?.defaultEffort === 'low' ? S.segBtnActive : S.segBtn,
+								onClick: () => void setCfg('defaultEffort', 'low'),
+							}, 'low'),
+							h('button', {
+								type: 'button',
+								style: status?.defaultEffort === 'medium' ? S.segBtnActive : S.segBtn,
+								onClick: () => void setCfg('defaultEffort', 'medium'),
+							}, 'medium'),
+							h('button', {
+								type: 'button',
+								style: status?.defaultEffort === 'high' ? S.segBtnActive : S.segBtn,
+								onClick: () => void setCfg('defaultEffort', 'high'),
+							}, 'high'),
+						),
+					),
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+						h('span', { style: S.muted }, '号池调度:'),
+						h('div', { style: S.segGroup },
+							h('button', {
+								type: 'button',
+								style: pool?.mode === 'sequential' || !pool?.mode ? S.segBtnActive : S.segBtn,
+								onClick: () => void setMode('sequential'),
+							}, '顺次耗尽'),
+							h('button', {
+								type: 'button',
+								style: pool?.mode === 'round-robin' ? S.segBtnActive : S.segBtn,
+								onClick: () => void setMode('round-robin'),
+							}, '轮询均衡'),
+						),
+					),
+				),
 			),
 		);
 	};
 
+	/** Modal dialog container rendered into document.body */
+	const AgyModalDialog = (): unknown => {
+		const [isOpen, setIsOpen] = useState(agyModalStore.open);
+
+		useEffect(() => {
+			const unsubscribe = agyModalStore.subscribe(() => {
+				setIsOpen(agyModalStore.open);
+			});
+			return unsubscribe;
+		}, []);
+
+		useEffect(() => {
+			if (!isOpen) return;
+			const onKey = (e: any) => {
+				if (e.key === 'Escape') {
+					e.stopPropagation();
+					agyModalStore.setOpen(false);
+				}
+			};
+			win.addEventListener?.('keydown', onKey, true);
+			return () => win.removeEventListener?.('keydown', onKey, true);
+		}, [isOpen]);
+
+		if (!isOpen) return null;
+
+		return h('div', {
+			className: 'agy-modal-backdrop',
+			onClick: (e: { target: unknown; currentTarget: unknown }) => {
+				if (e.target === e.currentTarget) agyModalStore.setOpen(false);
+			},
+		},
+			h('div', { className: 'agy-modal-panel', role: 'dialog', 'aria-modal': true },
+				h('div', {
+					style: {
+						display: 'flex',
+						alignItems: 'center',
+						justifyContent: 'space-between',
+						padding: '12px 16px',
+						borderBottom: '1px solid rgba(128,128,128,0.2)',
+						background: 'rgba(128,128,128,0.05)',
+					},
+				},
+					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+						agyIcon(18),
+						h('strong', { style: { fontSize: '14px' } }, 'Antigravity 管理控制台'),
+					),
+					h('button', {
+						type: 'button',
+						title: '关闭 (Esc)',
+						style: {
+							background: 'transparent',
+							border: 'none',
+							color: '#9aa0a6',
+							cursor: 'pointer',
+							padding: '4px 6px',
+							borderRadius: '4px',
+							display: 'inline-flex',
+							alignItems: 'center',
+						},
+						onClick: () => agyModalStore.setOpen(false),
+					}, uiIcon('x', 14, '#9aa0a6')),
+				),
+				h('div', { style: { overflowY: 'auto', padding: '16px', flex: '1' } },
+					h(AgySettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
+				),
+			),
+		);
+	};
+
+	/** Session Header badge in chat toolbar */
 	const AgySessionStatus = (): unknown => {
-		const [status, setStatus] = useState<StatusPayload | null>(null);
+		const [status, setStatus] = useState<StatusPayload | null>(statusCache);
 		useEffect(() => {
 			let alive = true;
+			let lastJson = '';
 			const tick = async () => {
 				const st = await getStatus();
-				if (alive) setStatus(st);
+				if (!alive || !st) return;
+				const json = JSON.stringify(st);
+				if (json !== lastJson) {
+					lastJson = json;
+					setStatus(st);
+				}
 			};
 			void tick();
 			const timer = setInterval(tick, 3000);
@@ -906,15 +1203,19 @@ export function apply(ctx: ClientContext): void {
 		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
 		const color = status === null ? '#9aa0a6' : status.dormantReason ? '#f59e0b' : hasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
 
-		return h('button',
+		// The console modal lives with the always-mounted header badge (the
+		// sidebar footer shortcut was removed per product decision).
+		const badge = h('button',
 			{
 				type: 'button',
-				title: `Antigravity Multi-Account: ${accounts.length} pooled accounts`,
+				title: `Antigravity: ${accounts.length} accounts ready · 点击打开控制台`,
+				className: 'agy-btn',
+				onClick: () => agyModalStore.setOpen(true),
 				style: {
 					background: 'transparent',
 					border: '1px solid rgba(128,128,128,0.25)',
 					borderRadius: '999px',
-					cursor: 'default',
+					cursor: 'pointer',
 					padding: '2px 8px',
 					fontSize: '11px',
 					lineHeight: 1.5,
@@ -927,8 +1228,13 @@ export function apply(ctx: ClientContext): void {
 			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color } }),
 			`AGY (${accounts.length})`,
 		);
+		return h('div', { style: { display: 'inline-block' } },
+			badge,
+			portalToBody(h(AgyModalDialog, null)),
+		);
 	};
 
+	// Register in header session toolbar
 	ctx.slots.inject('conversation.session.header.actions', () => {
 		const dispose = ctx.slots.register(
 			{
@@ -942,6 +1248,7 @@ export function apply(ctx: ClientContext): void {
 		return dispose;
 	});
 
+	// Register in settings section (under Gear icon -> Antigravity)
 	ctx.slots.inject('settings.section', () => {
 		const dispose = ctx.slots.register(
 			{
@@ -955,3 +1262,4 @@ export function apply(ctx: ClientContext): void {
 		return dispose;
 	});
 }
+

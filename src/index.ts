@@ -20,6 +20,7 @@ import { RunRegistry } from './host/recording.ts'
 import { MIN_AGY_VERSION, compareVersions, parseVersion, probeProcess, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
 import { AccountPoolManager } from './host/pool.ts'
+import { PoolAuthFlow } from './host/pool-auth.ts'
 import { QuotaService } from './host/quota.ts'
 import { StreamJsonParser } from './host/parser.ts'
 import { defaultMediaDir, sweepDir, type ImageRefLike } from './host/media.ts'
@@ -106,7 +107,13 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     300_000,
   )
   const auth = new AuthHelper(bin)
+  const poolAuth = new PoolAuthFlow(pool, quota, log)
   const runs = new RunRegistry()
+
+  // Boot hygiene: remove staging dirs abandoned by interrupted add-account
+  // attempts (observed in the wild after the scrape-based flow timed out).
+  const swept = pool.sweepStaleStaging()
+  if (swept > 0) log('swept ' + swept + ' stale staging dir(s)')
 
   const adapter = new AgyAdapter({
     getConfig,
@@ -202,6 +209,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       catalog: () => catalog,
       store: () => store,
       pool: () => pool,
+      poolAuth: () => poolAuth,
       quota: () => quota,
       lastRun: () => lastRun,
       setOverride,
@@ -320,7 +328,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           defaultModel: cfg.defaultModel,
           defaultEffort: cfg.defaultEffort,
           askTool: cfg.askTool,
-          auth: await auth.resolvedStatus(),
+          auth: auth.status(),
+          poolAuth: poolAuth.status(),
           pool: pool.getPoolData(),
           catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
           bindings: Object.keys(store.all()).length,
@@ -381,6 +390,51 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     reg({ kind: 'exact', path: '/plugins/agy-link/pool', handler: (_req, res) => {
       sendJson(res as RawRes, 200, pool.getPoolData())
     }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/begin-add', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const alias = typeof body.alias === 'string' ? body.alias : undefined
+        const proxyUrl = typeof body.proxyUrl === 'string' ? body.proxyUrl : undefined
+        const st = await poolAuth.begin(alias, proxyUrl)
+        sendJson(res as RawRes, st.ok ? 200 : 500, st)
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/complete-add', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const code = typeof body.code === 'string' ? body.code : ''
+        if (!code) {
+          sendJson(res as RawRes, 400, { ok: false, error: 'missing code' })
+          return
+        }
+        const st = await poolAuth.submitCode(code)
+        sendJson(res as RawRes, st.ok ? 200 : 400, {
+          ok: st.ok,
+          phase: st.phase,
+          message: st.message,
+          pool: pool.getPoolData(),
+        })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/cancel-add', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        await readBody(req)
+        await poolAuth.cancel()
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
+      })()
+    }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool/add', handler: (req, res) => {
       void (async () => {
         if (methodOf(req) !== 'POST') {
@@ -396,7 +450,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "export HOME='${acc.dir}'; agy"`
             execFile('osascript', ['-e', script], () => {})
           } else if (process.platform === 'win32') {
-            execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set HOME=${acc.dir} && agy`], () => {})
+            // HOME alone is ignored by Node/Go on Windows — set USERPROFILE too.
+            execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${acc.dir}" && set "USERPROFILE=${acc.dir}" && agy`], () => {})
           } else {
             execFile('x-terminal-emulator', ['-e', `sh -c "export HOME='${acc.dir}'; agy; exec sh"`], () => {})
           }
@@ -421,7 +476,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "export HOME='${acc.dir}'; agy"`
           execFile('osascript', ['-e', script], () => {})
         } else if (process.platform === 'win32') {
-          execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set HOME=${acc.dir} && agy`], () => {})
+          // HOME alone is ignored by Node/Go on Windows — set USERPROFILE too.
+          execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${acc.dir}" && set "USERPROFILE=${acc.dir}" && agy`], () => {})
         } else {
           execFile('x-terminal-emulator', ['-e', `sh -c "export HOME='${acc.dir}'; agy; exec sh"`], () => {})
         }
@@ -487,9 +543,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const id = typeof body.id === 'string' ? body.id : ''
         if (id) {
           const acc = pool.getAccount(id)
-          if (acc) await quota.refreshAccountQuota(acc)
+          if (acc) await quota.refreshAccountQuota(acc, true)
         } else {
-          await quota.refreshAllQuotas()
+          await quota.refreshAllQuotas(true)
         }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
@@ -576,6 +632,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     return () => clearInterval(timer)
   })
 
+  // Background quota refresh: reads local token files only (no agy spawns,
+  // no Keychain prompts), then one HTTPS call per account every 5 minutes.
+  ctx.effect(() => {
+    if (!getConfig().enabled) return () => undefined
+    const refresh = (): void => {
+      void quota.refreshAllQuotas().catch(() => undefined)
+    }
+    const boot = setTimeout(refresh, 5_000)
+    const timer = setInterval(refresh, 5 * 60_000)
+    return () => {
+      clearTimeout(boot)
+      clearInterval(timer)
+    }
+  })
+
   const bridgeState: { bridge: Awaited<ReturnType<typeof startMcpBridge>> | null; restore: (() => void) | null } = { bridge: null, restore: null }
   const syncMcpBridge = (): void => {
     const cfg = getConfig()
@@ -612,6 +683,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
 
   ctx.effect(() => {
     auth.dispose()
+    void poolAuth.cancel()
     if (askToolDispose.current !== null) askToolDispose.current()
     if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
     bridgeState.restore?.()

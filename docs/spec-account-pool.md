@@ -53,7 +53,7 @@ This specification details a **Multi-Account Pool (号池系统)** that enables 
                  │
                  ▼
 2. Generates Google OAuth PKCE authorization URL:
-   - Client ID: 1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com
+   - Client ID: AGY_PUBLIC_CLIENT_ID (Antigravity Consumer Public OAuth Client)
    - Scopes: cloud-platform, userinfo.email, userinfo.profile, cclog, experimentsandconfigs
                  │
                  ▼

@@ -461,6 +461,49 @@ test('listModels and resolveModel advertise text and image modalities (multimoda
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
 })
 
+test('resolveModel uniformly advertises 1M context window across all Antigravity models (ADR-013)', async () => {
+  const { adapter } = makeAdapter()
+  const gemini = await adapter.resolveModel('antigravity', 'gemini-3.7-flash')
+  assert.equal(gemini.context?.contextWindow, 1_048_576)
+  const claude = await adapter.resolveModel('antigravity', 'claude-sonnet-4-6')
+  assert.equal(claude.context?.contextWindow, 1_048_576)
+  const gpt = await adapter.resolveModel('antigravity', 'gpt-oss-120b-medium')
+  assert.equal(gpt.context?.contextWindow, 1_048_576)
+})
+
+test('compaction detection clears stale binding and re-seeds with digest (ADR-013)', async () => {
+  const { adapter, store } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-compact.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  // Turn 1: 5 messages, creates binding with watermark 5
+  await runTurn(adapter, [
+    msg('user', 'm1'),
+    msg('assistant', 'a1'),
+    msg('user', 'm2'),
+    msg('assistant', 'a2'),
+    msg('user', 'm3'),
+  ], { sessionId: 'sess-compact' as never })
+
+  await waitFor(() => store.get('sess-compact'))
+  assert.equal(store.get('sess-compact')?.lastMessageCount, 5)
+
+  // Turn 2: DSH compacts history down to 2 messages (compacted summary + new user prompt)
+  await runTurn(adapter, [
+    msg('assistant', '[compacted summary of m1-m3]'),
+    msg('user', 'new question after compaction'),
+  ], { sessionId: 'sess-compact' as never })
+
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  // Because messages.length (2) < previous lastMessageCount (5), binding was reset and re-seeded with digest!
+  assert.ok(prompt.includes('[conversation so far]'))
+  assert.ok(prompt.includes('[compacted summary of m1-m3]'))
+  assert.ok(prompt.includes('new question after compaction'))
+  assert.ok(!argv.includes('--conversation') || argv[argv.indexOf('--conversation') + 1] !== 'conv-fresh-1')
+})
+
 test.after(() => {
   rmSync(workDir, { recursive: true, force: true })
 })

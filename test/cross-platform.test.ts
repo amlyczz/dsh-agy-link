@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, isCmdShim, startAgyProcess, windowsQuote } from '../src/host/runner.ts'
+import { binCandidates, isolatedHomeEnv, isCmdShim, startAgyProcess, windowsQuote } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -31,6 +31,19 @@ test('binCandidates are per-platform', () => {
   assert.deepEqual(mac, [join('/opt/homebrew/bin', 'agy')])
 })
 
+test('isolatedHomeEnv always sets HOME + GEMINI_CLI_HOME', () => {
+  const env = isolatedHomeEnv('/tmp/acc1')
+  assert.equal(env.HOME, '/tmp/acc1')
+  assert.equal(env.GEMINI_CLI_HOME, join('/tmp/acc1', '.gemini'))
+  if (process.platform === 'win32') {
+    // Windows libuv/Go ignore $HOME — USERPROFILE/HOMEDRIVE/HOMEPATH required.
+    assert.equal(env.USERPROFILE, '/tmp/acc1')
+    const drive = isolatedHomeEnv('C:\\Users\\acc1')
+    assert.equal(drive.HOMEDRIVE, 'C:')
+    assert.equal(drive.HOMEPATH, '\\Users\\acc1')
+  }
+})
+
 test('isCmdShim detects cmd/bat case-insensitively', () => {
   assert.equal(isCmdShim('C:\\npm\\agy.CMD'), true)
   assert.equal(isCmdShim('C:\\npm\\agy.bat'), true)
@@ -59,8 +72,8 @@ test('runner strips trailing CR from CRLF output', async () => {
 })
 
 test('startAgyProcess activity watchdog refreshes on output chunks', async () => {
-  // timeoutMs is 1500ms, child emits 4 chunks across 1200ms (every 300ms).
-  // A fixed watchdog would kill at 1500ms; sliding activity watchdog refreshes on each chunk.
+  // timeoutMs is 3000ms, child emits 4 chunks across 600ms (every 150ms).
+  // A fixed watchdog would kill at 3000ms; sliding activity watchdog refreshes on each chunk.
   const script = `
     const fs = require('node:fs');
     let i = 0;
@@ -68,13 +81,13 @@ test('startAgyProcess activity watchdog refreshes on output chunks', async () =>
     const t = setInterval(() => {
       fs.writeSync(1, Buffer.from('chunk' + (++i) + '\\n'));
       if (i >= 4) clearInterval(t);
-    }, 250);
+    }, 150);
   `
   const lines: string[] = []
   const proc = startAgyProcess({
     bin: process.execPath,
     args: ['-e', script],
-    timeoutMs: 1500,
+    timeoutMs: 3000,
     onLine: (l) => lines.push(l),
   })
   const outcome = await proc.outcome

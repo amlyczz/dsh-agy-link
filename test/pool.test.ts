@@ -99,6 +99,38 @@ test('Sequential Drain: family-scoped rate limit fallback', () => {
   assert.equal(pool.selectAccount('anthropic')?.id, accA.id)
 })
 
+test('Sticky Sequential Drain: stays on current active account until it runs out', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-sticky-'))
+  const pool = new AccountPoolManager(dir)
+  const accA = pool.getAccounts()[0]!
+  const accB = pool.createAccountSlot('Account B')
+  const accC = pool.createAccountSlot('Account C')
+
+  // 1. Initial request picks Account A
+  assert.equal(pool.selectAccount('google')?.id, accA.id)
+
+  // 2. Account A runs out of quota (hits 429) -> failover to Account B
+  pool.recordFailure(accA.id, 'google', '429 Rate Limit')
+  assert.equal(pool.selectAccount('google')?.id, accB.id)
+
+  // 3. User continues chatting with Account B
+  assert.equal(pool.selectAccount('google')?.id, accB.id)
+
+  // 4. Now Account A recovers its quota / cooldown expires!
+  pool.clearCooldown(accA.id, 'google')
+
+  // 5. CRITICAL: Account B is still healthy and in-use, so it MUST stay on Account B!
+  assert.equal(pool.selectAccount('google')?.id, accB.id)
+
+  // 6. Only when Account B runs out of quota does it move to Account C
+  pool.recordFailure(accB.id, 'google', '429 Rate Limit')
+  assert.equal(pool.selectAccount('google')?.id, accC.id)
+
+  // 7. When Account C also runs out, and A is recovered, it wraps back to Account A
+  pool.recordFailure(accC.id, 'google', '429 Rate Limit')
+  assert.equal(pool.selectAccount('google')?.id, accA.id)
+})
+
 test('Corrupt pool.json recovers gracefully', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-corrupt-'))
   writeFileSync(join(dir, 'pool.json'), '{ broken json', 'utf8')
@@ -106,3 +138,4 @@ test('Corrupt pool.json recovers gracefully', () => {
   assert.equal(pool.getAccounts().length, 1)
   assert.equal(pool.getAccounts()[0]?.id, 'acc_primary')
 })
+

@@ -14,7 +14,7 @@
 // DSH message list alone — retries and replays stay idempotent with no
 // mutable per-stream state.
 import { randomUUID } from 'node:crypto'
-import type { AgyEvent } from '../common/types.ts'
+import type { AgyEvent, RawUsage } from '../common/types.ts'
 
 /** Terminal failure recorded when the process ended without a usable result. */
 export interface RecordingFailure {
@@ -32,7 +32,16 @@ export class RunRecording {
   private settled = false
   private failure: RecordingFailure | null = null
   private resultConversationId: string | null = null
+  private lastStepUsageRaw: RawUsage | null = null
   private [waiters] = new Set<() => void>()
+
+  /**
+   * Set by the adapter right after spawn. A mid-turn user steer makes DSH
+   * open a NEW stream() call for the same session while this run's process
+   * is still alive; without aborting it, two agy processes would append to
+   * the SAME conversation concurrently.
+   */
+  requestAbort: (() => void) | null = null
 
   constructor(runId: string = randomUUID()) {
     this.runId = runId
@@ -44,6 +53,25 @@ export class RunRecording {
     this.events.push(ev)
     if (ev.kind === 'result') this.resultConversationId = ev.conversationId ?? null
     this.wake()
+  }
+
+  /**
+   * Usage accounting (verified against agy 1.1.16 stream-json): step_update
+   * usage is PER-CALL (the current context size at that internal LLM call),
+   * while the result envelope's usage is CUMULATIVE across the whole agy
+   * conversation. DSH's token meter treats the last reported sample as
+   * current context occupancy, so forwarding the cumulative result makes
+   * pressure explode quadratically and fires compaction within a few turns.
+   * We therefore remember the last per-call step sample and report IT at
+   * result time instead of the cumulative envelope.
+   */
+  noteStepUsage(raw: RawUsage): void {
+    this.lastStepUsageRaw = raw
+  }
+
+  /** The usage to report for the result envelope: last per-call step sample. */
+  finalUsage(resultRaw: RawUsage): RawUsage {
+    return this.lastStepUsageRaw ?? resultRaw
   }
 
   /** Settle the recording: no further events will arrive. */

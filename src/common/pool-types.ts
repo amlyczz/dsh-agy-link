@@ -12,13 +12,28 @@ export function modelFamilyOf(modelId?: string): ModelFamily {
   return 'unknown'
 }
 
-export interface FamilyQuotaInfo {
-  /** Remaining quota fraction: 0.0 (exhausted) to 1.0 (full). */
+export interface ModelQuotaInfo {
+  modelId: string
+  displayName?: string
   remainingFraction?: number
-  /** ISO-8601 timestamp for when the quota window resets (e.g. "2026-08-20T16:00:00Z"). */
   resetTime?: string
+}
+
+export interface FamilyQuotaInfo {
+  /** 5-hour rolling remaining quota fraction: 0.0 (exhausted) to 1.0 (full). */
+  remainingFraction?: number
+  /** ISO-8601 timestamp for when the 5-hour quota window resets. */
+  resetTime?: string
+  /** Weekly remaining quota fraction: 0.0 (exhausted) to 1.0 (full). */
+  weeklyFraction?: number
+  /** ISO-8601 timestamp for when the weekly quota resets. */
+  weeklyResetTime?: string
+  /** Description / tooltip from upstream backend */
+  description?: string
   /** Timestamp when this quota was last updated locally. */
   updatedAt?: number
+  /** Optional model-level breakdown in this family. */
+  models?: ModelQuotaInfo[]
 }
 
 export interface FamilyCooldownState {
@@ -64,6 +79,8 @@ export interface AccountPoolData {
   defaultCooldownMs: number
   maxCooldownMs: number
   primaryAccountId?: string
+  /** Currently active account id per model family for sticky sequential drain */
+  activeAccountIds?: Partial<Record<ModelFamily, string>>
   accounts: ManagedAccount[]
 }
 

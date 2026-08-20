@@ -1,6 +1,6 @@
 // AccountPoolManager: multi-profile credential isolation, family-scoped cooldown,
 // and sticky sequential drain scheduling for Google Antigravity accounts.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import {
@@ -119,6 +119,75 @@ export class AccountPoolManager {
   }
 
   /**
+   * Create an isolated staging directory for an unverified account login attempt.
+   */
+  createStagingSlot(): { id: string; dir: string } {
+    const id = `acc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+    const dir = join(this.baseDir, `staging_${id}`)
+    mkdirSync(join(dir, '.gemini', 'antigravity-cli'), { recursive: true })
+    return { id, dir }
+  }
+
+  /**
+   * Commit a successfully authenticated staging account into the pool.
+   */
+  commitStagingAccount(id: string, dir: string, alias?: string, email?: string, proxyUrl?: string): ManagedAccount {
+    const finalDir = join(this.baseDir, id)
+    try {
+      if (existsSync(dir)) {
+        renameSync(dir, finalDir)
+      }
+    } catch {
+      // If rename fails, keep dir
+    }
+    const count = this.data.accounts.length + 1
+    const newAccount: ManagedAccount = {
+      id,
+      alias: alias || `备用 Google 账号 ${count}`,
+      dir: existsSync(finalDir) ? finalDir : dir,
+      ...(email ? { email } : {}),
+      ...(proxyUrl ? { proxyUrl } : {}),
+      enabled: true,
+      createdAt: Date.now(),
+      cooldowns: {},
+      quotas: {},
+    }
+
+    this.data.accounts.push(newAccount)
+    this.persist()
+    return newAccount
+  }
+
+  cleanupStagingSlot(dir: string): void {
+    try {
+      if (existsSync(dir)) {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    } catch {
+      // Ignore cleanup error
+    }
+  }
+
+  /**
+   * Remove every staging_* directory left behind by interrupted add-account
+   * attempts. Staging dirs are never referenced by committed accounts, so
+   * sweeping them at boot is always safe. Returns the number removed.
+   */
+  sweepStaleStaging(): number {
+    let removed = 0
+    try {
+      for (const entry of readdirSync(this.baseDir)) {
+        if (!entry.startsWith('staging_')) continue
+        rmSync(join(this.baseDir, entry), { recursive: true, force: true })
+        removed++
+      }
+    } catch {
+      // Ignore sweep errors
+    }
+    return removed
+  }
+
+  /**
    * Create a new isolated account slot and prepare its filesystem home.
    */
   createAccountSlot(alias?: string): ManagedAccount {
@@ -158,6 +227,11 @@ export class AccountPoolManager {
     if (this.data.primaryAccountId === id) {
       this.data.primaryAccountId = this.data.accounts[0]?.id
     }
+    if (this.data.activeAccountIds) {
+      for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
+        if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
+      }
+    }
     this.persist()
     return true
   }
@@ -182,6 +256,11 @@ export class AccountPoolManager {
     const acc = this.getAccount(id)
     if (!acc) return false
     acc.enabled = enabled
+    if (!enabled && this.data.activeAccountIds) {
+      for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
+        if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
+      }
+    }
     this.persist()
     return true
   }
@@ -193,6 +272,12 @@ export class AccountPoolManager {
     // Move to front of accounts list
     const [acc] = this.data.accounts.splice(idx, 1)
     if (acc) this.data.accounts.unshift(acc)
+    // Make primary immediately active for all families
+    this.data.activeAccountIds = {
+      google: id,
+      anthropic: id,
+      openai: id,
+    }
     this.persist()
     return true
   }
@@ -292,7 +377,8 @@ export class AccountPoolManager {
 
   /**
    * Core scheduling algorithm: Sticky Sequential Drain.
-   * Returns the first healthy, enabled account for the requested family.
+   * Sticks to the current active account until it runs out of quota/rate-limited,
+   * then smoothly advances to the next available account in cyclic order.
    */
   selectAccount(family: ModelFamily): ManagedAccount | null {
     const now = Date.now()
@@ -300,11 +386,18 @@ export class AccountPoolManager {
       if (!acc.enabled) return false
       const cd = acc.cooldowns[family]
       if (cd && cd.cooldownUntil > now) return false
-      // If quota remaining is 0% and reset time is in future, treat as in cooldown
+      // If 5h quota remaining is <= 2% and reset time is in future, treat as in cooldown
       const quota = acc.quotas[family]
       if (quota && typeof quota.remainingFraction === 'number' && quota.remainingFraction <= 0.02) {
         if (quota.resetTime) {
           const resetMs = Date.parse(quota.resetTime)
+          if (!Number.isNaN(resetMs) && resetMs > now) return false
+        }
+      }
+      // If weekly quota remaining is <= 1% and weekly reset time is in future, treat as in cooldown
+      if (quota && typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= 0.01) {
+        if (quota.weeklyResetTime) {
+          const resetMs = Date.parse(quota.weeklyResetTime)
           if (!Number.isNaN(resetMs) && resetMs > now) return false
         }
       }
@@ -319,8 +412,36 @@ export class AccountPoolManager {
       return sorted[0] ?? null
     }
 
-    // Default 'sequential': Pick the first candidate in priority order
-    return candidates[0] ?? null
+    // Default 'sequential' (Sticky Sequential Drain):
+    // 1. If currently active account for this family is still healthy and has quota, STICK WITH IT!
+    const activeId = this.data.activeAccountIds?.[family]
+    if (activeId) {
+      const activeCandidate = candidates.find((a) => a.id === activeId)
+      if (activeCandidate) {
+        return activeCandidate
+      }
+    }
+
+    // 2. Active account is drained or unavailable -> advance to next healthy candidate in cyclic order
+    let nextAccount: ManagedAccount = candidates[0]!
+    if (activeId) {
+      const currentIndex = this.data.accounts.findIndex((a) => a.id === activeId)
+      if (currentIndex !== -1) {
+        const total = this.data.accounts.length
+        for (let i = 1; i < total; i++) {
+          const checkAcc = this.data.accounts[(currentIndex + i) % total]!
+          if (candidates.some((c) => c.id === checkAcc.id)) {
+            nextAccount = checkAcc
+            break
+          }
+        }
+      }
+    }
+
+    if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
+    this.data.activeAccountIds[family] = nextAccount.id
+    this.persist()
+    return nextAccount
   }
 
   /**

@@ -29,6 +29,30 @@ export function windowsQuote(arg: string): string {
   return escaped
 }
 
+/**
+ * Environment that relocates the agy home directory for account isolation.
+ * On Unix, HOME suffices. On Windows, libuv (Node) and Go both resolve the
+ * home directory from USERPROFILE / HOMEDRIVE+HOMEPATH and IGNORE $HOME, so
+ * omitting them silently breaks account isolation (every account would share
+ * the real user profile). GEMINI_CLI_HOME is honored by the agy CLI on all
+ * platforms for its .gemini dir.
+ */
+export function isolatedHomeEnv(dir: string): Record<string, string> {
+  const env: Record<string, string> = {
+    HOME: dir,
+    GEMINI_CLI_HOME: join(dir, '.gemini'),
+  }
+  if (IS_WIN) {
+    env.USERPROFILE = dir
+    const m = dir.match(/^([A-Za-z]:)(.*)$/)
+    if (m) {
+      env.HOMEDRIVE = m[1] as string
+      env.HOMEPATH = m[2] as string
+    }
+  }
+  return env
+}
+
 export const MIN_AGY_VERSION = '1.1.8'
 
 export function resolveAgyBin(cfg: PluginConfig): string | null {

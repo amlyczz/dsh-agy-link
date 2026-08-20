@@ -16,7 +16,7 @@ import { parseMirrorCallId, type RunRecording, type RunRegistry } from './record
 import { defaultEffortFor, findEntry, ModelCatalog, resolveModelSlug } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
-import { startAgyProcess } from './runner.ts'
+import { isolatedHomeEnv, startAgyProcess } from './runner.ts'
 import { stateDir } from '../common/config.ts'
 import type { SessionStore } from './sessions.ts'
 
@@ -126,8 +126,18 @@ function sawAuthFailure(parser: StreamJsonParser, outcome: { stderrTail: string;
 }
 
 export class AgyAdapter extends LlmAdapter {
+  private readonly warnedKeys = new Set<string>()
+  /** sessionKey -> in-flight run, for steer-time preemption. */
+  private readonly activeRuns = new Map<string, RunRecording>()
+
   constructor(private readonly deps: AgyAdapterDeps) {
     super()
+  }
+
+  private warnOnce(key: string, msg: string): void {
+    if (this.warnedKeys.has(key)) return
+    this.warnedKeys.add(key)
+    this.deps.log?.('WARNING: ' + msg)
   }
 
   /**
@@ -165,10 +175,7 @@ export class AgyAdapter extends LlmAdapter {
     const cat = this.deps.catalog.get()
     const entry = findEntry(cat, model)
     const name = entry ? entry.name : model
-    const mLower = model.toLowerCase()
-    const isClaude = mLower.startsWith('claude')
-    const isGpt = mLower.startsWith('gpt')
-    const contextWindow = isClaude ? 200_000 : isGpt ? 128_000 : cfg.contextWindowDefault
+    const contextWindow = cfg.contextWindowDefault
     const resolved: LlmResolvedModelInfo = {
       provider: PROVIDER_ID,
       id: model,
@@ -223,7 +230,24 @@ export class AgyAdapter extends LlmAdapter {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
     const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
-    const workspaceRoot = cfg.workspaceRoot !== '' ? cfg.workspaceRoot : this.deps.sessionCwd?.(sessionKey) || process.cwd()
+    // cwd precedence: explicit config > the DSH session's own workspace >
+    // the host process cwd. The last fallback can land agy in an UNRELATED
+    // directory (wherever the DSH server was started) — with permissionMode
+    // 'skip' that is a silent wrong-workspace write path, so log it loudly
+    // once per session instead of failing the turn.
+    let workspaceRoot = cfg.workspaceRoot
+    if (workspaceRoot === '') {
+      const fromSession = sessionKey !== '' ? this.deps.sessionCwd?.(sessionKey) : undefined
+      if (fromSession) {
+        workspaceRoot = fromSession
+      } else {
+        workspaceRoot = process.cwd()
+        this.warnOnce(
+          'cwd:' + (sessionKey || 'anon'),
+          'session workspace unresolved (sessionId=' + (sessionKey || 'none') + ') — running agy in the DSH process cwd: ' + workspaceRoot,
+        )
+      }
+    }
 
     // ---- native tool mirroring: continuation spans (v0.3) ----
     // When the previous span cut on a completed agy tool step, DSH dispatched
@@ -250,6 +274,15 @@ export class AgyAdapter extends LlmAdapter {
       }
       yield* this.driveSpan(rec, continuation.eventIndex + 1, true)
       return
+    }
+    // Mid-turn steer preemption: DSH claims the steered message at the next
+    // step boundary and calls stream() again (a NEW run, not a continuation).
+    // The previous run's agy process is still alive and would keep appending
+    // to the SAME conversation concurrently — abort it first. Auxiliary calls
+    // (compaction/title) neither preempt nor get tracked.
+    if (!isAux && sessionKey !== '') {
+      const prev = this.activeRuns.get(sessionKey)
+      if (prev !== undefined && !prev.isSettled) prev.requestAbort?.()
     }
     const catalog = this.deps.catalog.get()
     const rawModel = options.model
@@ -296,7 +329,16 @@ export class AgyAdapter extends LlmAdapter {
     }
 
     const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
-    const binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
+    let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
+
+    // Compaction detection (ADR-013): If DSH compacted history or cleared earlier turns,
+    // messages.length drops below the recorded watermark. Invalidate the stale agy
+    // conversation binding so a clean agy session is started and seeded with the compacted summary.
+    if (!isAux && binding !== undefined && messages.length < binding.lastMessageCount) {
+      if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
+      binding = undefined
+    }
+
     let prompt = ''
     if (isAux && options.purpose === 'compaction') {
       const cap = cfg.compactionMaxChars > 0 ? cfg.compactionMaxChars : 800_000
@@ -395,22 +437,20 @@ export class AgyAdapter extends LlmAdapter {
     // account rides the real system HOME (agy 1.1.15 keeps credentials in
     // the macOS Keychain); injecting HOME there signs agy out ("Please
     // sign in") and every turn fails with an auth error.
-    const env =
-      account && account.dir
+    const env = {
+      ...process.env,
+      ...(account && account.dir ? isolatedHomeEnv(account.dir) : {}),
+      ...(account?.proxyUrl
         ? {
-            ...process.env,
-            HOME: account.dir,
-            GEMINI_CLI_HOME: join(account.dir, '.gemini'),
-            ...(account.proxyUrl ? {
-              ALL_PROXY: account.proxyUrl,
-              HTTPS_PROXY: account.proxyUrl,
-              HTTP_PROXY: account.proxyUrl,
-              all_proxy: account.proxyUrl,
-              https_proxy: account.proxyUrl,
-              http_proxy: account.proxyUrl,
-            } : {}),
+            ALL_PROXY: account.proxyUrl,
+            HTTPS_PROXY: account.proxyUrl,
+            HTTP_PROXY: account.proxyUrl,
+            all_proxy: account.proxyUrl,
+            https_proxy: account.proxyUrl,
+            http_proxy: account.proxyUrl,
           }
-        : process.env
+        : {}),
+    }
 
     let proc: ReturnType<typeof startAgyProcess>
     try {
@@ -429,6 +469,10 @@ export class AgyAdapter extends LlmAdapter {
         }
       },
       })
+      if (!isAux && sessionKey !== '') {
+        rec.requestAbort = () => proc.kill('abort')
+        this.activeRuns.set(sessionKey, rec)
+      }
     } catch (e) {
       releaseOnce()
       throw new LlmError('failed to spawn agy: ' + brief(String(e)), Err.PROCESS_EXIT)
@@ -437,6 +481,7 @@ export class AgyAdapter extends LlmAdapter {
     void (async () => {
       const outcome = await proc.outcome
       releaseOnce()
+      if (this.activeRuns.get(sessionKey) === rec) this.activeRuns.delete(sessionKey)
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
         rec.append(ev)
@@ -524,6 +569,7 @@ export class AgyAdapter extends LlmAdapter {
         runId: rec.runId,
         cutOnTool,
         initialSawText: rec.sawTextBefore(from),
+        usage: rec,
       })
       let i = from
       try {

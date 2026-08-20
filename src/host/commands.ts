@@ -7,6 +7,7 @@ import type { AuthHelper } from './auth.ts'
 import type { ModelCatalog } from './models.ts'
 import type { SessionStore } from './sessions.ts'
 import type { AccountPoolManager } from './pool.ts'
+import type { PoolAuthFlow } from './pool-auth.ts'
 import type { QuotaService } from './quota.ts'
 
 export interface CommandDeps {
@@ -17,6 +18,7 @@ export interface CommandDeps {
   catalog: () => ModelCatalog
   store: () => SessionStore
   pool?: () => AccountPoolManager
+  poolAuth?: () => PoolAuthFlow
   quota?: () => QuotaService
   lastRun: () => { ok: boolean; code: string; durationMs: number; model: string } | null
   setOverride: (key: string, value: unknown) => void
@@ -31,8 +33,8 @@ const HELP = [
   '- `/agy refresh-quota` — query Google backend for fresh quota %',
   '- `/agy clear-cooldown` — reset cooldown timers across all accounts',
   '- `/agy remove-account <id>` — delete an account slot',
-  '- `/agy auth` — start Google login (returns the consent URL)',
-  '- `/agy auth-code <code>` — paste the authorization code',
+  '- `/agy auth` — Google login for the primary account (opens the browser)',
+  '- `/agy auth-code <code>` — finish login by pasting the code (fallback)',
   '- `/agy models` — refresh and list discovered models',
   '- `/agy mode <skip|plan|accept-edits>` — permission mode (next turn)',
   '- `/agy effort <low|medium|high|default>` — default reasoning effort',
@@ -119,29 +121,30 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
     }
 
     if (sub === 'auth') {
-      const auth = deps.auth()
-      if (!auth) return err('agy binary not found — install the CLI first')
-      const st = await auth.begin()
-      if (st.phase === 'pending' && st.url) {
+      const flow = deps.poolAuth?.()
+      if (!flow) return err('auth flow not available')
+      const st = await flow.beginPrimary()
+      if (st.ok && st.url) {
         return ok([
-          '**Google login required** — open the URL, approve access, then bring the authorization code back:',
+          st.browserOpened
+            ? '**浏览器已打开 Google 授权页** — 批准访问后自动完成登录。'
+            : '**请手动打开下面的 URL 完成 Google 授权：**',
           '',
           st.url,
           '',
-          'Then run: `/agy auth-code <authorization code>`',
-          'The GUI panel offers the same flow with a QR code and a paste box.',
+          '备用：授权完成后运行 `/agy auth-code <授权码或完整回调URL>`。',
         ].join('\n'))
       }
-      return ok('Auth probe: ' + (st.message ?? st.phase))
+      return err(st.message ?? 'failed to start the login flow')
     }
     if (sub === 'auth-code') {
-      if (arg === '') return err('usage: /agy auth-code <code>')
-      const auth = deps.auth()
-      if (!auth) return err('agy binary not found')
-      const st = await auth.submitCode(arg)
-      if (st.phase === 'ok') {
+      if (arg === '') return err('usage: /agy auth-code <code-or-callback-url>')
+      const flow = deps.poolAuth?.()
+      if (!flow) return err('auth flow not available')
+      const st = await flow.submitCode(arg)
+      if (st.ok) {
         deps.store().clear()
-        return ok('Logged in to Antigravity. Session bindings refreshed.')
+        return ok(st.message ?? 'Logged in to Antigravity.')
       }
       return err(st.message ?? 'login failed')
     }

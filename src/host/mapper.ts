@@ -48,6 +48,15 @@ export interface EventMapperOptions {
   cutOnTool: boolean
   /** Whether an earlier span of this run already streamed assistant text. */
   initialSawText?: boolean
+  /**
+   * Shared per-run usage tracker (lives on the recording, spans share it).
+   * Step usage is per-call (current context); the result envelope is
+   * conversation-cumulative and must never reach DSH's token meter.
+   */
+  usage?: {
+    noteStepUsage(raw: RawUsage): void
+    finalUsage(resultRaw: RawUsage): RawUsage
+  }
 }
 
 export class EventMapper {
@@ -116,6 +125,7 @@ export class EventMapper {
     if (ev.kind === 'init') return
     if (ev.kind === 'garbage') return
     if (ev.kind === 'step') {
+      if (ev.usage) this.opts.usage?.noteStepUsage(ev.usage)
       if (ev.stepKind === 'text') {
         // agy ≥1.1.15 thinking turns: agent_response steps with usage but no
         // text_delta. The thoughts themselves are not streamed in print mode,
@@ -245,7 +255,7 @@ export class EventMapper {
       }
       const closeErr = this.closeOpen()
       if (closeErr) yield closeErr
-      yield { type: 'usage', usage: usageFromRaw(ev.usage) }
+      yield { type: 'usage', usage: usageFromRaw(this.opts.usage?.finalUsage(ev.usage) ?? ev.usage) }
       yield {
         type: 'finish',
         reason: { kind: 'stop' },
@@ -261,7 +271,7 @@ export class EventMapper {
     }
     const close = this.closeOpen()
     if (close) yield close
-    yield { type: 'usage', usage: usageFromRaw(ev.usage) }
+    yield { type: 'usage', usage: usageFromRaw(this.opts.usage?.finalUsage(ev.usage) ?? ev.usage) }
     yield {
       type: 'finish',
       reason: { kind: 'stop' },

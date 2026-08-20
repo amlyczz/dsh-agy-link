@@ -73,6 +73,55 @@ test('ok run without tools emits ordered protocol: blocks, usage, finish last', 
   assert.equal(m.isFinished, true)
 })
 
+test('result usage reports the last PER-CALL step sample, never the cumulative envelope', () => {
+  // Verified against agy 1.1.16: step_update usage is per-call (current
+  // context), result usage is conversation-cumulative. Forwarding the
+  // envelope made DSH's token meter see 76M tokens against a 1M window and
+  // fire compaction every few turns.
+  const tracker = {
+    last: null as import('../src/common/types.ts').RawUsage | null,
+    noteStepUsage(raw: import('../src/common/types.ts').RawUsage) {
+      this.last = raw
+    },
+    finalUsage(resultRaw: import('../src/common/types.ts').RawUsage) {
+      return this.last ?? resultRaw
+    },
+  }
+  const m = new EventMapper({ runId: 'ru1', cutOnTool: true, usage: tracker })
+  const chunks = mapAll(m, [
+    { kind: 'init', conversationId: 'c1' },
+    { kind: 'step', stepKey: '1', stepKind: 'text', text: 'part one', usage: { input_tokens: 15_000, output_tokens: 100 } },
+    { kind: 'step', stepKey: '2', stepKind: 'text', text: 'part two', usage: { input_tokens: 16_800, output_tokens: 160 } },
+    { kind: 'result', conversationId: 'c1', ok: true, response: 'part one part two', usage: { input_tokens: 31_800, output_tokens: 260 } },
+  ])
+  const usageChunks = chunks.filter((c) => c.type === 'usage')
+  const finalUsage = asUsage(usageChunks[usageChunks.length - 1] as StreamChunk)
+  // last per-call step sample (16.8k), NOT the cumulative 31.8k
+  assert.equal(finalUsage.usage.inputTokens, 16_800)
+  assert.equal(finalUsage.usage.outputTokens, 160)
+})
+
+test('result usage falls back to the envelope when no step carried usage', () => {
+  const tracker = {
+    last: null as import('../src/common/types.ts').RawUsage | null,
+    noteStepUsage(raw: import('../src/common/types.ts').RawUsage) {
+      this.last = raw
+    },
+    finalUsage(resultRaw: import('../src/common/types.ts').RawUsage) {
+      return this.last ?? resultRaw
+    },
+  }
+  const m = new EventMapper({ runId: 'ru2', cutOnTool: true, usage: tracker })
+  const chunks = mapAll(m, [
+    { kind: 'init', conversationId: 'c1' },
+    { kind: 'step', stepKey: '1', stepKind: 'text', text: 'hi' },
+    { kind: 'result', conversationId: 'c1', ok: true, response: 'hi', usage: { input_tokens: 14_726, output_tokens: 166 } },
+  ])
+  const usageChunks = chunks.filter((c) => c.type === 'usage')
+  const finalUsage = asUsage(usageChunks[usageChunks.length - 1] as StreamChunk)
+  assert.equal(finalUsage.usage.inputTokens, 14_726)
+})
+
 test('snapshot-style repeated steps stream as suffix deltas', () => {
   const m = newSpan()
   const chunks = mapAll(m, [

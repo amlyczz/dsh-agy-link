@@ -4,7 +4,8 @@
 // the client panel and pipe the code back. We never read, write, copy, or
 // move the OAuth token file itself — the official binary owns credentials.
 import { extractAuthUrl, looksLikeAuthFailure } from '../common/types.ts'
-import { probeProcess, startAgyProcess, type RunningProcess } from './runner.ts'
+import { openBrowser } from './oauth.ts'
+import { isolatedHomeEnv, probeProcess, startAgyProcess, type RunningProcess } from './runner.ts'
 
 export type AuthPhase = 'idle' | 'pending' | 'submitting' | 'ok' | 'failed' | 'signed-out'
 
@@ -89,12 +90,23 @@ export class AuthHelper {
     return st
   }
 
-  private startProbe(homeDir?: string): RunningProcess | null {
+  private startProbe(homeDir?: string, proxyUrl?: string): RunningProcess | null {
     const bin = this.bin();
     if (!bin) return null;
     this.cancel();
     this.capturedUrl = null;
-    const env = homeDir ? { ...process.env, HOME: homeDir } : process.env
+    const env = {
+      ...process.env,
+      ...(homeDir ? isolatedHomeEnv(homeDir) : {}),
+      ...(proxyUrl ? {
+        ALL_PROXY: proxyUrl,
+        HTTPS_PROXY: proxyUrl,
+        HTTP_PROXY: proxyUrl,
+        all_proxy: proxyUrl,
+        https_proxy: proxyUrl,
+        http_proxy: proxyUrl,
+      } : {}),
+    }
     const proc = startAgyProcess({
       bin,
       args: ['-p', 'ping', '--output-format', 'stream-json', '--print-timeout', '4m'],
@@ -129,10 +141,10 @@ export class AuthHelper {
   }
 
   /** Start (or restart) the login flow; resolves with the consent URL. */
-  async begin(homeDir?: string, accountId?: string): Promise<AuthStatus> {
+  async begin(homeDir?: string, accountId?: string, proxyUrl?: string): Promise<AuthStatus> {
     this.activeHomeDir = homeDir || null;
     this.activeAccountId = accountId || null;
-    const proc = this.startProbe(homeDir);
+    const proc = this.startProbe(homeDir, proxyUrl);
     if (!proc) {
       this.state = { phase: 'failed', accountId: this.activeAccountId || undefined, message: 'agy binary not found' };
       return this.status();
@@ -153,6 +165,10 @@ export class AuthHelper {
       this.state = { phase: 'ok', accountId: this.activeAccountId || undefined, startedAt, message: 'no login URL produced — already authenticated?' };
       this.cancel();
       return this.status();
+    }
+    if (url) {
+      // Best-effort auto-open (shared helper: correct per-platform quoting)
+      void openBrowser(url)
     }
     let qrDataUrl: string | undefined
     try {
