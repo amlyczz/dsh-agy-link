@@ -165,12 +165,16 @@ export class AgyAdapter extends LlmAdapter {
     const cat = this.deps.catalog.get()
     const entry = findEntry(cat, model)
     const name = entry ? entry.name : model
+    const mLower = model.toLowerCase()
+    const isClaude = mLower.startsWith('claude')
+    const isGpt = mLower.startsWith('gpt')
+    const contextWindow = isClaude ? 200_000 : isGpt ? 128_000 : cfg.contextWindowDefault
     const resolved: LlmResolvedModelInfo = {
       provider: PROVIDER_ID,
       id: model,
       name,
       inputModalities: ['text', 'image'] as const,
-      context: { contextWindow: cfg.contextWindowDefault },
+      context: { contextWindow },
       defaultMaxTokens: cfg.maxTokensDefault,
     }
     if (entry && entry.efforts) {
@@ -256,7 +260,9 @@ export class AgyAdapter extends LlmAdapter {
     // ids, but validate explicit reasoning efforts against known entries.
     let effort: string | undefined
     if (isGemini) {
-      if (options.reasoningEffort !== undefined) {
+      if (isAux) {
+        effort = 'low'
+      } else if (options.reasoningEffort !== undefined) {
         const wanted = String(options.reasoningEffort)
         if (entry && entry.efforts === null) {
           throw new LlmError('model ' + model + ' has no selectable reasoning efforts', Err.UNSUPPORTED_REASONING_EFFORT)
