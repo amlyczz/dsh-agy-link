@@ -239,6 +239,248 @@ const GLOBAL_CSS = `
 	0% { transform: rotate(0deg); }
 	100% { transform: rotate(360deg); }
 }
+
+:root, body {
+	--agy-font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif);
+	--agy-bg-panel: var(--dsw-alias-bg-layer-2, #ffffff);
+	--agy-bg-card: var(--dsw-alias-bg-layer-2, #ffffff);
+	--agy-bg-card-primary: #f0f7ff;
+	--agy-bg-header: var(--dsw-alias-bg-layer-1, #f8fafc);
+	--agy-bg-box: var(--dsw-alias-bg-layer-1, #f8fafc);
+	--agy-bg-subbox: var(--dsw-alias-bg-layer-3, #f1f5f9);
+	--agy-bg-input: var(--dsw-alias-bg-layer-1, #ffffff);
+	--agy-bg-btn: var(--dsw-alias-bg-layer-3, #f1f5f9);
+	--agy-bg-btn-hover: var(--dsw-alias-interactive-bg-hover, #e2e8f0);
+	--agy-bg-btn-primary: var(--dsw-alias-state-business-primary, #2563eb);
+	--agy-bg-progress-track: #e2e8f0;
+
+	--agy-border-card: var(--dsw-alias-border-l2, #e2e8f0);
+	--agy-border-card-primary: #3b82f6;
+	--agy-border-box: var(--dsw-alias-border-l1, #e2e8f0);
+	--agy-border-subbox: var(--dsw-alias-border-l2, #cbd5e1);
+	--agy-border-input: var(--dsw-alias-border-l2, #cbd5e1);
+	--agy-border-input-focus: var(--dsw-alias-state-business-primary, #2563eb);
+	--agy-border-btn: var(--dsw-alias-border-l2, #cbd5e1);
+	--agy-border-btn-primary: #2563eb;
+	--agy-border-divider: var(--dsw-alias-border-l2, #e2e8f0);
+
+	--agy-text-primary: var(--dsw-alias-label-primary, #0f172a);
+	--agy-text-secondary: var(--dsw-alias-label-secondary, #334155);
+	--agy-text-tertiary: var(--dsw-alias-label-tertiary, #64748b);
+	--agy-text-muted: var(--dsw-alias-label-caption, #94a3b8);
+	--agy-text-btn: var(--dsw-alias-label-primary, #0f172a);
+	--agy-text-btn-primary: #ffffff;
+	--agy-text-window-label: #2563eb;
+
+	--agy-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05);
+	--agy-shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
+	--agy-shadow-card-primary: 0 0 0 1px #3b82f6, 0 4px 14px rgba(37, 99, 235, 0.12);
+	--agy-shadow-modal: 0 20px 50px rgba(0, 0, 0, 0.18);
+	--agy-modal-backdrop: rgba(15, 23, 42, 0.5);
+
+	/* Badges */
+	--agy-badge-primary-bg: #dbeafe;
+	--agy-badge-primary-text: #1e40af;
+	--agy-badge-primary-border: #60a5fa;
+
+	--agy-badge-tag-bg: #f1f5f9;
+	--agy-badge-tag-text: #334155;
+	--agy-badge-tag-border: #cbd5e1;
+
+	--agy-badge-email-bg: #eff6ff;
+	--agy-badge-email-text: #1d4ed8;
+	--agy-badge-email-border: #bfdbfe;
+
+	--agy-badge-proxy-bg: #ecfdf5;
+	--agy-badge-proxy-text: #047857;
+	--agy-badge-proxy-border: #a7f3d0;
+
+	--agy-badge-ready-bg: #ecfdf5;
+	--agy-badge-ready-text: #047857;
+	--agy-badge-ready-border: #a7f3d0;
+
+	--agy-badge-unready-bg: #eff6ff;
+	--agy-badge-unready-text: #1d4ed8;
+	--agy-badge-unready-border: #bfdbfe;
+
+	/* Quota status pills */
+	--agy-quota-high-bg: #ecfdf5;
+	--agy-quota-high-text: #047857;
+	--agy-quota-high-border: #a7f3d0;
+	--agy-quota-med-bg: #fffbeb;
+	--agy-quota-med-text: #b45309;
+	--agy-quota-med-border: #fde68a;
+	--agy-quota-low-bg: #fef2f2;
+	--agy-quota-low-text: #b91c1c;
+	--agy-quota-low-border: #fecaca;
+	--agy-quota-none-bg: #f1f5f9;
+	--agy-quota-none-text: #64748b;
+	--agy-quota-none-border: #cbd5e1;
+
+	/* Danger button */
+	--agy-danger-bg: #fef2f2;
+	--agy-danger-text: #b91c1c;
+	--agy-danger-border: #fecaca;
+	--agy-danger-hover-bg: #fee2e2;
+
+	/* Warning banner */
+	--agy-warn-bg: #fffbeb;
+	--agy-warn-text: #92400e;
+	--agy-warn-border: #fcd34d;
+	--agy-warn-btn-bg: #fef3c7;
+	--agy-warn-btn-text: #92400e;
+	--agy-warn-btn-border: #f59e0b;
+
+	/* Toast notices */
+	--agy-toast-success-bg: #ecfdf5;
+	--agy-toast-success-text: #065f46;
+	--agy-toast-success-border: #6ee7b7;
+	--agy-toast-info-bg: #eff6ff;
+	--agy-toast-info-text: #1e40af;
+	--agy-toast-info-border: #93c5fd;
+	--agy-toast-warn-bg: #fffbeb;
+	--agy-toast-warn-text: #92400e;
+	--agy-toast-warn-border: #fcd34d;
+	--agy-toast-error-bg: #fef2f2;
+	--agy-toast-error-text: #991b1b;
+	--agy-toast-error-border: #fca5a5;
+
+	/* Auth Modal / Box */
+	--agy-auth-box-bg: #f0f7ff;
+	--agy-auth-box-border: #3b82f6;
+
+	/* Segment control */
+	--agy-seg-group-bg: #e2e8f0;
+	--agy-seg-group-border: #cbd5e1;
+	--agy-seg-btn-text: #475569;
+	--agy-seg-btn-active-bg: var(--dsw-alias-state-business-primary, #2563eb);
+	--agy-seg-btn-active-text: #ffffff;
+	--agy-seg-danger-bg: #dc2626;
+	--agy-seg-danger-text: #ffffff;
+	--agy-seg-danger-border: #b91c1c;
+}
+
+body[data-ds-dark-theme],
+body.dark,
+[data-theme="dark"] {
+	--agy-bg-panel: var(--dsw-alias-bg-layer-2, #0f172a);
+	--agy-bg-card: var(--dsw-alias-bg-layer-2, #1e293b);
+	--agy-bg-card-primary: #111d33;
+	--agy-bg-header: var(--dsw-alias-bg-layer-1, #1e293b);
+	--agy-bg-box: var(--dsw-alias-bg-layer-1, #0f172a);
+	--agy-bg-subbox: var(--dsw-alias-bg-layer-3, #090d16);
+	--agy-bg-input: var(--dsw-alias-bg-layer-3, #090d16);
+	--agy-bg-btn: var(--dsw-alias-bg-layer-3, #334155);
+	--agy-bg-btn-hover: var(--dsw-alias-interactive-bg-hover, #475569);
+	--agy-bg-btn-primary: var(--dsw-alias-state-business-primary, #2563eb);
+	--agy-bg-progress-track: #1e293b;
+
+	--agy-border-card: var(--dsw-alias-border-l2, #334155);
+	--agy-border-card-primary: #3b82f6;
+	--agy-border-box: var(--dsw-alias-border-l1, #1e293b);
+	--agy-border-subbox: var(--dsw-alias-border-l2, #334155);
+	--agy-border-input: var(--dsw-alias-border-l2, #334155);
+	--agy-border-input-focus: #3b82f6;
+	--agy-border-btn: var(--dsw-alias-border-l2, #475569);
+	--agy-border-btn-primary: #3b82f6;
+	--agy-border-divider: var(--dsw-alias-border-l2, #334155);
+
+	--agy-text-primary: var(--dsw-alias-label-primary, #f8fafc);
+	--agy-text-secondary: var(--dsw-alias-label-secondary, #cbd5e1);
+	--agy-text-tertiary: var(--dsw-alias-label-tertiary, #94a3b8);
+	--agy-text-muted: var(--dsw-alias-label-caption, #64748b);
+	--agy-text-btn: var(--dsw-alias-label-primary, #ffffff);
+	--agy-text-btn-primary: #ffffff;
+	--agy-text-window-label: #93c5fd;
+
+	--agy-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3);
+	--agy-shadow-card-hover: 0 6px 16px rgba(0, 0, 0, 0.4);
+	--agy-shadow-card-primary: 0 0 16px rgba(59, 130, 246, 0.25);
+	--agy-shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.8);
+	--agy-modal-backdrop: rgba(0, 0, 0, 0.75);
+
+	/* Badges */
+	--agy-badge-primary-bg: #1e3a8a;
+	--agy-badge-primary-text: #93c5fd;
+	--agy-badge-primary-border: #3b82f6;
+
+	--agy-badge-tag-bg: #0f172a;
+	--agy-badge-tag-text: #cbd5e1;
+	--agy-badge-tag-border: #334155;
+
+	--agy-badge-email-bg: #1e293b;
+	--agy-badge-email-text: #93c5fd;
+	--agy-badge-email-border: #3b82f6;
+
+	--agy-badge-proxy-bg: #064e3b;
+	--agy-badge-proxy-text: #6ee7b7;
+	--agy-badge-proxy-border: #059669;
+
+	--agy-badge-ready-bg: rgba(16, 185, 129, 0.15);
+	--agy-badge-ready-text: #34d399;
+	--agy-badge-ready-border: rgba(16, 185, 129, 0.35);
+
+	--agy-badge-unready-bg: rgba(59, 130, 246, 0.15);
+	--agy-badge-unready-text: #93c5fd;
+	--agy-badge-unready-border: rgba(59, 130, 246, 0.35);
+
+	/* Quota status pills */
+	--agy-quota-high-bg: #064e3b;
+	--agy-quota-high-text: #6ee7b7;
+	--agy-quota-high-border: #059669;
+	--agy-quota-med-bg: #451a03;
+	--agy-quota-med-text: #fde68a;
+	--agy-quota-med-border: #d97706;
+	--agy-quota-low-bg: #450a0a;
+	--agy-quota-low-text: #fca5a5;
+	--agy-quota-low-border: #dc2626;
+	--agy-quota-none-bg: #1e293b;
+	--agy-quota-none-text: #94a3b8;
+	--agy-quota-none-border: #475569;
+
+	/* Danger button */
+	--agy-danger-bg: #450a0a;
+	--agy-danger-text: #fca5a5;
+	--agy-danger-border: #ef4444;
+	--agy-danger-hover-bg: #5f1313;
+
+	/* Warning banner */
+	--agy-warn-bg: #451a03;
+	--agy-warn-text: #fde68a;
+	--agy-warn-border: #d97706;
+	--agy-warn-btn-bg: #78350f;
+	--agy-warn-btn-text: #fde68a;
+	--agy-warn-btn-border: #d97706;
+
+	/* Toast notices */
+	--agy-toast-success-bg: #064e3b;
+	--agy-toast-success-text: #6ee7b7;
+	--agy-toast-success-border: #059669;
+	--agy-toast-info-bg: #1e3a8a;
+	--agy-toast-info-text: #93c5fd;
+	--agy-toast-info-border: #3b82f6;
+	--agy-toast-warn-bg: #451a03;
+	--agy-toast-warn-text: #fde68a;
+	--agy-toast-warn-border: #d97706;
+	--agy-toast-error-bg: #450a0a;
+	--agy-toast-error-text: #fca5a5;
+	--agy-toast-error-border: #dc2626;
+
+	/* Auth Modal / Box */
+	--agy-auth-box-bg: #0f223a;
+	--agy-auth-box-border: #3b82f6;
+
+	/* Segment control */
+	--agy-seg-group-bg: #090d16;
+	--agy-seg-group-border: #334155;
+	--agy-seg-btn-text: #94a3b8;
+	--agy-seg-btn-active-bg: var(--dsw-alias-state-business-primary, #2563eb);
+	--agy-seg-btn-active-text: #ffffff;
+	--agy-seg-danger-bg: #7f1d1d;
+	--agy-seg-danger-text: #fca5a5;
+	--agy-seg-danger-border: #ef4444;
+}
+
 .agy-spinner {
 	display: inline-block;
 	width: 12px;
@@ -260,15 +502,15 @@ const GLOBAL_CSS = `
 	transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
 }
 .agy-card-hover:hover {
-	border-color: #475569 !important;
-	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4) !important;
+	border-color: var(--agy-border-card-primary, #3b82f6) !important;
+	box-shadow: var(--agy-shadow-card-hover) !important;
 }
 .agy-btn {
 	transition: all 0.15s ease;
 	user-select: none;
 }
 .agy-btn:hover:not(:disabled) {
-	filter: brightness(1.15);
+	filter: brightness(1.08);
 	transform: translateY(-0.5px);
 }
 .agy-btn:active:not(:disabled) {
@@ -281,7 +523,7 @@ const GLOBAL_CSS = `
 	position: fixed;
 	inset: 0;
 	z-index: 9999;
-	background: rgba(0, 0, 0, 0.75);
+	background: var(--agy-modal-backdrop);
 	backdrop-filter: blur(6px);
 	display: flex;
 	align-items: center;
@@ -294,27 +536,27 @@ const GLOBAL_CSS = `
 	width: 100%;
 	max-width: 640px;
 	max-height: min(820px, calc(100vh - 48px));
-	background: #0f172a;
-	border: 1px solid #334155;
-	border-radius: 12px;
-	box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8);
+	background: var(--agy-bg-panel);
+	border: 1px solid var(--agy-border-card);
+	border-radius: 14px;
+	box-shadow: var(--agy-shadow-modal);
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	color: #f8fafc;
-	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	color: var(--agy-text-primary);
+	font-family: var(--agy-font-family);
 }
 .agy-submodel-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 6px 10px;
+	padding: 7px 10px;
 	font-size: 11.5px;
 	border-radius: 6px;
-	background: #090d16;
-	border: 1px solid #1e293b;
+	background: var(--agy-bg-subbox);
+	border: 1px solid var(--agy-border-box);
 	margin: 4px 0;
-	color: #e2e8f0;
+	color: var(--agy-text-primary);
 }
 `;
 
@@ -322,27 +564,28 @@ const S: Record<string, Record<string, unknown>> = {
 	container: {
 		lineHeight: 1.5,
 		fontSize: '13px',
-		fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-		color: '#f8fafc',
+		fontFamily: 'var(--agy-font-family)',
+		color: 'var(--agy-text-primary)',
 	},
 	headerCard: {
 		display: 'flex',
 		alignItems: 'center',
 		justifyContent: 'space-between',
 		padding: '12px 16px',
-		background: '#1e293b',
-		border: '1px solid #334155',
-		borderRadius: '8px',
+		background: 'var(--agy-bg-header)',
+		border: '1px solid var(--agy-border-card)',
+		borderRadius: '10px',
 		marginBottom: '12px',
-		color: '#ffffff',
+		color: 'var(--agy-text-primary)',
+		boxShadow: 'var(--agy-shadow-card)',
 	},
 	badgePrimary: {
 		display: 'inline-flex',
 		alignItems: 'center',
 		gap: '4px',
-		background: '#1e3a8a',
-		color: '#93c5fd',
-		border: '1px solid #3b82f6',
+		background: 'var(--agy-badge-primary-bg)',
+		color: 'var(--agy-badge-primary-text)',
+		border: '1px solid var(--agy-badge-primary-border)',
 		padding: '2px 8px',
 		borderRadius: '5px',
 		fontSize: '11px',
@@ -352,34 +595,59 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		gap: '4px',
-		background: '#0f172a',
-		color: '#cbd5e1',
-		border: '1px solid #334155',
+		background: 'var(--agy-badge-tag-bg)',
+		color: 'var(--agy-badge-tag-text)',
+		border: '1px solid var(--agy-badge-tag-border)',
 		padding: '2px 7px',
 		borderRadius: '5px',
 		fontSize: '11px',
 		fontWeight: 600,
 	},
+	badgeReady: {
+		display: 'inline-flex',
+		alignItems: 'center',
+		gap: '4px',
+		background: 'var(--agy-badge-ready-bg)',
+		color: 'var(--agy-badge-ready-text)',
+		border: '1px solid var(--agy-badge-ready-border)',
+		padding: '2px 8px',
+		borderRadius: '5px',
+		fontSize: '11px',
+		fontWeight: 700,
+	},
+	badgeUnready: {
+		display: 'inline-flex',
+		alignItems: 'center',
+		gap: '4px',
+		background: 'var(--agy-badge-unready-bg)',
+		color: 'var(--agy-badge-unready-text)',
+		border: '1px solid var(--agy-badge-unready-border)',
+		padding: '2px 8px',
+		borderRadius: '5px',
+		fontSize: '11px',
+		fontWeight: 700,
+	},
 	card: {
-		background: '#1e293b',
-		border: '1px solid #334155',
+		background: 'var(--agy-bg-card)',
+		border: '1px solid var(--agy-border-card)',
 		borderRadius: '10px',
 		padding: '14px 16px',
 		marginBottom: '12px',
-		color: '#ffffff',
+		color: 'var(--agy-text-primary)',
+		boxShadow: 'var(--agy-shadow-card)',
 	},
 	cardPrimary: {
-		background: '#111d33',
-		border: '1.5px solid #3b82f6',
+		background: 'var(--agy-bg-card-primary)',
+		border: '1.5px solid var(--agy-border-card-primary)',
 		borderRadius: '10px',
 		padding: '14px 16px',
 		marginBottom: '12px',
-		boxShadow: '0 0 16px rgba(59, 130, 246, 0.25)',
-		color: '#ffffff',
+		boxShadow: 'var(--agy-shadow-card-primary)',
+		color: 'var(--agy-text-primary)',
 	},
 	quotaBox: {
-		background: '#090d16',
-		border: '1px solid #1e293b',
+		background: 'var(--agy-bg-box)',
+		border: '1px solid var(--agy-border-box)',
 		borderRadius: '8px',
 		padding: '8px 10px',
 		marginTop: '10px',
@@ -388,8 +656,8 @@ const S: Record<string, Record<string, unknown>> = {
 		flex: '1',
 		height: '8px',
 		borderRadius: '4px',
-		background: '#1e293b',
-		border: '1px solid #334155',
+		background: 'var(--agy-bg-progress-track)',
+		border: '1px solid var(--agy-border-box)',
 		overflow: 'hidden',
 		margin: '0 10px',
 	},
@@ -399,9 +667,9 @@ const S: Record<string, Record<string, unknown>> = {
 		justifyContent: 'center',
 		padding: '5px 12px',
 		borderRadius: '6px',
-		border: '1px solid #475569',
-		background: '#334155',
-		color: '#ffffff',
+		border: '1px solid var(--agy-border-btn)',
+		background: 'var(--agy-bg-btn)',
+		color: 'var(--agy-text-btn)',
 		cursor: 'pointer',
 		fontSize: '12px',
 		fontWeight: 600,
@@ -412,9 +680,9 @@ const S: Record<string, Record<string, unknown>> = {
 		justifyContent: 'center',
 		padding: '5px 13px',
 		borderRadius: '6px',
-		border: '1px solid #3b82f6',
-		background: '#2563eb',
-		color: '#ffffff',
+		border: '1px solid var(--agy-border-btn-primary)',
+		background: 'var(--agy-bg-btn-primary)',
+		color: 'var(--agy-text-btn-primary)',
 		cursor: 'pointer',
 		fontSize: '12px',
 		fontWeight: 700,
@@ -426,9 +694,9 @@ const S: Record<string, Record<string, unknown>> = {
 		justifyContent: 'center',
 		padding: '4px 9px',
 		borderRadius: '6px',
-		border: '1px solid #ef4444',
-		background: '#450a0a',
-		color: '#fca5a5',
+		border: '1px solid var(--agy-danger-border)',
+		background: 'var(--agy-danger-bg)',
+		color: 'var(--agy-danger-text)',
 		cursor: 'pointer',
 		fontSize: '11px',
 		fontWeight: 600,
@@ -439,9 +707,9 @@ const S: Record<string, Record<string, unknown>> = {
 		justifyContent: 'center',
 		padding: '4px 9px',
 		borderRadius: '5px',
-		border: '1px solid #475569',
-		background: '#334155',
-		color: '#f8fafc',
+		border: '1px solid var(--agy-border-btn)',
+		background: 'var(--agy-bg-btn)',
+		color: 'var(--agy-text-btn)',
 		cursor: 'pointer',
 		fontSize: '11.5px',
 		fontWeight: 600,
@@ -452,26 +720,26 @@ const S: Record<string, Record<string, unknown>> = {
 		justifyContent: 'center',
 		padding: '4px 9px',
 		borderRadius: '5px',
-		border: '1px solid #60a5fa',
-		background: '#1e40af',
-		color: '#ffffff',
+		border: '1px solid var(--agy-border-btn-primary)',
+		background: 'var(--agy-bg-btn-primary)',
+		color: 'var(--agy-text-btn-primary)',
 		cursor: 'pointer',
 		fontSize: '11.5px',
 		fontWeight: 700,
 	},
 	segGroup: {
 		display: 'inline-flex',
-		background: '#090d16',
-		borderRadius: '6px',
+		background: 'var(--agy-seg-group-bg)',
+		borderRadius: '7px',
 		padding: '3px',
-		border: '1px solid #334155',
+		border: '1px solid var(--agy-seg-group-border)',
 	},
 	segBtn: {
 		padding: '4px 10px',
 		borderRadius: '4px',
 		border: 'none',
 		background: 'transparent',
-		color: '#94a3b8',
+		color: 'var(--agy-seg-btn-text)',
 		cursor: 'pointer',
 		fontSize: '11.5px',
 		fontWeight: 600,
@@ -480,8 +748,8 @@ const S: Record<string, Record<string, unknown>> = {
 		padding: '4px 10px',
 		borderRadius: '4px',
 		border: 'none',
-		background: '#2563eb',
-		color: '#ffffff',
+		background: 'var(--agy-seg-btn-active-bg)',
+		color: 'var(--agy-seg-btn-active-text)',
 		cursor: 'pointer',
 		fontSize: '11.5px',
 		fontWeight: 700,
@@ -491,13 +759,13 @@ const S: Record<string, Record<string, unknown>> = {
 		flex: '1',
 		padding: '7px 12px',
 		borderRadius: '6px',
-		border: '1.5px solid #334155',
-		background: '#090d16',
-		color: '#ffffff',
+		border: '1.5px solid var(--agy-border-input)',
+		background: 'var(--agy-bg-input)',
+		color: 'var(--agy-text-primary)',
 		fontSize: '12.5px',
 		outline: 'none',
 	},
-	muted: { color: '#94a3b8', fontSize: '11.5px' },
+	muted: { color: 'var(--agy-text-tertiary)', fontSize: '11.5px' },
 	noticeBanner: {
 		display: 'flex',
 		alignItems: 'center',
@@ -509,12 +777,12 @@ const S: Record<string, Record<string, unknown>> = {
 		fontWeight: 500,
 	},
 	authModal: {
-		background: '#0f223a',
-		border: '1.5px solid #3b82f6',
+		background: 'var(--agy-auth-box-bg)',
+		border: '1.5px solid var(--agy-auth-box-border)',
 		borderRadius: '10px',
 		padding: '14px 16px',
 		marginBottom: '14px',
-		color: '#ffffff',
+		color: 'var(--agy-text-primary)',
 	},
 };
 
@@ -694,10 +962,10 @@ export function apply(ctx: ClientContext): void {
 		const renderToastBanner = () => {
 			if (!toast) return null;
 			const typeStyles = {
-				success: { background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7' },
-				info: { background: '#1e3a8a', border: '1px solid #3b82f6', color: '#93c5fd' },
-				warn: { background: '#451a03', border: '1px solid #d97706', color: '#fde68a' },
-				error: { background: '#450a0a', border: '1px solid #dc2626', color: '#fca5a5' },
+				success: { background: 'var(--agy-toast-success-bg)', border: '1px solid var(--agy-toast-success-border)', color: 'var(--agy-toast-success-text)' },
+				info: { background: 'var(--agy-toast-info-bg)', border: '1px solid var(--agy-toast-info-border)', color: 'var(--agy-toast-info-text)' },
+				warn: { background: 'var(--agy-toast-warn-bg)', border: '1px solid var(--agy-toast-warn-border)', color: 'var(--agy-toast-warn-text)' },
+				error: { background: 'var(--agy-toast-error-bg)', border: '1px solid var(--agy-toast-error-border)', color: 'var(--agy-toast-error-text)' },
 			};
 			const style = typeStyles[toast.type];
 			return h('div', { style: { ...S.noticeBanner, ...style } },
@@ -730,10 +998,36 @@ export function apply(ctx: ClientContext): void {
 			const wWeekly = formatQuotaWindow(info?.weeklyResetTime);
 
 			const getColors = (pct: number) => {
-				if (pct < 0) return { bar: '#334155', text: '#94a3b8', bg: '#1e293b', border: '#475569' };
-				if (pct <= 20) return { bar: 'linear-gradient(90deg, #dc2626, #ef4444)', text: '#fca5a5', bg: '#450a0a', border: '#dc2626' };
-				if (pct <= 50) return { bar: 'linear-gradient(90deg, #d97706, #f59e0b)', text: '#fde68a', bg: '#451a03', border: '#d97706' };
-				return { bar: 'linear-gradient(90deg, #059669, #10b981)', text: '#6ee7b7', bg: '#064e3b', border: '#059669' };
+				if (pct < 0) {
+					return {
+						bar: 'var(--agy-quota-none-border)',
+						text: 'var(--agy-quota-none-text)',
+						bg: 'var(--agy-quota-none-bg)',
+						border: 'var(--agy-quota-none-border)',
+					};
+				}
+				if (pct <= 20) {
+					return {
+						bar: 'linear-gradient(90deg, #dc2626, #ef4444)',
+						text: 'var(--agy-quota-low-text)',
+						bg: 'var(--agy-quota-low-bg)',
+						border: 'var(--agy-quota-low-border)',
+					};
+				}
+				if (pct <= 50) {
+					return {
+						bar: 'linear-gradient(90deg, #d97706, #f59e0b)',
+						text: 'var(--agy-quota-med-text)',
+						bg: 'var(--agy-quota-med-bg)',
+						border: 'var(--agy-quota-med-border)',
+					};
+				}
+				return {
+					bar: 'linear-gradient(90deg, #059669, #10b981)',
+					text: 'var(--agy-quota-high-text)',
+					bg: 'var(--agy-quota-high-bg)',
+					border: 'var(--agy-quota-high-border)',
+				};
 			};
 
 			const c5h = getColors(pct5h);
@@ -741,7 +1035,7 @@ export function apply(ctx: ClientContext): void {
 
 			const renderLine = (windowName: string, percent: number, c: { bar: string; text: string; bg: string; border: string }, resetStr: string) => {
 				return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '4px 0' } },
-					h('span', { style: { width: '52px', color: '#93c5fd', fontSize: '11px', fontWeight: 700, flexShrink: 0 } }, windowName),
+					h('span', { style: { width: '52px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 700, flexShrink: 0 } }, windowName),
 					h('div', { style: S.progressBarBg },
 						h('div', {
 							className: 'agy-progress-fill',
@@ -766,13 +1060,13 @@ export function apply(ctx: ClientContext): void {
 								lineHeight: 1.2,
 							},
 						}, percent < 0 ? '—' : `${percent}%`),
-						resetStr ? h('span', { style: { color: '#cbd5e1', fontSize: '11px', fontWeight: 500 } }, `↻ ${resetStr}`) : null,
+						resetStr ? h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '11px', fontWeight: 500 } }, `↻ ${resetStr}`) : null,
 					),
 				);
 			};
 
-			return h('div', { style: { margin: '6px 0', padding: '8px 10px', background: '#131d2e', borderRadius: '7px', border: '1px solid #1e293b' } },
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12.5px', marginBottom: '5px', color: '#ffffff' } },
+			return h('div', { style: { margin: '6px 0', padding: '8px 10px', background: 'var(--agy-bg-subbox)', borderRadius: '7px', border: '1px solid var(--agy-border-box)' } },
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12.5px', marginBottom: '5px', color: 'var(--agy-text-primary)' } },
 					brandIcon(FAMILY_BRAND[familyKey], 14),
 					h('span', null, label),
 				),
@@ -806,17 +1100,17 @@ export function apply(ctx: ClientContext): void {
 							className: 'agy-pulse-dot',
 							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}aa` },
 						}),
-						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: '#ffffff' } }, acc.alias),
-						acc.email ? h('span', { style: { ...S.badgeTag, background: '#1e293b', color: '#93c5fd', borderColor: '#3b82f6', gap: '5px' } },
-							uiIcon('mail', 11, '#60a5fa'),
+						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' } }, acc.alias),
+						acc.email ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-email-bg)', color: 'var(--agy-badge-email-text)', borderColor: 'var(--agy-badge-email-border)', gap: '5px' } },
+							uiIcon('mail', 11, 'var(--agy-badge-email-text)'),
 							acc.email,
 						) : null,
 						isPrimary ? h('span', { style: { ...S.badgePrimary, gap: '4px' } },
-							uiIcon('star', 10, '#93c5fd'),
+							uiIcon('star', 10, 'var(--agy-badge-primary-text)'),
 							'主用',
 						) : null,
-						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, background: '#064e3b', color: '#6ee7b7', borderColor: '#059669', gap: '5px' } },
-							uiIcon('globe', 11, '#34d399'),
+						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-proxy-bg)', color: 'var(--agy-badge-proxy-text)', borderColor: 'var(--agy-badge-proxy-border)', gap: '5px' } },
+							uiIcon('globe', 11, 'var(--agy-badge-proxy-text)'),
 							'代理',
 						) : null,
 					),
@@ -848,7 +1142,7 @@ export function apply(ctx: ClientContext): void {
 							title: '移除此账号',
 							disabled: isBusy,
 							onClick: () => void removeAccount(acc.id, acc.alias),
-						}, loadingAction === `remove:${acc.id}` ? renderSpinner() : uiIcon('trash', 12, '#ef4444')) : null,
+						}, loadingAction === `remove:${acc.id}` ? renderSpinner() : uiIcon('trash', 12, 'var(--agy-danger-text)')) : null,
 					),
 				),
 				h('div', { style: S.quotaBox },
@@ -859,20 +1153,20 @@ export function apply(ctx: ClientContext): void {
 						style: {
 							marginTop: '8px',
 							paddingTop: '8px',
-							borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+							borderTop: '1px solid var(--agy-border-box)',
 						},
 					},
-						h('div', { style: { color: 'var(--dsw-alias-text-secondary, #94a3b8)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, '单模型明细:'),
+						h('div', { style: { color: 'var(--agy-text-secondary)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, '单模型明细:'),
 						allChildModels.map(({ family, model }) => {
 							const frac = model.remainingFraction ?? 1;
 							const pct = Math.round(frac * 100);
 							const w = formatQuotaWindow(model.resetTime);
-							const pColor = pct <= 20 ? '#f87171' : pct <= 50 ? '#fbbf24' : '#34d399';
+							const pColor = pct <= 20 ? 'var(--agy-quota-low-text)' : pct <= 50 ? 'var(--agy-quota-med-text)' : 'var(--agy-quota-high-text)';
 							return h('div', { key: model.modelId, className: 'agy-submodel-row' },
-								h('span', { style: { fontWeight: 500, color: 'var(--dsw-alias-text-primary, #e2e8f0)' } }, `[${family}] ${model.displayName || model.modelId}`),
+								h('span', { style: { fontWeight: 500, color: 'var(--agy-text-primary)' } }, `[${family}] ${model.displayName || model.modelId}`),
 								h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 									h('span', { style: { color: pColor, fontWeight: 700 } }, `${pct}%`),
-									w.resetText ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #cbd5e1)', fontSize: '10.5px' } }, `↻ ${w.resetText}`) : null,
+									w.resetText ? h('span', { style: { color: 'var(--agy-text-tertiary)', fontSize: '10.5px' } }, `↻ ${w.resetText}`) : null,
 								),
 							);
 						}),
@@ -880,11 +1174,11 @@ export function apply(ctx: ClientContext): void {
 				),
 				hasCooldown ? h('div', {
 					style: {
-						background: '#451a03',
-						border: '1px solid #d97706',
+						background: 'var(--agy-warn-bg)',
+						border: '1px solid var(--agy-warn-border)',
 						borderRadius: '7px',
 						padding: '6px 10px',
-						color: '#fde68a',
+						color: 'var(--agy-warn-text)',
 						fontSize: '11.5px',
 						fontWeight: 600,
 						marginTop: '8px',
@@ -894,24 +1188,24 @@ export function apply(ctx: ClientContext): void {
 					},
 				},
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-						uiIcon('alert', 13, '#fde68a'),
+						uiIcon('alert', 13, 'var(--agy-warn-text)'),
 						h('span', null, '部分模型限流中，已自动切换账号'),
 					),
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
-						style: { ...S.btnSm, color: '#fde68a', borderColor: '#d97706', background: '#78350f', gap: '4px' },
+						style: { ...S.btnSm, color: 'var(--agy-warn-btn-text)', borderColor: 'var(--agy-warn-btn-border)', background: 'var(--agy-warn-btn-bg)', gap: '4px' },
 						disabled: isBusy,
 						onClick: () => void clearCooldown(acc.id),
-					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, '#fde68a'), ' 清除冷却']),
+					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, 'var(--agy-warn-btn-text)'), ' 清除冷却']),
 				) : null,
 				isEditingProxy ? h('div', {
 					style: {
 						marginTop: '8px',
 						padding: '10px 12px',
-						background: '#090d16',
+						background: 'var(--agy-bg-subbox)',
 						borderRadius: '7px',
-						border: '1px solid #334155',
+						border: '1px solid var(--agy-border-subbox)',
 					},
 				},
 					h('div', { style: { display: 'flex', gap: '8px' } },
@@ -945,8 +1239,8 @@ export function apply(ctx: ClientContext): void {
 
 		const addAccountSection = addingAccount
 			? h('div', { style: S.authModal },
-				h('div', { style: { fontWeight: 600, fontSize: '13px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' } },
-					uiIcon('plus', 13, '#3b82f6'),
+				h('div', { style: { fontWeight: 700, fontSize: '13.5px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--agy-text-primary)' } },
+					uiIcon('plus', 13, 'var(--agy-btn-primary-bg)'),
 					'添加 Google 账号',
 				),
 				!flowActive
@@ -964,7 +1258,7 @@ export function apply(ctx: ClientContext): void {
 								style: { ...S.btnPrimary, gap: '4px' },
 								disabled: isBusy,
 								onClick: () => void handleBeginAddAccount(),
-							}, loadingAction === 'pool:beginAdd' ? [renderSpinner(), '正在打开浏览器...'] : [uiIcon('externalLink', 12, '#3b82f6'), ' 打开浏览器登录']),
+							}, loadingAction === 'pool:beginAdd' ? [renderSpinner(), '正在打开浏览器...'] : [uiIcon('externalLink', 12, '#ffffff'), ' 打开浏览器登录']),
 							h('button', {
 								type: 'button',
 								className: 'agy-btn',
@@ -973,11 +1267,11 @@ export function apply(ctx: ClientContext): void {
 							}, '取消'),
 						),
 						flowPhase === 'failed' && poolAuth?.message ? h('div', {
-							style: { ...S.muted, color: '#ef4444', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px' },
-						}, uiIcon('alert', 12, '#ef4444'), poolAuth.message) : null,
+							style: { ...S.muted, color: 'var(--agy-danger-text)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 },
+						}, uiIcon('alert', 12, 'var(--agy-danger-text)'), poolAuth.message) : null,
 					)
 					: h('div', null,
-						h('div', { style: { display: 'flex', alignItems: 'center', ...S.muted, marginBottom: '8px', lineHeight: 1.5 } },
+						h('div', { style: { display: 'flex', alignItems: 'center', color: 'var(--agy-text-secondary)', marginBottom: '8px', lineHeight: 1.5, fontSize: '12px' } },
 							renderSpinner(),
 							flowPhase === 'exchanging'
 								? '正在验证授权并激活账号，请稍候...'
@@ -987,10 +1281,10 @@ export function apply(ctx: ClientContext): void {
 							h('a', {
 								href: poolAuth.url,
 								target: '_blank',
-								style: { color: '#3b82f6', textDecoration: 'none', fontSize: '12px', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '4px' },
-							}, uiIcon('externalLink', 12, '#3b82f6'), '若浏览器未打开，请点击此处手动打开 Google 登录页'),
+								style: { color: 'var(--dsw-alias-state-business-primary, #2563eb)', textDecoration: 'underline', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' },
+							}, uiIcon('externalLink', 12, 'currentColor'), '若浏览器未打开，请点击此处手动打开 Google 登录页'),
 						) : null,
-						h('div', { style: { ...S.muted, marginBottom: '6px', fontSize: '10px' } },
+						h('div', { style: { color: 'var(--agy-text-tertiary)', marginBottom: '6px', fontSize: '11px', fontWeight: 500 } },
 							'未完成自动回调时，可粘贴授权码或回调 URL：',
 						),
 						h('div', { style: { display: 'flex', gap: '8px' } },
@@ -1006,7 +1300,7 @@ export function apply(ctx: ClientContext): void {
 								style: { ...S.btnPrimary, gap: '4px' },
 								disabled: isBusy || !authCodeInput.trim(),
 								onClick: () => void handleCompleteAddAccount(),
-							}, loadingAction === 'pool:completeAdd' ? [renderSpinner(), '验证激活中...'] : [uiIcon('check', 12, '#3b82f6'), ' 手动激活']),
+							}, loadingAction === 'pool:completeAdd' ? [renderSpinner(), '验证激活中...'] : [uiIcon('check', 12, '#ffffff'), ' 手动激活']),
 							h('button', {
 								type: 'button',
 								className: 'agy-btn',
@@ -1030,8 +1324,8 @@ export function apply(ctx: ClientContext): void {
 			h('div', { style: S.headerCard },
 				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 					agyIcon(16),
-					h('span', { style: { fontWeight: 700, fontSize: '14px' } }, 'Antigravity'),
-					h('span', { style: isAuthed ? { ...S.badgePrimary, color: '#10b981', background: 'rgba(16,185,129,0.12)', borderColor: 'rgba(16,185,129,0.3)' } : S.badgePrimary }, isAuthed ? '就绪' : '待认证'),
+					h('span', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--agy-text-primary)' } }, 'Antigravity'),
+					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? '就绪' : '待认证'),
 				),
 				h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
 					!addingAccount ? h('button', {
@@ -1039,23 +1333,23 @@ export function apply(ctx: ClientContext): void {
 						className: 'agy-btn',
 						style: { ...S.btnPrimary, gap: '4px' },
 						onClick: () => setAddingAccount(true),
-					}, [uiIcon('plus', 12, '#3b82f6'), ' 添加账号']) : null,
+					}, [uiIcon('plus', 12, '#ffffff'), ' 添加账号']) : null,
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
 						style: { ...S.btn, gap: '4px' },
 						disabled: isBusy,
 						onClick: () => void refreshQuota(),
-					}, loadingAction === 'refresh:all' ? [renderSpinner(), '刷新中'] : [uiIcon('refresh', 12), ' 刷新额度']),
+					}, loadingAction === 'refresh:all' ? [renderSpinner(), '刷新中'] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ' 刷新额度']),
 				),
 			),
 			renderToastBanner(),
 			addAccountSection,
 			renderedAccountCards,
-			h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #334155' } },
+			h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--agy-border-divider)' } },
 				h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { ...S.muted, color: '#cbd5e1', fontWeight: 600 } }, '权限模式:'),
+						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, '权限模式:'),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
@@ -1069,13 +1363,13 @@ export function apply(ctx: ClientContext): void {
 							}, 'accept-edits (改代码)'),
 							h('button', {
 								type: 'button',
-								style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: '#fca5a5', background: '#7f1d1d', border: '1px solid #ef4444' } : S.segBtn,
+								style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: 'var(--agy-seg-danger-text)', background: 'var(--agy-seg-danger-bg)', border: '1px solid var(--agy-seg-danger-border)' } : S.segBtn,
 								onClick: () => void setCfg('permissionMode', 'skip'),
 							}, 'skip (全自动免确认)'),
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { ...S.muted, color: '#cbd5e1', fontWeight: 600 } }, '思考强度:'),
+						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, '思考强度:'),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
@@ -1100,7 +1394,7 @@ export function apply(ctx: ClientContext): void {
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { ...S.muted, color: '#cbd5e1', fontWeight: 600 } }, '号池调度:'),
+						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, '号池调度:'),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
@@ -1157,22 +1451,22 @@ export function apply(ctx: ClientContext): void {
 						alignItems: 'center',
 						justifyContent: 'space-between',
 						padding: '14px 18px',
-						borderBottom: '1px solid #334155',
-						background: '#1e293b',
-						color: '#ffffff',
+						borderBottom: '1px solid var(--agy-border-card)',
+						background: 'var(--agy-bg-header)',
+						color: 'var(--agy-text-primary)',
 					},
 				},
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 						agyIcon(18),
-						h('strong', { style: { fontSize: '14.5px', fontWeight: 700 } }, 'Antigravity 管理控制台'),
+						h('strong', { style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--agy-text-primary)' } }, 'Antigravity 管理控制台'),
 					),
 					h('button', {
 						type: 'button',
 						title: '关闭 (Esc)',
 						style: {
-							background: '#334155',
-							border: '1px solid #475569',
-							color: '#f8fafc',
+							background: 'var(--agy-bg-btn)',
+							border: '1px solid var(--agy-border-btn)',
+							color: 'var(--agy-text-btn)',
 							cursor: 'pointer',
 							padding: '4px 8px',
 							borderRadius: '6px',
@@ -1180,9 +1474,9 @@ export function apply(ctx: ClientContext): void {
 							alignItems: 'center',
 						},
 						onClick: () => agyModalStore.setOpen(false),
-					}, uiIcon('x', 14, '#f8fafc')),
+					}, uiIcon('x', 14, 'var(--agy-text-btn)')),
 				),
-				h('div', { style: { overflowY: 'auto', padding: '18px', flex: '1', background: '#0f172a' } },
+				h('div', { style: { overflowY: 'auto', padding: '18px', flex: '1', background: 'var(--agy-bg-panel)' } },
 					h(AgySettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
 				),
 			),
@@ -1225,19 +1519,19 @@ export function apply(ctx: ClientContext): void {
 				className: 'agy-btn',
 				onClick: () => agyModalStore.setOpen(true),
 				style: {
-					background: '#1e293b',
-					border: '1px solid #334155',
+					background: 'var(--agy-bg-header)',
+					border: '1px solid var(--agy-border-card)',
 					borderRadius: '999px',
 					cursor: 'pointer',
 					padding: '3px 10px',
 					fontSize: '11.5px',
 					fontWeight: 600,
 					lineHeight: 1.5,
-					color: '#f8fafc',
+					color: 'var(--agy-text-primary)',
 					display: 'inline-flex',
 					alignItems: 'center',
 					gap: '6px',
-					boxShadow: '0 1px 3px rgba(0, 0, 0, 0.3)',
+					boxShadow: 'var(--agy-shadow-card)',
 				},
 			},
 			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color } }),
@@ -1277,4 +1571,3 @@ export function apply(ctx: ClientContext): void {
 		return dispose;
 	});
 }
-
