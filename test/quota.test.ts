@@ -9,7 +9,9 @@ import { QuotaService } from '../src/host/quota.ts'
 test('QuotaService parses stored tokens and saves token refresh updates', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-quota-test-'))
   const pool = new AccountPoolManager(dir)
-  const acc = pool.getAccounts()[0]!
+  // Primary rides the system HOME (Keychain); token files only exist for
+  // isolated secondary accounts — exercise those.
+  const acc = pool.createAccountSlot('quota-test')
 
   const tokenDir = join(acc.dir, '.gemini', 'antigravity-cli')
   mkdirSync(tokenDir, { recursive: true })

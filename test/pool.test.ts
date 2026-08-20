@@ -27,6 +27,10 @@ test('AccountPoolManager bootstraps and manages isolated account slots', () => {
   const accounts = pool.getAccounts()
   assert.equal(accounts.length, 1)
   assert.equal(accounts[0]?.id, 'acc_primary')
+  // Primary rides the real system HOME: no isolated dir, Keychain keeps
+  // agy signed in. Only secondary accounts get isolated directories.
+  assert.equal(accounts[0]?.systemHome, true)
+  assert.equal(accounts[0]?.dir, '')
   assert.ok(existsSync(join(dir, 'pool.json')))
 
   // Create new account slot

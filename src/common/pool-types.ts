@@ -34,8 +34,19 @@ export interface ManagedAccount {
   id: string
   alias: string
   email?: string
-  /** Absolute path to the isolated account home directory. */
+  /**
+   * Absolute path to the isolated account home directory. Empty for the
+   * primary/system account: agy 1.1.15+ stores credentials in the macOS
+   * Keychain (Antigravity Safe Storage), NOT in a ~/.gemini token file, so
+   * the primary account must keep the real system HOME to stay signed in.
+   */
   dir: string
+  /**
+   * True when this account rides the real system HOME (no HOME injection).
+   * Always true for the primary account; only secondary pool accounts get
+   * isolated HOME directories.
+   */
+  systemHome?: boolean
   /** Optional custom proxy URL override (e.g. "socks5://127.0.0.1:7890"). */
   proxyUrl?: string
   enabled: boolean

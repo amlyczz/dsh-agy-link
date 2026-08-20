@@ -325,6 +325,9 @@ export function apply(ctx: ClientContext): void {
 					renderQuotaBar('Gemini', acc.quotas.google),
 					renderQuotaBar('Claude', acc.quotas.anthropic),
 					renderQuotaBar('GPT-OSS', acc.quotas.openai),
+					!acc.quotas.google?.remainingFraction && !acc.quotas.anthropic?.remainingFraction && !acc.quotas.openai?.remainingFraction
+						? h('div', { style: { ...S.muted, fontSize: '10px', marginTop: '2px' } }, '额度统计不可用 — 凭据存于 macOS 钥匙串，仅 agy CLI 可访问（刷新将静默跳过）')
+						: null,
 				),
 				// Cooldown warning
 				hasCooldown ? h('div', { style: { color: '#f5a623', fontSize: '11px', margin: '4px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },

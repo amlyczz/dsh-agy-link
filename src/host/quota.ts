@@ -1,6 +1,14 @@
 // QuotaService: fetch and refresh live quota statistics and user profile
 // directly from Google Antigravity backend (v1internal:fetchAvailableModels).
+//
+// Security note: NO OAuth client credentials are hard-coded here. agy 1.1.15
+// stores credentials in the macOS Keychain (Antigravity Safe Storage) and we
+// never attempt to re-exchange tokens with a guessed client id/secret — a
+// wrong client pair makes Google return invalid_client and surfaces as
+// "API key is invalid" in the UI. Quota refresh degrades silently to
+// "unavailable" when credentials cannot be sourced.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   modelFamilyOf,
@@ -10,14 +18,10 @@ import {
 } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 
-export const AGY_CLIENT_ID =
-  process.env.AGY_CLIENT_ID ||
-  ['1071006060591', 'tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com'].join('-')
-export const AGY_CLIENT_SECRET =
-  process.env.AGY_CLIENT_SECRET ||
-  ['GOCSPX', 'K58FWR486LdLJ1mLB8sXC4z6qDAf'].join('-')
-
-
+// Optional overrides for users who run a self-hosted OAuth client. Absent by
+// default: quota refresh then only works with a still-valid access_token.
+export const AGY_CLIENT_ID: string | undefined = process.env.AGY_CLIENT_ID
+export const AGY_CLIENT_SECRET: string | undefined = process.env.AGY_CLIENT_SECRET
 
 export const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 export const OAUTH_USERINFO_URL = 'https://www.googleapis.com/oauth2/v1/userinfo'
@@ -54,7 +58,10 @@ export class QuotaService {
   constructor(private readonly pool: AccountPoolManager) {}
 
   private getTokenFilePath(account: ManagedAccount): string {
-    return join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+    // The primary account rides the real system HOME (Keychain-backed);
+    // only secondary accounts have an isolated dir.
+    const home = account.systemHome || !account.dir ? homedir() : account.dir
+    return join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
   }
 
   getStoredToken(account: ManagedAccount): StoredToken | null {
@@ -92,8 +99,11 @@ export class QuotaService {
       return accessToken
     }
 
-    // Refresh if refresh_token is available
-    if (refreshToken) {
+    // Refresh if refresh_token is available AND an OAuth client pair is
+    // configured. Without credentials we never call the token endpoint:
+    // a wrong client id/secret yields invalid_client and would surface as
+    // "API key is invalid" while degrading quota stats to unavailable.
+    if (refreshToken && AGY_CLIENT_ID && AGY_CLIENT_SECRET) {
       try {
         const body = new URLSearchParams({
           grant_type: 'refresh_token',

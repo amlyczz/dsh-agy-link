@@ -6,3 +6,6 @@ dist/
 *.log
 .spec/
 research/
+
+# agy credential dirs (never commit)
+.gemini/

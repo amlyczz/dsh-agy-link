@@ -385,21 +385,26 @@ export class AgyAdapter extends LlmAdapter {
       released = true
       release()
     }
-    const env = account
-      ? {
-          ...process.env,
-          HOME: account.dir,
-          GEMINI_CLI_HOME: join(account.dir, '.gemini'),
-          ...(account.proxyUrl ? {
-            ALL_PROXY: account.proxyUrl,
-            HTTPS_PROXY: account.proxyUrl,
-            HTTP_PROXY: account.proxyUrl,
-            all_proxy: account.proxyUrl,
-            https_proxy: account.proxyUrl,
-            http_proxy: account.proxyUrl,
-          } : {}),
-        }
-      : process.env
+    // Only SECONDARY pool accounts get an isolated HOME. The primary
+    // account rides the real system HOME (agy 1.1.15 keeps credentials in
+    // the macOS Keychain); injecting HOME there signs agy out ("Please
+    // sign in") and every turn fails with an auth error.
+    const env =
+      account && account.dir
+        ? {
+            ...process.env,
+            HOME: account.dir,
+            GEMINI_CLI_HOME: join(account.dir, '.gemini'),
+            ...(account.proxyUrl ? {
+              ALL_PROXY: account.proxyUrl,
+              HTTPS_PROXY: account.proxyUrl,
+              HTTP_PROXY: account.proxyUrl,
+              all_proxy: account.proxyUrl,
+              https_proxy: account.proxyUrl,
+              http_proxy: account.proxyUrl,
+            } : {}),
+          }
+        : process.env
 
     let proc: ReturnType<typeof startAgyProcess>
     try {

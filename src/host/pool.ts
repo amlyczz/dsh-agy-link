@@ -28,6 +28,7 @@ export class AccountPoolManager {
     this.file = join(baseDir, 'pool.json')
     this.data = this.load()
     this.bootstrapDefaultAccount()
+    this.normalizeLegacyPrimary()
   }
 
   private load(): AccountPoolData {
@@ -61,40 +62,23 @@ export class AccountPoolManager {
 
   /**
    * Bootstraps the primary account on first start.
-   * If a system-level ~/.gemini/ credentials exists, auto-copies to acc_default
-   * so existing users experience zero migration friction.
+   *
+   * The primary account rides the REAL system HOME with no directory
+   * isolation: agy 1.1.15+ persists credentials in the macOS Keychain
+   * ("Antigravity Safe Storage"), not in a ~/.gemini token file, so copying
+   * files cannot migrate sign-in state. Injecting HOME would log the
+   * primary account out of agy entirely (observed: "Please sign in").
+   * Only SECONDARY pool accounts get isolated HOME directories, created
+   * and signed in via /agy add-account.
    */
   private bootstrapDefaultAccount(): void {
     if (this.data.accounts.length > 0) return
 
-    const defaultId = 'acc_primary'
-    const defaultDir = join(this.baseDir, defaultId)
-    mkdirSync(defaultDir, { recursive: true })
-
-    // Check if existing ~/.gemini/ token can be imported
-    const sysGemini = join(homedir(), '.gemini')
-    const sysToken = join(sysGemini, 'antigravity-cli', 'antigravity-oauth-token')
-    const destTokenDir = join(defaultDir, '.gemini', 'antigravity-cli')
-
-    if (existsSync(sysToken)) {
-      try {
-        mkdirSync(destTokenDir, { recursive: true })
-        const tokenContent = readFileSync(sysToken, 'utf8')
-        writeFileSync(join(destTokenDir, 'antigravity-oauth-token'), tokenContent, 'utf8')
-        // Also copy standalone jetski token if present
-        const sysJetski = join(sysGemini, 'jetski-standalone-oauth-token')
-        if (existsSync(sysJetski)) {
-          writeFileSync(join(defaultDir, '.gemini', 'jetski-standalone-oauth-token'), readFileSync(sysJetski), 'utf8')
-        }
-      } catch {
-        // Ignore copy errors
-      }
-    }
-
     const primary: ManagedAccount = {
-      id: defaultId,
-      alias: '主账号 (Primary Account)',
-      dir: defaultDir,
+      id: 'acc_primary',
+      alias: '主账号 (系统登录)',
+      dir: '',
+      systemHome: true,
       enabled: true,
       createdAt: Date.now(),
       cooldowns: {},
@@ -102,7 +86,23 @@ export class AccountPoolManager {
     }
 
     this.data.accounts.push(primary)
-    this.data.primaryAccountId = defaultId
+    this.data.primaryAccountId = primary.id
+    this.persist()
+  }
+
+  /**
+   * Migrates pool files created before Keychain-aware primaries: an
+   * acc_primary that carries an isolated dir (and likely a broken token
+   * copy) is converted back to the system HOME so agy stays signed in.
+   * The stale directory is left untouched (never deletes user data).
+   */
+  private normalizeLegacyPrimary(): void {
+    const primary = this.data.accounts.find((a) => a.id === 'acc_primary')
+    if (!primary || primary.systemHome) return
+    primary.dir = ''
+    primary.systemHome = true
+    primary.alias = '主账号 (系统登录)'
+    this.data.primaryAccountId = primary.id
     this.persist()
   }
 
