@@ -207,7 +207,7 @@ Config lives in the `agy-link` plugin entry (edit via `/plugin` or the profile p
 | permissionMode | `DSH_AGY_MODE` | `skip` | `skip` / `plan` / `accept-edits` (below) |
 | defaultModel | `DSH_AGY_DEFAULT_MODEL` | `(agy default)` | model slug |
 | defaultEffort | `DSH_AGY_DEFAULT_EFFORT` | `(model default)` | `low` / `medium` / `high` |
-| timeoutMs | `DSH_AGY_TIMEOUT_MS` | `600000` | per-turn watchdog |
+| timeoutMs | `DSH_AGY_TIMEOUT_MS` | `600000` | sliding activity watchdog (inactivity timeout; active long tasks run indefinitely) |
 | extraArgs | `DSH_AGY_EXTRA_ARGS` | — | extra agy flags, space-separated |
 | workspaceRoot | `DSH_AGY_WORKSPACE_ROOT` | session cwd | agy workspace; explicit config wins, otherwise the DSH session's cwd is used |
 

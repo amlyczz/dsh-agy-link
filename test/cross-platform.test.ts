@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, isCmdShim, windowsQuote } from '../src/host/runner.ts'
+import { binCandidates, isCmdShim, startAgyProcess, windowsQuote } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -56,4 +56,38 @@ test('runner strips trailing CR from CRLF output', async () => {
   const code = await new Promise<number | null>((r) => child.on('exit', (c) => r(c)))
   assert.equal(code, 0)
   assert.deepEqual(lines.map((l) => JSON.parse(l)), [{ a: 1 }, { b: 2 }])
+})
+
+test('startAgyProcess activity watchdog refreshes on output chunks', async () => {
+  // timeoutMs is 700ms, but child outputs 4 times across ~1500ms (total duration > 2x timeoutMs).
+  // A fixed watchdog would kill at 700ms; sliding activity watchdog refreshes on each chunk.
+  const script = `
+    console.log('chunk1');
+    setTimeout(() => console.log('chunk2'), 400);
+    setTimeout(() => console.log('chunk3'), 800);
+    setTimeout(() => console.log('chunk4'), 1200);
+  `
+  const lines: string[] = []
+  const proc = startAgyProcess({
+    bin: process.execPath,
+    args: ['-e', script],
+    timeoutMs: 700,
+    onLine: (l) => lines.push(l),
+  })
+  const outcome = await proc.outcome
+  assert.equal(outcome.timedOut, false)
+  assert.equal(outcome.code, 0)
+  assert.deepEqual(lines, ['chunk1', 'chunk2', 'chunk3', 'chunk4'])
+})
+
+test('startAgyProcess times out if child is completely silent', async () => {
+  // timeoutMs is 400ms, child sleeps for 2000ms silently without any stdout/stderr
+  const script = `setTimeout(() => {}, 2000)`
+  const proc = startAgyProcess({
+    bin: process.execPath,
+    args: ['-e', script],
+    timeoutMs: 400,
+  })
+  const outcome = await proc.outcome
+  assert.equal(outcome.timedOut, true)
 })

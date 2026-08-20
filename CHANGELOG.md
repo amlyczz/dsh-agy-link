@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.2.9 (2026-08-19)
+## 0.3.5 (2026-08-20)
+
+- **Sliding activity watchdog for long-running tasks.** Replaced the static
+  wall-clock timeout with an activity-based idle watchdog: the timer rearms
+  on every chunk of stdout/stderr activity. Long-running tasks (e.g. multi-step
+  refactors, extensive test suites, deep searches) can now run indefinitely as
+  long as the process is actively working, while deadlocked/silent processes
+  are still cleanly terminated after `timeoutMs` of complete inactivity.
+  The agy CLI `--print-timeout` is given a generous ceiling (4h) to avoid
+  premature termination of active print sessions.
+
+## 0.3.4 (2026-08-19)
 
 - **Tool activity moved out of the thinking panel into the reply body.**
   User feedback on 0.2.8: tool annotations hidden inside the DSH thinking

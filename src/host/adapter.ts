@@ -189,8 +189,10 @@ export class AgyAdapter extends LlmAdapter {
     timeoutMs: number
     extraArgs: readonly string[]
     addDirs?: readonly string[]
+    printTimeoutMinutes?: number
   }): string[] {
-    const args: string[] = ['--output-format', 'stream-json', '--print-timeout', Math.max(1, Math.ceil(opts.timeoutMs / 60_000)) + 'm']
+    const ptMins = opts.printTimeoutMinutes ?? Math.max(1, Math.ceil(opts.timeoutMs / 60_000))
+    const args: string[] = ['--output-format', 'stream-json', '--print-timeout', ptMins + 'm']
     if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
     else args.push('--mode', opts.permissionMode)
     if (opts.model !== '') args.push('--model', opts.model)
@@ -353,6 +355,7 @@ export class AgyAdapter extends LlmAdapter {
       conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
       permissionMode: isAux ? 'plan' : cfg.permissionMode,
       timeoutMs: cfg.timeoutMs,
+      printTimeoutMinutes: Math.max(240, Math.ceil(cfg.timeoutMs / 60_000)),
       extraArgs: cfg.extraArgs,
       addDirs: stagedDirs,
     })
@@ -402,7 +405,7 @@ export class AgyAdapter extends LlmAdapter {
       if (outcome.aborted) {
         failure = { kind: 'aborted', code: 'ABORTED', message: 'agy run aborted by caller' }
       } else if (outcome.timedOut) {
-        failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run exceeded the watchdog budget (' + cfg.timeoutMs + 'ms)' }
+        failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run was idle for ' + cfg.timeoutMs + 'ms without output' }
       } else if (sawAuthFailure(parser, outcome)) {
         failure = { kind: 'error', code: Err.AUTH, message: 'agy is not signed in — run /agy auth (or run agy once in a terminal) to login' }
       } else if (!consumable) {

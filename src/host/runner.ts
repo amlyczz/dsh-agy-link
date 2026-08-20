@@ -167,13 +167,16 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     }
   }
 
-  const watchdog =
-    opts.timeoutMs && opts.timeoutMs > 0
-      ? setTimeout(() => {
-        timedOut = true;
-        killTree(child);
-      }, opts.timeoutMs)
-      : null;
+  let watchdog: NodeJS.Timeout | null = null;
+  const refreshWatchdog = () => {
+    if (!opts.timeoutMs || opts.timeoutMs <= 0 || settled) return;
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+    }, opts.timeoutMs);
+  };
+  refreshWatchdog();
 
   const onAbort = () => {
     aborted = true;
@@ -185,6 +188,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
   if (child.stderr) child.stderr.setEncoding('utf8');
   let pending = '';
   child.stdout?.on('data', (chunk: string) => {
+    refreshWatchdog();
     stdout += chunk;
     if (stdout.length > 4_000_000) stdout = stdout.slice(-2_000_000);
     pending += chunk;
@@ -196,6 +200,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     }
   });
   child.stderr?.on('data', (chunk: string) => {
+    refreshWatchdog();
     stderr = (stderr + chunk).slice(-4096);
   });
 
@@ -232,6 +237,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     kill: (reason) => {
       if (reason === 'timeout') timedOut = true;
       else aborted = true;
+      if (watchdog) clearTimeout(watchdog);
       killTree(child);
     },
   };
