@@ -390,8 +390,18 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const body = await readBody(req)
         const alias = typeof body.alias === 'string' ? body.alias : undefined
         const acc = pool.createAccountSlot(alias)
-        const st = await auth.begin(acc.dir, acc.id)
-        sendJson(res as RawRes, 200, { ...st, account: acc, pool: pool.getPoolData() })
+        const autoOpen = body.autoOpenTerminal !== false
+        if (autoOpen && acc.dir) {
+          if (process.platform === 'darwin') {
+            const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "export HOME='${acc.dir}'; agy"`
+            execFile('osascript', ['-e', script], () => {})
+          } else if (process.platform === 'win32') {
+            execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set HOME=${acc.dir} && agy`], () => {})
+          } else {
+            execFile('x-terminal-emulator', ['-e', `sh -c "export HOME='${acc.dir}'; agy; exec sh"`], () => {})
+          }
+        }
+        sendJson(res as RawRes, 200, { ok: true, account: acc, pool: pool.getPoolData() })
       })()
     }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool/open-terminal', handler: (req, res) => {

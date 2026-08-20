@@ -219,10 +219,10 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '5px 14px',
+		padding: '6px 14px',
 		borderRadius: '6px',
 		border: '1px solid rgba(59,130,246,0.5)',
-		background: 'rgba(59,130,246,0.22)',
+		background: 'rgba(59,130,246,0.25)',
 		color: '#3b82f6',
 		cursor: 'pointer',
 		fontSize: '12px',
@@ -342,7 +342,6 @@ const S: Record<string, Record<string, unknown>> = {
 export function apply(ctx: ClientContext): void {
 	const AgySettingsSection = (): unknown => {
 		const [status, setStatus] = useState<StatusPayload | null>(null);
-		const [code, setCode] = useState('');
 		const [aliasInput, setAliasInput] = useState('');
 		const [proxyInputs, setProxyInputs] = useState<Record<string, string>>({});
 		const [editingProxyId, setEditingProxyId] = useState<string | null>(null);
@@ -368,55 +367,23 @@ export function apply(ctx: ClientContext): void {
 			setToast({ text, type, id: Date.now() });
 			setTimeout(() => {
 				setToast((prev) => (prev?.text === text ? null : prev));
-			}, 6000);
+			}, 7000);
 		};
 
 		const refresh = async (): Promise<void> => {
 			setStatus(await getStatus());
 		};
 
-		const startAuth = async (accountId?: string, homeDir?: string): Promise<void> => {
-			setLoadingAction('auth:start');
-			await postJson('/plugins/agy-link/auth', { accountId, homeDir });
-			await refresh();
-			setLoadingAction(null);
-			showToast('Google 授权已发起，请在下方点击授权链接或扫码', 'info');
-		};
-
-		const startAddAccount = async (): Promise<void> => {
+		// Unified One-Step Add Account Flow
+		const handleCreateAndLoginAccount = async (): Promise<void> => {
 			setLoadingAction('pool:add');
-			const alias = aliasInput.trim() || undefined;
-			await postJson('/plugins/agy-link/pool/add', { alias });
+			const alias = aliasInput.trim() || `备用 Google 账号 ${(status?.pool?.accounts?.length ?? 1) + 1}`;
+			await postJson('/plugins/agy-link/pool/add', { alias, autoOpenTerminal: true });
 			setAliasInput('');
 			setAddingAccount(false);
 			await refresh();
 			setLoadingAction(null);
-			showToast('✅ 新账号槽位创建成功！请点击卡片上的【💻 终端登录】进行认证', 'success');
-		};
-
-		const cancelAuth = async (): Promise<void> => {
-			setLoadingAction('auth:cancel');
-			setAddingAccount(false);
-			await postJson('/plugins/agy-link/auth-cancel', {});
-			await refresh();
-			setLoadingAction(null);
-			showToast('已取消授权流程', 'info');
-		};
-
-		const submitCode = async (): Promise<void> => {
-			if (code.trim() === '') return;
-			setLoadingAction('auth:submit');
-			await postJson('/plugins/agy-link/auth-code', { code: code.trim() });
-			setCode('');
-			setAddingAccount(false);
-			const st = await getStatus();
-			setStatus(st);
-			setLoadingAction(null);
-			if (st?.auth?.phase === 'ok') {
-				showToast('🎉 Google 账号认证激活成功！', 'success');
-			} else {
-				showToast(st?.auth?.message || '授权码提交完成', 'info');
-			}
+			showToast('💻 已自动调起系统终端！请在弹出的终端窗口中登录第二个 Google 账号，完成后点击【🔄 刷新额度】即可自动入池', 'success');
 		};
 
 		const setCfg = async (key: string, value: unknown): Promise<void> => {
@@ -448,7 +415,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/refresh-quota', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast(id ? '✅ 额度已刷新' : '✅ 全部账号额度已同步更新', 'success');
+			showToast(id ? '✅ 账号状态与额度已刷新' : '✅ 全部账号状态已同步刷新', 'success');
 		};
 
 		const openTerminal = async (id: string): Promise<void> => {
@@ -473,7 +440,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/mode', { mode });
 			await refresh();
 			setLoadingAction(null);
-			showToast(`已切换号池调度模式为: ${mode === 'sequential' ? '顺次耗尽' : '轮询均衡'}`, 'success');
+			showToast(`已切换号池调度模式为: ${mode === 'sequential' ? '顺次耗尽 (Sequential)' : '轮询均衡 (Round-Robin)'}`, 'success');
 		};
 
 		const clearCooldown = async (id?: string): Promise<void> => {
@@ -512,70 +479,83 @@ export function apply(ctx: ClientContext): void {
 			);
 		};
 
-		// Quota Progress Bar Helper with Rich Gradient & Reset Time
-		const renderQuotaBar = (label: string, icon: string, info?: FamilyQuotaInfo): unknown => {
+		// Quota Progress Bar / Status Row Helper
+		const renderQuotaBar = (label: string, icon: string, info?: FamilyQuotaInfo, isKeychain = false): unknown => {
 			const fraction = typeof info?.remainingFraction === 'number' ? info.remainingFraction : null;
 			const percent = fraction !== null ? Math.round(fraction * 100) : null;
 			
-			// Color scheme
-			let barGradient = 'linear-gradient(90deg, #9aa0a6, #70757a)';
-			let textColor = '#9aa0a6';
-			let badgeBg = 'rgba(128,128,128,0.15)';
 			if (percent !== null) {
-				if (percent > 50) {
-					barGradient = 'linear-gradient(90deg, #10b981, #059669)';
-					textColor = '#10b981';
-					badgeBg = 'rgba(16,185,129,0.15)';
-				} else if (percent > 20) {
-					barGradient = 'linear-gradient(90deg, #f59e0b, #d97706)';
-					textColor = '#f59e0b';
-					badgeBg = 'rgba(245,158,11,0.15)';
-				} else {
+				let barGradient = 'linear-gradient(90deg, #10b981, #059669)';
+				let textColor = '#10b981';
+				let badgeBg = 'rgba(16,185,129,0.15)';
+				if (percent <= 20) {
 					barGradient = 'linear-gradient(90deg, #ef4444, #dc2626)';
 					textColor = '#ef4444';
 					badgeBg = 'rgba(239,68,68,0.15)';
+				} else if (percent <= 50) {
+					barGradient = 'linear-gradient(90deg, #f59e0b, #d97706)';
+					textColor = '#f59e0b';
+					badgeBg = 'rgba(245,158,11,0.15)';
 				}
+
+				let resetTimeStr = '';
+				if (info?.resetTime) {
+					try {
+						const d = new Date(info.resetTime);
+						resetTimeStr = ` (${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')} 重置)`;
+					} catch {
+						// skip
+					}
+				}
+
+				return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11px', margin: '4px 0' } },
+					h('span', { style: { width: '85px', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 } },
+						h('span', null, icon),
+						label,
+					),
+					h('div', { style: S.progressBarBg },
+						h('div', {
+							className: 'agy-progress-fill',
+							style: {
+								width: `${Math.min(100, Math.max(0, percent))}%`,
+								height: '100%',
+								background: barGradient,
+								borderRadius: '4px',
+							},
+						}),
+					),
+					h('div', { style: { display: 'inline-flex', alignItems: 'center', minWidth: '55px', justifyContent: 'flex-end' } },
+						h('span', {
+							style: {
+								padding: '1px 6px',
+								borderRadius: '4px',
+								background: badgeBg,
+								color: textColor,
+								fontWeight: 600,
+								fontSize: '11px',
+							},
+						}, `${percent}%`),
+					),
+					resetTimeStr ? h('span', { style: { ...S.muted, fontSize: '10px', marginLeft: '4px' } }, resetTimeStr) : null,
+				);
 			}
 
-			let resetTimeStr = '';
-			if (info?.resetTime) {
-				try {
-					const d = new Date(info.resetTime);
-					resetTimeStr = ` (${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')} 重置)`;
-				} catch {
-					// skip
-				}
-			}
-
-			return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11px', margin: '4px 0' } },
-				h('span', { style: { width: '85px', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 } },
+			// Active Keychain native managed state
+			return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', margin: '3px 0' } },
+				h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 } },
 					h('span', null, icon),
 					label,
 				),
-				h('div', { style: S.progressBarBg },
-					h('div', {
-						className: 'agy-progress-fill',
-						style: {
-							width: percent !== null ? `${Math.min(100, Math.max(0, percent))}%` : '0%',
-							height: '100%',
-							background: barGradient,
-							borderRadius: '4px',
-						},
-					}),
-				),
-				h('div', { style: { display: 'inline-flex', alignItems: 'center', minWidth: '60px', justifyContent: 'flex-end' } },
-					h('span', {
-						style: {
-							padding: '1px 6px',
-							borderRadius: '4px',
-							background: badgeBg,
-							color: textColor,
-							fontWeight: 600,
-							fontSize: '11px',
-						},
-					}, percent !== null ? `${percent}%` : '—'),
-				),
-				resetTimeStr ? h('span', { style: { ...S.muted, fontSize: '10px', marginLeft: '4px' } }, resetTimeStr) : null,
+				h('span', {
+					style: {
+						color: '#10b981',
+						background: 'rgba(16,185,129,0.12)',
+						padding: '1px 6px',
+						borderRadius: '4px',
+						fontSize: '10px',
+						fontWeight: 500,
+					},
+				}, '🟢 官方 CLI 实时调度正常'),
 			);
 		};
 
@@ -593,6 +573,7 @@ export function apply(ctx: ClientContext): void {
 			const isClearingCooldown = loadingAction === `clearCooldown:${acc.id}`;
 
 			const cardStyle = isPrimary ? { ...S.cardPrimary } : { ...S.card };
+			const hasExplicitQuotas = !!(acc.quotas.google?.remainingFraction || acc.quotas.anthropic?.remainingFraction || acc.quotas.openai?.remainingFraction);
 
 			return h('div', { key: acc.id, className: 'agy-card-hover', style: cardStyle },
 				// Card Header
@@ -603,7 +584,7 @@ export function apply(ctx: ClientContext): void {
 							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}88` },
 						}),
 						h('span', { style: { fontWeight: 600, fontSize: '13px' } }, `${idx + 1}. ${acc.alias}`),
-						acc.email ? h('span', { style: S.badgeTag }, `✉️ ${acc.email}`) : null,
+						acc.email ? h('span', { style: { ...S.badgeTag, color: '#3b82f6', borderColor: 'rgba(59,130,246,0.3)' } }, `✉️ ${acc.email}`) : null,
 						isPrimary ? h('span', { style: S.badgePrimary }, '⭐ 主用账号') : null,
 						acc.systemHome ? h('span', { style: S.badgeTag }, '💻 Keychain') : null,
 					),
@@ -615,14 +596,14 @@ export function apply(ctx: ClientContext): void {
 							style: S.btnSm,
 							disabled: isBusy,
 							onClick: () => void refreshQuota(acc.id),
-						}, isRefreshing ? [renderSpinner(), '刷新中...'] : '🔄 刷新额度'),
+						}, isRefreshing ? [renderSpinner(), '刷新中...'] : '🔄 刷新状态'),
 						!isPrimary && acc.dir ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
 							style: S.btnSmPrimary,
 							disabled: isBusy,
 							onClick: () => void openTerminal(acc.id),
-						}, isOpeningTerminal ? [renderSpinner(), '打开中...'] : '💻 终端登录') : null,
+						}, isOpeningTerminal ? [renderSpinner(), '打开中...'] : '💻 打开终端登录') : null,
 						!isPrimary ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
@@ -647,16 +628,16 @@ export function apply(ctx: ClientContext): void {
 					),
 				),
 
-				// Quota Progress Bars Section
+				// Quota / Status Section
 				h('div', { style: S.quotaBox },
-					renderQuotaBar('Gemini', '✨', acc.quotas.google),
-					renderQuotaBar('Claude', '🧠', acc.quotas.anthropic),
-					renderQuotaBar('GPT-OSS', '⚡', acc.quotas.openai),
-					!acc.quotas.google?.remainingFraction && !acc.quotas.anthropic?.remainingFraction && !acc.quotas.openai?.remainingFraction
-						? h('div', { style: { ...S.muted, fontSize: '11px', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' } },
+					renderQuotaBar('Gemini', '✨', acc.quotas.google, acc.systemHome),
+					renderQuotaBar('Claude', '🧠', acc.quotas.anthropic, acc.systemHome),
+					renderQuotaBar('GPT-OSS', '⚡', acc.quotas.openai, acc.systemHome),
+					!hasExplicitQuotas
+						? h('div', { style: { ...S.muted, fontSize: '11px', marginTop: '6px', borderTop: '1px dashed rgba(128,128,128,0.15)', paddingTop: '4px' } },
 							acc.systemHome
-								? 'ℹ️ 凭据由 macOS 钥匙串托管（agy CLI 原生正常可用）'
-								: '💡 账号环境已就绪。点击上方【💻 终端登录】完成认证后点击【🔄 刷新额度】即可'
+								? 'ℹ️ 凭据由 macOS 钥匙串托管，额度由 agy CLI 原生实时调度；触发 429 自动无缝切号'
+								: '💡 账号环境已就绪。点击上方【💻 打开终端登录】在终端中回车完成 Google 登录，完成后点击【🔄 刷新状态】即可入池'
 						)
 						: null,
 				),
@@ -676,7 +657,7 @@ export function apply(ctx: ClientContext): void {
 						justifyContent: 'space-between',
 					},
 				},
-					h('span', null, '⚠️ 当前部分模型家族处于限流冷却中 (已自动切换至备用账号)'),
+					h('span', null, '⚠️ 当前部分模型家族处于限流冷却中 (已自动顺次切换至下一个可用账号)'),
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
@@ -722,107 +703,18 @@ export function apply(ctx: ClientContext): void {
 			);
 		});
 
-		// OAuth Flow Wizard
-		let authModalContent: unknown = null;
-		if (authPhase === 'pending') {
-			authModalContent = h('div', { style: S.authBox },
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '13px', color: '#3b82f6', marginBottom: '8px' } },
-					h('span', { className: 'agy-spinner' }),
-					'Google 官方 OAuth 授权进行中',
-				),
-				h('div', { style: { ...S.muted, marginBottom: '10px' } },
-					'步骤 1: 点击下方按钮在浏览器中打开 Google 授权页面（需开启代理），或手机扫码：',
-				),
-				status?.auth?.url ? h('div', { style: { margin: '8px 0 12px' } },
-					h('a', {
-						href: status.auth.url,
-						target: '_blank',
-						rel: 'noopener noreferrer',
-						style: {
-							display: 'inline-flex',
-							alignItems: 'center',
-							gap: '6px',
-							padding: '8px 16px',
-							borderRadius: '6px',
-							background: 'rgba(59,130,246,0.25)',
-							border: '1px solid rgba(59,130,246,0.6)',
-							color: '#3b82f6',
-							textDecoration: 'none',
-							fontWeight: 600,
-							fontSize: '13px',
-						},
-					}, '👉 点击在浏览器中打开 Google 授权页面 (Open Google Auth)'),
-				) : null,
-				status?.auth?.qrDataUrl ? h('div', { style: { textAlign: 'center', margin: '12px 0' } },
-					h('img', {
-						src: status.auth.qrDataUrl,
-						alt: 'auth QR',
-						width: 170,
-						height: 170,
-						style: { display: 'inline-block', borderRadius: '8px', border: '1px solid rgba(128,128,128,0.3)', background: '#fff', padding: '6px' },
-					}),
-					h('div', { style: { ...S.muted, fontSize: '11px', marginTop: '4px' } }, '使用手机扫描二维码快速授权'),
-				) : null,
-				h('div', { style: { ...S.muted, margin: '10px 0 6px' } },
-					'步骤 2: 授权完成后复制 Google 网页显示的授权码，粘贴在下方激活：',
-				),
-				h('div', { style: { display: 'flex', gap: '8px' } },
-					h('input', {
-						style: S.input,
-						value: code,
-						placeholder: '粘贴 Google 授权码 (Authorization Code)',
-						onChange: (e: { target: { value: string } }) => setCode(e.target.value),
-					}),
-					h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: S.btnPrimary,
-						disabled: isBusy || code.trim() === '',
-						onClick: () => void submitCode(),
-					}, loadingAction === 'auth:submit' ? [renderSpinner(), '激活中...'] : '🚀 提交激活'),
-					h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: S.btn,
-						disabled: isBusy,
-						onClick: () => void cancelAuth(),
-					}, '取消'),
-				),
-			);
-		} else if (authPhase === 'submitting') {
-			authModalContent = h('div', { style: S.authBox },
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '13px' } },
-					renderSpinner(),
-					'正在向 Google 验证授权码并绑定凭据...',
-				),
-				h('div', { style: { ...S.muted, marginTop: '4px' } }, '请稍候，凭据交换完成后将自动点亮入池。'),
-			);
-		} else if (authPhase === 'failed') {
-			authModalContent = h('div', { style: { ...S.authBox, borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)' } },
-				h('div', { style: { fontWeight: 600, color: '#ef4444', marginBottom: '6px' } }, '❌ 授权失败 / 授权码无效或已过期'),
-				h('div', { style: { ...S.muted, color: '#ef4444', marginBottom: '10px' } }, status?.auth?.message ?? 'authorization code rejected or timeout'),
-				h('button', {
-					type: 'button',
-					className: 'agy-btn',
-					style: S.btnPrimary,
-					disabled: isBusy,
-					onClick: () => void startAuth(),
-				}, '🔄 重新发起 Google 登录'),
-			);
-		}
-
 		// Add Account Drawer
-		const addAccountSection = addingAccount && authPhase !== 'pending' && authPhase !== 'submitting'
+		const addAccountSection = addingAccount
 			? h('div', { style: { ...S.authBox, marginTop: '10px' } },
-				h('div', { style: { fontWeight: 600, fontSize: '13px', marginBottom: '4px' } }, '➕ 添加新 Google 账号入池'),
-				h('div', { style: { ...S.muted, marginBottom: '10px' } },
-					'系统将自动创建专属隔离目录（~/.dsh/agy-accounts/）。创建后点击卡片上的【💻 终端登录】即可完成第二账号认证。',
+				h('div', { style: { fontWeight: 600, fontSize: '14px', marginBottom: '6px' } }, '➕ 添加新 Google 账号入池 (统一标准向导)'),
+				h('div', { style: { ...S.muted, marginBottom: '10px', lineHeight: 1.6 } },
+					'1. 为新账号命名（如“工作账号 / 备用账号2”）；\n2. 点击下方按钮，系统将自动创建隔离环境并自动调起 macOS 终端运行官方 agy；\n3. 终端自动调起系统浏览器完成 Google 登录授权；\n4. 登录完成后回到此页面点击【🔄 刷新状态】，账号即可自动激活入池！',
 				),
-				h('div', { style: { display: 'flex', gap: '8px' } },
+				h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
 					h('input', {
 						style: S.input,
 						value: aliasInput,
-						placeholder: '账号别名 (例如: 备用账号 2 / Work Account)',
+						placeholder: '账号别名 (例如: 备用 Google 账号 2)',
 						onChange: (e: { target: { value: string } }) => setAliasInput(e.target.value),
 					}),
 					h('button', {
@@ -830,8 +722,8 @@ export function apply(ctx: ClientContext): void {
 						className: 'agy-btn',
 						style: S.btnPrimary,
 						disabled: isBusy,
-						onClick: () => void startAddAccount(),
-					}, loadingAction === 'pool:add' ? [renderSpinner(), '创建中...'] : '🚀 创建账号槽位'),
+						onClick: () => void handleCreateAndLoginAccount(),
+					}, loadingAction === 'pool:add' ? [renderSpinner(), '创建并调起中...'] : '🚀 创建并调起终端登录'),
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
@@ -846,9 +738,9 @@ export function apply(ctx: ClientContext): void {
 					type: 'button',
 					className: 'agy-btn',
 					style: S.btnPrimary,
-					disabled: isBusy || authPhase === 'pending',
+					disabled: isBusy,
 					onClick: () => setAddingAccount(true),
-				}, '➕ 添加新 Google 账号 (Add Account)'),
+				}, '➕ 添加新 Google 账号 (Add Google Account)'),
 			);
 
 		// Global Pool Header & Mode Toggle
@@ -888,7 +780,7 @@ export function apply(ctx: ClientContext): void {
 					style: S.btn,
 					disabled: isBusy,
 					onClick: () => void refreshQuota(),
-				}, loadingAction === 'refresh:all' ? [renderSpinner(), '刷新中...'] : '🔄 刷新全部额度'),
+				}, loadingAction === 'refresh:all' ? [renderSpinner(), '刷新中...'] : '🔄 刷新全部状态'),
 			),
 		);
 
@@ -972,9 +864,6 @@ export function apply(ctx: ClientContext): void {
 
 			// Toast Feedback
 			renderToastBanner(),
-
-			// OAuth Box if in flow
-			authModalContent,
 
 			// Account Pool Section
 			poolHeader,

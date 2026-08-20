@@ -7,7 +7,7 @@
 // wrong client pair makes Google return invalid_client and surfaces as
 // "API key is invalid" in the UI. Quota refresh degrades silently to
 // "unavailable" when credentials cannot be sourced.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -17,6 +17,31 @@ import {
   type ModelFamily,
 } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
+
+export function detectEmailFromAgyLogs(homeDir: string): string | undefined {
+  const logDir = join(homeDir, '.gemini', 'antigravity-cli', 'log')
+  if (!existsSync(logDir)) return undefined
+  try {
+    const files = readdirSync(logDir)
+      .filter((f) => f.startsWith('cli-') && f.endsWith('.log'))
+      .map((f) => ({ name: f, time: statSync(join(logDir, f)).mtimeMs }))
+      .sort((a, b) => b.time - a.time)
+      .slice(0, 5)
+
+    for (const file of files) {
+      try {
+        const content = readFileSync(join(logDir, file.name), 'utf8')
+        const m = content.match(/(?:authenticated successfully as|applyAuthResult:\s*email=)\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i)
+        if (m && m[1]) return m[1]
+      } catch {
+        // ignore unreadable log
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return undefined
+}
 
 // Optional overrides for users who run a self-hosted OAuth client. Absent by
 // default: quota refresh then only works with a still-valid access_token.
@@ -155,8 +180,20 @@ export class QuotaService {
    * Fetch and aggregate quota statistics for a single account across model families.
    */
   async refreshAccountQuota(account: ManagedAccount): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
+    const home = account.systemHome || !account.dir ? homedir() : account.dir
+    let email = account.email
+    if (!email) {
+      const detected = detectEmailFromAgyLogs(home)
+      if (detected) email = detected
+    }
+
     const accessToken = await this.getValidAccessToken(account)
-    if (!accessToken) return null
+    if (!accessToken) {
+      if (email && email !== account.email) {
+        this.pool.updateAccountQuotas(account.id, account.quotas, email)
+      }
+      return null
+    }
 
     let discovered: DiscoveredModelsResponse | null = null
     for (const endpoint of AGY_ENDPOINTS) {
@@ -179,8 +216,7 @@ export class QuotaService {
       }
     }
 
-    // Try fetching email if not set
-    let email = account.email
+    // Try fetching email if still not set
     if (!email) {
       const info = await this.fetchUserInfo(accessToken)
       if (info?.email) email = info.email
@@ -188,7 +224,7 @@ export class QuotaService {
 
     if (!discovered || !discovered.models) {
       if (email && email !== account.email) {
-        this.pool.updateAccountQuotas(account.id, {}, email)
+        this.pool.updateAccountQuotas(account.id, account.quotas, email)
       }
       return null
     }

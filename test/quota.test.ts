@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
-import { QuotaService } from '../src/host/quota.ts'
+import { QuotaService, detectEmailFromAgyLogs } from '../src/host/quota.ts'
 
 test('QuotaService parses stored tokens and saves token refresh updates', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-quota-test-'))
@@ -61,4 +61,17 @@ test('Quota aggregation extracts bottleneck model fraction and earliest reset', 
   assert.equal(updated.quotas.google?.remainingFraction, 0.85)
   assert.equal(updated.quotas.anthropic?.remainingFraction, 0.4)
   assert.equal(updated.quotas.openai?.remainingFraction, 1.0)
+})
+
+test('detectEmailFromAgyLogs extracts user email from agy log files', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-log-test-'))
+  const logDir = join(dir, '.gemini', 'antigravity-cli', 'log')
+  mkdirSync(logDir, { recursive: true })
+  writeFileSync(
+    join(logDir, 'cli-20260820_120000.log'),
+    'ERROR: logging before google.Init: OAuth: authenticated successfully as dev.user@google.com\n',
+    'utf8',
+  )
+  const email = detectEmailFromAgyLogs(dir)
+  assert.equal(email, 'dev.user@google.com')
 })

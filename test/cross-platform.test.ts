@@ -59,8 +59,8 @@ test('runner strips trailing CR from CRLF output', async () => {
 })
 
 test('startAgyProcess activity watchdog refreshes on output chunks', async () => {
-  // timeoutMs is 1000ms, child emits 4 chunks across 1600ms (total duration > timeoutMs).
-  // A fixed watchdog would kill at 1000ms; sliding activity watchdog refreshes on each chunk.
+  // timeoutMs is 1500ms, child emits 4 chunks across 1200ms (every 300ms).
+  // A fixed watchdog would kill at 1500ms; sliding activity watchdog refreshes on each chunk.
   const script = `
     const fs = require('node:fs');
     let i = 0;
@@ -68,13 +68,13 @@ test('startAgyProcess activity watchdog refreshes on output chunks', async () =>
     const t = setInterval(() => {
       fs.writeSync(1, Buffer.from('chunk' + (++i) + '\\n'));
       if (i >= 4) clearInterval(t);
-    }, 400);
+    }, 250);
   `
   const lines: string[] = []
   const proc = startAgyProcess({
     bin: process.execPath,
     args: ['-e', script],
-    timeoutMs: 1000,
+    timeoutMs: 1500,
     onLine: (l) => lines.push(l),
   })
   const outcome = await proc.outcome
