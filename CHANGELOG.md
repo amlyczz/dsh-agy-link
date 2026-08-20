@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0 (2026-08-20)
+
+- **Multi-Account Pool & Process-Level Profile Isolation.**
+  - Account pool management under `~/.dsh/agy-accounts/` with physical process-level environment isolation (`HOME=~/.dsh/agy-accounts/<id>/`).
+  - Primary account rides system `HOME` to reuse Mac OS Keychain credentials without duplicate login.
+  - Multi-profile Google OAuth flow: dynamic state machine per account, drop hardcoded OAuth credentials, secure in-memory and isolated disk storage.
+  - Per-account proxy configuration (`ALL_PROXY` / `HTTPS_PROXY`) preventing IP correlation across accounts.
+- **Sticky Sequential Drain (按模型家族顺次耗尽).**
+  - Fine-grained rate limit tracking scoped to model family (`google`, `anthropic`, `openai`). Exhausting Claude quota will not penalize Gemini requests.
+  - Transparent in-flight failover: upon encountering `429` / `RESOURCE_EXHAUSTED`, the active turn immediately and seamlessly switches to the next healthy account.
+  - Automatic cooldown calculation with tiered backoff and reset time detection.
+- **Real-Time Quota Progress Bars & Silent Degradation.**
+  - Real-time token consumption and quota percentage tracking for all pooled accounts.
+  - Quota statistics surface directly to DSH WebUI with visual progress bars and bottleneck indicators.
+  - Graceful silent degradation: token polling failures fall back smoothly without interrupting ongoing runs.
+- **DSH In-GUI Management & Slash Commands.**
+  - New slash commands: `/agy pool`, `/agy add-account`, `/agy switch`, and `/agy quota`.
+  - Rich WebUI status card with account list, quota meters, proxy badges, and fast switcher.
+
 ## 0.3.6 (2026-08-20)
 
 - **Comprehensive Google OAuth login state machine & reliable QR rendering.**
