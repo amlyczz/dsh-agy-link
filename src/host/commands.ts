@@ -89,20 +89,14 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
     }
     if (sub === 'add-account') {
       const pool = deps.pool?.()
-      const auth = deps.auth()
-      if (!pool || !auth) return err('Account pool not available')
+      if (!pool) return err('Account pool not available')
       const acc = pool.createAccountSlot(arg || undefined)
-      const st = await auth.begin(acc.dir, acc.id)
-      if (st.phase === 'pending' && st.url) {
-        return ok([
-          `**Adding Account slot [${acc.alias}]** — open URL and paste the authorization code:`,
-          '',
-          st.url,
-          '',
-          `Run: \`/agy auth-code <code>\` to finish activation.`,
-        ].join('\n'))
-      }
-      return ok(`Slot created: ${acc.id} (${acc.alias})`)
+      return ok([
+        `**Account slot created: [${acc.alias}]** (id: \`${acc.id}\`)`,
+        `- Isolated directory: \`${acc.dir}\``,
+        `- Run in terminal: \`HOME="${acc.dir}" agy\` to authenticate this Google account.`,
+        `- Once logged in, run: \`/agy pool\` or click 🔄 刷新额度 in WebUI.`,
+      ].join('\n'))
     }
     if (sub === 'refresh-quota') {
       const quota = deps.quota?.()

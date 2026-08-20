@@ -4,6 +4,7 @@
 // registers as cordis effects, so uninstalling the plugin rolls it back
 // cleanly.
 import type { Context } from '@deepseek-ai/cordis'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { overridesPath, readOverrides, resolveConfig, stateDir } from './common/config.ts'
@@ -391,6 +392,30 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const acc = pool.createAccountSlot(alias)
         const st = await auth.begin(acc.dir, acc.id)
         sendJson(res as RawRes, 200, { ...st, account: acc, pool: pool.getPoolData() })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/open-terminal', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id : ''
+        const acc = pool.getAccount(id)
+        if (!acc || !acc.dir) {
+          sendJson(res as RawRes, 400, { error: 'account has no isolated directory' })
+          return
+        }
+        if (process.platform === 'darwin') {
+          const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "export HOME='${acc.dir}'; agy"`
+          execFile('osascript', ['-e', script], () => {})
+        } else if (process.platform === 'win32') {
+          execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set HOME=${acc.dir} && agy`], () => {})
+        } else {
+          execFile('x-terminal-emulator', ['-e', `sh -c "export HOME='${acc.dir}'; agy; exec sh"`], () => {})
+        }
+        sendJson(res as RawRes, 200, { ok: true, dir: acc.dir })
       })()
     }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool/remove', handler: (req, res) => {

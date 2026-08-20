@@ -245,6 +245,14 @@ export function apply(ctx: ClientContext): void {
 			setBusy(false);
 		};
 
+		const openTerminal = async (id: string): Promise<void> => {
+			setBusy(true);
+			await postJson('/plugins/agy-link/pool/open-terminal', { id });
+			setNotice('已打开终端窗口，请在终端中完成 Google 登录。完成后点击【🔄 刷新额度】');
+			await refresh();
+			setBusy(false);
+		};
+
 		const saveProxy = async (id: string): Promise<void> => {
 			setBusy(true);
 			const proxyUrl = proxyInputs[id];
@@ -314,9 +322,9 @@ export function apply(ctx: ClientContext): void {
 					),
 					h('div', { style: { display: 'flex', gap: '4px' } },
 						h('button', { type: 'button', style: S.btnSm, disabled: busy, onClick: () => void refreshQuota(acc.id) }, '🔄 刷新额度'),
+						!isPrimary && acc.dir ? h('button', { type: 'button', style: S.btnSm, disabled: busy, onClick: () => void openTerminal(acc.id) }, '💻 终端登录') : null,
 						!isPrimary ? h('button', { type: 'button', style: S.btnSm, disabled: busy, onClick: () => void setPrimary(acc.id) }, '⬆️ 设为主用') : null,
 						h('button', { type: 'button', style: S.btnSm, disabled: busy, onClick: () => setEditingProxyId(isEditingProxy ? null : acc.id) }, '⚙️ 代理'),
-						h('button', { type: 'button', style: S.btnSm, disabled: busy, onClick: () => void startAuth(acc.id, acc.dir) }, '🔑 重新认证'),
 						accounts.length > 1 ? h('button', { type: 'button', style: S.btnDanger, disabled: busy, onClick: () => void removeAccount(acc.id) }, '🗑️ 移除') : null,
 					),
 				),
@@ -326,7 +334,11 @@ export function apply(ctx: ClientContext): void {
 					renderQuotaBar('Claude', acc.quotas.anthropic),
 					renderQuotaBar('GPT-OSS', acc.quotas.openai),
 					!acc.quotas.google?.remainingFraction && !acc.quotas.anthropic?.remainingFraction && !acc.quotas.openai?.remainingFraction
-						? h('div', { style: { ...S.muted, fontSize: '10px', marginTop: '2px' } }, '额度统计不可用 — 凭据存于 macOS 钥匙串，仅 agy CLI 可访问（刷新将静默跳过）')
+						? h('div', { style: { ...S.muted, fontSize: '10px', marginTop: '2px' } },
+							acc.systemHome
+								? 'ℹ️ 凭据由 macOS 钥匙串托管（agy CLI 正常可用）'
+								: 'ℹ️ 槽位已创建。点击【💻 终端登录】完成认证后点击【🔄 刷新额度】即可'
+						)
 						: null,
 				),
 				// Cooldown warning
@@ -409,9 +421,10 @@ export function apply(ctx: ClientContext): void {
 		}
 
 		// ---- Add Account Input Bar ----
-		const addAccountBar = addingAccount && authPhase === 'idle'
+		const addAccountBar = addingAccount && authPhase !== 'pending' && authPhase !== 'submitting'
 			? h('div', { style: { ...S.authBox, marginTop: '8px' } },
 				h('div', { style: { fontWeight: 600, fontSize: '13px', marginBottom: '6px' } }, '➕ 添加新 Google 账号入池'),
+				h('div', { style: { ...S.muted, marginBottom: '8px' } }, '为新账号创建独立隔离目录（~/.dsh/agy-accounts/）。创建后可点击【💻 终端登录】进行第二账号认证。'),
 				h('div', { style: S.row },
 					h('input', {
 						style: S.input,
@@ -419,7 +432,7 @@ export function apply(ctx: ClientContext): void {
 						placeholder: '账号别名 (例如: 备用账号 2 / Work Account)',
 						onChange: (e: { target: { value: string } }) => setAliasInput(e.target.value),
 					}),
-					h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: () => void startAddAccount() }, '🚀 生成授权向导'),
+					h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: () => void startAddAccount() }, '🚀 创建账号槽位'),
 					h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setAddingAccount(false) }, '取消'),
 				),
 			)
