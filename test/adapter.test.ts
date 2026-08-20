@@ -99,13 +99,8 @@ async function runTurn(
       (c) => c.type === 'block-end' && (c as { block: { type: string } }).block.type === 'tool-call',
     ) as unknown as { block: { id: string; name: string; arguments: string } } | undefined
     if (end === undefined) throw new Error('tool-calls finish without a tool-call block')
-    if (end.block.name !== 'run_code') throw new Error('tool-call block must address run_code, got ' + end.block.name)
-    // The deployment only dispatches run_code directly; the embedded program
-    // invokes the mirror with a (run, step) cursor — that is what executes.
-    const wrapper = JSON.parse(end.block.arguments) as { code: string; description: string }
-    const inv = parseMirrorInvocation(wrapper.code)
-    if (inv === null) throw new Error('run_code wrapper lacks the agy_tool invocation')
-    const args = { run: inv.run, step: inv.step, tool: '' } as unknown as MirrorArgs
+    if (end.block.name !== 'agy_tool') throw new Error('tool-call block must address agy_tool, got ' + end.block.name)
+    const args = JSON.parse(end.block.arguments) as MirrorArgs
     toolCalls.push({ id: end.block.id, args })
     messages.push({ role: 'assistant', content: [end.block] } as unknown as Message)
     messages.push({

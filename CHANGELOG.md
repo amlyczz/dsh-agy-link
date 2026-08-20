@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.10 (2026-08-21)
+
+- **Fixed `Error: unknown tool "run_code"` loop (Root Cause).**
+  - Standard DSH agents and WebUI run direct tool dispatch without Code Mode runner (`run_code`). Emitting span cuts addressed to `run_code` triggered `ToolNotFoundError: unknown tool "run_code"` and trapped agy in an infinite error loop.
+  - Span cuts now directly emit `agy_tool` tool-call blocks, which execute instantly and render native tool cards (Terminal, Diff, Read, Search).
+- **Emphasized System Proxy & TUN Mode Requirements in README.**
+  - Added prominent warnings and configuration instructions for system proxy, TUN mode, and environment variables (`HTTPS_PROXY`) required for Google connectivity in restricted regions.
+
 ## 0.4.9 (2026-08-20)
 
 - **Theme-Adaptive System & High-Contrast Typography.**
