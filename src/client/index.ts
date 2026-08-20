@@ -257,16 +257,18 @@ const GLOBAL_CSS = `
 	border-radius: 50%;
 }
 .agy-card-hover {
-	transition: border-color 0.2s ease, box-shadow 0.2s ease;
+	transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
 }
 .agy-card-hover:hover {
-	border-color: rgba(128,128,128,0.35) !important;
+	border-color: #475569 !important;
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4) !important;
 }
 .agy-btn {
 	transition: all 0.15s ease;
+	user-select: none;
 }
 .agy-btn:hover:not(:disabled) {
-	filter: brightness(1.12);
+	filter: brightness(1.15);
 	transform: translateY(-0.5px);
 }
 .agy-btn:active:not(:disabled) {
@@ -279,8 +281,8 @@ const GLOBAL_CSS = `
 	position: fixed;
 	inset: 0;
 	z-index: 9999;
-	background: rgba(0, 0, 0, 0.55);
-	backdrop-filter: blur(4px);
+	background: rgba(0, 0, 0, 0.75);
+	backdrop-filter: blur(6px);
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -292,26 +294,27 @@ const GLOBAL_CSS = `
 	width: 100%;
 	max-width: 640px;
 	max-height: min(820px, calc(100vh - 48px));
-	background: var(--dsw-specific-menu, #1c1d22);
-	border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25));
+	background: #0f172a;
+	border: 1px solid #334155;
 	border-radius: 12px;
-	box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+	box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8);
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	color: inherit;
-	font-family: inherit;
+	color: #f8fafc;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 .agy-submodel-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 4px 8px;
-	font-size: 11px;
-	border-radius: 5px;
-	background: rgba(255, 255, 255, 0.04);
-	border: 1px solid rgba(255, 255, 255, 0.06);
-	margin: 3px 0;
+	padding: 6px 10px;
+	font-size: 11.5px;
+	border-radius: 6px;
+	background: #090d16;
+	border: 1px solid #1e293b;
+	margin: 4px 0;
+	color: #e2e8f0;
 }
 `;
 
@@ -319,68 +322,74 @@ const S: Record<string, Record<string, unknown>> = {
 	container: {
 		lineHeight: 1.5,
 		fontSize: '13px',
-		fontFamily: 'inherit',
-		color: 'inherit',
+		fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+		color: '#f8fafc',
 	},
 	headerCard: {
 		display: 'flex',
 		alignItems: 'center',
 		justifyContent: 'space-between',
-		padding: '12px 14px',
-		background: 'rgba(255, 255, 255, 0.04)',
-		border: '1px solid rgba(255, 255, 255, 0.12)',
+		padding: '12px 16px',
+		background: '#1e293b',
+		border: '1px solid #334155',
 		borderRadius: '8px',
 		marginBottom: '12px',
+		color: '#ffffff',
 	},
 	badgePrimary: {
 		display: 'inline-flex',
 		alignItems: 'center',
-		gap: '3px',
-		background: 'rgba(59, 130, 246, 0.2)',
-		color: '#60a5fa',
-		border: '1px solid rgba(59, 130, 246, 0.45)',
-		padding: '1px 7px',
+		gap: '4px',
+		background: '#1e3a8a',
+		color: '#93c5fd',
+		border: '1px solid #3b82f6',
+		padding: '2px 8px',
 		borderRadius: '5px',
 		fontSize: '11px',
-		fontWeight: 600,
+		fontWeight: 700,
 	},
 	badgeTag: {
 		display: 'inline-flex',
 		alignItems: 'center',
-		gap: '3px',
-		background: 'rgba(255, 255, 255, 0.06)',
-		color: 'var(--dsw-alias-text-primary, #e2e8f0)',
-		border: '1px solid rgba(255, 255, 255, 0.14)',
-		padding: '1px 6px',
-		borderRadius: '4px',
+		gap: '4px',
+		background: '#0f172a',
+		color: '#cbd5e1',
+		border: '1px solid #334155',
+		padding: '2px 7px',
+		borderRadius: '5px',
 		fontSize: '11px',
+		fontWeight: 600,
 	},
 	card: {
-		background: 'rgba(255, 255, 255, 0.03)',
-		border: '1px solid rgba(255, 255, 255, 0.12)',
-		borderRadius: '8px',
-		padding: '12px 14px',
-		marginBottom: '10px',
+		background: '#1e293b',
+		border: '1px solid #334155',
+		borderRadius: '10px',
+		padding: '14px 16px',
+		marginBottom: '12px',
+		color: '#ffffff',
 	},
 	cardPrimary: {
-		background: 'rgba(59, 130, 246, 0.05)',
-		border: '1px solid rgba(59, 130, 246, 0.45)',
-		borderRadius: '8px',
-		padding: '12px 14px',
-		marginBottom: '10px',
+		background: '#111d33',
+		border: '1.5px solid #3b82f6',
+		borderRadius: '10px',
+		padding: '14px 16px',
+		marginBottom: '12px',
+		boxShadow: '0 0 16px rgba(59, 130, 246, 0.25)',
+		color: '#ffffff',
 	},
 	quotaBox: {
-		background: 'rgba(0, 0, 0, 0.2)',
-		border: '1px solid rgba(255, 255, 255, 0.08)',
-		borderRadius: '7px',
+		background: '#090d16',
+		border: '1px solid #1e293b',
+		borderRadius: '8px',
 		padding: '8px 10px',
-		marginTop: '8px',
+		marginTop: '10px',
 	},
 	progressBarBg: {
 		flex: '1',
-		height: '7px',
+		height: '8px',
 		borderRadius: '4px',
-		background: 'rgba(255, 255, 255, 0.1)',
+		background: '#1e293b',
+		border: '1px solid #334155',
 		overflow: 'hidden',
 		margin: '0 10px',
 	},
@@ -388,122 +397,124 @@ const S: Record<string, Record<string, unknown>> = {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '4px 10px',
+		padding: '5px 12px',
 		borderRadius: '6px',
-		border: '1px solid rgba(255, 255, 255, 0.16)',
-		background: 'rgba(255, 255, 255, 0.07)',
-		color: 'inherit',
+		border: '1px solid #475569',
+		background: '#334155',
+		color: '#ffffff',
 		cursor: 'pointer',
 		fontSize: '12px',
-		fontWeight: 500,
+		fontWeight: 600,
 	},
 	btnPrimary: {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '5px 12px',
+		padding: '5px 13px',
 		borderRadius: '6px',
-		border: '1px solid rgba(59, 130, 246, 0.6)',
-		background: 'rgba(59, 130, 246, 0.28)',
-		color: '#60a5fa',
+		border: '1px solid #3b82f6',
+		background: '#2563eb',
+		color: '#ffffff',
 		cursor: 'pointer',
 		fontSize: '12px',
-		fontWeight: 600,
+		fontWeight: 700,
+		boxShadow: '0 2px 6px rgba(37, 99, 235, 0.35)',
 	},
 	btnDanger: {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '3px 8px',
-		borderRadius: '5px',
-		border: '1px solid rgba(239, 68, 68, 0.45)',
-		background: 'rgba(239, 68, 68, 0.15)',
-		color: '#f87171',
+		padding: '4px 9px',
+		borderRadius: '6px',
+		border: '1px solid #ef4444',
+		background: '#450a0a',
+		color: '#fca5a5',
 		cursor: 'pointer',
 		fontSize: '11px',
-		fontWeight: 500,
+		fontWeight: 600,
 	},
 	btnSm: {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '3px 8px',
+		padding: '4px 9px',
 		borderRadius: '5px',
-		border: '1px solid rgba(255, 255, 255, 0.14)',
-		background: 'rgba(255, 255, 255, 0.06)',
-		color: 'inherit',
+		border: '1px solid #475569',
+		background: '#334155',
+		color: '#f8fafc',
 		cursor: 'pointer',
-		fontSize: '11px',
-		fontWeight: 500,
+		fontSize: '11.5px',
+		fontWeight: 600,
 	},
 	btnSmPrimary: {
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
-		padding: '3px 8px',
+		padding: '4px 9px',
 		borderRadius: '5px',
-		border: '1px solid rgba(59, 130, 246, 0.45)',
-		background: 'rgba(59, 130, 246, 0.2)',
-		color: '#60a5fa',
+		border: '1px solid #60a5fa',
+		background: '#1e40af',
+		color: '#ffffff',
 		cursor: 'pointer',
-		fontSize: '11px',
-		fontWeight: 600,
+		fontSize: '11.5px',
+		fontWeight: 700,
 	},
 	segGroup: {
 		display: 'inline-flex',
-		background: 'rgba(255, 255, 255, 0.08)',
+		background: '#090d16',
 		borderRadius: '6px',
-		padding: '2px',
-		border: '1px solid rgba(255, 255, 255, 0.12)',
+		padding: '3px',
+		border: '1px solid #334155',
 	},
 	segBtn: {
-		padding: '3px 9px',
+		padding: '4px 10px',
 		borderRadius: '4px',
 		border: 'none',
 		background: 'transparent',
-		color: 'inherit',
+		color: '#94a3b8',
 		cursor: 'pointer',
-		fontSize: '11px',
-		fontWeight: 500,
-		opacity: 0.8,
+		fontSize: '11.5px',
+		fontWeight: 600,
 	},
 	segBtnActive: {
-		padding: '3px 9px',
+		padding: '4px 10px',
 		borderRadius: '4px',
 		border: 'none',
-		background: 'rgba(59, 130, 246, 0.35)',
-		color: '#60a5fa',
+		background: '#2563eb',
+		color: '#ffffff',
 		cursor: 'pointer',
-		fontSize: '11px',
-		fontWeight: 600,
-		opacity: 1,
+		fontSize: '11.5px',
+		fontWeight: 700,
+		boxShadow: '0 2px 4px rgba(37, 99, 235, 0.4)',
 	},
 	input: {
 		flex: '1',
-		padding: '6px 10px',
+		padding: '7px 12px',
 		borderRadius: '6px',
-		border: '1px solid rgba(255, 255, 255, 0.2)',
-		background: 'rgba(0, 0, 0, 0.25)',
-		color: 'inherit',
-		fontSize: '12px',
+		border: '1.5px solid #334155',
+		background: '#090d16',
+		color: '#ffffff',
+		fontSize: '12.5px',
 		outline: 'none',
 	},
-	muted: { color: 'var(--dsw-alias-text-secondary, #94a3b8)', fontSize: '11px' },
+	muted: { color: '#94a3b8', fontSize: '11.5px' },
 	noticeBanner: {
 		display: 'flex',
 		alignItems: 'center',
 		justifyContent: 'space-between',
-		padding: '8px 12px',
-		borderRadius: '6px',
-		marginBottom: '10px',
-		fontSize: '12px',
+		padding: '10px 14px',
+		borderRadius: '8px',
+		marginBottom: '12px',
+		fontSize: '12.5px',
+		fontWeight: 500,
 	},
 	authModal: {
-		background: 'rgba(59, 130, 246, 0.08)',
-		border: '1px solid rgba(59, 130, 246, 0.35)',
-		borderRadius: '8px',
-		padding: '12px 14px',
-		marginBottom: '12px',
+		background: '#0f223a',
+		border: '1.5px solid #3b82f6',
+		borderRadius: '10px',
+		padding: '14px 16px',
+		marginBottom: '14px',
+		color: '#ffffff',
 	},
 };
 
@@ -683,15 +694,15 @@ export function apply(ctx: ClientContext): void {
 		const renderToastBanner = () => {
 			if (!toast) return null;
 			const typeStyles = {
-				success: { background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.4)', color: '#10b981' },
-				info: { background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: '#3b82f6' },
-				warn: { background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.4)', color: '#f59e0b' },
-				error: { background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', color: '#ef4444' },
+				success: { background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7' },
+				info: { background: '#1e3a8a', border: '1px solid #3b82f6', color: '#93c5fd' },
+				warn: { background: '#451a03', border: '1px solid #d97706', color: '#fde68a' },
+				error: { background: '#450a0a', border: '1px solid #dc2626', color: '#fca5a5' },
 			};
 			const style = typeStyles[toast.type];
 			return h('div', { style: { ...S.noticeBanner, ...style } },
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 500 } },
-					uiIcon(toast.type === 'success' ? 'check' : toast.type === 'error' || toast.type === 'warn' ? 'alert' : 'globe', 13, style.color),
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 } },
+					uiIcon(toast.type === 'success' ? 'check' : toast.type === 'error' || toast.type === 'warn' ? 'alert' : 'globe', 14, style.color),
 					h('span', null, toast.text),
 				),
 				h('button', {
@@ -719,18 +730,18 @@ export function apply(ctx: ClientContext): void {
 			const wWeekly = formatQuotaWindow(info?.weeklyResetTime);
 
 			const getColors = (pct: number) => {
-				if (pct < 0) return { bar: 'rgba(255, 255, 255, 0.12)', text: '#94a3b8', badge: 'rgba(255, 255, 255, 0.08)' };
-				if (pct <= 20) return { bar: 'linear-gradient(90deg, #ef4444, #f87171)', text: '#f87171', badge: 'rgba(239, 68, 68, 0.22)' };
-				if (pct <= 50) return { bar: 'linear-gradient(90deg, #f59e0b, #fbbf24)', text: '#fbbf24', badge: 'rgba(245, 158, 11, 0.22)' };
-				return { bar: 'linear-gradient(90deg, #10b981, #34d399)', text: '#34d399', badge: 'rgba(16, 185, 129, 0.22)' };
+				if (pct < 0) return { bar: '#334155', text: '#94a3b8', bg: '#1e293b', border: '#475569' };
+				if (pct <= 20) return { bar: 'linear-gradient(90deg, #dc2626, #ef4444)', text: '#fca5a5', bg: '#450a0a', border: '#dc2626' };
+				if (pct <= 50) return { bar: 'linear-gradient(90deg, #d97706, #f59e0b)', text: '#fde68a', bg: '#451a03', border: '#d97706' };
+				return { bar: 'linear-gradient(90deg, #059669, #10b981)', text: '#6ee7b7', bg: '#064e3b', border: '#059669' };
 			};
 
 			const c5h = getColors(pct5h);
 			const cWeekly = getColors(pctWeekly);
 
-			const renderLine = (windowName: string, percent: number, c: { bar: string; text: string; badge: string }, resetStr: string) => {
-				return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11px', margin: '3px 0' } },
-					h('span', { style: { width: '50px', color: 'var(--dsw-alias-text-primary, #e2e8f0)', fontSize: '10.5px', fontWeight: 600, flexShrink: 0 } }, windowName),
+			const renderLine = (windowName: string, percent: number, c: { bar: string; text: string; bg: string; border: string }, resetStr: string) => {
+				return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '4px 0' } },
+					h('span', { style: { width: '52px', color: '#93c5fd', fontSize: '11px', fontWeight: 700, flexShrink: 0 } }, windowName),
 					h('div', { style: S.progressBarBg },
 						h('div', {
 							className: 'agy-progress-fill',
@@ -738,28 +749,30 @@ export function apply(ctx: ClientContext): void {
 								width: `${percent < 0 ? 100 : percent}%`,
 								height: '100%',
 								background: c.bar,
-								borderRadius: '4px',
+								borderRadius: '3px',
 							},
 						}),
 					),
-					h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: '135px', justifyContent: 'flex-end', flexShrink: 0 } },
+					h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', minWidth: '140px', justifyContent: 'flex-end', flexShrink: 0 } },
 						h('span', {
 							style: {
-								padding: '1px 6px',
+								padding: '2px 7px',
 								borderRadius: '4px',
-								background: c.badge,
+								background: c.bg,
 								color: c.text,
+								border: `1px solid ${c.border}`,
 								fontWeight: 700,
-								fontSize: '11px',
+								fontSize: '11.5px',
+								lineHeight: 1.2,
 							},
 						}, percent < 0 ? '—' : `${percent}%`),
-						resetStr ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #cbd5e1)', fontSize: '10.5px', fontWeight: 500 } }, `↻ ${resetStr}`) : null,
+						resetStr ? h('span', { style: { color: '#cbd5e1', fontSize: '11px', fontWeight: 500 } }, `↻ ${resetStr}`) : null,
 					),
 				);
 			};
 
-			return h('div', { style: { margin: '6px 0', padding: '6px 8px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' } },
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '12px', marginBottom: '4px', color: 'var(--dsw-alias-text-primary, #f8fafc)' } },
+			return h('div', { style: { margin: '6px 0', padding: '8px 10px', background: '#131d2e', borderRadius: '7px', border: '1px solid #1e293b' } },
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12.5px', marginBottom: '5px', color: '#ffffff' } },
 					brandIcon(FAMILY_BRAND[familyKey], 14),
 					h('span', null, label),
 				),
@@ -771,7 +784,7 @@ export function apply(ctx: ClientContext): void {
 		const renderedAccountCards = accounts.map((acc: ManagedAccount) => {
 			const isPrimary = acc.id === pool?.primaryAccountId;
 			const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
-			const dotColor = !acc.enabled ? '#9aa0a6' : hasCooldown ? '#f59e0b' : '#10b981';
+			const dotColor = !acc.enabled ? '#64748b' : hasCooldown ? '#f59e0b' : '#10b981';
 			const isEditingProxy = editingProxyId === acc.id;
 			const isExpanded = expandedModels[acc.id] ?? false;
 
@@ -787,23 +800,23 @@ export function apply(ctx: ClientContext): void {
 			];
 
 			return h('div', { key: acc.id, className: 'agy-card-hover', style: cardStyle },
-				h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' } },
+				h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
 						h('span', {
 							className: 'agy-pulse-dot',
-							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}88` },
+							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}aa` },
 						}),
-						h('span', { style: { fontWeight: 600, fontSize: '13px' } }, acc.alias),
-						acc.email ? h('span', { style: { ...S.badgeTag, color: '#3b82f6', borderColor: 'rgba(59,130,246,0.3)', gap: '4px' } },
-							uiIcon('mail', 11, '#3b82f6'),
+						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: '#ffffff' } }, acc.alias),
+						acc.email ? h('span', { style: { ...S.badgeTag, background: '#1e293b', color: '#93c5fd', borderColor: '#3b82f6', gap: '5px' } },
+							uiIcon('mail', 11, '#60a5fa'),
 							acc.email,
 						) : null,
 						isPrimary ? h('span', { style: { ...S.badgePrimary, gap: '4px' } },
-							uiIcon('star', 10, '#3b82f6'),
+							uiIcon('star', 10, '#93c5fd'),
 							'主用',
 						) : null,
-						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, color: '#10b981', borderColor: 'rgba(16,185,129,0.3)', gap: '4px' } },
-							uiIcon('globe', 11, '#10b981'),
+						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, background: '#064e3b', color: '#6ee7b7', borderColor: '#059669', gap: '5px' } },
+							uiIcon('globe', 11, '#34d399'),
 							'代理',
 						) : null,
 					),
@@ -867,40 +880,41 @@ export function apply(ctx: ClientContext): void {
 				),
 				hasCooldown ? h('div', {
 					style: {
-						background: 'rgba(245,158,11,0.1)',
-						border: '1px solid rgba(245,158,11,0.3)',
-						borderRadius: '6px',
-						padding: '4px 8px',
-						color: '#f59e0b',
-						fontSize: '11px',
-						marginTop: '6px',
+						background: '#451a03',
+						border: '1px solid #d97706',
+						borderRadius: '7px',
+						padding: '6px 10px',
+						color: '#fde68a',
+						fontSize: '11.5px',
+						fontWeight: 600,
+						marginTop: '8px',
 						display: 'flex',
 						alignItems: 'center',
 						justifyContent: 'space-between',
 					},
 				},
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-						uiIcon('alert', 12, '#f59e0b'),
+						uiIcon('alert', 13, '#fde68a'),
 						h('span', null, '部分模型限流中，已自动切换账号'),
 					),
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
-						style: { ...S.btnSm, color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.15)', gap: '3px' },
+						style: { ...S.btnSm, color: '#fde68a', borderColor: '#d97706', background: '#78350f', gap: '4px' },
 						disabled: isBusy,
 						onClick: () => void clearCooldown(acc.id),
-					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, '#f59e0b'), ' 清除冷却']),
+					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, '#fde68a'), ' 清除冷却']),
 				) : null,
 				isEditingProxy ? h('div', {
 					style: {
-						marginTop: '6px',
-						padding: '8px 10px',
-						background: 'rgba(128,128,128,0.06)',
-						borderRadius: '6px',
-						border: '1px solid rgba(128,128,128,0.15)',
+						marginTop: '8px',
+						padding: '10px 12px',
+						background: '#090d16',
+						borderRadius: '7px',
+						border: '1px solid #334155',
 					},
 				},
-					h('div', { style: { display: 'flex', gap: '6px' } },
+					h('div', { style: { display: 'flex', gap: '8px' } },
 						h('input', {
 							style: S.input,
 							value: proxyInputs[acc.id] !== undefined ? proxyInputs[acc.id] : (acc.proxyUrl ?? ''),
@@ -1038,10 +1052,10 @@ export function apply(ctx: ClientContext): void {
 			renderToastBanner(),
 			addAccountSection,
 			renderedAccountCards,
-			h('div', { style: { marginTop: '14px', paddingTop: '10px', borderTop: '1px solid rgba(128,128,128,0.15)' } },
-				h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+			h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #334155' } },
+				h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: S.muted }, '权限模式:'),
+						h('span', { style: { ...S.muted, color: '#cbd5e1', fontWeight: 600 } }, '权限模式:'),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
@@ -1055,13 +1069,13 @@ export function apply(ctx: ClientContext): void {
 							}, 'accept-edits (改代码)'),
 							h('button', {
 								type: 'button',
-								style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: '#ef4444', background: 'rgba(239,68,68,0.2)' } : S.segBtn,
+								style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: '#fca5a5', background: '#7f1d1d', border: '1px solid #ef4444' } : S.segBtn,
 								onClick: () => void setCfg('permissionMode', 'skip'),
 							}, 'skip (全自动免确认)'),
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: S.muted }, '思考强度:'),
+						h('span', { style: { ...S.muted, color: '#cbd5e1', fontWeight: 600 } }, '思考强度:'),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
@@ -1086,7 +1100,7 @@ export function apply(ctx: ClientContext): void {
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: S.muted }, '号池调度:'),
+						h('span', { style: { ...S.muted, color: '#cbd5e1', fontWeight: 600 } }, '号池调度:'),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
@@ -1142,32 +1156,33 @@ export function apply(ctx: ClientContext): void {
 						display: 'flex',
 						alignItems: 'center',
 						justifyContent: 'space-between',
-						padding: '12px 16px',
-						borderBottom: '1px solid rgba(128,128,128,0.2)',
-						background: 'rgba(128,128,128,0.05)',
+						padding: '14px 18px',
+						borderBottom: '1px solid #334155',
+						background: '#1e293b',
+						color: '#ffffff',
 					},
 				},
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 						agyIcon(18),
-						h('strong', { style: { fontSize: '14px' } }, 'Antigravity 管理控制台'),
+						h('strong', { style: { fontSize: '14.5px', fontWeight: 700 } }, 'Antigravity 管理控制台'),
 					),
 					h('button', {
 						type: 'button',
 						title: '关闭 (Esc)',
 						style: {
-							background: 'transparent',
-							border: 'none',
-							color: '#9aa0a6',
+							background: '#334155',
+							border: '1px solid #475569',
+							color: '#f8fafc',
 							cursor: 'pointer',
-							padding: '4px 6px',
-							borderRadius: '4px',
+							padding: '4px 8px',
+							borderRadius: '6px',
 							display: 'inline-flex',
 							alignItems: 'center',
 						},
 						onClick: () => agyModalStore.setOpen(false),
-					}, uiIcon('x', 14, '#9aa0a6')),
+					}, uiIcon('x', 14, '#f8fafc')),
 				),
-				h('div', { style: { overflowY: 'auto', padding: '16px', flex: '1' } },
+				h('div', { style: { overflowY: 'auto', padding: '18px', flex: '1', background: '#0f172a' } },
 					h(AgySettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
 				),
 			),
@@ -1201,10 +1216,8 @@ export function apply(ctx: ClientContext): void {
 		const accounts = pool?.accounts ?? [];
 		const hasCooldown = accounts.some((a) => Object.entries(a.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now()));
 		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
-		const color = status === null ? '#9aa0a6' : status.dormantReason ? '#f59e0b' : hasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
+		const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : hasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
 
-		// The console modal lives with the always-mounted header badge (the
-		// sidebar footer shortcut was removed per product decision).
 		const badge = h('button',
 			{
 				type: 'button',
@@ -1212,17 +1225,19 @@ export function apply(ctx: ClientContext): void {
 				className: 'agy-btn',
 				onClick: () => agyModalStore.setOpen(true),
 				style: {
-					background: 'transparent',
-					border: '1px solid rgba(128,128,128,0.25)',
+					background: '#1e293b',
+					border: '1px solid #334155',
 					borderRadius: '999px',
 					cursor: 'pointer',
-					padding: '2px 8px',
-					fontSize: '11px',
+					padding: '3px 10px',
+					fontSize: '11.5px',
+					fontWeight: 600,
 					lineHeight: 1.5,
-					color: 'inherit',
+					color: '#f8fafc',
 					display: 'inline-flex',
 					alignItems: 'center',
-					gap: '5px',
+					gap: '6px',
+					boxShadow: '0 1px 3px rgba(0, 0, 0, 0.3)',
 				},
 			},
 			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color } }),
