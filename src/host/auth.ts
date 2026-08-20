@@ -11,13 +11,14 @@ export type AuthPhase = 'idle' | 'pending' | 'submitting' | 'ok' | 'failed' | 's
 export interface AuthStatus {
   phase: AuthPhase;
   url?: string;
+  qrDataUrl?: string;
   startedAt?: number;
-  /** agy hard-codes a ~60s wait for the code; fresh URL after that. */
+  /** agy hard-codes a wait for the code; fresh URL after that. */
   expiresAt?: number;
   message?: string;
 }
 
-const URL_WAIT_MS = 15_000;
+const URL_WAIT_MS = 20_000;
 const CODE_SETTLE_MS = 90_000;
 
 export class AuthHelper {
@@ -125,7 +126,7 @@ export class AuthHelper {
       return this.status();
     }
     const startedAt = Date.now();
-    this.state = { phase: 'pending', startedAt, expiresAt: startedAt + 55_000 };
+    this.state = { phase: 'pending', startedAt, expiresAt: startedAt + 120_000 };
     const url = await new Promise<string | null>((resolve) => {
       this.urlWaiter = resolve;
       this.urlTimer = setTimeout(() => {
@@ -141,7 +142,14 @@ export class AuthHelper {
       this.cancel();
       return this.status();
     }
-    this.state = { phase: 'pending', url, startedAt, expiresAt: startedAt + 55_000 };
+    let qrDataUrl: string | undefined
+    try {
+      const qrcode = (await import('qrcode')) as unknown as { toDataURL: (t: string, o?: { width?: number; margin?: number }) => Promise<string> }
+      qrDataUrl = await qrcode.toDataURL(url, { width: 220, margin: 1 })
+    } catch {
+      // ignore qr generation error
+    }
+    this.state = { phase: 'pending', url, qrDataUrl, startedAt, expiresAt: startedAt + 120_000 };
     return this.status();
   }
 
@@ -175,11 +183,19 @@ export class AuthHelper {
     }
     const tail = outcome.stdout + outcome.stderrTail;
     if (outcome.code === 0 && !looksLikeAuthFailure(tail)) {
+      this.signedInCache = { value: true, at: Date.now() };
       this.state = { phase: 'ok', message: 'authenticated' };
     } else {
+      this.signedInCache = { value: false, at: Date.now() };
       this.state = { phase: 'failed', message: outcome.stderrTail.trim() || 'authorization code rejected' };
     }
     this.probe = null;
+    return this.status();
+  }
+
+  cancelAuth(): AuthStatus {
+    this.cancel();
+    this.state = { phase: 'signed-out', message: 'login cancelled' };
     return this.status();
   }
 

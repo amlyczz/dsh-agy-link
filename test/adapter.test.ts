@@ -319,9 +319,20 @@ test('buildArgs assembles flags per ADR-3/8/10', () => {
   assert.equal(args[args.indexOf('--conversation') + 1], 'c9')
   assert.equal(args[args.indexOf('--print-timeout') + 1], '2m')
   assert.equal(args[args.indexOf('--add-dir') + 1], '/tmp')
-  assert.equal(args[args.length - 1], 'do it')
-  const planArgs = adapter.buildArgs({ prompt: 'p', model: 'm', permissionMode: 'plan', timeoutMs: 60_000, extraArgs: [] })
+  const planArgs = adapter.buildArgs({ prompt: 'p', model: 'gemini-3.5-flash', permissionMode: 'plan', timeoutMs: 60_000, extraArgs: [] })
   assert.equal(planArgs[planArgs.indexOf('--mode') + 1], 'plan')
+
+  // Non-Gemini models (Claude, GPT-OSS) MUST strip --effort and resolve aliases
+  const claudeArgs = adapter.buildArgs({
+    prompt: 'hello',
+    model: 'claude-opus-4-6',
+    effort: 'medium',
+    permissionMode: 'plan',
+    timeoutMs: 60_000,
+    extraArgs: [],
+  })
+  assert.equal(claudeArgs[claudeArgs.indexOf('--model') + 1], 'claude-opus-4-6-thinking')
+  assert.ok(!claudeArgs.includes('--effort'), 'effort flag stripped for non-gemini models')
 })
 
 test('buildDigest bounds output and keeps newest turns', () => {

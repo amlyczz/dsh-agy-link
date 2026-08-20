@@ -47,7 +47,14 @@ interface StatusPayload {
 	workspaceRoot?: string;
 	defaultModel?: string;
 	defaultEffort?: string;
-	auth?: { phase: string; url?: string; message?: string };
+	auth?: {
+		phase: string;
+		url?: string;
+		qrDataUrl?: string;
+		startedAt?: number;
+		expiresAt?: number;
+		message?: string;
+	};
 	catalog?: { source: string; count: number; lastError: string | null };
 	bindings?: number;
 	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
@@ -90,13 +97,23 @@ const S: Record<string, Record<string, unknown>> = {
 		fontSize: '12px',
 	},
 	btnPrimary: {
-		padding: '6px 12px',
+		padding: '6px 14px',
 		borderRadius: '6px',
 		border: '1px solid rgba(64,140,255,0.6)',
 		background: 'rgba(64,140,255,0.25)',
-		color: 'inherit',
+		color: '#408cff',
 		cursor: 'pointer',
 		fontSize: '13px',
+		fontWeight: 600,
+	},
+	btnDanger: {
+		padding: '4px 10px',
+		borderRadius: '6px',
+		border: '1px solid rgba(229,72,77,0.5)',
+		background: 'rgba(229,72,77,0.15)',
+		color: '#e5484d',
+		cursor: 'pointer',
+		fontSize: '12px',
 	},
 	input: {
 		flex: '1',
@@ -108,6 +125,13 @@ const S: Record<string, Record<string, unknown>> = {
 		fontSize: '12px',
 	},
 	muted: { color: '#9aa0a6', fontSize: '12px' },
+	authBox: {
+		background: 'rgba(128,128,128,0.06)',
+		border: '1px solid rgba(128,128,128,0.2)',
+		borderRadius: '8px',
+		padding: '12px',
+		margin: '10px 0',
+	},
 };
 
 export function apply(ctx: ClientContext): void {
@@ -124,7 +148,7 @@ export function apply(ctx: ClientContext): void {
 				if (alive) setStatus(st)
 			}
 			void tick()
-			const timer = setInterval(tick, 3000)
+			const timer = setInterval(tick, 2500)
 			return () => {
 				alive = false
 				clearInterval(timer)
@@ -139,6 +163,13 @@ export function apply(ctx: ClientContext): void {
 			setBusy(true)
 			setNotice('')
 			await postJson('/plugins/agy-link/auth', {})
+			await refresh()
+			setBusy(false)
+		}
+
+		const cancelAuth = async (): Promise<void> => {
+			setBusy(true)
+			await postJson('/plugins/agy-link/auth-cancel', {})
 			await refresh()
 			setBusy(false)
 		}
@@ -161,25 +192,25 @@ export function apply(ctx: ClientContext): void {
 			setBusy(false)
 		}
 
-		// status === null means the /plugins/agy-link/status route answered
-		// non-200 or the fetch failed — that is a host-side routing problem,
-		// NOT "agy is not installed". Render it honestly instead of the old
-		// misleading "agy binary: not found" placeholders.
 		const reachable = status !== null
+		const authPhase = status?.auth?.phase ?? 'unknown'
+		const isAuthed = authPhase === 'ok'
 		const summary =
 			!reachable
 				? 'Status endpoint unreachable — the plugin host did not answer /plugins/agy-link/status. Restart the DSH web server and check its logs.'
 				: status.dormantReason
 					? 'Not ready — ' + status.dormantReason
-					: status.auth?.phase === 'ok'
-						? 'Ready — agy is connected'
-						: 'Needs Google login — start the login flow below, or run /agy auth'
+					: isAuthed
+						? 'Ready — agy is connected and authenticated'
+						: authPhase === 'pending'
+							? 'Google OAuth login in progress — approve in browser or scan QR'
+							: 'Needs Google login — click below to start OAuth flow'
 		const color =
 			!reachable
 				? '#e5484d'
 				: status.dormantReason
 					? '#f5a623'
-					: status.auth?.phase === 'ok'
+					: isAuthed
 						? '#30a46c'
 						: '#f5a623'
 
@@ -187,7 +218,7 @@ export function apply(ctx: ClientContext): void {
 			'div',
 			{ style: { ...S.muted, lineHeight: 1.6, margin: '6px 0 12px' } },
 			h('div', null, 'agy binary: ', status?.bin ?? 'not found', status?.version ? ' — v' + status.version : ''),
-			h('div', null, 'auth: ', status?.auth?.phase ?? 'unknown'),
+			h('div', null, 'auth: ', authPhase + (status?.auth?.message ? ' (' + status.auth.message + ')' : '')),
 			h('div', null, 'workspace: ', status?.workspaceRoot ? status.workspaceRoot : '(session cwd / process cwd)'),
 			h('div', null, 'models: ', String(status?.catalog?.count ?? 0), ' — ', status?.catalog?.source ?? ''),
 			h('div', null, 'bindings: ', String(status?.bindings ?? 0)),
@@ -219,37 +250,100 @@ export function apply(ctx: ClientContext): void {
 			'skip runs agy tools with --dangerously-skip-permissions (no approval prompts). plan is the safe read-only default.',
 		)
 
-		const authBlock = h(
+		const reAuthRow = h(
 			'div',
-			null,
-			h('div', { style: { fontWeight: 600, marginBottom: '4px' } }, 'Google login required'),
-			h('div', null, 'agy is not signed in. Start the login flow, scan the QR or open the URL, then paste the authorization code below.'),
-			h('img', { src: base + '/plugins/agy-link/qr', alt: 'auth QR', width: 200, height: 200, style: { display: 'block', margin: '8px auto' } }),
-			h('div', { style: { wordBreak: 'break-all' } }, status?.auth?.url ?? ''),
-			h(
-				'div',
-				{ style: S.row },
-				h('input', { style: S.input, value: code, placeholder: 'authorization code', onChange: (e: { target: { value: string } }) => setCode(e.target.value) }),
-				h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: () => void submitCode() }, 'Submit code'),
-				h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => void startAuth() }, 'Restart login'),
-			),
-			notice !== '' ? h('div', null, notice) : null,
+			{ style: { marginTop: '10px' } },
+			h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => void startAuth() }, '🔄 重新登录 Google 账号 (Re-authenticate)'),
 		)
 
-		const needsAuth =
-			reachable &&
-			!status.dormantReason &&
-			status.auth !== undefined &&
-			status.auth.phase !== 'ok'
+		// ---- Auth state machine rendering ----
+		let authContent: unknown = null
+		if (authPhase === 'pending') {
+			authContent = h(
+				'div',
+				{ style: S.authBox },
+				h('div', { style: { fontWeight: 600, marginBottom: '6px', fontSize: '13px' } }, '🟡 Google OAuth 登录进行中 (Login in progress)'),
+				h('div', { style: { ...S.muted, marginBottom: '8px' } }, '1. 点击下方按钮在浏览器中打开 Google 授权页面（需开启代理），或手机扫码：'),
+				status?.auth?.url
+					? h('div', { style: { margin: '8px 0' } },
+						h('a', {
+							href: status.auth.url,
+							target: '_blank',
+							rel: 'noopener noreferrer',
+							style: {
+								display: 'inline-block',
+								padding: '8px 14px',
+								borderRadius: '6px',
+								background: 'rgba(64,140,255,0.2)',
+								border: '1px solid rgba(64,140,255,0.6)',
+								color: '#408cff',
+								textDecoration: 'none',
+								fontWeight: 600,
+								fontSize: '13px',
+							},
+						}, '👉 点击在浏览器中打开 Google 授权页面 (Open Auth URL)'),
+					)
+					: null,
+				(status?.auth?.qrDataUrl || status?.auth?.url)
+					? h('div', { style: { textAlign: 'center', margin: '10px 0' } },
+						h('img', {
+							src: status.auth.qrDataUrl ?? (base + '/plugins/agy-link/qr'),
+							alt: 'auth QR',
+							width: 180,
+							height: 180,
+							style: { display: 'inline-block', borderRadius: '8px', border: '1px solid rgba(128,128,128,0.3)', background: '#fff', padding: '6px' },
+						}),
+						h('div', { style: { ...S.muted, fontSize: '11px', marginTop: '4px' } }, '扫描二维码完成 Google 账号授权'),
+					)
+					: null,
+				h('div', { style: { ...S.muted, margin: '8px 0 4px' } }, '2. 完成授权后复制 Google 返回的授权码，粘贴在下方并点击提交激活：'),
+				h(
+					'div',
+					{ style: S.row },
+					h('input', {
+						style: S.input,
+						value: code,
+						placeholder: '粘贴 Google 授权码 / Paste authorization code',
+						onChange: (e: { target: { value: string } }) => setCode(e.target.value),
+					}),
+					h('button', { type: 'button', style: S.btnPrimary, disabled: busy || code.trim() === '', onClick: () => void submitCode() }, busy ? '提交中...' : '提交激活 (Submit)'),
+					h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => void cancelAuth() }, '取消 (Cancel)'),
+				),
+				notice !== '' ? h('div', { style: { marginTop: '6px', color: '#f5a623', fontSize: '12px' } }, notice) : null,
+			)
+		} else if (authPhase === 'submitting') {
+			authContent = h(
+				'div',
+				{ style: S.authBox },
+				h('div', { style: { fontWeight: 600, marginBottom: '6px' } }, '⏳ 正在验证授权码并激活 agy 凭据...'),
+				h('div', { style: S.muted }, '请稍候，完成交换后将自动就绪。'),
+			)
+		} else if (authPhase === 'failed') {
+			authContent = h(
+				'div',
+				{ style: { ...S.authBox, borderColor: 'rgba(229,72,77,0.4)', background: 'rgba(229,72,77,0.08)' } },
+				h('div', { style: { fontWeight: 600, color: '#e5484d', marginBottom: '6px' } }, '❌ 登录失败 / 授权码错误'),
+				h('div', { style: { ...S.muted, color: '#e5484d', marginBottom: '8px' } }, status?.auth?.message ?? 'authorization code rejected or timeout'),
+				h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: () => void startAuth() }, '🔄 重新开始 Google 登录'),
+			)
+		} else if (!isAuthed) {
+			authContent = h(
+				'div',
+				{ style: S.authBox },
+				h('div', { style: { fontWeight: 600, marginBottom: '6px' } }, 'Google login required (需要登录 Google 账号)'),
+				h('div', { style: { ...S.muted, marginBottom: '10px' } }, 'agy 当前未登录。点击下方按钮开始 Google OAuth 授权流程，通过浏览器授权或扫码激活：'),
+				h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: () => void startAuth() }, '🚀 开始 Google OAuth 登录 (Start Google Login)'),
+			)
+		}
 
 		const controls =
 			!reachable
 				? null
 				: status.dormantReason
 					? h('div', { style: S.muted }, 'Bridge dormant: ', status.dormantReason)
-					: needsAuth
-						? authBlock
-						: h('div', null, infoBlock, modeRow, effortRow, skipWarn)
+					: isAuthed
+						? h('div', null, infoBlock, modeRow, effortRow, skipWarn, reAuthRow)
+						: authContent
 
 		return h('div', { style: { lineHeight: 1.6 } },
 			h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px' } },
@@ -257,7 +351,7 @@ export function apply(ctx: ClientContext): void {
 				'Antigravity (agy CLI)'),
 			h('div', { style: { ...S.muted, margin: '6px 0 12px' } }, summary),
 			controls,
-			h('div', { style: S.muted }, 'Run `/agy status` for full diagnostics, `/agy doctor` to export a report.'),
+			h('div', { style: { ...S.muted, marginTop: '12px' } }, 'Run `/agy status` for full diagnostics, `/agy doctor` to export a report.'),
 		)
 	}
 

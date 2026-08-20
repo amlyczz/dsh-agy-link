@@ -10,7 +10,7 @@ import { Err, looksLikeAuthFailure, PROVIDER_ID, type PluginConfig } from '../co
 import { diffConversations, snapshotConversations } from './discovery.ts'
 import { EventMapper } from './mapper.ts'
 import { parseMirrorCallId, type RunRecording, type RunRegistry } from './recording.ts'
-import { defaultEffortFor, findEntry, ModelCatalog } from './models.ts'
+import { defaultEffortFor, findEntry, ModelCatalog, resolveModelSlug } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
 import { startAgyProcess } from './runner.ts'
@@ -195,8 +195,10 @@ export class AgyAdapter extends LlmAdapter {
     const args: string[] = ['--output-format', 'stream-json', '--print-timeout', ptMins + 'm']
     if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
     else args.push('--mode', opts.permissionMode)
-    if (opts.model !== '') args.push('--model', opts.model)
-    if (opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
+    const effectiveModel = resolveModelSlug(opts.model)
+    if (effectiveModel !== '') args.push('--model', effectiveModel)
+    const isGemini = effectiveModel === '' || effectiveModel.toLowerCase().startsWith('gemini')
+    if (isGemini && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
     if (opts.conversationId) args.push('--conversation', opts.conversationId)
     for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
     args.push(...opts.extraArgs)
@@ -242,22 +244,26 @@ export class AgyAdapter extends LlmAdapter {
       return
     }
     const catalog = this.deps.catalog.get()
-    const model = options.model
+    const rawModel = options.model
+    const model = resolveModelSlug(rawModel)
     const entry = findEntry(catalog, model)
+    const isGemini = (model === '' ? cfg.defaultModel : model).toLowerCase().startsWith('gemini')
     // The catalog is advisory (the fallback list may be stale): accept unknown
     // ids, but validate explicit reasoning efforts against known entries.
     let effort: string | undefined
-    if (options.reasoningEffort !== undefined) {
-      const wanted = String(options.reasoningEffort)
-      if (entry && entry.efforts === null) {
-        throw new LlmError('model ' + model + ' has no selectable reasoning efforts', Err.UNSUPPORTED_REASONING_EFFORT)
+    if (isGemini) {
+      if (options.reasoningEffort !== undefined) {
+        const wanted = String(options.reasoningEffort)
+        if (entry && entry.efforts === null) {
+          throw new LlmError('model ' + model + ' has no selectable reasoning efforts', Err.UNSUPPORTED_REASONING_EFFORT)
+        }
+        if (entry && entry.efforts && !entry.efforts.includes(wanted)) {
+          throw new LlmError('reasoning effort ' + wanted + ' is not supported by ' + model, Err.UNSUPPORTED_REASONING_EFFORT)
+        }
+        effort = wanted
+      } else if (entry && entry.efforts) {
+        effort = defaultEffortFor(entry, cfg)
       }
-      if (entry && entry.efforts && !entry.efforts.includes(wanted)) {
-        throw new LlmError('reasoning effort ' + wanted + ' is not supported by ' + model, Err.UNSUPPORTED_REASONING_EFFORT)
-      }
-      effort = wanted
-    } else if (entry && entry.efforts) {
-      effort = defaultEffortFor(entry, cfg)
     }
 
     // ---- prompt assembly (ADR-7) ----

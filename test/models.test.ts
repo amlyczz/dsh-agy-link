@@ -54,8 +54,8 @@ test('fallback catalog carries the current model line-up incl. 3.7', () => {
   const ids = cat.map((e) => e.id)
   assert.ok(ids.includes('gemini-3.7-flash'), '3.7 flash present')
   assert.ok(ids.includes('gemini-3.6-flash'))
-  assert.ok(ids.includes('claude-opus-4-8'))
-  assert.ok(ids.includes('gpt-oss-120b'))
+  assert.ok(ids.includes('claude-opus-4-6-thinking'))
+  assert.ok(ids.includes('gpt-oss-120b-medium'))
   const f37 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'gemini-3.7-flash')
   assert.deepEqual(f37?.efforts, ['low', 'medium', 'high'])
 })
@@ -88,7 +88,7 @@ test('bare gemini base without siblings gets no efforts', () => {
 
 test('buildFallbackCatalog carries configurable efforts', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
-  assert.equal(cat.length, 18)
+  assert.equal(cat.length, 7)
   const flash = cat.find((e) => e.id === 'gemini-3.7-flash')
   assert.deepEqual(flash?.efforts, ['low', 'medium', 'high'])
   const claude = cat.find((e) => e.id === 'claude-sonnet-4-6')
@@ -116,3 +116,11 @@ test('effort suffix ids still resolve to their base entry', () => {
   const cat = { source: 'discovered' as const, models: folded, discoveredAt: 0 }
   assert.equal(findEntry(cat, 'gemini-3-6-flash')?.id, 'gemini-3-6-flash')
 })
+
+test('findEntry resolves aliases via resolveModelSlug', () => {
+  const cat = { source: 'fallback' as const, models: buildFallbackCatalog(DEFAULT_FALLBACK_MODELS), discoveredAt: 0 }
+  assert.equal(findEntry(cat, 'claude-opus-4-6')?.id, 'claude-opus-4-6-thinking')
+  assert.equal(findEntry(cat, 'claude-opus')?.id, 'claude-opus-4-6-thinking')
+  assert.equal(findEntry(cat, 'gpt-oss-120b')?.id, 'gpt-oss-120b-medium')
+})
+

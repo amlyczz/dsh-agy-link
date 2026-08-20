@@ -201,8 +201,28 @@ export class ModelCatalog {
   }
 }
 
+export function resolveModelSlug(id: string): string {
+  const s = id.trim().toLowerCase()
+  if (s === 'claude-opus-4-6' || s === 'claude-opus-4-8' || s === 'claude-opus' || s === 'claude-opus-4.6' || s === 'claude-opus-4-5') {
+    return 'claude-opus-4-6-thinking'
+  }
+  if (s === 'claude-sonnet' || s === 'claude-sonnet-4.6' || s === 'claude-sonnet-4-5') {
+    return 'claude-sonnet-4-6'
+  }
+  if (s === 'gpt-oss-120b' || s === 'gpt-oss-20b' || s === 'gpt-oss') {
+    return 'gpt-oss-120b-medium'
+  }
+  return id.trim()
+}
+
 export function findEntry(catalog: Catalog, id: string): CatalogEntry | undefined {
-  return catalog.models.find((m) => m.id === id);
+  const direct = catalog.models.find((m) => m.id === id);
+  if (direct) return direct;
+  const resolved = resolveModelSlug(id);
+  if (resolved !== id) {
+    return catalog.models.find((m) => m.id === resolved);
+  }
+  return undefined;
 }
 
 export function defaultEffortFor(entry: CatalogEntry, cfg: PluginConfig): string | undefined {
@@ -214,3 +234,4 @@ export function defaultEffortFor(entry: CatalogEntry, cfg: PluginConfig): string
   }
   return entry.efforts[entry.efforts.length - 1];
 }
+

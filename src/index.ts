@@ -347,6 +347,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         sendJson(res as RawRes, 200, st)
       })()
     }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/auth-cancel', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        await readBody(req)
+        const st = auth.cancelAuth()
+        sendJson(res as RawRes, 200, st)
+      })()
+    }})
     reg({ kind: 'exact', path: '/plugins/agy-link/config', handler: (req, res) => {
       void (async () => {
         if (methodOf(req) !== 'POST') {

@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.3.5 (2026-08-20)
+## 0.3.6 (2026-08-20)
+
+- **Comprehensive Google OAuth login state machine & reliable QR rendering.**
+  - Fixed broken QR image rendering by generating inline base64 data URLs directly in the `/status` payload (`auth.qrDataUrl`).
+  - Added direct one-click authorization link (`👉 点击在浏览器中打开 Google 授权页面`) so users can open the consent URL in their browser tab with proxy support.
+  - Implemented explicit state machine lifecycle: `signed-out` -> `pending` (URL & QR active) -> `submitting` (exchanging authorization code) -> `ok` (connected & refreshed) / `failed` (actionable error & restart).
+  - Added `/plugins/agy-link/auth-cancel` endpoint and in-GUI Cancel / Restart buttons.
+- **Fixed non-Gemini model execution (Claude Sonnet / Claude Opus / GPT-OSS).**
+  - The agy CLI rejects the `--effort` flag for Claude and GPT-OSS models (`--effort is not supported for model ...`). The adapter now automatically strips `--effort` when calling non-Gemini models.
+  - Added automatic model slug alias resolution: `claude-opus-4-6` and `claude-opus` resolve to `claude-opus-4-6-thinking`; `gpt-oss-120b` resolves to `gpt-oss-120b-medium`.
+  - Updated `DEFAULT_FALLBACK_MODELS` to match live agy 1.1.15 slugs.
+
 
 - **Sliding activity watchdog for long-running tasks.** Replaced the static
   wall-clock timeout with an activity-based idle watchdog: the timer rearms
