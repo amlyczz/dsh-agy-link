@@ -6,6 +6,8 @@ import type { PluginConfig } from '../common/types.ts'
 import type { AuthHelper } from './auth.ts'
 import type { ModelCatalog } from './models.ts'
 import type { SessionStore } from './sessions.ts'
+import type { AccountPoolManager } from './pool.ts'
+import type { QuotaService } from './quota.ts'
 
 export interface CommandDeps {
   cfg: () => PluginConfig
@@ -14,6 +16,8 @@ export interface CommandDeps {
   auth: () => AuthHelper | null
   catalog: () => ModelCatalog
   store: () => SessionStore
+  pool?: () => AccountPoolManager
+  quota?: () => QuotaService
   lastRun: () => { ok: boolean; code: string; durationMs: number; model: string } | null
   setOverride: (key: string, value: unknown) => void
   runDoctor: () => Promise<string>
@@ -22,6 +26,11 @@ export interface CommandDeps {
 const HELP = [
   '**/agy** — Antigravity (agy CLI) bridge',
   '- `/agy status` — binary, version, auth, mode, catalog, bindings',
+  '- `/agy pool` / `/agy accounts` — account pool, live quota %, cooldowns',
+  '- `/agy add-account [alias]` — start OAuth login for a new account slot',
+  '- `/agy refresh-quota` — query Google backend for fresh quota %',
+  '- `/agy clear-cooldown` — reset cooldown timers across all accounts',
+  '- `/agy remove-account <id>` — delete an account slot',
   '- `/agy auth` — start Google login (returns the consent URL)',
   '- `/agy auth-code <code>` — paste the authorization code',
   '- `/agy models` — refresh and list discovered models',
@@ -47,6 +56,74 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
   const arg = parts[1] ?? ''
   try {
     if (sub === 'status') return ok(await renderStatus(deps))
+    if (sub === 'pool' || sub === 'accounts') {
+      const pool = deps.pool?.()
+      if (!pool) return ok('Account pool not enabled.')
+      const accounts = pool.getAccounts()
+      const data = pool.getPoolData()
+      const lines = [
+        `**Antigravity Account Pool (${accounts.length} accounts, mode: ${data.mode})**`,
+      ]
+      for (let i = 0; i < accounts.length; i++) {
+        const a = accounts[i]
+        if (!a) continue
+        const isPrimary = a.id === data.primaryAccountId
+        const qG = a.quotas.google?.remainingFraction !== undefined ? `${Math.round(a.quotas.google.remainingFraction * 100)}%` : 'unknown'
+        const qC = a.quotas.anthropic?.remainingFraction !== undefined ? `${Math.round(a.quotas.anthropic.remainingFraction * 100)}%` : 'unknown'
+        const qO = a.quotas.openai?.remainingFraction !== undefined ? `${Math.round(a.quotas.openai.remainingFraction * 100)}%` : 'unknown'
+        const cds: string[] = []
+        for (const [fam, cd] of Object.entries(a.cooldowns)) {
+          if (cd && cd.cooldownUntil > Date.now()) {
+            const sec = Math.ceil((cd.cooldownUntil - Date.now()) / 1000)
+            cds.push(`${fam} cooldown: ${sec}s left (${cd.reason})`)
+          }
+        }
+        lines.push(
+          `${i + 1}. **${a.alias}** (${a.email || a.id})${isPrimary ? ' ⭐ primary' : ''}`,
+          `   - Proxy: ${a.proxyUrl || 'system default'}`,
+          `   - Quota: Gemini ${qG} | Claude ${qC} | GPT-OSS ${qO}`,
+          cds.length > 0 ? `   - ⚠️ ${cds.join('; ')}` : '   - Status: 🟢 Ready'
+        )
+      }
+      return ok(lines.join('\n'))
+    }
+    if (sub === 'add-account') {
+      const pool = deps.pool?.()
+      const auth = deps.auth()
+      if (!pool || !auth) return err('Account pool not available')
+      const acc = pool.createAccountSlot(arg || undefined)
+      const st = await auth.begin(acc.dir, acc.id)
+      if (st.phase === 'pending' && st.url) {
+        return ok([
+          `**Adding Account slot [${acc.alias}]** — open URL and paste the authorization code:`,
+          '',
+          st.url,
+          '',
+          `Run: \`/agy auth-code <code>\` to finish activation.`,
+        ].join('\n'))
+      }
+      return ok(`Slot created: ${acc.id} (${acc.alias})`)
+    }
+    if (sub === 'refresh-quota') {
+      const quota = deps.quota?.()
+      if (!quota) return err('Quota service not available')
+      await quota.refreshAllQuotas()
+      return ok('Refreshed quota statistics for all accounts in pool.')
+    }
+    if (sub === 'clear-cooldown') {
+      const pool = deps.pool?.()
+      if (!pool) return err('Account pool not available')
+      pool.clearCooldown(arg || undefined)
+      return ok('Cleared cooldown timers.')
+    }
+    if (sub === 'remove-account') {
+      if (!arg) return err('usage: /agy remove-account <id>')
+      const pool = deps.pool?.()
+      if (!pool) return err('Account pool not available')
+      const success = pool.deleteAccount(arg)
+      return success ? ok(`Removed account ${arg}`) : err(`Account ${arg} not found`)
+    }
+
     if (sub === 'auth') {
       const auth = deps.auth()
       if (!auth) return err('agy binary not found — install the CLI first')

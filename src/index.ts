@@ -18,6 +18,8 @@ import { ModelCatalog } from './host/models.ts'
 import { RunRegistry } from './host/recording.ts'
 import { MIN_AGY_VERSION, compareVersions, parseVersion, probeProcess, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
+import { AccountPoolManager } from './host/pool.ts'
+import { QuotaService } from './host/quota.ts'
 import { StreamJsonParser } from './host/parser.ts'
 import { defaultMediaDir, sweepDir, type ImageRefLike } from './host/media.ts'
 import { startMcpBridge, writeMcpConfig, type McpBridge, type ToolsServiceLike } from './host/mcp-bridge.ts'
@@ -84,6 +86,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   }
   const version = () => versionCache
   const store = new SessionStore(join(stateDir(), 'sessions.json'))
+  const pool = new AccountPoolManager()
+  const quota = new QuotaService(pool)
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
   const catalog = new ModelCatalog(
     async (signal) => {
@@ -107,6 +111,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     getConfig,
     catalog,
     store,
+    pool,
     bin,
     acquire: () => semaphore.acquire(),
     log,
@@ -195,6 +200,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       auth: () => auth,
       catalog: () => catalog,
       store: () => store,
+      pool: () => pool,
+      quota: () => quota,
       lastRun: () => lastRun,
       setOverride,
       runDoctor: async () => {
@@ -313,6 +320,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           defaultEffort: cfg.defaultEffort,
           askTool: cfg.askTool,
           auth: await auth.resolvedStatus(),
+          pool: pool.getPoolData(),
           catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
           bindings: Object.keys(store.all()).length,
           lastRun,
@@ -325,8 +333,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
         }
-        await readBody(req)
-        const st = await auth.begin()
+        const body = await readBody(req)
+        const homeDir = typeof body.homeDir === 'string' ? body.homeDir : undefined
+        const accountId = typeof body.accountId === 'string' ? body.accountId : undefined
+        const st = await auth.begin(homeDir, accountId)
         sendJson(res as RawRes, 200, st)
       })()
     }})
@@ -344,6 +354,12 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const st = await auth.submitCode(code)
         if (st.phase === 'ok') {
+          if (st.accountId) {
+            const acc = pool.getAccount(st.accountId)
+            if (acc) void quota.refreshAccountQuota(acc).catch(() => undefined)
+          } else {
+            void quota.refreshAllQuotas().catch(() => undefined)
+          }
           store.clear()
           void catalog.forceRefresh().catch(() => undefined)
         }
@@ -359,6 +375,101 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         await readBody(req)
         const st = auth.cancelAuth()
         sendJson(res as RawRes, 200, st)
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool', handler: (_req, res) => {
+      sendJson(res as RawRes, 200, pool.getPoolData())
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/add', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const alias = typeof body.alias === 'string' ? body.alias : undefined
+        const acc = pool.createAccountSlot(alias)
+        const st = await auth.begin(acc.dir, acc.id)
+        sendJson(res as RawRes, 200, { ...st, account: acc, pool: pool.getPoolData() })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/remove', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id : ''
+        pool.deleteAccount(id)
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/proxy', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id : ''
+        const proxyUrl = typeof body.proxyUrl === 'string' ? body.proxyUrl : undefined
+        pool.setAccountProxy(id, proxyUrl)
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/primary', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id : ''
+        pool.setPrimaryAccount(id)
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/mode', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const mode = body.mode === 'round-robin' ? 'round-robin' : 'sequential'
+        pool.setMode(mode)
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/refresh-quota', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id : ''
+        if (id) {
+          const acc = pool.getAccount(id)
+          if (acc) await quota.refreshAccountQuota(acc)
+        } else {
+          await quota.refreshAllQuotas()
+        }
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/clear-cooldown', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id : undefined
+        const family = typeof body.family === 'string' ? body.family : undefined
+        pool.clearCooldown(id, family as never)
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
     reg({ kind: 'exact', path: '/plugins/agy-link/config', handler: (req, res) => {

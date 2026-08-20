@@ -5,8 +5,11 @@
 // multi-turn continuity (ADR-4). Only the trailing user messages become the
 // prompt; earlier context rides agy-native history plus a digest prefix on
 // first bind (ADR-7).
+import { join } from 'node:path'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Err, looksLikeAuthFailure, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { Err, looksLikeAuthFailure, looksLikeRateLimit, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { modelFamilyOf } from '../common/pool-types.ts'
+import type { AccountPoolManager } from './pool.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
 import { EventMapper } from './mapper.ts'
 import { parseMirrorCallId, type RunRecording, type RunRegistry } from './recording.ts'
@@ -58,6 +61,7 @@ export interface AgyAdapterDeps {
   getConfig: () => PluginConfig
   catalog: ModelCatalog
   store: SessionStore
+  pool?: AccountPoolManager
   bin: () => string | null
   /** Shared semaphore for cross-session concurrency (ADR-12). */
   acquire: () => Promise<() => void>
@@ -277,7 +281,16 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     const trailingUser = messages.slice(lastAssistantIdx + 1).filter((m) => m.role === 'user')
-    const binding = sessionKey !== '' ? this.deps.store.get(sessionKey) : undefined
+    const family = modelFamilyOf(model === '' ? cfg.defaultModel : model)
+    const account = this.deps.pool ? this.deps.pool.selectAccount(family) : undefined
+    if (this.deps.pool && this.deps.pool.getAccounts().length > 0 && !account) {
+      const countdown = this.deps.pool.getEarliestResetCountdown(family)
+      const waitStr = countdown ? ` (earliest reset in ${Math.ceil(countdown / 1000)}s)` : ''
+      throw new LlmError(`All Antigravity accounts in pool are in cooldown for ${family}${waitStr}. Add an account or wait for reset.`, Err.AGY_ERROR)
+    }
+
+    const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
+    const binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
     let prompt = ''
     if (isAux && options.purpose === 'compaction') {
       const cap = cfg.compactionMaxChars > 0 ? cfg.compactionMaxChars : 800_000
@@ -372,6 +385,22 @@ export class AgyAdapter extends LlmAdapter {
       released = true
       release()
     }
+    const env = account
+      ? {
+          ...process.env,
+          HOME: account.dir,
+          GEMINI_CLI_HOME: join(account.dir, '.gemini'),
+          ...(account.proxyUrl ? {
+            ALL_PROXY: account.proxyUrl,
+            HTTPS_PROXY: account.proxyUrl,
+            HTTP_PROXY: account.proxyUrl,
+            all_proxy: account.proxyUrl,
+            https_proxy: account.proxyUrl,
+            http_proxy: account.proxyUrl,
+          } : {}),
+        }
+      : process.env
+
     let proc: ReturnType<typeof startAgyProcess>
     try {
       proc = startAgyProcess({
@@ -380,6 +409,7 @@ export class AgyAdapter extends LlmAdapter {
       cwd: workspaceRoot,
       timeoutMs: cfg.timeoutMs,
       signal: options.signal,
+      env,
       onLine: (line) => {
         for (const ev of parser.feed(line + '\n')) {
           if (ev.kind === 'init' && ev.conversationId) streamCid = ev.conversationId
@@ -424,23 +454,33 @@ export class AgyAdapter extends LlmAdapter {
         }
       }
       rec.settle(failure)
-      if (!isAux && sessionKey !== '') {
-        if (failure === null) {
+      if (failure === null) {
+        if (account) this.deps.pool?.recordSuccess(account.id, family)
+        if (!isAux && sessionAccountKey !== '') {
           const finalId = binding !== undefined ? binding.conversationId : conversationId
           if (finalId) {
-            this.deps.store.set(sessionKey, {
+            this.deps.store.set(sessionAccountKey, {
               conversationId: finalId,
               lastMessageCount: messages.length,
               updatedAt: Date.now(),
               model,
             })
           }
-        } else if (
-          failure.code === Err.AUTH ||
-          (failure.message && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
-        ) {
-          // If auth expired or agy rejected the previous conversation ID, drop the stale binding
-          this.deps.store.delete(sessionKey)
+        }
+      } else {
+        const isRateLimit = looksLikeRateLimit(failure.message)
+        if (account && isRateLimit) {
+          this.deps.pool?.recordFailure(account.id, family, failure.message)
+        }
+        if (!isAux && sessionAccountKey !== '') {
+          if (
+            failure.code === Err.AUTH ||
+            isRateLimit ||
+            (failure.message && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
+          ) {
+            // If auth expired or rate limit hit or conversation rejected, drop stale binding
+            this.deps.store.delete(sessionAccountKey)
+          }
         }
       }
       this.deps.onRun?.({

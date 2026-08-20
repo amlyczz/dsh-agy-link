@@ -181,3 +181,9 @@ export function extractAuthUrl(text: string): string | undefined {
   if (!m) return undefined
   return m[0].replace(/[)\]>.,;\x27\x22]+$/, '')
 }
+
+export function looksLikeRateLimit(text?: string): boolean {
+  if (!text) return false
+  return /429|too many requests|resource_exhausted|quota exceeded|rate limit|model overloaded|server.*experiencing high traffic/i.test(text)
+}
+

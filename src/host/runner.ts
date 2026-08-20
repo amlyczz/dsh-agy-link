@@ -96,6 +96,7 @@ export interface RunOptions {
   cwd?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
   onLine?: (line: string) => void;
   /** stdin stays writable (auth code injection). */
   keepStdin?: boolean;
@@ -134,17 +135,18 @@ function killTree(child: ChildProcess): void {
 export function startAgyProcess(opts: RunOptions): RunningProcess {
   const started = Date.now();
   const viaCmd = IS_WIN && isCmdShim(opts.bin)
+  const env = opts.env ?? process.env
   const child = viaCmd
     ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', [opts.bin, ...opts.args].map(windowsQuote).join(' ')], {
         cwd: opts.cwd,
-        env: process.env,
+        env,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsVerbatimArguments: true,
         windowsHide: true,
       })
     : spawn(opts.bin, opts.args, {
         cwd: opts.cwd,
-        env: process.env,
+        env,
         detached: !IS_WIN,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
@@ -249,7 +251,9 @@ export async function probeProcess(
   args: readonly string[],
   timeoutMs = 30_000,
   signal?: AbortSignal,
+  env?: NodeJS.ProcessEnv,
 ): Promise<RunOutcome> {
-  const p = startAgyProcess({ bin, args, timeoutMs, signal });
+  const p = startAgyProcess({ bin, args, timeoutMs, signal, env });
   return p.outcome;
 }
+

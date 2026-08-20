@@ -10,6 +10,7 @@ export type AuthPhase = 'idle' | 'pending' | 'submitting' | 'ok' | 'failed' | 's
 
 export interface AuthStatus {
   phase: AuthPhase;
+  accountId?: string;
   url?: string;
   qrDataUrl?: string;
   startedAt?: number;
@@ -27,6 +28,8 @@ export class AuthHelper {
   private capturedUrl: string | null = null;
   private urlWaiter: ((url: string) => void) | null = null;
   private urlTimer: NodeJS.Timeout | null = null;
+  private activeHomeDir: string | null = null;
+  private activeAccountId: string | null = null;
 
   private signedInCache: { value: boolean | null; at: number } | null = null
   private signedInFlight: Promise<boolean | null> | null = null
@@ -44,30 +47,35 @@ export class AuthHelper {
    * spawn failure, ambiguous output). While a login flow is active the
    * in-memory phase wins and the probe is skipped.
    */
-  async probeSignedIn(force = false): Promise<boolean | null> {
+  async probeSignedIn(force = false, homeDir?: string): Promise<boolean | null> {
     if (this.state.phase === 'pending' || this.state.phase === 'submitting') return null
-    if (this.state.phase === 'ok') return true
+    if (this.state.phase === 'ok' && !homeDir) return true
     const now = Date.now()
-    if (!force && this.signedInCache !== null && now - this.signedInCache.at < 60_000) {
+    if (!force && !homeDir && this.signedInCache !== null && now - this.signedInCache.at < 60_000) {
       return this.signedInCache.value
     }
-    if (this.signedInFlight !== null) return this.signedInFlight
+    if (this.signedInFlight !== null && !homeDir) return this.signedInFlight
     const bin = this.bin()
     if (!bin) return null
-    this.signedInFlight = (async () => {
+    const runner = async () => {
       let value: boolean | null = null
       try {
-        const out = await probeProcess(bin, ['models'], 15_000)
+        const env = homeDir ? { ...process.env, HOME: homeDir } : process.env
+        const out = await probeProcess(bin, ['models'], 15_000, undefined, env)
         const tail = out.stderrTail + '\n' + out.stdout.slice(0, 2000)
         if (out.code === 0 && !looksLikeAuthFailure(out.stdout)) value = true
         else if (out.code !== 0 && looksLikeAuthFailure(tail)) value = false
       } catch {
         value = null
       }
-      this.signedInCache = { value, at: Date.now() }
-      this.signedInFlight = null
+      if (!homeDir) {
+        this.signedInCache = { value, at: Date.now() }
+        this.signedInFlight = null
+      }
       return value
-    })()
+    }
+    if (homeDir) return runner()
+    this.signedInFlight = runner()
     return this.signedInFlight
   }
 
@@ -81,16 +89,18 @@ export class AuthHelper {
     return st
   }
 
-  private startProbe(): RunningProcess | null {
+  private startProbe(homeDir?: string): RunningProcess | null {
     const bin = this.bin();
     if (!bin) return null;
     this.cancel();
     this.capturedUrl = null;
+    const env = homeDir ? { ...process.env, HOME: homeDir } : process.env
     const proc = startAgyProcess({
       bin,
       args: ['-p', 'ping', '--output-format', 'stream-json', '--print-timeout', '4m'],
       timeoutMs: 5 * 60_000,
       keepStdin: true,
+      env,
       onLine: (line) => {
         if (this.capturedUrl) return;
         const url = extractAuthUrl(line);
@@ -119,14 +129,16 @@ export class AuthHelper {
   }
 
   /** Start (or restart) the login flow; resolves with the consent URL. */
-  async begin(): Promise<AuthStatus> {
-    const proc = this.startProbe();
+  async begin(homeDir?: string, accountId?: string): Promise<AuthStatus> {
+    this.activeHomeDir = homeDir || null;
+    this.activeAccountId = accountId || null;
+    const proc = this.startProbe(homeDir);
     if (!proc) {
-      this.state = { phase: 'failed', message: 'agy binary not found' };
+      this.state = { phase: 'failed', accountId: this.activeAccountId || undefined, message: 'agy binary not found' };
       return this.status();
     }
     const startedAt = Date.now();
-    this.state = { phase: 'pending', startedAt, expiresAt: startedAt + 120_000 };
+    this.state = { phase: 'pending', accountId: this.activeAccountId || undefined, startedAt, expiresAt: startedAt + 120_000 };
     const url = await new Promise<string | null>((resolve) => {
       this.urlWaiter = resolve;
       this.urlTimer = setTimeout(() => {
@@ -138,7 +150,7 @@ export class AuthHelper {
     this.urlTimer = null;
     if (!url) {
       // No URL within the window: agy is probably already signed in.
-      this.state = { phase: 'ok', startedAt, message: 'no login URL produced — already authenticated?' };
+      this.state = { phase: 'ok', accountId: this.activeAccountId || undefined, startedAt, message: 'no login URL produced — already authenticated?' };
       this.cancel();
       return this.status();
     }
@@ -149,7 +161,7 @@ export class AuthHelper {
     } catch {
       // ignore qr generation error
     }
-    this.state = { phase: 'pending', url, qrDataUrl, startedAt, expiresAt: startedAt + 120_000 };
+    this.state = { phase: 'pending', accountId: this.activeAccountId || undefined, url, qrDataUrl, startedAt, expiresAt: startedAt + 120_000 };
     return this.status();
   }
 
