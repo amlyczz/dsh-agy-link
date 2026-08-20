@@ -156,7 +156,7 @@ export class AgyAdapter extends LlmAdapter {
       provider: PROVIDER_ID,
       id: m.id,
       name: m.name,
-      inputModalities: ['text'] as const,
+      inputModalities: ['text', 'image'] as const,
     }))
   }
 
@@ -169,7 +169,7 @@ export class AgyAdapter extends LlmAdapter {
       provider: PROVIDER_ID,
       id: model,
       name,
-      inputModalities: ['text'] as const,
+      inputModalities: ['text', 'image'] as const,
       context: { contextWindow: cfg.contextWindowDefault },
       defaultMaxTokens: cfg.maxTokensDefault,
     }

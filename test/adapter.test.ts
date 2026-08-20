@@ -450,6 +450,17 @@ test('explicit workspaceRoot wins over the DSH session cwd', async () => {
   rmSync(sessionDir, { recursive: true, force: true })
 })
 
+test('listModels and resolveModel advertise text and image modalities (multimodal)', async () => {
+  const { adapter } = makeAdapter()
+  const models = await adapter.listModels('antigravity')
+  assert.ok(models.length > 0)
+  for (const m of models) {
+    assert.deepEqual(m.inputModalities, ['text', 'image'], `model ${m.id} should advertise text and image modalities`)
+  }
+  const resolved = await adapter.resolveModel('antigravity', 'gemini-3.7-flash')
+  assert.deepEqual(resolved.inputModalities, ['text', 'image'])
+})
+
 test.after(() => {
   rmSync(workDir, { recursive: true, force: true })
 })
