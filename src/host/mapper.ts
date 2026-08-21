@@ -17,7 +17,7 @@
 import { CallId, type StreamChunk, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { AgyEvent, RawUsage } from '../common/types.ts'
 import { mirrorCallId } from './recording.ts'
-import { MIRROR_TOOL_NAME } from './mirror-tool.ts'
+import { buildMirrorRunCode, WRAPPER_TOOL_NAME } from './mirror-tool.ts'
 
 export function usageFromRaw(raw: RawUsage): TokenUsage {
   // The DSH session layer rejects chunks carrying undefined-valued fields
@@ -203,18 +203,17 @@ export class EventMapper {
         this.announcedTools.add(ev.stepKey)
         if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
         // Cut the span: close any open block, then one tool-call block
-        // addressed to agy_tool (the registered mirror tool). The dispatch
-        // renders the native tool card; the callId still encodes the (run, eventIndex)
-        // cursor for continuation detection.
+        // addressed to run_code — the only tool the deployment's dispatch
+        // policy lets a model call directly — wrapping a generated program
+        // whose single statement invokes the registered agy_tool mirror.
+        // The inner dispatch renders the native tool card; the callId still
+        // encodes the (run, eventIndex) cursor for continuation detection.
         const close = this.closeOpen()
         if (close) yield close
         const idx = this.blockIdx
-        const argumentsJson = JSON.stringify({
-          run: this.opts.runId,
-          step: absIndex,
-          tool: ev.tool.name,
-          input: ev.tool.args,
-        })
+        const argumentsJson = JSON.stringify(
+          buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name),
+        )
         yield { type: 'block-start', index: idx, blockType: 'tool-call' }
         yield {
           type: 'block-end',
@@ -222,7 +221,7 @@ export class EventMapper {
           block: {
             type: 'tool-call',
             id: CallId(mirrorCallId(this.opts.runId, absIndex)),
-            name: MIRROR_TOOL_NAME,
+            name: WRAPPER_TOOL_NAME,
             arguments: argumentsJson,
           },
         }

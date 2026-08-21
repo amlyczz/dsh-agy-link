@@ -143,15 +143,17 @@ test('completed tool step cuts the span into a native tool-call + finish:tool-ca
     { kind: 'step', stepKey: '9', stepKind: 'text', text: 'after the cut' },
   ])
   const end = toolCallEnd(chunks)
-  // The block addresses agy_tool (the registered mirror tool); the arguments
-  // carry the (run, step, tool, input) payload.
-  assert.equal(end.block.name, 'agy_tool')
+  // The block addresses run_code (the only directly dispatchable tool); the
+  // generated program inside carries the agy_tool cursor.
+  assert.equal(end.block.name, 'run_code')
   assert.equal(end.block.id, mirrorCallId('run-abc', 2))
-  const args = JSON.parse(end.block.arguments) as { run: string; step: number; tool: string; input?: unknown }
-  assert.equal(args.run, 'run-abc')
-  assert.equal(args.step, 2)
-  assert.equal(args.tool, 'run_command')
-  assert.deepEqual(args.input, { command: 'ls' })
+  const args = JSON.parse(end.block.arguments) as { code: string; description: string }
+  const inv = parseMirrorInvocation(args.code)
+  assert.ok(inv !== null, 'code embeds the agy_tool invocation')
+  assert.equal(inv.run, 'run-abc')
+  assert.equal(inv.step, 2)
+  assert.ok(args.description.includes('run_command'), args.description)
+  assert.ok(args.code.includes("tools['agy_tool']"), 'program calls the mirror tool')
   const finish = asFinish(lastChunk(chunks))
   assert.equal(finish.reason.kind, 'tool-calls')
   assert.equal(m.isFinished, true)
@@ -166,9 +168,8 @@ test('erroring tool step cuts exactly like a successful one', () => {
     { kind: 'step', stepKey: '4', stepKind: 'tool', state: 'ERROR', text: '', tool: { name: 'find_by_name', args: { pattern: 'x' }, error: 'timed out' } },
   ])
   const end = toolCallEnd(chunks)
-  assert.equal(end.block.name, 'agy_tool')
-  const args = JSON.parse(end.block.arguments) as { tool: string }
-  assert.equal(args.tool, 'find_by_name')
+  const args = JSON.parse(end.block.arguments) as { description: string }
+  assert.ok(args.description.includes('find_by_name'), args.description)
   assert.equal(asFinish(lastChunk(chunks)).reason.kind, 'tool-calls')
 })
 

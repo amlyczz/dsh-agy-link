@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.11 (2026-08-21)
+
+- **Fixed `Error: unknown tool "agy_tool": only run_code is callable directly` in DSH Code Mode.**
+  - Restored the `run_code` wrapper dispatch (`WRAPPER_TOOL_NAME` + `buildMirrorRunCode`) for span cuts.
+  - Under DSH's default Code Mode (`agent-presets: default: code`), model-direct tool calls are collapsed unless addressed to `run_code`. Wrapping the mirror invocation in `run_code` allows internal sub-dispatch to `agy_tool` to replay recorded events without being blocked by DSH's dispatch guard.
+
 ## 0.4.10 (2026-08-21)
 
 - **Fixed `Error: unknown tool "run_code"` loop (Root Cause).**
