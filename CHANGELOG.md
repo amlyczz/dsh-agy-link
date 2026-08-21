@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.13 (2026-08-21)
+
+- **Fixed Multimodal Image Attachment Staging & Direct Disk Fallback.**
+  - **Dynamic Attachment Service Lookup**: Fixed Cordis proxy boundary issue where `(ctx as any).attachments` evaluated to `undefined` when not statically declared in `inject`; now resolves via `ctx.get('attachments')`.
+  - **Local Storage Direct Disk Fallback**: Added direct fallback to read from DSH's local content-addressed storage (`~/.dsh/attachments/v1/objects/<prefix>/<id>`), guaranteeing 100% reliable image byte extraction even if service bindings are uninitialized.
+  - **Explicit Vision Tool Directives**: Enhanced prompt staging lines to explicitly reference the `view_file` tool and absolute file path (`[image attached: "..." staged at ... Inspect it using the view_file tool with AbsolutePath: "..."]`), ensuring `agy` proactively inspects attached images even when the user sends an image without accompanying text.
+
 ## 0.4.12 (2026-08-21)
 
 - **Adaptive Tool Dispatch for Both Standard / Native Mode and Code Mode.**

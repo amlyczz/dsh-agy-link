@@ -550,6 +550,66 @@ test('adapts tool dispatch to Native Mode (agy_tool) vs Code Mode (run_code)', a
   assert.equal((nativeBlocks[0] as unknown as { block: { name: string } }).block.name, 'agy_tool')
 })
 
+test('multimodal: stages attached images and forwards path with view_file instructions', async () => {
+  const pngData = Buffer.from('89504e470d0a1a0a', 'hex')
+  const { adapter } = makeAdapter({}, {
+    readImage: async () => pngData,
+  })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-multimodal.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  // 1. Text + image
+  const imgMsg: Message = {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'what is this image?' },
+      {
+        type: 'image',
+        attachment: {
+          attachmentId: 'img_test_1' as never,
+          mediaType: 'image/png',
+          bytes: pngData.length,
+          width: 100,
+          height: 100,
+          name: 'diagram.png',
+        },
+      },
+    ],
+  } as unknown as Message
+
+  await runTurn(adapter, [imgMsg], { sessionId: 'sess-img' as never })
+  const argv1 = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt1 = argv1[argv1.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt1.includes('what is this image?'))
+  assert.ok(prompt1.includes('[image attached: "diagram.png"'))
+  assert.ok(prompt1.includes('Inspect it using the view_file tool'))
+  assert.ok(argv1.includes('--add-dir'))
+
+  // 2. Image only (no text)
+  const imgOnlyMsg: Message = {
+    role: 'user',
+    content: [
+      {
+        type: 'image',
+        attachment: {
+          attachmentId: 'img_test_2' as never,
+          mediaType: 'image/png',
+          bytes: pngData.length,
+          width: 50,
+          height: 50,
+        },
+      },
+    ],
+  } as unknown as Message
+
+  await runTurn(adapter, [imgOnlyMsg], { sessionId: 'sess-img-only' as never })
+  const argv2 = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt2 = argv2[argv2.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt2.includes('[image attached: "img_test_2"'))
+  assert.ok(prompt2.includes('[Please inspect the attached image(s) using view_file and assist the user.]'))
+})
+
 test.after(() => {
   rmSync(workDir, { recursive: true, force: true })
 })

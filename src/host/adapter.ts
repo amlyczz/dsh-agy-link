@@ -392,8 +392,14 @@ export class AgyAdapter extends LlmAdapter {
       const imageRefs: ImageRefLike[] = []
       for (const m of trailingUser) {
         for (const b of (m as { content?: readonly unknown[] }).content ?? []) {
-          const blk = b as { type?: string; attachment?: ImageRefLike }
-          if (blk && blk.type === 'image' && blk.attachment) imageRefs.push(blk.attachment)
+          const blk = b as { type?: string; attachment?: ImageRefLike; attachmentId?: string }
+          if (blk && blk.type === 'image') {
+            if (blk.attachment && typeof blk.attachment === 'object') {
+              imageRefs.push(blk.attachment)
+            } else if (typeof blk.attachmentId === 'string') {
+              imageRefs.push(blk as unknown as ImageRefLike)
+            }
+          }
         }
       }
       if (imageRefs.length > 0 && this.deps.readImage) {
@@ -407,7 +413,11 @@ export class AgyAdapter extends LlmAdapter {
           maxImages: cfg.mediaMaxImages,
           maxBytes: cfg.mediaMaxBytes,
         })
-        if (res.promptSuffix !== '') prompt = prompt === '' ? res.promptSuffix : prompt + '\n\n' + res.promptSuffix
+        if (res.promptSuffix !== '') {
+          prompt = prompt === ''
+            ? (res.promptSuffix + '\n\n[Please inspect the attached image(s) using view_file and assist the user.]')
+            : (prompt + '\n\n' + res.promptSuffix)
+        }
         if (res.staged.length > 0) stagedDirs = [dir]
       }
       if (prompt.trim() === '') {

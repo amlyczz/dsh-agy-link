@@ -97,7 +97,7 @@ export async function stageImages(opts: {
       const path = stagedPath(opts.dir, opts.key, i, ref.mediaType)
       await writeFile(path, data);
       staged.push({ path, name: label, width: ref.width, height: ref.height, bytes: ref.bytes });
-      lines.push('[image attached: "' + label + '" — view it with your file/vision tools at ' + path + ' (' + ref.width + 'x' + ref.height + ', ' + ref.bytes + ' bytes)]');
+      lines.push('[image attached: "' + label + '" — staged at ' + path + ' (' + ref.width + 'x' + ref.height + ', ' + ref.bytes + ' bytes). Inspect it using the view_file tool with AbsolutePath: "' + path + '"]');
       i++;
     }
   }

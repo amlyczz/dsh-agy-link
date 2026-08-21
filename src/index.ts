@@ -6,8 +6,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { overridesPath, readOverrides, resolveConfig, stateDir } from './common/config.ts'
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { dshHome, overridesPath, readOverrides, resolveConfig, stateDir } from './common/config.ts'
 import { PLUGIN_ID, PROVIDER_ID, type PluginConfig } from './common/types.ts'
 import { AgyAdapter } from './host/adapter.ts'
 import { defineAgyAskTool } from './host/ask-tool.ts'
@@ -135,14 +135,28 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       lastParser = p
     },
     readImage: async (ref: ImageRefLike) => {
-      const svc = (ctx as unknown as { attachments?: { readImage?: (r: ImageRefLike) => Promise<{ data?: Uint8Array } | null> } }).attachments
-      if (!svc || typeof svc.readImage !== 'function') return null
+      const svc = (ctx.get('attachments') as { readImage?: (r: ImageRefLike) => Promise<{ data?: Uint8Array } | null> } | undefined)
+        ?? (ctx as unknown as { attachments?: { readImage?: (r: ImageRefLike) => Promise<{ data?: Uint8Array } | null> } }).attachments
+      if (svc && typeof svc.readImage === 'function') {
+        try {
+          const stored = await svc.readImage(ref)
+          if (stored?.data) return stored.data
+        } catch {
+          // fall through to disk read fallback
+        }
+      }
       try {
-        const stored = await svc.readImage(ref)
-        return stored?.data ?? null
+        const id = ref.attachmentId
+        if (id && typeof id === 'string') {
+          const diskPath = join(dshHome(), 'attachments', 'v1', 'objects', id.slice(0, 2), id)
+          if (existsSync(diskPath)) {
+            return readFileSync(diskPath)
+          }
+        }
       } catch {
         return null
       }
+      return null
     },
   })
 
