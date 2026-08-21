@@ -63,6 +63,26 @@ test('normalizeStoredToken reads agy 1.1.16 nested shape with ISO expiry', () =>
   assert.equal(millis?.expiryMs, 1_800_000_000_000)
 })
 
+test('normalizeStoredToken parses go-keyring-base64 JSON payloads from Keychain', () => {
+  const payload = {
+    token: {
+      access_token: 'ya29.keychain_access',
+      token_type: 'Bearer',
+      refresh_token: '1//keychain_refresh',
+      expiry: '2026-08-21T15:34:29.273+08:00',
+    },
+    auth_method: 'consumer',
+  }
+  const b64 = Buffer.from(JSON.stringify(payload)).toString('base64')
+  const rawKeychainString = `go-keyring-base64:${b64}`
+  assert.ok(rawKeychainString.startsWith('go-keyring-base64:'))
+  const decoded = JSON.parse(Buffer.from(rawKeychainString.slice('go-keyring-base64:'.length), 'base64').toString('utf8'))
+  const token = normalizeStoredToken(decoded)
+  assert.equal(token?.accessToken, 'ya29.keychain_access')
+  assert.equal(token?.refreshToken, '1//keychain_refresh')
+  assert.equal(token?.expiryMs, Date.parse('2026-08-21T15:34:29.273+08:00'))
+})
+
 test('writeAgyTokenFile emits the agy on-disk format and round-trips', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-oauth-write-'))
   const home = join(dir, 'home')

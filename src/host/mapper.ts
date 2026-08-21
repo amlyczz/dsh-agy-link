@@ -17,7 +17,7 @@
 import { CallId, type StreamChunk, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { AgyEvent, RawUsage } from '../common/types.ts'
 import { mirrorCallId } from './recording.ts'
-import { buildMirrorRunCode, WRAPPER_TOOL_NAME } from './mirror-tool.ts'
+import { buildMirrorRunCode, MIRROR_TOOL_NAME, WRAPPER_TOOL_NAME } from './mirror-tool.ts'
 
 export function usageFromRaw(raw: RawUsage): TokenUsage {
   // The DSH session layer rejects chunks carrying undefined-valued fields
@@ -48,6 +48,11 @@ export interface EventMapperOptions {
   cutOnTool: boolean
   /** Whether an earlier span of this run already streamed assistant text. */
   initialSawText?: boolean
+  /**
+   * True if DSH is in Code Mode (options.tools has 'run_code').
+   * False if DSH is in Native / Standard Mode (options.tools has 'agy_tool' or standard tools).
+   */
+  useCodeWrapper?: boolean
   /**
    * Shared per-run usage tracker (lives on the recording, spans share it).
    * Step usage is per-call (current context); the result envelope is
@@ -202,18 +207,23 @@ export class EventMapper {
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)
         if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
-        // Cut the span: close any open block, then one tool-call block
-        // addressed to run_code — the only tool the deployment's dispatch
-        // policy lets a model call directly — wrapping a generated program
-        // whose single statement invokes the registered agy_tool mirror.
-        // The inner dispatch renders the native tool card; the callId still
-        // encodes the (run, eventIndex) cursor for continuation detection.
+        // Cut the span: close any open block, then one tool-call block.
+        // In Code Mode: addressed to run_code wrapping tools['agy_tool']({ run, step }).
+        // In Native Mode: addressed to agy_tool directly with { run, step, tool, input }.
+        // The callId still encodes the (run, eventIndex) cursor for continuation detection.
         const close = this.closeOpen()
         if (close) yield close
         const idx = this.blockIdx
-        const argumentsJson = JSON.stringify(
-          buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name),
-        )
+        const useCode = this.opts.useCodeWrapper === true
+        const toolName = useCode ? WRAPPER_TOOL_NAME : MIRROR_TOOL_NAME
+        const argumentsJson = useCode
+          ? JSON.stringify(buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name))
+          : JSON.stringify({
+              run: this.opts.runId,
+              step: absIndex,
+              tool: ev.tool.name,
+              ...(ev.tool.args !== undefined ? { input: ev.tool.args } : {}),
+            })
         yield { type: 'block-start', index: idx, blockType: 'tool-call' }
         yield {
           type: 'block-end',
@@ -221,7 +231,7 @@ export class EventMapper {
           block: {
             type: 'tool-call',
             id: CallId(mirrorCallId(this.opts.runId, absIndex)),
-            name: WRAPPER_TOOL_NAME,
+            name: toolName,
             arguments: argumentsJson,
           },
         }

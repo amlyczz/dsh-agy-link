@@ -229,6 +229,7 @@ export class AgyAdapter extends LlmAdapter {
     if (isAux && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
+    const isCodeMode = options.tools ? options.tools.some((t) => t.name === 'run_code') : false
     const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
     // cwd precedence: explicit config > the DSH session's own workspace >
     // the host process cwd. The last fallback can land agy in an UNRELATED
@@ -272,7 +273,7 @@ export class AgyAdapter extends LlmAdapter {
         }
         return
       }
-      yield* this.driveSpan(rec, continuation.eventIndex + 1, true)
+      yield* this.driveSpan(rec, continuation.eventIndex + 1, true, isCodeMode)
       return
     }
     // Mid-turn steer preemption: DSH claims the steered message at the next
@@ -330,6 +331,13 @@ export class AgyAdapter extends LlmAdapter {
 
     const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
     let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
+
+    // Model switch detection: If model changed in the session, drop stale agy conversation binding
+    const currentModel = model === '' ? cfg.defaultModel : model
+    if (!isAux && binding !== undefined && binding.model && binding.model !== currentModel) {
+      if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
+      binding = undefined
+    }
 
     // Compaction detection (ADR-013): If DSH compacted history or cleared earlier turns,
     // messages.length drops below the recorded watermark. Invalidate the stale agy
@@ -552,7 +560,7 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* this.driveSpan(rec, 0, !isAux)
+    yield* this.driveSpan(rec, 0, !isAux, isCodeMode)
   }
 
   /**
@@ -562,13 +570,19 @@ export class AgyAdapter extends LlmAdapter {
    * as this span's terminal chunk — the turn ends exactly like a native
    * provider error.
    */
-  private async *driveSpan(rec: RunRecording, from: number, cutOnTool: boolean): AsyncIterable<StreamChunk> {
+  private async *driveSpan(
+    rec: RunRecording,
+    from: number,
+    cutOnTool: boolean,
+    useCodeWrapper: boolean,
+  ): AsyncIterable<StreamChunk> {
     const queue = new ChunkQueue()
     void (async () => {
       const mapper = new EventMapper({
         runId: rec.runId,
         cutOnTool,
         initialSawText: rec.sawTextBefore(from),
+        useCodeWrapper,
         usage: rec,
       })
       let i = from

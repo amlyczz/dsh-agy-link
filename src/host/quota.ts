@@ -7,9 +7,10 @@
 // wrong client pair makes Google return invalid_client and surfaces as
 // "API key is invalid" in the UI. Quota refresh degrades silently to
 // "unavailable" when credentials cannot be sourced.
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   modelFamilyOf,
   type FamilyQuotaInfo,
@@ -150,6 +151,32 @@ interface QuotaSummaryResponse {
   description?: string
 }
 
+/**
+ * Reads the active primary Antigravity OAuth token from the macOS Keychain.
+ * agy 1.1.15+ on macOS stores primary credentials via go-keyring in the Keychain
+ * under service "gemini" / account "antigravity" (base64-encoded JSON).
+ */
+export function readMacKeychainToken(): StoredToken | null {
+  if (process.platform !== 'darwin') return null
+  try {
+    const raw = execFileSync('security', ['find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w'], {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    if (!raw) return null
+    let jsonStr = raw
+    if (raw.startsWith('go-keyring-base64:')) {
+      const b64 = raw.slice('go-keyring-base64:'.length)
+      jsonStr = Buffer.from(b64, 'base64').toString('utf8')
+    }
+    const parsed = JSON.parse(jsonStr) as Record<string, unknown>
+    return normalizeStoredToken(parsed)
+  } catch {
+    return null
+  }
+}
+
 export class QuotaService {
   private preferredEndpointIndex = 0
 
@@ -163,11 +190,16 @@ export class QuotaService {
   }
 
   /**
-   * Read the on-disk token document and normalize it to a flat StoredToken.
-   * Handles both agy's nested shape and legacy flat writers; any non-string
-   * access token (e.g. the nested `token` object itself) is rejected.
+   * Read the active token document and normalize it to a flat StoredToken.
+   * For the primary account on macOS, reads directly from the macOS Keychain
+   * where agy 1.1.15+ stores active credentials. Falls back to the on-disk file.
    */
   getStoredToken(account: ManagedAccount): StoredToken | null {
+    if (account.systemHome || !account.dir) {
+      const keychainToken = readMacKeychainToken()
+      if (keychainToken) return keychainToken
+    }
+
     const file = this.getTokenFilePath(account)
     if (!existsSync(file)) return null
     try {
@@ -182,7 +214,15 @@ export class QuotaService {
   private persistRefreshedToken(account: ManagedAccount, tokens: { access_token: string; expiryMs?: number }): void {
     const file = this.getTokenFilePath(account)
     try {
-      const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+      mkdirSync(dirname(file), { recursive: true })
+      let raw: Record<string, unknown> = {}
+      if (existsSync(file)) {
+        try {
+          raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+        } catch {
+          raw = {}
+        }
+      }
       const expiryIso = tokens.expiryMs ? new Date(tokens.expiryMs).toISOString() : undefined
       if (raw && typeof raw.token === 'object' && raw.token !== null) {
         const nested = raw.token as Record<string, unknown>
@@ -337,7 +377,9 @@ export class QuotaService {
     }
     const home = account.systemHome || !account.dir ? homedir() : account.dir
     let email = account.email
-    if (!email) {
+    // For primary/systemHome account or when email is missing, always detect
+    // the latest email from logs to immediately catch account switching outside DSH.
+    if (account.systemHome || !email) {
       const detected = detectEmailFromAgyLogs(home)
       if (detected) email = detected
     }
@@ -355,8 +397,8 @@ export class QuotaService {
       this.fetchAvailableModels(accessToken, account.proxyUrl),
     ])
 
-    // Try fetching email if still not set
-    if (!email) {
+    // Query userinfo endpoint if email still unknown or on systemHome accounts
+    if (account.systemHome || !email) {
       const info = await this.fetchUserInfo(accessToken, account.proxyUrl)
       if (info?.email) email = info.email
     }

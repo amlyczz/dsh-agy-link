@@ -10,8 +10,8 @@ type UsageChunk = Extract<StreamChunk, { type: 'usage' }>
 type ToolCallEnd = Extract<StreamChunk, { type: 'block-end' }> & { block: { type: 'tool-call'; id: string; name: string; arguments: string } }
 
 /** Fresh mapper for one span of run r1 (cut on completed tools, like main turns). */
-function newSpan(runId = 'r1', initialSawText = false): EventMapper {
-  return new EventMapper({ runId, cutOnTool: true, initialSawText })
+function newSpan(runId = 'r1', initialSawText = false, useCodeWrapper = false): EventMapper {
+  return new EventMapper({ runId, cutOnTool: true, initialSawText, useCodeWrapper })
 }
 
 function mapAll(mapper: EventMapper, events: unknown[], startIdx = 0): StreamChunk[] {
@@ -132,8 +132,8 @@ test('snapshot-style repeated steps stream as suffix deltas', () => {
   assert.deepEqual(deltas, ['Hello', ' world'])
 })
 
-test('completed tool step cuts the span into a native tool-call + finish:tool-calls', () => {
-  const m = newSpan('run-abc')
+test('completed tool step cuts the span into native agy_tool call in standard mode', () => {
+  const m = newSpan('run-abc', false, false)
   const chunks = mapAll(m, [
     { kind: 'step', stepKey: '2', stepKind: 'text', text: 'Working on it' },
     // ACTIVE has no payload yet: no cut
@@ -143,34 +143,54 @@ test('completed tool step cuts the span into a native tool-call + finish:tool-ca
     { kind: 'step', stepKey: '9', stepKind: 'text', text: 'after the cut' },
   ])
   const end = toolCallEnd(chunks)
-  // The block addresses run_code (the only directly dispatchable tool); the
-  // generated program inside carries the agy_tool cursor.
-  assert.equal(end.block.name, 'run_code')
+  assert.equal(end.block.name, 'agy_tool')
   assert.equal(end.block.id, mirrorCallId('run-abc', 2))
-  const args = JSON.parse(end.block.arguments) as { code: string; description: string }
-  const inv = parseMirrorInvocation(args.code)
-  assert.ok(inv !== null, 'code embeds the agy_tool invocation')
-  assert.equal(inv.run, 'run-abc')
-  assert.equal(inv.step, 2)
-  assert.ok(args.description.includes('run_command'), args.description)
-  assert.ok(args.code.includes("tools['agy_tool']"), 'program calls the mirror tool')
+  const args = JSON.parse(end.block.arguments) as { run: string; step: number; tool: string; input: Record<string, unknown> }
+  assert.equal(args.run, 'run-abc')
+  assert.equal(args.step, 2)
+  assert.equal(args.tool, 'run_command')
+  assert.deepEqual(args.input, { command: 'ls' })
   const finish = asFinish(lastChunk(chunks))
   assert.equal(finish.reason.kind, 'tool-calls')
   assert.equal(m.isFinished, true)
-  // no text beyond the pre-tool block leaked into this span
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
   assert.equal(text, 'Working on it')
 })
 
-test('erroring tool step cuts exactly like a successful one', () => {
-  const m = newSpan()
+test('completed tool step cuts the span into run_code wrapper in Code Mode', () => {
+  const m = newSpan('run-abc', false, true)
   const chunks = mapAll(m, [
-    { kind: 'step', stepKey: '4', stepKind: 'tool', state: 'ERROR', text: '', tool: { name: 'find_by_name', args: { pattern: 'x' }, error: 'timed out' } },
+    { kind: 'step', stepKey: '2', stepKind: 'text', text: 'Working on it' },
+    { kind: 'step', stepKey: '3', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'run_command', args: { command: 'ls' }, output: 'a.txt' } },
   ])
   const end = toolCallEnd(chunks)
-  const args = JSON.parse(end.block.arguments) as { description: string }
-  assert.ok(args.description.includes('find_by_name'), args.description)
-  assert.equal(asFinish(lastChunk(chunks)).reason.kind, 'tool-calls')
+  assert.equal(end.block.name, 'run_code')
+  assert.equal(end.block.id, mirrorCallId('run-abc', 1))
+  const args = JSON.parse(end.block.arguments) as { code: string; description: string }
+  const inv = parseMirrorInvocation(args.code)
+  assert.ok(inv !== null, 'code embeds the agy_tool invocation')
+  assert.equal(inv.run, 'run-abc')
+  assert.equal(inv.step, 1)
+  assert.ok(args.description.includes('run_command'), args.description)
+  assert.ok(args.code.includes("tools['agy_tool']"), 'program calls the mirror tool')
+})
+
+test('erroring tool step cuts exactly like a successful one in both modes', () => {
+  const mNative = newSpan('r1', false, false)
+  const chunksNative = mapAll(mNative, [
+    { kind: 'step', stepKey: '4', stepKind: 'tool', state: 'ERROR', text: '', tool: { name: 'find_by_name', args: { pattern: 'x' }, error: 'timed out' } },
+  ])
+  const endNative = toolCallEnd(chunksNative)
+  assert.equal(endNative.block.name, 'agy_tool')
+  assert.equal(asFinish(lastChunk(chunksNative)).reason.kind, 'tool-calls')
+
+  const mCode = newSpan('r1', false, true)
+  const chunksCode = mapAll(mCode, [
+    { kind: 'step', stepKey: '4', stepKind: 'tool', state: 'ERROR', text: '', tool: { name: 'find_by_name', args: { pattern: 'x' }, error: 'timed out' } },
+  ])
+  const endCode = toolCallEnd(chunksCode)
+  assert.equal(endCode.block.name, 'run_code')
+  assert.equal(asFinish(lastChunk(chunksCode)).reason.kind, 'tool-calls')
 })
 
 test('auxiliary spans never cut on tools', () => {

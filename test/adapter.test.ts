@@ -99,13 +99,18 @@ async function runTurn(
       (c) => c.type === 'block-end' && (c as { block: { type: string } }).block.type === 'tool-call',
     ) as unknown as { block: { id: string; name: string; arguments: string } } | undefined
     if (end === undefined) throw new Error('tool-calls finish without a tool-call block')
-    if (end.block.name !== 'run_code') throw new Error('tool-call block must address run_code, got ' + end.block.name)
-    // The deployment only dispatches run_code directly; the embedded program
-    // invokes the mirror with a (run, step) cursor — that is what executes.
-    const wrapper = JSON.parse(end.block.arguments) as { code: string; description: string }
-    const inv = parseMirrorInvocation(wrapper.code)
-    if (inv === null) throw new Error('run_code wrapper lacks the agy_tool invocation')
-    const args = { run: inv.run, step: inv.step, tool: '' } as unknown as MirrorArgs
+    let args: MirrorArgs
+    if (end.block.name === 'run_code') {
+      const wrapper = JSON.parse(end.block.arguments) as { code: string; description: string }
+      const inv = parseMirrorInvocation(wrapper.code)
+      if (inv === null) throw new Error('run_code wrapper lacks the agy_tool invocation')
+      args = { run: inv.run, step: inv.step, tool: '' } as unknown as MirrorArgs
+    } else if (end.block.name === 'agy_tool') {
+      const parsed = JSON.parse(end.block.arguments) as { run: string; step: number; tool?: string }
+      args = { run: parsed.run, step: parsed.step, tool: parsed.tool ?? '' } as unknown as MirrorArgs
+    } else {
+      throw new Error('tool-call block must address run_code or agy_tool, got ' + end.block.name)
+    }
     toolCalls.push({ id: end.block.id, args })
     messages.push({ role: 'assistant', content: [end.block] } as unknown as Message)
     messages.push({
@@ -502,6 +507,47 @@ test('compaction detection clears stale binding and re-seeds with digest (ADR-01
   assert.ok(prompt.includes('[compacted summary of m1-m3]'))
   assert.ok(prompt.includes('new question after compaction'))
   assert.ok(!argv.includes('--conversation') || argv[argv.indexOf('--conversation') + 1] !== 'conv-fresh-1')
+})
+
+test('model switch invalidates stale agy conversation binding', async () => {
+  const { adapter, store } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-modelswitch.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  // Turn 1: model gemini-3.7-flash
+  await runTurn(adapter, [msg('user', 'hello')], { sessionId: 'sess-switch' as never, model: 'gemini-3.7-flash' })
+  await waitFor(() => store.get('sess-switch'))
+  assert.equal(store.get('sess-switch')?.model, 'gemini-3.7-flash')
+  const conv1 = store.get('sess-switch')?.conversationId
+
+  // Turn 2: switch to claude-sonnet-4-6
+  await runTurn(adapter, [msg('user', 'hello'), msg('assistant', 'hi'), msg('user', 'next')], { sessionId: 'sess-switch' as never, model: 'claude-sonnet-4-6' })
+
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  assert.ok(!argv.includes('--conversation') || argv[argv.indexOf('--conversation') + 1] !== conv1)
+})
+
+test('adapts tool dispatch to Native Mode (agy_tool) vs Code Mode (run_code)', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = join(workDir, 'args-modes.json')
+
+  // In Code Mode: tools contains run_code
+  const codeRes = await runTurn(adapter, [msg('user', 'code mode test')], {
+    sessionId: 'sess-code' as never,
+    tools: [{ name: 'run_code', description: 'execute JS', parameters: {} }] as never,
+  })
+  const codeBlocks = codeRes.chunks.filter((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call')
+  assert.equal((codeBlocks[0] as unknown as { block: { name: string } }).block.name, 'run_code')
+
+  // In Native Mode: tools contains agy_tool or standard tools
+  const nativeRes = await runTurn(adapter, [msg('user', 'native mode test')], {
+    sessionId: 'sess-native' as never,
+    tools: [{ name: 'agy_tool', description: 'mirror tool', parameters: {} }] as never,
+  })
+  const nativeBlocks = nativeRes.chunks.filter((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call')
+  assert.equal((nativeBlocks[0] as unknown as { block: { name: string } }).block.name, 'agy_tool')
 })
 
 test.after(() => {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.12 (2026-08-21)
+
+- **Adaptive Tool Dispatch for Both Standard / Native Mode and Code Mode.**
+  - Dynamically inspects `options.tools` on each model stream call.
+  - In **Code Mode** (`run_code` present in tools list): emits `run_code` program wrapping `tools['agy_tool'](...)` to conform to code-mode dispatch rules.
+  - In **Standard / Native Mode** (`agy_tool` / normal tools present): emits `agy_tool` directly with structured cursor arguments, eliminating `unknown tool "run_code"` and `unknown tool "agy_tool"` errors across all preset modes.
+- **Fixed Primary Account Stale Token & Quota Sync on macOS Keychain.**
+  - `agy` 1.1.15+ on macOS persists active login credentials via `go-keyring` in the macOS Keychain (`service: "gemini"`, `account: "antigravity"`), leaving stale files in `~/.gemini/antigravity-cli/antigravity-oauth-token` when users switch accounts outside DSH.
+  - Added `readMacKeychainToken` to decode active `go-keyring-base64` credentials directly from macOS Keychain for the primary/system account.
+  - Live quota & user profile (`fetchUserInfo`) now always read the active Keychain token, immediately detecting account switches and syncing the correct email and quotas.
+- **Auto-Invalidate Conversation Binding on Model Switch.**
+  - Switching models in the same DSH session now automatically drops the old agy `conversationId` binding, ensuring the prompt immediately executes with the new model without being locked to old agy conversation state.
+
 ## 0.4.11 (2026-08-21)
 
 - **Fixed `Error: unknown tool "agy_tool": only run_code is callable directly` in DSH Code Mode.**
