@@ -191,23 +191,27 @@ export class QuotaService {
 
   /**
    * Read the active token document and normalize it to a flat StoredToken.
-   * For the primary account on macOS, reads directly from the macOS Keychain
-   * where agy 1.1.15+ stores active credentials. Falls back to the on-disk file.
+   * Reads from the on-disk token file first (0ms, silent, avoids macOS Keychain popups).
+   * Falls back to macOS Keychain only if the disk file is absent.
    */
   getStoredToken(account: ManagedAccount): StoredToken | null {
+    const file = this.getTokenFilePath(account)
+    if (existsSync(file)) {
+      try {
+        const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+        const tok = normalizeStoredToken(raw)
+        if (tok && (tok.accessToken || tok.refreshToken)) return tok
+      } catch {
+        // Fall through to keychain if disk file was corrupted
+      }
+    }
+
     if (account.systemHome || !account.dir) {
       const keychainToken = readMacKeychainToken()
       if (keychainToken) return keychainToken
     }
 
-    const file = this.getTokenFilePath(account)
-    if (!existsSync(file)) return null
-    try {
-      const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
-      return normalizeStoredToken(raw)
-    } catch {
-      return null
-    }
+    return null
   }
 
   /** Persist refreshed tokens back in the SAME on-disk shape agy wrote. */
@@ -254,13 +258,23 @@ export class QuotaService {
 
     // Expired or missing access token — refresh if we have a refresh_token
     if (tok.refreshToken) {
-      const refreshed = await refreshTokens(tok.refreshToken, account.proxyUrl)
-      if (refreshed?.access_token) {
-        this.persistRefreshedToken(account, {
-          access_token: refreshed.access_token,
-          expiryMs: refreshed.expiryMs,
-        })
-        return refreshed.access_token
+      try {
+        const refreshed = await refreshTokens(tok.refreshToken, account.proxyUrl)
+        if (refreshed?.access_token) {
+          this.persistRefreshedToken(account, {
+            access_token: refreshed.access_token,
+            expiryMs: refreshed.expiryMs,
+          })
+          if (account.authRequired) {
+            this.pool.clearAuthRequired(account.id)
+          }
+          return refreshed.access_token
+        }
+      } catch (err: unknown) {
+        const errMsg = String(err)
+        if (/invalid_grant|revoked|disabled|unauthorized_client|token endpoint 400/i.test(errMsg)) {
+          this.pool.markAuthRequired(account.id, errMsg)
+        }
       }
     }
 

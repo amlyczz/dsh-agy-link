@@ -52,6 +52,14 @@ export interface PluginConfig {
   mcpBridge: boolean
   /** Comma-separated tool-name allowlist for the MCP bridge (empty = all non-internal). */
   mcpToolAllowlist: string
+  /** Maximum requests allowed per minute across all sessions (0 = disabled). */
+  rateLimitPerMinute: number
+  /** Automatically fallback to available lower-tier model if active model is exhausted. */
+  autoFallbackModel: boolean
+  /** Days to retain historical agy CLI log files before automatic sweep (default: 7). */
+  logRetentionDays: number
+  /** Opt-out and suppress Google Cloud Code / Antigravity telemetry tracking. */
+  disableTelemetry: boolean
 }
 
 // Full fallback line-up, mined from the agy 1.1.13 binary. Serves the
@@ -93,6 +101,10 @@ export function defaultConfig(): PluginConfig {
     mediaMaxImages: 8,
     mcpBridge: false,
     mcpToolAllowlist: '',
+    rateLimitPerMinute: 0,
+    autoFallbackModel: false,
+    logRetentionDays: 7,
+    disableTelemetry: true,
   }
 }
 
@@ -184,6 +196,48 @@ export function extractAuthUrl(text: string): string | undefined {
 
 export function looksLikeRateLimit(text?: string): boolean {
   if (!text) return false
-  return /429|too many requests|resource_exhausted|quota exceeded|rate limit|model overloaded|server.*experiencing high traffic/i.test(text)
+  return /429|too many requests|resource_exhausted|quota exceeded|quota reached|individual quota reached|rate limit|model overloaded|server.*experiencing high traffic|exceeded.*quota/i.test(
+    text,
+  )
+}
+
+/**
+ * Parse reset duration in milliseconds from rate-limit / quota-exhausted error strings.
+ * Supports compact formats ("Resets in 21m25s", "Resets in 2h26m6s", "Resets in 45s"),
+ * verbose formats ("Resets in 15 minutes", "retry after 30 seconds"), and ISO timestamps.
+ */
+export function parseResetDurationMs(text?: string): number | undefined {
+  if (!text) return undefined
+
+  // 1. Compact: "Resets in 2h26m6s", "resets in 21m25s", "resets in 45s"
+  const compactMatch = text.match(/resets?\s+in\s+((?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?)/i)
+  if (compactMatch && compactMatch[1]?.trim()) {
+    const hours = parseInt(compactMatch[2] || '0', 10)
+    const minutes = parseInt(compactMatch[3] || '0', 10)
+    const seconds = parseInt(compactMatch[4] || '0', 10)
+    const totalMs = (hours * 3600 + minutes * 60 + seconds) * 1000
+    if (totalMs > 0) return totalMs
+  }
+
+  // 2. Word-based: "Resets in 15 minutes", "resets in 2 hours", "retry after 30 seconds"
+  const wordMatch = text.match(/(?:resets?|retry)\s+(?:in|after)\s+(\d+)\s*(hour|hr|minute|min|second|sec)s?/i)
+  if (wordMatch) {
+    const num = parseInt(wordMatch[1]!, 10)
+    const unit = wordMatch[2]!.toLowerCase()
+    if (unit.startsWith('h')) return num * 3600 * 1000
+    if (unit.startsWith('m')) return num * 60 * 1000
+    if (unit.startsWith('s')) return num * 1000
+  }
+
+  // 3. ISO timestamp or future date string
+  const isoMatch = text.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/)
+  if (isoMatch) {
+    const parsed = Date.parse(isoMatch[0])
+    if (!Number.isNaN(parsed) && parsed > Date.now()) {
+      return parsed - Date.now()
+    }
+  }
+
+  return undefined
 }
 

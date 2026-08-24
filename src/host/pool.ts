@@ -1,6 +1,6 @@
 // AccountPoolManager: multi-profile credential isolation, family-scoped cooldown,
 // and sticky sequential drain scheduling for Google Antigravity accounts.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import {
@@ -12,6 +12,7 @@ import {
   type ManagedAccount,
   type ModelFamily,
 } from '../common/pool-types.ts'
+import { parseResetDurationMs } from '../common/types.ts'
 
 export function defaultPoolDir(): string {
   const dshState = process.env.DSH_STATE_DIR || join(homedir(), '.dsh')
@@ -188,6 +189,50 @@ export class AccountPoolManager {
   }
 
   /**
+   * Sweep agy CLI log files older than maxDays (default: 7) across all managed account directories
+   * as well as the primary system ~/.gemini/antigravity-cli/log directory.
+   */
+  sweepOldLogs(maxDays = 7): number {
+    const maxAgeMs = Math.max(1, maxDays) * 86_400_000
+    const now = Date.now()
+    let removed = 0
+
+    const targetLogDirs = [
+      join(homedir(), '.gemini', 'antigravity-cli', 'log'),
+    ]
+
+    for (const acc of this.data.accounts) {
+      if (acc.dir) {
+        targetLogDirs.push(join(acc.dir, '.gemini', 'antigravity-cli', 'log'))
+      }
+    }
+
+    for (const logDir of targetLogDirs) {
+      if (!existsSync(logDir)) continue
+      try {
+        const files = readdirSync(logDir)
+        for (const f of files) {
+          if (!f.startsWith('cli-') || !f.endsWith('.log')) continue
+          const fp = join(logDir, f)
+          try {
+            const st = statSync(fp)
+            if (now - st.mtimeMs > maxAgeMs) {
+              rmSync(fp, { force: true })
+              removed++
+            }
+          } catch {
+            // Ignore file error
+          }
+        }
+      } catch {
+        // Ignore dir error
+      }
+    }
+
+    return removed
+  }
+
+  /**
    * Create a new isolated account slot and prepare its filesystem home.
    */
   createAccountSlot(alias?: string): ManagedAccount {
@@ -265,6 +310,27 @@ export class AccountPoolManager {
     return true
   }
 
+  markAuthRequired(id: string, reason?: string): void {
+    const acc = this.getAccount(id)
+    if (!acc) return
+    acc.authRequired = true
+    acc.authError = reason || 'Authentication expired or revoked (invalid_grant)'
+    if (this.data.activeAccountIds) {
+      for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
+        if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
+      }
+    }
+    this.persist()
+  }
+
+  clearAuthRequired(id: string): void {
+    const acc = this.getAccount(id)
+    if (!acc) return
+    delete acc.authRequired
+    delete acc.authError
+    this.persist()
+  }
+
   setPrimaryAccount(id: string): boolean {
     const idx = this.data.accounts.findIndex((a) => a.id === id)
     if (idx === -1) return false
@@ -328,13 +394,18 @@ export class AccountPoolManager {
     const failures = (prev?.consecutiveFailures ?? 0) + 1
 
     let cooldownUntil: number
-    if (serverResetTime) {
+    const parsedDuration = parseResetDurationMs(serverResetTime || reason)
+
+    if (serverResetTime && !parsedDuration) {
       const parsed = Date.parse(serverResetTime)
       if (!Number.isNaN(parsed) && parsed > Date.now()) {
-        cooldownUntil = parsed
+        cooldownUntil = parsed + 10_000 // 10s safety buffer
       } else {
         cooldownUntil = Date.now() + Math.min(this.data.defaultCooldownMs * failures, this.data.maxCooldownMs)
       }
+    } else if (parsedDuration && parsedDuration > 0) {
+      // Add a 10s safety buffer to avoid hitting Google at the exact millisecond of reset
+      cooldownUntil = Date.now() + parsedDuration + 10_000
     } else {
       cooldownUntil = Date.now() + Math.min(this.data.defaultCooldownMs * failures, this.data.maxCooldownMs)
     }
@@ -348,16 +419,20 @@ export class AccountPoolManager {
   }
 
   /**
-   * Records a successful run, clearing failure counter for the family.
+   * Records a successful run, clearing failure counter and authRequired flag for the family.
    */
   recordSuccess(id: string, family: ModelFamily): void {
     const acc = this.getAccount(id)
     if (!acc) return
     acc.lastUsedAt = Date.now()
+    if (acc.authRequired) {
+      delete acc.authRequired
+      delete acc.authError
+    }
     if (acc.cooldowns[family]) {
       delete acc.cooldowns[family]
-      this.persist()
     }
+    this.persist()
   }
 
   clearCooldown(id?: string, family?: ModelFamily): void {
@@ -383,7 +458,7 @@ export class AccountPoolManager {
   selectAccount(family: ModelFamily): ManagedAccount | null {
     const now = Date.now()
     const candidates = this.data.accounts.filter((acc) => {
-      if (!acc.enabled) return false
+      if (!acc.enabled || acc.authRequired) return false
       const cd = acc.cooldowns[family]
       if (cd && cd.cooldownUntil > now) return false
       // If 5h quota remaining is <= 2% and reset time is in future, treat as in cooldown

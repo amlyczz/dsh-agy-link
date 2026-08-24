@@ -67,10 +67,37 @@ export interface ManagedAccount {
   enabled: boolean
   createdAt: number
   lastUsedAt?: number
+  /** Set to true when OAuth token refresh fails with invalid_grant or authentication is rejected. */
+  authRequired?: boolean
+  /** Last authentication failure reason. */
+  authError?: string
   /** Cooldown state tracked per model family. */
   cooldowns: Partial<Record<ModelFamily, FamilyCooldownState>>
   /** Cached real-time quota statistics per model family. */
   quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>
+}
+
+export type AccountHealthStatus = 'healthy' | 'cooldown' | 'auth_required' | 'disabled'
+
+export interface AccountHealthInfo {
+  status: AccountHealthStatus
+  message?: string
+  cooldownMs?: number
+}
+
+/** Compute real-time health indicator for an account. */
+export function getAccountHealth(account: ManagedAccount, family: ModelFamily = 'google'): AccountHealthInfo {
+  if (!account.enabled) return { status: 'disabled', message: 'Account disabled' }
+  if (account.authRequired) return { status: 'auth_required', message: account.authError || 'Authentication required' }
+  const cd = account.cooldowns[family]
+  if (cd && cd.cooldownUntil > Date.now()) {
+    return {
+      status: 'cooldown',
+      message: cd.reason,
+      cooldownMs: cd.cooldownUntil - Date.now(),
+    }
+  }
+  return { status: 'healthy' }
 }
 
 export interface AccountPoolData {
@@ -88,7 +115,7 @@ export function defaultPoolData(): AccountPoolData {
   return {
     version: 1,
     mode: 'sequential',
-    defaultCooldownMs: 10 * 60 * 1000, // 10 minutes
+    defaultCooldownMs: 15 * 60 * 1000, // 15 minutes (hardened from 10m)
     maxCooldownMs: 60 * 60 * 1000,    // 60 minutes
     accounts: [],
   }

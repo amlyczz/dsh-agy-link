@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { modelFamilyOf } from '../src/common/pool-types.ts'
@@ -137,5 +137,93 @@ test('Corrupt pool.json recovers gracefully', () => {
   const pool = new AccountPoolManager(dir)
   assert.equal(pool.getAccounts().length, 1)
   assert.equal(pool.getAccounts()[0]?.id, 'acc_primary')
+})
+
+import { parseResetDurationMs } from '../src/common/types.ts'
+
+test('parseResetDurationMs parses various rate limit durations', () => {
+  // Compact durations
+  assert.equal(parseResetDurationMs('RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 21m25s.'), 1285000)
+  assert.equal(parseResetDurationMs('Rate limited. Resets in 2h26m6s.'), 8766000)
+  assert.equal(parseResetDurationMs('Resets in 3m30s'), 210000)
+  assert.equal(parseResetDurationMs('resets in 45s'), 45000)
+  assert.equal(parseResetDurationMs('Resets in 1h'), 3600000)
+
+  // Word-based durations
+  assert.equal(parseResetDurationMs('Resets in 15 minutes'), 900000)
+  assert.equal(parseResetDurationMs('retry after 30 seconds'), 30000)
+  assert.equal(parseResetDurationMs('resets in 2 hours'), 7200000)
+
+  // Invalid / empty
+  assert.equal(parseResetDurationMs(undefined), undefined)
+  assert.equal(parseResetDurationMs(''), undefined)
+  assert.equal(parseResetDurationMs('regular error message without reset info'), undefined)
+})
+
+test('recordFailure parses reset duration from error text and sets safety buffer', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-reset-'))
+  const pool = new AccountPoolManager(dir)
+  const accA = pool.getAccounts()[0]!
+
+  // Record failure with reset text
+  const errText = 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 21m25s.'
+  const t0 = Date.now()
+  pool.recordFailure(accA.id, 'google', errText)
+
+  const cd = pool.getAccount(accA.id)?.cooldowns.google
+  assert.ok(cd)
+  // Expected cooldown = now + 1285s + 10s buffer
+  const expectedMin = t0 + 1295 * 1000 - 500
+  const expectedMax = t0 + 1295 * 1000 + 5000
+  assert.ok(cd.cooldownUntil >= expectedMin && cd.cooldownUntil <= expectedMax)
+})
+
+import { getAccountHealth } from '../src/common/pool-types.ts'
+
+test('markAuthRequired quarantines broken accounts from selectAccount', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-auth-'))
+  const pool = new AccountPoolManager(dir)
+  const accA = pool.getAccounts()[0]!
+  const accB = pool.createAccountSlot('Account B')
+
+  assert.equal(pool.selectAccount('google')?.id, accA.id)
+
+  // Mark A as auth required (token revoked/invalid_grant)
+  pool.markAuthRequired(accA.id, 'invalid_grant: Token expired')
+  const accAUpdated = pool.getAccount(accA.id)!
+  assert.equal(accAUpdated.authRequired, true)
+
+  const healthA = getAccountHealth(accAUpdated, 'google')
+  assert.equal(healthA.status, 'auth_required')
+
+  // Pool automatically bypasses account A and selects account B
+  assert.equal(pool.selectAccount('google')?.id, accB.id)
+
+  // When A is re-authenticated or cleared, it recovers
+  pool.clearAuthRequired(accA.id)
+  assert.equal(pool.getAccount(accA.id)?.authRequired, undefined)
+})
+
+test('sweepOldLogs sweeps log files older than retention days', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-logs-'))
+  const pool = new AccountPoolManager(dir)
+  const accB = pool.createAccountSlot('Account B')
+
+  const logDir = join(accB.dir, '.gemini', 'antigravity-cli', 'log')
+  mkdirSync(logDir, { recursive: true })
+
+  const oldLog = join(logDir, 'cli-old.log')
+  const freshLog = join(logDir, 'cli-fresh.log')
+  writeFileSync(oldLog, 'old log data', 'utf8')
+  writeFileSync(freshLog, 'fresh log data', 'utf8')
+
+  // Set old log mtime to 10 days ago
+  const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000)
+  utimesSync(oldLog, tenDaysAgo, tenDaysAgo)
+
+  const swept = pool.sweepOldLogs(7)
+  assert.ok(swept >= 1)
+  assert.equal(existsSync(oldLog), false)
+  assert.equal(existsSync(freshLog), true)
 })
 

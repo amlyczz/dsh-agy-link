@@ -129,6 +129,13 @@ export class AgyAdapter extends LlmAdapter {
   private readonly warnedKeys = new Set<string>()
   /** sessionKey -> in-flight run, for steer-time preemption. */
   private readonly activeRuns = new Map<string, RunRecording>()
+  /** sessionKey -> prompt info for duplicate submission debounce */
+  private readonly activeSessionPrompts = new Map<string, { prompt: string; startedAt: number }>()
+  /** accountId -> timestamp of last spawn for spacing throttling */
+  private readonly lastAccountSpawnTime = new Map<string, number>()
+  private readonly minSpawnIntervalMs = 500
+  /** Global sliding window timestamps for batch rate-limiting protection */
+  private readonly requestTimestamps: number[] = []
 
   constructor(private readonly deps: AgyAdapterDeps) {
     super()
@@ -321,19 +328,52 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     const trailingUser = messages.slice(lastAssistantIdx + 1).filter((m) => m.role === 'user')
-    const family = modelFamilyOf(model === '' ? cfg.defaultModel : model)
-    const account = this.deps.pool ? this.deps.pool.selectAccount(family) : undefined
+
+    // Sliding-window rate limit protection per minute (for overnight batch / /goal stability)
+    if (!isAux && cfg.rateLimitPerMinute > 0) {
+      const now = Date.now()
+      const windowStart = now - 60_000
+      while (this.requestTimestamps.length > 0 && this.requestTimestamps[0]! < windowStart) {
+        this.requestTimestamps.shift()
+      }
+      if (this.requestTimestamps.length >= cfg.rateLimitPerMinute) {
+        const delayMs = this.requestTimestamps[0]! + 60_000 - now
+        if (delayMs > 0) {
+          await new Promise((r) => setTimeout(r, delayMs))
+        }
+      }
+      this.requestTimestamps.push(Date.now())
+    }
+
+    let activeModel = model === '' ? cfg.defaultModel : model
+    let family = modelFamilyOf(activeModel)
+    let account = this.deps.pool ? this.deps.pool.selectAccount(family) : undefined
     if (this.deps.pool && this.deps.pool.getAccounts().length > 0 && !account) {
-      const countdown = this.deps.pool.getEarliestResetCountdown(family)
-      const waitStr = countdown ? ` (earliest reset in ${Math.ceil(countdown / 1000)}s)` : ''
-      throw new LlmError(`All Antigravity accounts in pool are in cooldown for ${family}${waitStr}. Add an account or wait for reset.`, Err.AGY_ERROR)
+      if (cfg.autoFallbackModel) {
+        const fallbackSlugs = ['gemini-3.5-flash', 'gemini-3.6-flash']
+        for (const fb of fallbackSlugs) {
+          const fbFam = modelFamilyOf(fb)
+          const fbAcc = this.deps.pool.selectAccount(fbFam)
+          if (fbAcc) {
+            account = fbAcc
+            family = fbFam
+            activeModel = fb
+            break
+          }
+        }
+      }
+      if (!account) {
+        const countdown = this.deps.pool.getEarliestResetCountdown(family)
+        const waitStr = countdown ? ` (earliest reset in ${Math.ceil(countdown / 1000)}s)` : ''
+        throw new LlmError(`All Antigravity accounts in pool are in cooldown for ${family}${waitStr}. Add an account or wait for reset.`, Err.AGY_ERROR)
+      }
     }
 
     const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
     let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
 
     // Model switch detection: If model changed in the session, drop stale agy conversation binding
-    const currentModel = model === '' ? cfg.defaultModel : model
+    const currentModel = activeModel === '' ? cfg.defaultModel : activeModel
     if (!isAux && binding !== undefined && binding.model && binding.model !== currentModel) {
       if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
       binding = undefined
@@ -427,6 +467,18 @@ export class AgyAdapter extends LlmAdapter {
       throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
     }
 
+    // In-flight duplicate submission debounce (prevents double-clicks / network repeat loops)
+    if (!isAux && sessionKey !== '') {
+      const activePrompt = this.activeSessionPrompts.get(sessionKey)
+      if (activePrompt !== undefined && activePrompt.prompt === prompt && Date.now() - activePrompt.startedAt < 3000) {
+        throw new LlmError(
+          'Duplicate request ignored: an identical request is already running for this session.',
+          Err.BUSY,
+        )
+      }
+      this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: Date.now() })
+    }
+
     // ---- spawn + record (v0.3: spans consume a shared recording) ----
     const before = snapshotConversations()
     const rec = this.deps.runs.create()
@@ -435,7 +487,7 @@ export class AgyAdapter extends LlmAdapter {
     let streamCid: string | null = null
     const args = this.buildArgs({
       prompt,
-      model: model === '' ? cfg.defaultModel : model,
+      model: activeModel === '' ? cfg.defaultModel : activeModel,
       effort,
       conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
       permissionMode: isAux ? 'plan' : cfg.permissionMode,
@@ -457,6 +509,14 @@ export class AgyAdapter extends LlmAdapter {
     // sign in") and every turn fails with an auth error.
     const env = {
       ...process.env,
+      ...(cfg.disableTelemetry
+        ? {
+            DO_NOT_TRACK: '1',
+            DISABLE_TELEMETRY: '1',
+            GOOGLE_CLOUD_DISABLE_TELEMETRY: '1',
+            ANTIGRAVITY_DISABLE_TELEMETRY: '1',
+          }
+        : {}),
       ...(account && account.dir ? isolatedHomeEnv(account.dir) : {}),
       ...(account?.proxyUrl
         ? {
@@ -468,6 +528,18 @@ export class AgyAdapter extends LlmAdapter {
             http_proxy: account.proxyUrl,
           }
         : {}),
+    }
+
+    // Per-account burst spacing throttle with randomized jitter (prevents high-frequency flood to Google endpoints)
+    if (account) {
+      const lastSpawn = this.lastAccountSpawnTime.get(account.id) ?? 0
+      const elapsed = Date.now() - lastSpawn
+      const jitter = Math.floor(Math.random() * 300) // 100~400ms organic jitter
+      const targetInterval = this.minSpawnIntervalMs + jitter
+      if (elapsed < targetInterval) {
+        await new Promise((r) => setTimeout(r, targetInterval - elapsed))
+      }
+      this.lastAccountSpawnTime.set(account.id, Date.now())
     }
 
     let proc: ReturnType<typeof startAgyProcess>
@@ -500,6 +572,7 @@ export class AgyAdapter extends LlmAdapter {
       const outcome = await proc.outcome
       releaseOnce()
       if (this.activeRuns.get(sessionKey) === rec) this.activeRuns.delete(sessionKey)
+      if (!isAux && sessionKey !== '') this.activeSessionPrompts.delete(sessionKey)
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
         rec.append(ev)
@@ -511,6 +584,8 @@ export class AgyAdapter extends LlmAdapter {
       // un-finished, so the failure below reaches it through the recording.
       const r = rec.getResultEvent()
       const consumable = r !== null && (r.ok || r.response !== '')
+      const rawErrText = [outcome.stderrTail, outcome.stdout, parser.stats.lastResultError].filter(Boolean).join(' ')
+      const isRateLimit = looksLikeRateLimit(rawErrText)
       let failure: { kind: 'error' | 'aborted'; code: string; message: string } | null = null
       if (outcome.aborted) {
         failure = { kind: 'aborted', code: 'ABORTED', message: 'agy run aborted by caller' }
@@ -518,6 +593,9 @@ export class AgyAdapter extends LlmAdapter {
         failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run was idle for ' + cfg.timeoutMs + 'ms without output' }
       } else if (sawAuthFailure(parser, outcome)) {
         failure = { kind: 'error', code: Err.AUTH, message: 'agy is not signed in — run /agy auth (or run agy once in a terminal) to login' }
+      } else if (isRateLimit) {
+        const bestMsg = parser.stats.lastResultError || (outcome.stderrTail ? brief(outcome.stderrTail) : 'Rate limit or quota reached')
+        failure = { kind: 'error', code: Err.AGY_ERROR, message: 'Google Antigravity quota / rate limit reached: ' + bestMsg }
       } else if (!consumable) {
         if (outcome.code !== 0) {
           failure = { kind: 'error', code: Err.PROCESS_EXIT, message: 'agy exited with code ' + outcome.code + (outcome.stderrTail !== '' ? ': ' + brief(outcome.stderrTail) : '') }
@@ -537,19 +615,22 @@ export class AgyAdapter extends LlmAdapter {
               conversationId: finalId,
               lastMessageCount: messages.length,
               updatedAt: Date.now(),
-              model,
+              model: activeModel,
             })
           }
         }
       } else {
-        const isRateLimit = looksLikeRateLimit(failure.message)
-        if (account && isRateLimit) {
+        const effectiveRateLimit = isRateLimit || looksLikeRateLimit(failure.message)
+        if (account && effectiveRateLimit) {
           this.deps.pool?.recordFailure(account.id, family, failure.message)
+        }
+        if (account && (failure.code === Err.AUTH || /invalid_grant|not signed in|auth/i.test(failure.message))) {
+          this.deps.pool?.markAuthRequired(account.id, failure.message)
         }
         if (!isAux && sessionAccountKey !== '') {
           if (
             failure.code === Err.AUTH ||
-            isRateLimit ||
+            effectiveRateLimit ||
             (failure.message && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
           ) {
             // If auth expired or rate limit hit or conversation rejected, drop stale binding

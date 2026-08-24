@@ -610,6 +610,68 @@ test('multimodal: stages attached images and forwards path with view_file instru
   assert.ok(prompt2.includes('[Please inspect the attached image(s) using view_file and assist the user.]'))
 })
 
+test('duplicate request with identical prompt within debounce window is rejected with BUSY', async () => {
+  const { adapter } = makeAdapter()
+  const userMsg = msg('user', 'Please perform task X')
+  const sessionOptions = opts([userMsg], { sessionId: 'sess-dup-test' as never })
+
+  // Start first stream (pulling first chunk starts the generator body)
+  const iter1 = adapter.stream(sessionOptions)[Symbol.asyncIterator]()
+  const firstChunk = await iter1.next()
+  assert.ok(!firstChunk.done)
+
+  // Immediately attempt second identical stream for same session
+  await assert.rejects(
+    async () => {
+      const iter2 = adapter.stream(sessionOptions)
+      for await (const _ of iter2) {}
+    },
+    (err: unknown) => {
+      assert.ok(err instanceof LlmError)
+      assert.equal(err.code, Err.BUSY)
+      assert.ok(err.message.includes('Duplicate request ignored'))
+      return true
+    },
+  )
+
+  // Drain first stream so it finishes cleanly
+  while (!(await iter1.next()).done) {}
+})
+
+test('rate limit error from agy maps to AGY_ERROR without retryable PROCESS_EXIT', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
+  process.env.FAKE_AGY_MODE = 'real-fail'
+  try {
+    const { adapter } = makeAdapter()
+    const userMsg = msg('user', 'Say hello')
+    const res = await runTurn(adapter, [userMsg], { sessionId: 'sess-ratelimit' as never })
+    const finish = res.chunks[res.chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
+    assert.equal(finish.type, 'finish')
+    assert.equal(finish.reason.kind, 'error')
+    assert.equal(finish.reason.failure?.code, Err.AGY_ERROR)
+    assert.ok(finish.reason.failure?.message.includes('rate limit'))
+  } finally {
+    process.env.FAKE_AGY_MODE = prevMode
+  }
+})
+
+test('sliding-window rate limit enforces request throttling per minute', async () => {
+  const { adapter } = makeAdapter({
+    rateLimitPerMinute: 2,
+  })
+
+  const t0 = Date.now()
+  const userMsg1 = msg('user', 'Req 1')
+  const userMsg2 = msg('user', 'Req 2')
+
+  // Run 2 turns quickly
+  await runTurn(adapter, [userMsg1], { sessionId: 'sess-rl-1' as never })
+  await runTurn(adapter, [userMsg2], { sessionId: 'sess-rl-2' as never })
+
+  const elapsed = Date.now() - t0
+  assert.ok(elapsed < 2000)
+})
+
 test.after(() => {
   rmSync(workDir, { recursive: true, force: true })
 })

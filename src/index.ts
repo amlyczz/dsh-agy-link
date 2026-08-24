@@ -110,10 +110,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   const poolAuth = new PoolAuthFlow(pool, quota, log)
   const runs = new RunRegistry()
 
-  // Boot hygiene: remove staging dirs abandoned by interrupted add-account
-  // attempts (observed in the wild after the scrape-based flow timed out).
+  // Boot hygiene: remove staging dirs and purge old historical logs
   const swept = pool.sweepStaleStaging()
   if (swept > 0) log('swept ' + swept + ' stale staging dir(s)')
+  const logsSwept = pool.sweepOldLogs(getConfig().logRetentionDays)
+  if (logsSwept > 0) log('swept ' + logsSwept + ' old log file(s)')
 
   const adapter = new AgyAdapter({
     getConfig,

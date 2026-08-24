@@ -1078,7 +1078,8 @@ export function apply(ctx: ClientContext): void {
 		const renderedAccountCards = accounts.map((acc: ManagedAccount) => {
 			const isPrimary = acc.id === pool?.primaryAccountId;
 			const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
-			const dotColor = !acc.enabled ? '#64748b' : hasCooldown ? '#f59e0b' : '#10b981';
+			const isAuthRequired = acc.authRequired;
+			const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : hasCooldown ? '#f59e0b' : '#10b981';
 			const isEditingProxy = editingProxyId === acc.id;
 			const isExpanded = expandedModels[acc.id] ?? false;
 
@@ -1101,6 +1102,16 @@ export function apply(ctx: ClientContext): void {
 							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}aa` },
 						}),
 						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' } }, acc.alias),
+						isAuthRequired ? h('span', {
+							style: {
+								...S.badgeTag,
+								background: 'var(--agy-badge-email-bg)',
+								color: '#ef4444',
+								borderColor: '#fca5a5',
+								gap: '4px',
+								fontWeight: 700,
+							},
+						}, uiIcon('alert', 11, '#ef4444'), '需重新登录') : null,
 						acc.email ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-email-bg)', color: 'var(--agy-badge-email-text)', borderColor: 'var(--agy-badge-email-border)', gap: '5px' } },
 							uiIcon('mail', 11, 'var(--agy-badge-email-text)'),
 							acc.email,

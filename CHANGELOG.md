@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.14 (2026-08-24)
+
+- **Hardened 429 Rate Limit Cooldown & Circuit Breaker (Anti-Risk Control).**
+  - **Accurate Reset Duration Parsing**: Added `parseResetDurationMs` to accurately extract server reset countdowns from strings like `"Resets in 21m25s"`, `"Resets in 2h26m6s"`, `"Resets in 45s"`, or verbose duration phrases.
+  - **Safety Cooldown Buffer**: Account failures on 429 now automatically apply the parsed reset duration + a 10s safety buffer (or a 15-minute minimum backoff), preventing accounts from re-triggering rate limiters at the exact millisecond of reset.
+  - **Non-Retryable 429 Classification**: Identified 429 / quota exhaustion errors from stderr / stdout and classified them as non-retryable `Err.AGY_ERROR` instead of `Err.PROCESS_EXIT`, stopping DSH from executing automatic rapid retries on exhausted accounts.
+- **Organic Spacing Jitter, In-Flight Debounce & Burst Protection.**
+  - **Human-like Timing Jitter**: Added randomized timing jitter (`+100ms ~ 400ms`) on top of the 500ms single-account throttle to produce natural non-periodic traffic distributions that evade automated queue detection.
+  - **In-Flight Session Debounce**: Rejects identical prompt submissions within a 3-second window while an existing request is active (`Err.BUSY`), preventing frontend repeat loops and double-clicks from hammering the backend.
+  - **Sliding-Window Rate Limiter**: Added configurable `rateLimitPerMinute` protection across all sessions to prevent runaway `/goal` autonomous loops from draining daily quotas.
+- **Account Health Quarantine & Self-Healing.**
+  - **Invalid Grant Quarantine**: Automatically detects `invalid_grant` / revoked OAuth tokens during refresh and flags the account as `auth_required`, immediately taking it out of pool selection and alerting the user in UI.
+  - **Visual Health Dashboard**: Added red alert badges (`需重新登录`) and health indicators on account cards.
+  - **Automatic Fallback Model**: Supports `autoFallbackModel` to smoothly route requests to available lower-tier models when high-tier models are exhausted.
+- **System Hygiene & Telemetry Minimization.**
+  - **Telemetry Opt-out**: Injected telemetry suppression flags (`DO_NOT_TRACK`, `DISABLE_TELEMETRY`) into child process environments to reduce unnecessary background event tracking to Google `cclog`.
+  - **Automated Old Log Purge**: Added `sweepOldLogs` on plugin boot to automatically sweep CLI log files older than 7 days across system and isolated account directories.
+
 ## 0.4.13 (2026-08-21)
 
 - **Fixed Multimodal Image Attachment Staging & Direct Disk Fallback.**

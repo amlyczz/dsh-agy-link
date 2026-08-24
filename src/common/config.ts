@@ -105,6 +105,10 @@ export function resolveConfig(
     mediaMaxImages: asNum(get('mediaMaxImages')) ?? base.mediaMaxImages,
     mcpBridge: asBool(get('mcpBridge')) ?? base.mcpBridge,
     mcpToolAllowlist: asString(get('mcpToolAllowlist')) ?? base.mcpToolAllowlist,
+    rateLimitPerMinute: asNum(get('rateLimitPerMinute')) ?? base.rateLimitPerMinute,
+    autoFallbackModel: asBool(get('autoFallbackModel')) ?? base.autoFallbackModel,
+    logRetentionDays: asNum(get('logRetentionDays')) ?? base.logRetentionDays,
+    disableTelemetry: asBool(get('disableTelemetry')) ?? base.disableTelemetry,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -137,5 +141,21 @@ export function resolveConfig(
     if (b !== undefined) cfg.mcpBridge = b
   }
   if (env.DSH_AGY_MCP_TOOL_ALLOWLIST) cfg.mcpToolAllowlist = env.DSH_AGY_MCP_TOOL_ALLOWLIST
+  if (env.DSH_AGY_RATE_LIMIT_PER_MINUTE) {
+    const r = asNum(env.DSH_AGY_RATE_LIMIT_PER_MINUTE)
+    if (r !== undefined && r >= 0) cfg.rateLimitPerMinute = r
+  }
+  if (env.DSH_AGY_AUTO_FALLBACK_MODEL !== undefined) {
+    const af = asBool(env.DSH_AGY_AUTO_FALLBACK_MODEL)
+    if (af !== undefined) cfg.autoFallbackModel = af
+  }
+  if (env.DSH_AGY_LOG_RETENTION_DAYS) {
+    const l = asNum(env.DSH_AGY_LOG_RETENTION_DAYS)
+    if (l && l > 0) cfg.logRetentionDays = l
+  }
+  if (env.DSH_AGY_DISABLE_TELEMETRY !== undefined) {
+    const dt = asBool(env.DSH_AGY_DISABLE_TELEMETRY)
+    if (dt !== undefined) cfg.disableTelemetry = dt
+  }
   return cfg
 }
