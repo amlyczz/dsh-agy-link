@@ -648,14 +648,16 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   })
 
   // Background quota refresh: reads local token files only (no agy spawns,
-  // no Keychain prompts), then one HTTPS call per account every 5 minutes.
+  // no Keychain prompts), then one HTTPS call per account per poll interval
+  // (default 15 min, configurable; clamped to at least 60s). Restricted
+  // accounts (cooldown / auth-quarantined) are skipped by refreshAllQuotas.
   ctx.effect(() => {
     if (!getConfig().enabled) return () => undefined
     const refresh = (): void => {
       void quota.refreshAllQuotas().catch(() => undefined)
     }
     const boot = setTimeout(refresh, 5_000)
-    const timer = setInterval(refresh, 5 * 60_000)
+    const timer = setInterval(refresh, Math.max(60_000, getConfig().quotaPollIntervalMs))
     return () => {
       clearTimeout(boot)
       clearInterval(timer)

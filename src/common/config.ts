@@ -109,6 +109,7 @@ export function resolveConfig(
     autoFallbackModel: asBool(get('autoFallbackModel')) ?? base.autoFallbackModel,
     logRetentionDays: asNum(get('logRetentionDays')) ?? base.logRetentionDays,
     disableTelemetry: asBool(get('disableTelemetry')) ?? base.disableTelemetry,
+    quotaPollIntervalMs: asNum(get('quotaPollIntervalMs')) ?? base.quotaPollIntervalMs,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -156,6 +157,10 @@ export function resolveConfig(
   if (env.DSH_AGY_DISABLE_TELEMETRY !== undefined) {
     const dt = asBool(env.DSH_AGY_DISABLE_TELEMETRY)
     if (dt !== undefined) cfg.disableTelemetry = dt
+  }
+  if (env.DSH_AGY_QUOTA_POLL_INTERVAL_MS) {
+    const q = asNum(env.DSH_AGY_QUOTA_POLL_INTERVAL_MS)
+    if (q && q >= 60_000) cfg.quotaPollIntervalMs = q
   }
   return cfg
 }

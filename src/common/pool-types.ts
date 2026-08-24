@@ -85,6 +85,23 @@ export interface AccountHealthInfo {
   cooldownMs?: number
 }
 
+/**
+ * Whether the background quota poller should touch this account at all.
+ * Disabled, auth-quarantined and cooldown accounts are skipped so automatic
+ * polling never hammers Google endpoints for accounts already known to be
+ * restricted (risk-control exposure minimization). Manual force refresh
+ * from the UI bypasses this gate.
+ */
+export function shouldPollAccount(account: ManagedAccount): boolean {
+  if (!account.enabled) return false
+  if (account.authRequired) return false
+  const now = Date.now()
+  for (const cd of Object.values(account.cooldowns)) {
+    if (cd && cd.cooldownUntil > now) return false
+  }
+  return true
+}
+
 /** Compute real-time health indicator for an account. */
 export function getAccountHealth(account: ManagedAccount, family: ModelFamily = 'google'): AccountHealthInfo {
   if (!account.enabled) return { status: 'disabled', message: 'Account disabled' }

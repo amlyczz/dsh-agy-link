@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
 import { QuotaService, detectEmailFromAgyLogs, normalizeStoredToken } from '../src/host/quota.ts'
+import { shouldPollAccount } from '../src/common/pool-types.ts'
 import { writeAgyTokenFile, parsePastedCode, generatePkce } from '../src/host/oauth.ts'
 
 test('QuotaService parses stored tokens and saves token refresh updates', async () => {
@@ -182,6 +183,36 @@ test('detectEmailFromAgyLogs extracts user email from agy log files', () => {
   )
   const email = detectEmailFromAgyLogs(dir)
   assert.equal(email, 'dev.user@google.com')
+})
+
+test('shouldPollAccount skips restricted accounts in background polling', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-poll-gate-'))
+  const pool = new AccountPoolManager(dir)
+  const healthy = pool.createAccountSlot('healthy')
+  const cooling = pool.createAccountSlot('cooling')
+  const quarantined = pool.createAccountSlot('quarantined')
+  const disabled = pool.createAccountSlot('disabled')
+
+  // healthy: pollable as-is
+  assert.equal(shouldPollAccount(pool.getAccount(healthy.id)!), true)
+
+  // cooling: 429 cooldown active -> skipped until it expires
+  pool.recordFailure(cooling.id, 'google', 'RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 21m25s.')
+  assert.equal(shouldPollAccount(pool.getAccount(cooling.id)!), false)
+
+  // quarantined: invalid_grant -> skipped until re-auth
+  pool.markAuthRequired(quarantined.id, 'invalid_grant')
+  assert.equal(shouldPollAccount(pool.getAccount(quarantined.id)!), false)
+
+  // disabled: skipped
+  const dis = pool.getAccount(disabled.id)!
+  dis.enabled = false
+  assert.equal(shouldPollAccount(dis), false)
+
+  // expired cooldown becomes pollable again
+  const cd = pool.getAccount(cooling.id)!.cooldowns.google!
+  cd.cooldownUntil = Date.now() - 1
+  assert.equal(shouldPollAccount(pool.getAccount(cooling.id)!), true)
 })
 
 test('UI_PATHS contains all expected clean SVG paths', async () => {

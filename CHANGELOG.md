@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.15 (2026-08-24)
+
+- **Quota Polling Risk-Exposure Minimization (root-cause follow-up).**
+  - **Poll Interval 5min → 15min (configurable)**: New `quotaPollIntervalMs` config (env `DSH_AGY_QUOTA_POLL_INTERVAL_MS`, clamped to >= 60s) cuts background `v1internal` polling volume by 3x — the poller was the last remaining high-frequency network surface after the CLI-level hardening.
+  - **Restricted-Account Poll Gating**: Automatic polling now skips disabled, auth-quarantined (`invalid_grant`) and 429-cooldown accounts (`shouldPollAccount`), so the poller never keeps probing Google endpoints for accounts already known to be limited. Manual UI force-refresh still refreshes everything.
+  - **Userinfo Endpoint Called Only When Email Unknown**: The primary account previously hit the OAuth userinfo endpoint on every poll cycle just to detect account switching; that detection now rides the local log scan (`detectEmailFromAgyLogs`, zero network), eliminating one network call per cycle.
+
 ## 0.4.14 (2026-08-24)
 
 - **Hardened 429 Rate Limit Cooldown & Circuit Breaker (Anti-Risk Control).**

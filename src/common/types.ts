@@ -60,6 +60,8 @@ export interface PluginConfig {
   logRetentionDays: number
   /** Opt-out and suppress Google Cloud Code / Antigravity telemetry tracking. */
   disableTelemetry: boolean
+  /** Background quota polling interval in ms (default 15 min; clamped >= 60s). Lower = more risk-control exposure. */
+  quotaPollIntervalMs: number
 }
 
 // Full fallback line-up, mined from the agy 1.1.13 binary. Serves the
@@ -105,6 +107,7 @@ export function defaultConfig(): PluginConfig {
     autoFallbackModel: false,
     logRetentionDays: 7,
     disableTelemetry: true,
+    quotaPollIntervalMs: 15 * 60_000,
   }
 }
 

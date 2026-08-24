@@ -13,6 +13,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   modelFamilyOf,
+  shouldPollAccount,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
@@ -411,8 +412,11 @@ export class QuotaService {
       this.fetchAvailableModels(accessToken, account.proxyUrl),
     ])
 
-    // Query userinfo endpoint if email still unknown or on systemHome accounts
-    if (account.systemHome || !email) {
+    // Query the userinfo endpoint ONLY when the email is still unknown.
+    // Account switching on systemHome accounts is already caught locally by
+    // detectEmailFromAgyLogs (no network); calling userinfo every poll cycle
+    // was pure risk-control exposure for a value that never changes.
+    if (!email) {
       const info = await this.fetchUserInfo(accessToken, account.proxyUrl)
       if (info?.email) email = info.email
     }
@@ -522,9 +526,13 @@ export class QuotaService {
 
   /**
    * Refresh quota statistics for all accounts in the pool.
+   * Automatic polling (force=false) skips restricted accounts (disabled /
+   * auth-quarantined / in cooldown) so the poller never keeps knocking on
+   * Google endpoints for accounts already known to be limited. Manual force
+   * refresh from the UI refreshes everything.
    */
   async refreshAllQuotas(force = false): Promise<void> {
-    const accounts = this.pool.getAccounts()
+    const accounts = force ? this.pool.getAccounts() : this.pool.getAccounts().filter(shouldPollAccount)
     await Promise.allSettled(accounts.map((acc) => this.refreshAccountQuota(acc, force)))
   }
 }
