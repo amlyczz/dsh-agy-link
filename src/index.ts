@@ -562,6 +562,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         } else {
           await quota.refreshAllQuotas(true)
         }
+        // Manual refresh also re-reads the model catalog: after an external
+        // re-login the subscription tier (and thus model list) may differ.
+        // One `agy models` spawn per explicit user click only — the
+        // background poller never touches the catalog.
+        void catalog.forceRefresh().catch(() => undefined)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})

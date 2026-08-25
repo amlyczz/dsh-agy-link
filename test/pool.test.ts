@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { modelFamilyOf } from '../src/common/pool-types.ts'
+import { modelFamilyOf, shouldPollAccount } from '../src/common/pool-types.ts'
 import { AccountPoolManager } from '../src/host/pool.ts'
 
 test('modelFamilyOf correctly categorizes models', () => {
@@ -179,6 +179,73 @@ test('recordFailure parses reset duration from error text and sets safety buffer
 })
 
 import { getAccountHealth } from '../src/common/pool-types.ts'
+
+test('primary slot is re-bootstrapped when missing while other accounts remain', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-primary-reboot-'))
+  // Simulate the broken on-disk state: user deleted the primary slot while
+  // an isolated account remained (old code never recreated it).
+  const orphan = {
+    id: 'acc_1787000000000_xx',
+    alias: 'orphan',
+    dir: join(dir, 'acc_1787000000000_xx'),
+    enabled: true,
+    createdAt: 1787000000000,
+    cooldowns: {},
+    quotas: {},
+    email: 'old.pool.account@gmail.com',
+  }
+  writeFileSync(
+    join(dir, 'pool.json'),
+    JSON.stringify({ version: 1, mode: 'sequential', defaultCooldownMs: 900000, maxCooldownMs: 3600000, accounts: [orphan], primaryAccountId: orphan.id }),
+    'utf8',
+  )
+
+  const pool = new AccountPoolManager(dir)
+  const accounts = pool.getAccounts()
+  assert.equal(accounts.length, 2)
+  // Primary recreated at the FRONT and marked as the pool primary.
+  assert.equal(accounts[0]?.id, 'acc_primary')
+  assert.equal(accounts[0]?.systemHome, true)
+  assert.equal(pool.getPoolData().primaryAccountId, 'acc_primary')
+  // The isolated account is untouched.
+  assert.equal(accounts[1]?.id, orphan.id)
+  assert.equal(accounts[1]?.email, 'old.pool.account@gmail.com')
+})
+
+test('resetAccountIdentity clears identity-bound state on external re-login', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-identity-reset-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('switched')
+
+  // Simulate the old account going down hard before the user re-logged in:
+  pool.recordFailure(acc.id, 'google', 'RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 2h26m6s.')
+  pool.markAuthRequired(acc.id, 'invalid_grant')
+  pool.updateAccountQuotas(acc.id, { google: { remainingFraction: 0, updatedAt: Date.now() } }, 'old.account@gmail.com')
+  const flagged = pool.getAccount(acc.id)!
+  assert.equal(flagged.email, 'old.account@gmail.com')
+  assert.equal(flagged.authRequired, true)
+  assert.ok(flagged.cooldowns.google)
+  assert.ok(flagged.quotas.google)
+  assert.equal(shouldPollAccount(flagged), false)
+
+  // External re-login detected from logs → full identity reset.
+  pool.resetAccountIdentity(acc.id, 'new.account@gmail.com')
+  const fresh = pool.getAccount(acc.id)!
+  assert.equal(fresh.email, 'new.account@gmail.com')
+  assert.equal(fresh.authRequired, undefined)
+  assert.equal(fresh.authError, undefined)
+  assert.deepEqual(fresh.cooldowns, {})
+  assert.deepEqual(fresh.quotas, {})
+  // Slot config survives the switch.
+  assert.equal(fresh.id, acc.id)
+  assert.equal(fresh.enabled, true)
+  // And the slot is pollable/selectable again immediately.
+  assert.equal(shouldPollAccount(fresh), true)
+  // (silence the bootstrapped primary so our slot is the sole candidate)
+  pool.setAccountEnabled('acc_primary', false)
+  const picked = pool.selectAccount('google')
+  assert.equal(picked?.id, acc.id)
+})
 
 test('markAuthRequired quarantines broken accounts from selectAccount', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-auth-'))

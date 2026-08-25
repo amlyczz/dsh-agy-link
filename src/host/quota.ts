@@ -399,11 +399,17 @@ export class QuotaService {
       if (detected) email = detected
     }
 
+    // External re-login: the slot now hosts a DIFFERENT Google account.
+    // Identity-bound state (cooldowns / quotas / auth quarantine) belongs to
+    // the previous email and must be reset before anything else — otherwise
+    // the new account inherits the old one's restrictions (and poll gating
+    // would keep the slot quarantined forever after an invalid_grant).
+    if (email && email !== account.email) {
+      this.pool.resetAccountIdentity(account.id, email)
+    }
+
     const accessToken = await this.getValidAccessToken(account)
     if (!accessToken) {
-      if (email && email !== account.email) {
-        this.pool.updateAccountQuotas(account.id, account.quotas, email)
-      }
       return null
     }
 
@@ -422,10 +428,14 @@ export class QuotaService {
     }
 
     if (!summary && (!discovered || !discovered.models)) {
-      if (email && email !== account.email) {
-        this.pool.updateAccountQuotas(account.id, account.quotas, email)
-      }
       return null
+    }
+
+    // Authenticated backend calls just succeeded with this token: any stale
+    // authRequired flag (e.g. set while the OLD account was logging out) is
+    // disproven — clear it so the slot rejoins selection and polling.
+    if (account.authRequired) {
+      this.pool.clearAuthRequired(account.id)
     }
 
     const familyQuotas: Partial<Record<ModelFamily, FamilyQuotaInfo>> = {}
@@ -530,9 +540,28 @@ export class QuotaService {
    * auth-quarantined / in cooldown) so the poller never keeps knocking on
    * Google endpoints for accounts already known to be limited. Manual force
    * refresh from the UI refreshes everything.
+   *
+   * Before gating, a ZERO-NETWORK identity reconciliation runs for flagged
+   * slots: an external `agy logout` + re-login writes the new email into the
+   * newest CLI logs, and detecting that locally lets us reset the stale
+   * quarantine/cooldowns so the slot rejoins polling — no extra request to
+   * Google is made for this check (risk-control neutral).
    */
   async refreshAllQuotas(force = false): Promise<void> {
-    const accounts = force ? this.pool.getAccounts() : this.pool.getAccounts().filter(shouldPollAccount)
+    let accounts = this.pool.getAccounts()
+    if (!force) {
+      const now = Date.now()
+      for (const acc of accounts) {
+        const flagged = acc.authRequired || Object.values(acc.cooldowns).some((cd) => cd && cd.cooldownUntil > now)
+        if (!acc.systemHome || !flagged) continue
+        const home = acc.systemHome || !acc.dir ? homedir() : acc.dir
+        const detected = detectEmailFromAgyLogs(home)
+        if (detected && detected !== acc.email) {
+          this.pool.resetAccountIdentity(acc.id, detected)
+        }
+      }
+      accounts = accounts.filter(shouldPollAccount)
+    }
     await Promise.allSettled(accounts.map((acc) => this.refreshAccountQuota(acc, force)))
   }
 }

@@ -73,7 +73,14 @@ export class AccountPoolManager {
    * and signed in via /agy add-account.
    */
   private bootstrapDefaultAccount(): void {
-    if (this.data.accounts.length > 0) return
+    // The primary slot represents whatever account is currently logged into
+    // the REAL system HOME (`agy login` / `agy logout` outside DSH). It must
+    // ALWAYS exist: it used to be created only for an empty pool, so deleting
+    // it while other accounts remained made the system-HOME login invisible
+    // forever — the UI fell back to an isolated account and looked "stale"
+    // after every external re-login. Users who don't want it can disable it.
+    const hasSystemHome = this.data.accounts.some((a) => a.systemHome)
+    if (hasSystemHome) return
 
     const primary: ManagedAccount = {
       id: 'acc_primary',
@@ -86,7 +93,7 @@ export class AccountPoolManager {
       quotas: {},
     }
 
-    this.data.accounts.push(primary)
+    this.data.accounts.unshift(primary)
     this.data.primaryAccountId = primary.id
     this.persist()
   }
@@ -270,7 +277,9 @@ export class AccountPoolManager {
       }
     }
     if (this.data.primaryAccountId === id) {
-      this.data.primaryAccountId = this.data.accounts[0]?.id
+      // Never promote an isolated account to "primary": the primary slot is
+      // reserved for the system-HOME login and is re-bootstrapped on load.
+      this.data.primaryAccountId = undefined
     }
     if (this.data.activeAccountIds) {
       for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
@@ -320,6 +329,23 @@ export class AccountPoolManager {
         if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
       }
     }
+    this.persist()
+  }
+
+  /**
+   * External re-login detected (agy logout + new login): identity-bound
+   * state from the PREVIOUS account (cooldowns, quotas, auth quarantine)
+   * must not leak onto the new one. Resets everything email-bound while
+   * keeping slot config (alias, dir, proxy, enabled).
+   */
+  resetAccountIdentity(id: string, newEmail: string): void {
+    const acc = this.getAccount(id)
+    if (!acc) return
+    acc.email = newEmail
+    acc.cooldowns = {}
+    acc.quotas = {}
+    delete acc.authRequired
+    delete acc.authError
     this.persist()
   }
 

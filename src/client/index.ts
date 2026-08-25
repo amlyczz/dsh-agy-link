@@ -1132,6 +1132,14 @@ export function apply(ctx: ClientContext): void {
 							style: isExpanded ? { ...S.btnSmPrimary, gap: '3px' } : { ...S.btnSm, gap: '3px' },
 							onClick: () => toggleExpand(acc.id),
 						}, isExpanded ? [uiIcon('chevronUp', 11), ' 收起'] : [uiIcon('chevronDown', 11), ' 明细']) : null,
+						h('button', {
+							type: 'button',
+							className: 'agy-btn',
+							style: { ...S.btnSm, gap: '4px' },
+							title: '刷新此账号（换号后点这里立即同步 email / 额度 / 模型）',
+							disabled: isBusy,
+							onClick: () => void refreshQuota(acc.id),
+						}, loadingAction === `refresh:${acc.id}` ? [renderSpinner(), '同步中'] : [uiIcon('refresh', 11), ' 同步']),
 						!isPrimary ? h('button', {
 							type: 'button',
 							className: 'agy-btn',

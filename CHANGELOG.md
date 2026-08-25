@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.16 (2026-08-24)
+
+- **External Re-Login Sync (换号自动/手动同步).**
+  - **Root cause fixed**: after `agy logout` + re-login as a DIFFERENT account, the pool slot kept the old account's email, cooldowns, quotas and `auth_required` quarantine — and poll gating (0.4.15) then skipped the flagged slot forever, freezing the UI on the stale account.
+  - **`resetAccountIdentity`**: detecting a changed email (from local CLI logs, zero network) now resets all identity-bound state (cooldowns / quotas / auth quarantine) while keeping slot config — the new account starts clean instead of inheriting the old one's restrictions.
+  - **Zero-network reconciliation before poll gating**: the background poller pre-checks flagged slots via local log scan, so an external re-login self-heals within one poll cycle (≤15 min) without any extra request to Google. Manual click is instant.
+  - **Auth self-heal on success**: a successful authenticated quota fetch clears a stale `auth_required` flag (the old token's invalid_grant no longer condemns the new login).
+  - **Manual refresh upgrades**: the 刷新 button now also re-reads the model catalog (one `agy models` spawn per explicit click only — new subscription tier may expose different models), and every account card gains a 同步 button for single-account refresh.
+  - **Primary slot always re-bootstrapped (real root cause of "UI stuck on old account")**: the primary slot was only created for an EMPTY pool, so once deleted it never came back while other accounts remained — the system-HOME login (e.g. after `agy logout` + re-login) had no slot to attach to and the UI kept showing an isolated account as 主账号. The slot is now recreated at the front on every load; deleting it no longer promotes an isolated account to primary. Disable the slot instead of deleting if unwanted.
+
 ## 0.4.15 (2026-08-24)
 
 - **Quota Polling Risk-Exposure Minimization (root-cause follow-up).**
