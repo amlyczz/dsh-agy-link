@@ -988,8 +988,11 @@ export function apply(ctx: ClientContext): void {
 
 			// 5-Hour limit
 			const has5h = typeof info?.remainingFraction === 'number' && Number.isFinite(info.remainingFraction);
-			let pct5h = has5h ? Math.max(0, Math.min(100, Math.round(info!.remainingFraction! * 100))) : -1;
-			if (inCooldown) pct5h = 0;
+			const pct5h = has5h ? Math.max(0, Math.min(100, Math.round(info!.remainingFraction! * 100))) : -1;
+			// Cooldown is a LOCAL heuristic — never overwrite the server-reported
+			// fraction with 0% (a ghost cooldown used to show a 98%-full account as
+			// empty). Surface it as a note next to the reset time instead.
+			const cdNote = inCooldown ? ' · 本地冷却中' : '';
 			const w5h = formatQuotaWindow(info?.resetTime);
 
 			// Weekly limit
@@ -1070,7 +1073,7 @@ export function apply(ctx: ClientContext): void {
 					brandIcon(FAMILY_BRAND[familyKey], 14),
 					h('span', null, label),
 				),
-				renderLine('5h 额度', pct5h, c5h, w5h.resetText),
+				renderLine('5h 额度', pct5h, c5h, w5h.resetText ? w5h.resetText + cdNote : cdNote.replace(/^ · /, '')),
 				renderLine('周额度', pctWeekly, cWeekly, wWeekly.resetText),
 			);
 		};

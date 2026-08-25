@@ -197,10 +197,29 @@ export function extractAuthUrl(text: string): string | undefined {
   return m[0].replace(/[)\]>.,;\x27\x22]+$/, '')
 }
 
+/**
+ * HARD, server-issued rate-limit signatures — the ONLY patterns allowed to
+ * put an account into cooldown. Deliberately narrow: bare `429` or
+ * `rate limit` matched incidental substrings in the wild (hash/UUID
+ * fragments, model prose mentioning quotas, unrelated tool/permission
+ * errors quoting such words) and produced ghost cooldowns that froze
+ * healthy accounts out of rotation.
+ */
+export function looksLikeHardRateLimit(text?: string): boolean {
+  if (!text) return false
+  return /RESOURCE_EXHAUSTED|code[ :]?429\b|status[ :]?429\b|HTTP[ :]?429\b|too many requests|individual quota reached|quota (?:exceeded|reached|exhausted)|rate[ -]?limit(?:ed)? (?:exceeded|reached|hit)|exceeded (?:your |the )?quota/i.test(
+    text,
+  )
+}
+
+/**
+ * Soft heuristic adds capacity signals (model overloaded / high traffic).
+ * Shapes the user-facing error message only — NEVER cools an account down.
+ */
 export function looksLikeRateLimit(text?: string): boolean {
   if (!text) return false
-  return /429|too many requests|resource_exhausted|quota exceeded|quota reached|individual quota reached|rate limit|model overloaded|server.*experiencing high traffic|exceeded.*quota/i.test(
-    text,
+  return (
+    looksLikeHardRateLimit(text) || /model overloaded|experiencing high traffic/i.test(text)
   )
 }
 

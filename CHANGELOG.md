@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.17 (2026-08-25)
+
+- **Ghost-Cooldown & Quota-Display Fix (额度显示 0% 根因).**
+  - **What happened**: the UI showed 5h quota as 0% while `agy` reported 98% — the parsed quota data was CORRECT all along, but (a) any active local cooldown forced the 5h bar to render 0%, and (b) the loose rate-limit classifier kept creating ghost cooldowns: it scanned the ENTIRE stdout (model prose mentioning "rate limit"/"quota", hash fragments containing "429") and matched bare keywords, so an unrelated tool/permission error froze a healthy account out of rotation with a 15-minute+ cooldown (captured real reason: `rate limit reached: declaring permissions: cortex tool write_to_file … invalid tool call error`).
+  - **Hard vs soft classification**: new `looksLikeHardRateLimit` (RESOURCE_EXHAUSTED / code·status·HTTP 429 / too many requests / individual quota reached / quota exceeded·reached·exhausted / rate limit exceeded·reached·hit) is the ONLY pattern allowed to put an account into cooldown; soft signals (model overloaded / high traffic) still shape the error message but never cool accounts.
+  - **Scan scope narrowed**: error classification reads stderr + the result envelope's error field only — stdout (event JSON + model prose) no longer participates.
+  - **Honest quota bars**: a local cooldown no longer overwrites the server-reported fraction with 0%; it now appends a `· 本地冷却中` note next to the reset time instead.
+  - Regression tests pin the exact incident text (cortex tool permission error) as a non-rate-limit fixture.
+
 ## 0.4.16 (2026-08-24)
 
 - **External Re-Login Sync (换号自动/手动同步).**

@@ -7,7 +7,7 @@
 // first bind (ADR-7).
 import { join } from 'node:path'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Err, looksLikeAuthFailure, looksLikeRateLimit, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { Err, looksLikeAuthFailure, looksLikeHardRateLimit, looksLikeRateLimit, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
@@ -584,7 +584,12 @@ export class AgyAdapter extends LlmAdapter {
       // un-finished, so the failure below reaches it through the recording.
       const r = rec.getResultEvent()
       const consumable = r !== null && (r.ok || r.response !== '')
-      const rawErrText = [outcome.stderrTail, outcome.stdout, parser.stats.lastResultError].filter(Boolean).join(' ')
+      // Error classification scans ONLY stderr and the result envelope's
+      // error field. stdout is model prose + event JSON: a run whose streamed
+      // text merely MENTIONED "rate limit"/"quota" (or contained a hash with
+      // "429") used to be misclassified as a quota failure, masking the real
+      // error and slapping a ghost cooldown on a healthy account.
+      const rawErrText = [outcome.stderrTail, parser.stats.lastResultError].filter(Boolean).join(' ')
       const isRateLimit = looksLikeRateLimit(rawErrText)
       let failure: { kind: 'error' | 'aborted'; code: string; message: string } | null = null
       if (outcome.aborted) {
@@ -621,7 +626,10 @@ export class AgyAdapter extends LlmAdapter {
         }
       } else {
         const effectiveRateLimit = isRateLimit || looksLikeRateLimit(failure.message)
-        if (account && effectiveRateLimit) {
+        // Cooldown is a costly local penalty (account leaves rotation): only
+        // HARD server-issued signatures may trigger it. Soft signals (model
+        // overloaded) shape the message above but never cool the account.
+        if (account && looksLikeHardRateLimit(rawErrText)) {
           this.deps.pool?.recordFailure(account.id, family, failure.message)
         }
         if (account && (failure.code === Err.AUTH || /invalid_grant|not signed in|auth/i.test(failure.message))) {
