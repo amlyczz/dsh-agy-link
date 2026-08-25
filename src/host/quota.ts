@@ -23,6 +23,22 @@ import type { AccountPoolManager } from './pool.ts'
 import { AGY_ENDPOINTS, refreshTokens } from './oauth.ts'
 import { agyFetch } from './net.ts'
 
+/**
+ * When the quota-summary endpoint transiently fails, per-model fallback
+ * data carries a SINGLE window (sometimes the weekly one) and no weekly
+ * fields. Overwriting a previously COMPLETE family entry with that partial
+ * shape dropped weeklyFraction to none and put wrong-window numbers into
+ * the 5h row (observed: 5h=100% / reset a week out / weekly missing).
+ * Rule: last-known-good complete data always wins over partial fallback.
+ */
+export function mergeFallbackFamilyQuota(
+  prev: FamilyQuotaInfo | undefined,
+  fallback: FamilyQuotaInfo,
+): FamilyQuotaInfo {
+  if (prev && typeof prev.remainingFraction === 'number') return prev
+  return fallback
+}
+
 export function detectEmailFromAgyLogs(homeDir: string): string | undefined {
   const logDir = join(homeDir, '.gemini', 'antigravity-cli', 'log')
   if (!existsSync(logDir)) return undefined
@@ -502,13 +518,13 @@ export class QuotaService {
           resetTime,
         })
 
-        // Fallback for family fraction if summary was unavailable
+        // Fallback for family fraction if summary was unavailable.
         if (!familyQuotas[fam]) {
-          familyQuotas[fam] = {
+          familyQuotas[fam] = mergeFallbackFamilyQuota(account.quotas[fam], {
             remainingFraction: remaining,
             resetTime,
             updatedAt: now,
-          }
+          })
         } else if (familyQuotas[fam]!.remainingFraction === undefined) {
           const curRemaining = familyQuotas[fam]!.remainingFraction ?? 1
           if (remaining < curRemaining) {

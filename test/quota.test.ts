@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
-import { QuotaService, detectEmailFromAgyLogs, normalizeStoredToken } from '../src/host/quota.ts'
+import { QuotaService, detectEmailFromAgyLogs, mergeFallbackFamilyQuota, normalizeStoredToken } from '../src/host/quota.ts'
 import { shouldPollAccount } from '../src/common/pool-types.ts'
 import { writeAgyTokenFile, parsePastedCode, generatePkce } from '../src/host/oauth.ts'
 
@@ -213,6 +213,31 @@ test('shouldPollAccount skips restricted accounts in background polling', () => 
   const cd = pool.getAccount(cooling.id)!.cooldowns.google!
   cd.cooldownUntil = Date.now() - 1
   assert.equal(shouldPollAccount(pool.getAccount(cooling.id)!), true)
+})
+
+test('mergeFallbackFamilyQuota keeps last-known-good data over partial fallback', () => {
+  // Real incident shape: complete entry (5h + weekly) existed, then the
+  // summary endpoint blipped and per-model fallback arrived carrying a
+  // single window (fraction 1, weekly-window reset a week out, no weekly).
+  const good: import('../src/common/pool-types.ts').FamilyQuotaInfo = {
+    remainingFraction: 0.84,
+    resetTime: '2026-08-25T14:01:28Z',
+    weeklyFraction: 0.47,
+    weeklyResetTime: '2026-08-27T08:13:04Z',
+    updatedAt: 1_000,
+  }
+  const partial = {
+    remainingFraction: 1,
+    resetTime: '2026-09-01T09:53:06Z',
+    updatedAt: 2_000,
+  }
+  // Complete previous data wins — never clobbered by the partial shape.
+  assert.equal(mergeFallbackFamilyQuota(good, partial), good)
+  assert.equal(mergeFallbackFamilyQuota(good, partial).weeklyFraction, 0.47)
+  // No previous data (first-ever refresh) → fallback fills in.
+  assert.equal(mergeFallbackFamilyQuota(undefined, partial), partial)
+  // Degenerate previous entry without a fraction → fallback fills in.
+  assert.equal(mergeFallbackFamilyQuota({ weeklyFraction: 0.5 }, partial), partial)
 })
 
 test('UI_PATHS contains all expected clean SVG paths', async () => {

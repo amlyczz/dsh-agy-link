@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.18 (2026-08-25)
+
+- **Quota Fallback Never Clobbers Good Data (5h=100%/weekly-missing 根因).**
+  - **What happened**: `retrieveUserQuotaSummary` transiently failed (proxy blip) while `fetchAvailableModels` still answered; the per-model fallback then OVERWROTE the stored family entry with a single-window partial shape — weeklyFraction vanished and the 5h row received wrong-window numbers (observed 5h=100%, reset a week out, weekly `—`, while the live API actually reported 5h 84% / weekly 47%).
+  - **`mergeFallbackFamilyQuota`**: last-known-good complete family data now always wins over partial fallback; the fallback only fills families with no usable previous entry (first-ever refresh). Verified live: both endpoints answer correctly and a successful summary refresh fully restores the display.
+  - Added `scripts/diag-quota.mts` one-shot endpoint probe for future incidents.
+
 ## 0.4.17 (2026-08-25)
 
 - **Ghost-Cooldown & Quota-Display Fix (额度显示 0% 根因).**
