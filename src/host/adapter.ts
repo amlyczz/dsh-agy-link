@@ -6,7 +6,7 @@
 // prompt; earlier context rides agy-native history plus a digest prefix on
 // first bind (ADR-7).
 import { join } from 'node:path'
-import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type PreparedAdapterCall, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Err, looksLikeAuthFailure, looksLikeHardRateLimit, looksLikeRateLimit, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
@@ -233,8 +233,15 @@ export class AgyAdapter extends LlmAdapter {
    * with "registration.adapter.prepareCall is not a function" on new hosts.
    * Implemented explicitly here so both old and new runtimes work: the old
    * runtime never calls it, the new runtime gets the capability-bound handle.
+   * Declared without `override`/imported types on purpose: the plugin still
+   * typechecks against dsh-llm ^0.1.0-rc.6 (no prepareCall in the base), while
+   * the runtime contract matches the 0.1.1-rc.2 PreparedAdapterCall shape
+   * { model: LlmResolvedModelInfo; stream(options): AsyncIterable<StreamChunk> }.
    */
-  override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+  async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{
+    model: LlmResolvedModelInfo
+    stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  }> {
     const modelInfo = await this.resolveModel(provider, model, signal)
     return {
       model: modelInfo,
