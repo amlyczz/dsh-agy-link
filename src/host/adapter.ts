@@ -6,7 +6,7 @@
 // prompt; earlier context rides agy-native history plus a digest prefix on
 // first bind (ADR-7).
 import { join } from 'node:path'
-import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type PreparedAdapterCall, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Err, looksLikeAuthFailure, looksLikeHardRateLimit, looksLikeRateLimit, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
@@ -223,6 +223,23 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     return resolved
+  }
+
+  /**
+   * Bind exact model metadata and dispatch to ONE adapter generation.
+   * Required by dsh-llm >= 0.1.1-rc.2: LlmRuntime.prepareCall calls
+   * registration.adapter.prepareCall(provider, model, signal) unconditionally,
+   * so an adapter compiled against the old base class (no prepareCall) crashed
+   * with "registration.adapter.prepareCall is not a function" on new hosts.
+   * Implemented explicitly here so both old and new runtimes work: the old
+   * runtime never calls it, the new runtime gets the capability-bound handle.
+   */
+  override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    const modelInfo = await this.resolveModel(provider, model, signal)
+    return {
+      model: modelInfo,
+      stream: (options) => this.stream(options),
+    }
   }
 
   /** Build the agy argv for one call. Exported for tests. */

@@ -288,6 +288,24 @@ test('nonzero exit WITH a stdout error envelope surfaces the real cause', async 
   assert.ok((finish.reason.failure?.message ?? '').includes('upstream request failed while generating'))
 })
 
+test('prepareCall binds model metadata and dispatch (dsh-llm >= 0.1.1-rc.2 contract)', async () => {
+  // Regression: new hosts call registration.adapter.prepareCall()
+  // unconditionally; an adapter built against the old base class crashed
+  // with "registration.adapter.prepareCall is not a function".
+  const { adapter } = makeAdapter()
+  const prepared = await adapter.prepareCall('antigravity', 'gemini-3.7-flash')
+  assert.equal(prepared.model.provider, 'antigravity')
+  assert.equal(prepared.model.id, 'gemini-3.7-flash')
+  assert.ok(typeof prepared.model.defaultMaxTokens === 'number' && prepared.model.defaultMaxTokens > 0)
+  assert.equal(typeof prepared.stream, 'function')
+  // the bound stream runs a full turn through the fake binary
+  process.env.FAKE_AGY_MODE = 'ok'
+  const chunks = await collect(prepared.stream(opts([msg('user', 'hi')])))
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  assert.notEqual(finish.reason.kind, 'error')
+})
+
 test('aux calls rejected when allowAuxiliary is false', async () => {
   const { adapter } = makeAdapter({ allowAuxiliary: false })
   process.env.FAKE_AGY_MODE = 'ok'

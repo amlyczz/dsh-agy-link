@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.22 (2026-08-27)
+
+- **Fixed: `registration.adapter.prepareCall is not a function` on new DSH hosts (本轮运行失败 UNKNOWN).**
+  - **Field report**: after upgrading the DSH host (manjh's source checkout), every turn failed immediately with `registration.adapter.prepareCall is not a function` — category UNKNOWN in the GUI, no reply at all.
+  - **Root cause (interface drift)**: dsh-llm >= 0.1.1-rc.2 added `LlmAdapter.prepareCall(provider, model, signal)` and `LlmRuntime.prepareCall()` now calls `registration.adapter.prepareCall(...)` **unconditionally** (both the prepared-call path and the direct `adapterStream` path). The plugin's devDependency pinned `@deepseek-ai/dsh-llm ^0.1.0-rc.6` (base class without `prepareCall`); when the plugin's adapter class resolved an older dsh-llm copy than the host runtime, `registration.adapter.prepareCall` was `undefined` and every turn threw a bare TypeError.
+  - **Fix**: `AgyAdapter` now implements `prepareCall` explicitly, returning `{ model: await this.resolveModel(...), stream: options => this.stream(options) }` — the exact one-generation capability-bound handle the new runtime expects (same shape as the base default, but present regardless of which dsh-llm copy the plugin resolves). Backward compatible: runtimes < 0.1.1-rc.2 never call it. devDependency bumped to `^0.1.1-rc.2` so the adapter is typechecked against the new contract.
+  - Regression test pins the contract end-to-end: `prepareCall` returns resolved model metadata (id/provider/defaultMaxTokens) plus a stream that runs a full fake turn.
+
 ## 0.4.21 (2026-08-27)
 
 - **Fixed: Silent `agy exited with code 1` Hid the Real Cause (发送消息无回复、只见 exit 1).**
