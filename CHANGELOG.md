@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.20 (2026-08-27)
+
+- **Fixed: Primary Account Quota Fetched With a STALE Token (主账号刷新/同步拿的值不对).**
+  - **Root cause (verified live)**: on macOS, agy >= 1.1.15 keeps its CURRENT credential in the Keychain; the on-disk `antigravity-oauth-token` was a stale leftover from a PREVIOUS account's login. `getStoredToken` read the disk file FIRST and only fell back to the Keychain — so every 刷新/同步 used the old account's (still-valid) token and displayed ITS quota under the current login's name (observed: agy authenticated as q98… while the disk file still held elegantmanco's token; UI showed the wrong account's 5h/weekly numbers).
+  - **Keychain-first token resolution**: for the primary / system-HOME account the Keychain credential now WINS over the on-disk file (disk remains the fallback for older agy builds and non-mac systems). Isolated pool accounts are pinned by test to never touch the shared Keychain. Verified end-to-end against live Google endpoints: the primary's token identity and quota now match the actual agy login (5h 91% / weekly 31% instead of the stale account's numbers).
+  - **Token-anchored identity on manual refresh**: `refreshAccountQuota(force=true)` additionally calls the OAuth userinfo endpoint once per explicit user click and re-labels the slot to the token's TRUE owner (`resetAccountIdentity`), so an external `agy logout` + re-login self-heals in one click even when logs disagree.
+  - **Log detection hardened**: `detectEmailFromAgyLogs` returns the LAST match per file (append-ordered logs → newest login wins), fixing first-match returning a superseded account.
+  - **Risk posture preserved**: background polls (force=false) still NEVER call userinfo — zero extra network on the automatic path (pinned by a regression test).
+
 ## 0.4.19 (2026-08-26)
 
 - **Fixed: Antigravity Models Missing From the Model Picker (登录成功、额度正常但模型列表为空 — issue #1).**

@@ -172,6 +172,171 @@ test('Quota aggregation extracts bottleneck model fraction and earliest reset', 
   assert.equal(updated.quotas.openai?.weeklyFraction, 1.0)
 })
 
+test('manual force refresh re-anchors slot identity from the token, not the label (primary showed another account\'s quota)', async () => {
+  // Real incident: the system token belonged to elegantmanco@gmail.com but
+  // the slot still said q986465568@gmail.com (log scraping returned the
+  // stale label), so 刷新/同步 fetched elegantmanco's quota and displayed
+  // it as the primary's values. Manual refresh must trust the TOKEN (via
+  // userinfo) over both the stored label and log detection.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-force-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('force-sync')
+  // Slot currently labeled with the OLD account.
+  pool.updateAccountQuotas(acc.id, { google: { remainingFraction: 0.5, weeklyFraction: 0.5 } }, 'q986465568@gmail.com')
+
+  // Token on disk is valid, so no refresh-token flow kicks in.
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.tok_of_elegantmanco', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+
+  let userinfoCalls = 0
+  class ForceSyncService extends QuotaService {
+    override async fetchUserInfo(): Promise<{ email?: string; name?: string } | null> {
+      userinfoCalls++
+      return { email: 'elegantmanco@gmail.com' }
+    }
+    override async fetchQuotaSummary() {
+      return {
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            description: 'Models within this group: Gemini Flash, Gemini Pro',
+            buckets: [
+              { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.7, resetTime: '2026-08-27T12:00:00Z' },
+              { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.42, resetTime: '2026-08-29T12:00:00Z' },
+            ],
+          },
+        ],
+      } as never
+    }
+    override async fetchAvailableModels() {
+      return { models: {} } as never
+    }
+  }
+
+  const svc = new ForceSyncService(pool)
+  await svc.refreshAccountQuota(pool.getAccount(acc.id)!, true)
+
+  assert.ok(userinfoCalls >= 1, 'manual refresh verifies the token identity via userinfo')
+  const healed = pool.getAccount(acc.id)!
+  assert.equal(healed.email, 'elegantmanco@gmail.com', 'slot re-labeled to the token owner')
+  assert.equal(healed.quotas.google?.remainingFraction, 0.7, 'quota stored under the healed identity')
+  assert.equal(healed.quotas.google?.weeklyFraction, 0.42)
+})
+
+test('background refresh keeps the zero-network identity path (no userinfo when email known)', async () => {
+  // 0.4.15 risk posture: background polls never call userinfo just to detect
+  // account switching — only manual force refreshes pay that network cost.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-bg-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('bg-poll')
+  pool.updateAccountQuotas(acc.id, { google: { remainingFraction: 0.5 } }, 'stable@gmail.com')
+
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.stable', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+
+  let userinfoCalls = 0
+  class BgService extends QuotaService {
+    override async fetchUserInfo(): Promise<{ email?: string; name?: string } | null> {
+      userinfoCalls++
+      return null
+    }
+    override async fetchQuotaSummary() {
+      return { groups: [{ displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.9, resetTime: '2026-08-27T12:00:00Z' }] }] } as never
+    }
+    override async fetchAvailableModels() {
+      return { models: {} } as never
+    }
+  }
+
+  const svc = new BgService(pool)
+  const out = await svc.refreshAccountQuota(pool.getAccount(acc.id)!, false)
+  assert.equal(userinfoCalls, 0, 'background refresh must not call userinfo')
+  assert.equal(out?.google?.remainingFraction, 0.9)
+  assert.equal(pool.getAccount(acc.id)!.email, 'stable@gmail.com')
+})
+
+test('getStoredToken prefers the macOS Keychain credential over a stale disk token for the primary account', async () => {
+  // Real incident (verified live): agy 1.1.15+ keeps the CURRENT credential
+  // in the macOS Keychain; the on-disk antigravity-oauth-token was a stale
+  // leftover from a PREVIOUS account's login. Disk-first precedence made
+  // every quota refresh fetch the WRONG account's numbers while agy itself
+  // was happily authenticated as the right one.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-kc-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts().find((a) => a.systemHome)!
+  assert.ok(primary, 'bootstrap default primary exists')
+
+  const keychainToken = {
+    accessToken: 'ya29.keychain_current_login',
+    refreshToken: '1//keychain_refresh',
+    expiryMs: Date.now() + 3_600_000,
+  }
+  let keychainReads = 0
+  class KeychainFirstService extends QuotaService {
+    override readSystemKeychainToken() {
+      keychainReads++
+      return keychainToken
+    }
+  }
+
+  const svc = new KeychainFirstService(pool)
+  const stored = svc.getStoredToken(primary)
+  assert.ok(keychainReads >= 1, 'primary token resolution consults the Keychain')
+  assert.equal(stored?.accessToken, 'ya29.keychain_current_login', 'Keychain credential wins over any disk file')
+  assert.equal(stored?.refreshToken, '1//keychain_refresh')
+})
+
+test('getStoredToken never reads the shared Keychain for isolated pool accounts', () => {
+  // The Keychain is ONE shared slot owned by the system-HOME login; isolated
+  // account slots must only ever see their own directory's token file.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-iso-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('isolated')
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.isolated_own', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+  let keychainReads = 0
+  class IsoService extends QuotaService {
+    override readSystemKeychainToken() {
+      keychainReads++
+      return null
+    }
+  }
+  const svc = new IsoService(pool)
+  assert.equal(svc.getStoredToken(acc)?.accessToken, 'ya29.isolated_own')
+  assert.equal(keychainReads, 0, 'isolated accounts must not touch the shared Keychain')
+})
+
+test('detectEmailFromAgyLogs returns the latest email in a log file, not the first', () => {
+  // Logs are append-ordered: an old login can appear ABOVE a newer one.
+  // First-match returned the OLD account; the last match is the current one.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-log-last-'))
+  const logDir = join(dir, '.gemini', 'antigravity-cli', 'log')
+  mkdirSync(logDir, { recursive: true })
+  writeFileSync(
+    join(logDir, 'cli-20260827_100000.log'),
+    'OAuth: authenticated successfully as old.account@google.com\n' +
+      '...hours pass...\n' +
+      'OAuth: authenticated successfully as new.account@google.com\n',
+    'utf8',
+  )
+  assert.equal(detectEmailFromAgyLogs(dir), 'new.account@google.com')
+})
+
 test('detectEmailFromAgyLogs extracts user email from agy log files', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-log-test-'))
   const logDir = join(dir, '.gemini', 'antigravity-cli', 'log')

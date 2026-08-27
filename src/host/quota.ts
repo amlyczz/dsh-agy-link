@@ -52,8 +52,15 @@ export function detectEmailFromAgyLogs(homeDir: string): string | undefined {
     for (const file of files) {
       try {
         const content = readFileSync(join(logDir, file.name), 'utf8')
-        const m = content.match(/(?:authenticated successfully as|applyAuthResult:\s*email=|"email"\s*:\s*"|User:\s*)\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i)
-        if (m && m[1]) return m[1]
+        // Logs are append-ordered: the LAST email match is the most recent
+        // login. Taking the first match returned a superseded account after
+        // an external re-login (observed in the wild), mislabeling the slot.
+        const re = /(?:authenticated successfully as|applyAuthResult:\s*email=|"email"\s*:\s*"|User:\s*)\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi
+        let last: string | undefined
+        for (let m = re.exec(content); m !== null; m = re.exec(content)) {
+          if (m[1]) last = m[1]
+        }
+        if (last) return last
       } catch {
         // ignore unreadable log
       }
@@ -207,28 +214,47 @@ export class QuotaService {
   }
 
   /**
+   * Read the system-HOME Keychain credential. Protected so tests (and future
+   * platforms) can substitute the reader without touching the real Keychain.
+   */
+  protected readSystemKeychainToken(): StoredToken | null {
+    return readMacKeychainToken()
+  }
+
+  /**
    * Read the active token document and normalize it to a flat StoredToken.
-   * Reads from the on-disk token file first (0ms, silent, avoids macOS Keychain popups).
-   * Falls back to macOS Keychain only if the disk file is absent.
+   *
+   * Precedence for the primary / system-HOME account: the macOS Keychain
+   * WINS over the on-disk token file. agy >= 1.1.15 keeps its CURRENT
+   * credential in the Keychain; the on-disk antigravity-oauth-token can be a
+   * stale leftover from a PREVIOUS account's login (verified live: disk
+   * held an old account's token while agy itself was authenticated as
+   * someone else — disk-first precedence made every quota refresh fetch the
+   * WRONG account's numbers). Isolated pool accounts only ever read their
+   * own directory's file; the Keychain is one shared slot they must not see.
    */
   getStoredToken(account: ManagedAccount): StoredToken | null {
-    const file = this.getTokenFilePath(account)
-    if (existsSync(file)) {
+    const disk = (() => {
+      const file = this.getTokenFilePath(account)
+      if (!existsSync(file)) return null
       try {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
         const tok = normalizeStoredToken(raw)
         if (tok && (tok.accessToken || tok.refreshToken)) return tok
       } catch {
-        // Fall through to keychain if disk file was corrupted
+        // corrupted disk file — treat as absent
+      }
+      return null
+    })()
+
+    if (account.systemHome || !account.dir) {
+      const keychainToken = this.readSystemKeychainToken()
+      if (keychainToken && (keychainToken.accessToken || keychainToken.refreshToken)) {
+        return keychainToken
       }
     }
 
-    if (account.systemHome || !account.dir) {
-      const keychainToken = readMacKeychainToken()
-      if (keychainToken) return keychainToken
-    }
-
-    return null
+    return disk
   }
 
   /** Persist refreshed tokens back in the SAME on-disk shape agy wrote. */
@@ -415,6 +441,23 @@ export class QuotaService {
       if (detected) email = detected
     }
 
+    const accessToken = await this.getValidAccessToken(account)
+    if (!accessToken) {
+      return null
+    }
+
+    // Manual refresh (刷新/同步): the TOKEN is the only authoritative identity
+    // anchor. Log scraping lies — observed live: the slot was labeled
+    // q98…@gmail.com while the stored token actually belonged to
+    // elegantmanco@…, so every manual click fetched and displayed the WRONG
+    // account's quota under the primary's name. One userinfo call per
+    // explicit user click re-anchors the identity; background polls keep
+    // the zero-network log-scan path below.
+    if (force) {
+      const info = await this.fetchUserInfo(accessToken, account.proxyUrl)
+      if (info?.email) email = info.email
+    }
+
     // External re-login: the slot now hosts a DIFFERENT Google account.
     // Identity-bound state (cooldowns / quotas / auth quarantine) belongs to
     // the previous email and must be reset before anything else — otherwise
@@ -422,11 +465,6 @@ export class QuotaService {
     // would keep the slot quarantined forever after an invalid_grant).
     if (email && email !== account.email) {
       this.pool.resetAccountIdentity(account.id, email)
-    }
-
-    const accessToken = await this.getValidAccessToken(account)
-    if (!accessToken) {
-      return null
     }
 
     const [summary, discovered] = await Promise.all([
