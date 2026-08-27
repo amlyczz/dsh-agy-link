@@ -169,12 +169,36 @@ export class AgyAdapter extends LlmAdapter {
   override async listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
     void this.deps.catalog.refreshIfNeeded()
     const cat = this.deps.catalog.get()
-    return cat.models.map((m) => ({
-      provider: PROVIDER_ID,
-      id: m.id,
-      name: m.name,
-      inputModalities: ['text', 'image'] as const,
-    }))
+    // DSH's llm.listModels rejects a provider catalog containing any
+    // duplicate model id (INVALID_CATALOG) and the model picker then drops
+    // the whole Antigravity group — dedupe as a final guard over every
+    // catalog source (discovered, fallback, user-configured fallbackModels).
+    const seen = new Set<string>()
+    const models: LlmModelInfo[] = []
+    const dropped: string[] = []
+    for (const m of cat.models) {
+      if (seen.has(m.id)) {
+        dropped.push(m.id)
+        continue
+      }
+      seen.add(m.id)
+      models.push({
+        provider: PROVIDER_ID,
+        id: m.id,
+        name: m.name,
+        inputModalities: ['text', 'image'] as const,
+      })
+    }
+    if (dropped.length > 0) {
+      // Observable on purpose: without this the guard silently masks the
+      // catalog duplication that would otherwise remove every Antigravity
+      // model from the picker (issue #1).
+      this.warnOnce(
+        'catalog-dupes',
+        'model catalog contained duplicate ids [' + dropped.join(', ') + '] — kept first occurrence so DSH does not drop the whole provider group (INVALID_CATALOG)',
+      )
+    }
+    return models
   }
 
   override async resolveModel(_provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {

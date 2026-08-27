@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.19 (2026-08-26)
+
+- **Fixed: Antigravity Models Missing From the Model Picker (登录成功、额度正常但模型列表为空 — issue #1).**
+  - **Root cause**: when `agy models` lists a bare Gemini base alongside its effort variants (the agy 1.1.13 output shape, e.g. `gemini-3.7-flash` + `gemini-3.7-flash-medium`), `foldEfforts` emitted the base id TWICE — once as the folded base entry and once as a verbatim row. DSH's `llm.listModels` contract throws `INVALID_CATALOG` on any duplicate model id, and the host's model-catalog builder then drops the ENTIRE Antigravity provider group from the picker — so login and quota panels looked perfectly healthy while no Antigravity model could be selected.
+  - **Fix (three layers)**: (1) `foldEfforts` now absorbs the bare base into its folded entry instead of duplicating it; (2) `parseModelsOutput` dedupes repeated raw slugs (first occurrence wins); (3) `AgyAdapter.listModels` dedupes ids as a final guard, so even a user-configured `fallbackModels` list containing repeats can never nuke the whole group.
+  - Regression tests pin both bare-base-plus-variants shapes and the duplicate-slug parse, plus an adapter-level uniqueness guard test.
+  - **Observability**: when the adapter-level guard drops duplicate ids it now logs which ids were removed (`model catalog contained duplicate ids [...]`) so field instances surface in DSH server logs instead of being silently masked. When reporting picker issues, attach the `/agy doctor` report (`~/.dsh/agy-link/diagnostics/doctor-*.md`) and the raw `agy models` output.
+
 ## 0.4.18 (2026-08-25)
 
 - **Quota Fallback Never Clobbers Good Data (5h=100%/weekly-missing 根因).**

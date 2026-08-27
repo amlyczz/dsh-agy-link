@@ -466,6 +466,32 @@ test('listModels and resolveModel advertise text and image modalities (multimoda
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
 })
 
+test('listModels never returns duplicate ids even with duplicate fallback defs (issue #1)', async () => {
+  // DSH's llm.listModels contract throws INVALID_CATALOG on any duplicate
+  // model id and the model picker then drops the whole Antigravity group.
+  // A user-configured fallbackModels list (or any catalog source) must never
+  // be able to trigger that, so the adapter dedupes as a final guard.
+  const logs: string[] = []
+  const { adapter } = makeAdapter({
+    fallbackModels: [
+      { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', efforts: ['low', 'medium', 'high'] },
+      { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash (dup)' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (dup)' },
+    ],
+  }, { log: (m) => logs.push(m) })
+  const models = await adapter.listModels('antigravity')
+  const ids = models.map((m) => m.id)
+  assert.equal(new Set(ids).size, ids.length, 'listModels ids must be unique')
+  assert.deepEqual(ids, ['gemini-3.7-flash', 'claude-sonnet-4-6'])
+  // The guard must be observable so field instances show up in server logs
+  // instead of silently masking the underlying catalog duplication.
+  assert.ok(
+    logs.some((m) => m.includes('duplicate') && m.includes('gemini-3.7-flash') && m.includes('claude-sonnet-4-6')),
+    'deduping should log which duplicate ids were dropped',
+  )
+})
+
 test('resolveModel uniformly advertises 1M context window across all Antigravity models (ADR-013)', async () => {
   const { adapter } = makeAdapter()
   const gemini = await adapter.resolveModel('antigravity', 'gemini-3.7-flash')

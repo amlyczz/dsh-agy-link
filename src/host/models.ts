@@ -30,7 +30,7 @@ export function parseModelsOutput(stdout: string): RawModel[] {
   try {
     const parsed: unknown = JSON.parse(text)
     const list = extractModelList(parsed)
-    if (list) return list
+    if (list) return dedupeBySlug(list)
   } catch {
     // fall through to text parsing
   }
@@ -44,7 +44,19 @@ export function parseModelsOutput(stdout: string): RawModel[] {
     if (m && m[1] !== undefined && m[2] !== undefined) out.push({ slug: m[1], label: m[2].trim() });
     else if (/^\S+$/.test(t)) out.push({ slug: t, label: t });
   }
-  return out;
+  return dedupeBySlug(out);
+}
+
+/** First occurrence wins: duplicate raw slugs would become duplicate catalog ids. */
+function dedupeBySlug(raw: readonly RawModel[]): RawModel[] {
+  const seen = new Set<string>()
+  const out: RawModel[] = []
+  for (const r of raw) {
+    if (seen.has(r.slug)) continue
+    seen.add(r.slug)
+    out.push(r)
+  }
+  return out
 }
 
 function extractModelList(parsed: unknown): RawModel[] | null {
@@ -127,7 +139,11 @@ export function foldEfforts(raw: readonly RawModel[]): CatalogEntry[] {
   };
   folded.sort((a, b) => rank(a) - rank(b));
   verbatim.sort((a, b) => rank(a) - rank(b));
-  return [...folded, ...verbatim];
+  // A bare base listed alongside its variants (agy 1.1.13 shape) is already
+  // represented by its folded entry; emitting it verbatim too would duplicate
+  // the id and DSH's llm.listModels would reject the whole provider catalog
+  // (INVALID_CATALOG), dropping every Antigravity model from the picker.
+  return [...folded, ...verbatim.filter((e) => !bases.has(e.id))];
 }
 
 function stripEffortLabel(label: string, eff: string): string {

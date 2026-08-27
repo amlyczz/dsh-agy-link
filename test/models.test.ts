@@ -81,6 +81,53 @@ test('foldEfforts folds gemini effort suffixes into a base entry', () => {
   assert.equal(claude?.efforts, null)
 })
 
+test('foldEfforts emits no duplicate ids when agy lists the bare base plus one variant (issue #1)', () => {
+  // agy 1.1.13 shape: the bare base IS a catalog member next to its
+  // variants. Folding must absorb the bare entry into the folded base
+  // instead of emitting the id twice — DSH's llm.listModels rejects the
+  // whole provider catalog on any duplicate id (INVALID_CATALOG), which
+  // drops the entire Antigravity group from the model picker.
+  const folded = foldEfforts([
+    { slug: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash' },
+    { slug: 'gemini-3.7-flash-medium', label: 'Gemini 3.7 Flash (Medium)' },
+    { slug: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
+  ])
+  const ids = folded.map((e) => e.id)
+  assert.equal(new Set(ids).size, ids.length, 'catalog ids must be unique')
+  const base = folded.filter((e) => e.id === 'gemini-3.7-flash')
+  assert.equal(base.length, 1, 'folded base appears exactly once')
+  assert.deepEqual(base[0]?.efforts, ['medium'])
+  // Unrelated bare entries stay verbatim.
+  assert.ok(ids.includes('gemini-3.6-flash'))
+})
+
+test('foldEfforts emits no duplicate ids when the bare base is listed alongside every variant', () => {
+  const folded = foldEfforts([
+    { slug: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash' },
+    { slug: 'gemini-3.7-flash-high', label: 'Gemini 3.7 Flash (High)' },
+    { slug: 'gemini-3.7-flash-medium', label: 'Gemini 3.7 Flash (Medium)' },
+    { slug: 'gemini-3.7-flash-low', label: 'Gemini 3.7 Flash (Low)' },
+    { slug: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Thinking)' },
+  ])
+  const ids = folded.map((e) => e.id)
+  assert.equal(new Set(ids).size, ids.length, 'catalog ids must be unique')
+  const base = folded.filter((e) => e.id === 'gemini-3.7-flash')
+  assert.equal(base.length, 1)
+  assert.deepEqual(base[0]?.efforts, ['low', 'medium', 'high'])
+  assert.ok(ids.includes('claude-sonnet-4-6'))
+})
+
+test('parseModelsOutput dedupes repeated slugs', () => {
+  // Some agy builds print the same row twice (e.g. overlapping sections);
+  // duplicate raw slugs would become duplicate catalog ids downstream.
+  const out = parseModelsOutput([
+    'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
+    'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
+    'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+  ].join('\n'))
+  assert.deepEqual(out.map((r) => r.slug), ['gemini-3.7-flash-high', 'claude-sonnet-4-6'])
+})
+
 test('bare gemini base without siblings gets no efforts', () => {
   const folded = foldEfforts([{ slug: 'gemini-3-1-pro', label: 'Gemini 3.1 Pro' }])
   assert.equal(folded[0]?.efforts, null)
