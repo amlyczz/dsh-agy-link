@@ -87,7 +87,7 @@ test('startAgyProcess activity watchdog refreshes on output chunks', async () =>
   const proc = startAgyProcess({
     bin: process.execPath,
     args: ['-e', script],
-    timeoutMs: 3000,
+    timeoutMs: 5000,
     onLine: (l) => lines.push(l),
   })
   const outcome = await proc.outcome

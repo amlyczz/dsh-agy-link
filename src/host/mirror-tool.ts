@@ -9,6 +9,8 @@
 // run_command becomes a terminal card, write_to_file an inline diff card, and
 // reads/searches generic cards with the right icon kind. Presenters are pure
 // functions of the arguments, so session-log replays render identically.
+import { execFileSync } from 'node:child_process'
+import path from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {
   DiffCallView,
@@ -26,6 +28,42 @@ export const MIRROR_TOOL_NAME = 'agy_tool'
 
 /** The only tool this DSH deployment lets a model call directly. */
 export const WRAPPER_TOOL_NAME = 'run_code'
+
+/**
+ * Retrieve the committed HEAD content of a file via git, for computing
+ * line diffs on full-file writes. Pure & safe: catches all failures (not in git,
+ * untracked, git missing, binary) and returns null in <=500ms.
+ */
+export function getGitHeadContent(filePath: string, execFn = execFileSync): string | null {
+  if (!filePath || typeof filePath !== 'string' || filePath === 'file') return null
+  try {
+    const resolved = path.resolve(filePath)
+    const dir = path.dirname(resolved)
+    const toplevel = execFn('git', ['rev-parse', '--show-toplevel'], {
+      cwd: dir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 500,
+      windowsHide: true,
+    })
+    const root = typeof toplevel === 'string' ? toplevel.trim() : ''
+    if (!root) return null
+    const relPath = path.relative(root, resolved).replace(/\\/g, '/')
+    if (relPath.startsWith('..')) return null
+    const content = execFn('git', ['show', `HEAD:${relPath}`], {
+      cwd: root,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 500,
+      windowsHide: true,
+    })
+    const str = typeof content === 'string' ? content : ''
+    if (str.includes('\u0000')) return null
+    return str
+  } catch {
+    return null
+  }
+}
 
 /**
  * Build the run_code tool-call arguments that replay one recorded agy tool
@@ -86,8 +124,9 @@ function toolInput(args: { input?: unknown }): Record<string, unknown> {
 
 /**
  * agy serializes tool args with PascalCase keys (CommandLine, AbsolutePath,
- * SearchDirectory, …); pick() accepts both spellings so cards always read
- * the real field instead of falling back to raw JSON.
+ * SearchDirectory, TargetFile, TargetContent, ReplacementContent, CodeContent…);
+ * pick() accepts all casing spellings so cards always read the real field
+ * instead of falling back to raw JSON.
  */
 function pick(input: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const k of keys) {
@@ -106,39 +145,100 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'run_command':
     case 'bash':
     case 'execute_command': {
-      const command = pick(input, 'command', 'cmd', 'CommandLine', 'Cmd') ?? JSON.stringify(input)
+      const command = pick(input, 'CommandLine', 'command_line', 'command', 'cmd', 'Cmd') ?? JSON.stringify(input)
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      const cwd = pick(input, 'Cwd', 'cwd', 'WorkingDirectory', 'working_directory')
       const view: TerminalCallView = {
         card: 'terminal',
         title: command,
-        ...(pick(input, 'description', 'Description') !== undefined ? { description: pick(input, 'description', 'Description') as string } : {}),
-        ...(pick(input, 'cwd', 'Cwd', 'WorkingDirectory') !== undefined ? { cwd: pick(input, 'cwd', 'Cwd', 'WorkingDirectory') as string } : {}),
+        ...(desc !== undefined ? { description: desc } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
+      }
+      return view
+    }
+    case 'replace_file_content':
+    case 'edit_file':
+    case 'replace_in_file':
+    case 'edit': {
+      const path =
+        pick(
+          input,
+          'TargetFile',
+          'target_file',
+          'path',
+          'file_path',
+          'Path',
+          'FilePath',
+          'AbsolutePath',
+          'targetFile',
+        ) ?? 'file'
+      const oldText =
+        pick(
+          input,
+          'TargetContent',
+          'target_content',
+          'old_string',
+          'oldText',
+          'OldString',
+          'OldText',
+          'targetContent',
+        ) ?? null
+      const newText =
+        pick(
+          input,
+          'ReplacementContent',
+          'replacement_content',
+          'new_string',
+          'newText',
+          'content',
+          'NewString',
+          'NewText',
+          'Content',
+          'replacementContent',
+        ) ?? ''
+      const desc = pick(input, 'Description', 'description', 'Instruction', 'instruction', 'toolAction', 'toolSummary')
+      const view: DiffCallView = {
+        card: 'diff',
+        title: desc ? `${desc} · ${path}` : 'Edit ' + path,
+        diffs: [{ path, oldText, newText }],
+        locations: [{ path }],
       }
       return view
     }
     case 'write_to_file':
     case 'write_file':
     case 'create_file': {
-      const path = pick(input, 'path', 'file_path', 'filename', 'Path', 'FilePath', 'FileName', 'AbsolutePath') ?? 'file'
-      const content = pick(input, 'content', 'Content', 'FileContents', 'contents') ?? ''
+      const path =
+        pick(
+          input,
+          'TargetFile',
+          'target_file',
+          'path',
+          'file_path',
+          'filename',
+          'Path',
+          'FilePath',
+          'FileName',
+          'AbsolutePath',
+          'targetFile',
+        ) ?? 'file'
+      const content =
+        pick(
+          input,
+          'CodeContent',
+          'code_content',
+          'content',
+          'Content',
+          'FileContents',
+          'contents',
+          'codeContent',
+        ) ?? ''
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      const oldText = pick(input, 'old_string', 'oldText', 'OldString', 'OldText') ?? getGitHeadContent(path)
       const view: DiffCallView = {
         card: 'diff',
-        title: 'Write ' + path,
-        diffs: [{ path, oldText: null, newText: content }],
-        locations: [{ path }],
-      }
-      return view
-    }
-    case 'edit_file':
-    case 'replace_in_file':
-    case 'edit': {
-      const path = pick(input, 'path', 'file_path', 'Path', 'FilePath', 'AbsolutePath') ?? 'file'
-      const newText =
-        pick(input, 'new_string', 'newText', 'content', 'NewString', 'NewText', 'Content') ?? ''
-      const oldText = pick(input, 'old_string', 'oldText', 'OldString', 'OldText') ?? null
-      const view: DiffCallView = {
-        card: 'diff',
-        title: 'Edit ' + path,
-        diffs: [{ path, oldText, newText }],
+        title: desc ? `${desc} · ${path}` : 'Write ' + path,
+        diffs: [{ path, oldText, newText: content }],
         locations: [{ path }],
       }
       return view
@@ -147,11 +247,35 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'view_file':
     case 'read':
     case 'open_file': {
-      const path = pick(input, 'path', 'file_path', 'filename', 'Path', 'FilePath', 'FileName', 'AbsolutePath') ?? ''
-      const offset = typeof input.offset === 'number' ? input.offset : typeof input.Offset === 'number' ? input.Offset : undefined
+      const path =
+        pick(
+          input,
+          'AbsolutePath',
+          'absolute_path',
+          'TargetFile',
+          'target_file',
+          'path',
+          'file_path',
+          'filename',
+          'Path',
+          'FilePath',
+          'FileName',
+          'targetFile',
+        ) ?? ''
+      const offset =
+        typeof input.offset === 'number'
+          ? input.offset
+          : typeof input.Offset === 'number'
+            ? input.Offset
+            : typeof input.StartLine === 'number'
+              ? input.StartLine - 1
+              : typeof input.start_line === 'number'
+                ? (input.start_line as number) - 1
+                : undefined
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
       const view: GenericCallView = {
         card: 'generic',
-        title: 'Read ' + path,
+        title: desc ? `${desc} · ${path}` : 'Read ' + path,
         kind: 'read',
         ...(path !== '' ? { locations: [{ path, ...(offset !== undefined ? { line: offset + 1 } : {}) }] } : {}),
       }
@@ -159,29 +283,81 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     }
     case 'find_by_name':
     case 'glob':
-    case 'search_files':
+    case 'search_files': {
+      const q = pick(input, 'pattern', 'Pattern', 'query', 'Query', 'regex', 'Regex', 'QueryString') ?? ''
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      const title = desc ?? (q !== '' ? 'Search ' + q : 'Search')
+      const view: GenericCallView = { card: 'generic', title, kind: 'search' }
+      return view
+    }
+    case 'grep_search':
     case 'search':
     case 'search_file_content':
     case 'grep': {
-      const q = pick(input, 'pattern', 'query', 'regex', 'Pattern', 'Query', 'Regex', 'QueryString') ?? ''
-      const view: GenericCallView = { card: 'generic', title: q !== '' ? 'Search ' + q : 'Search', kind: 'search' }
+      const q = pick(input, 'query', 'Query', 'pattern', 'Pattern', 'regex', 'Regex', 'QueryString') ?? ''
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      const title = desc ?? (q !== '' ? 'Search ' + q : 'Search')
+      const view: GenericCallView = { card: 'generic', title, kind: 'search' }
       return view
     }
     case 'list_dir':
     case 'ls': {
-      const path = pick(input, 'path', 'directory', 'Path', 'Directory', 'SearchDirectory', 'AbsolutePath') ?? ''
-      const view: GenericCallView = { card: 'generic', title: path !== '' ? 'List ' + path : 'List directory' }
+      const path =
+        pick(
+          input,
+          'DirectoryPath',
+          'directory_path',
+          'path',
+          'directory',
+          'Path',
+          'Directory',
+          'SearchDirectory',
+          'search_directory',
+          'AbsolutePath',
+        ) ?? ''
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      const view: GenericCallView = { card: 'generic', title: desc ?? (path !== '' ? 'List ' + path : 'List directory') }
       return view
     }
     case 'delete_file':
     case 'remove_file':
     case 'rm': {
-      const path = pick(input, 'path', 'file_path', 'Path', 'FilePath', 'AbsolutePath') ?? ''
-      const view: GenericCallView = { card: 'generic', title: 'Delete ' + path, kind: 'delete' }
+      const path =
+        pick(
+          input,
+          'TargetFile',
+          'target_file',
+          'path',
+          'file_path',
+          'Path',
+          'FilePath',
+          'AbsolutePath',
+        ) ?? ''
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      const view: GenericCallView = { card: 'generic', title: desc ?? ('Delete ' + path), kind: 'delete' }
       return view
     }
+    case 'ask_question': {
+      const questions = input.questions
+      const firstQ =
+        Array.isArray(questions) && questions.length > 0 && typeof (questions[0] as { question?: unknown }).question === 'string'
+          ? (questions[0] as { question: string }).question
+          : undefined
+      const title = firstQ ? `Ask Question: ${firstQ}` : 'Ask Question'
+      return { card: 'generic', title, rawInput: input }
+    }
+    case 'read_url_content': {
+      const url = pick(input, 'Url', 'url') ?? ''
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      return { card: 'generic', title: desc ?? (url ? `Fetch ${url}` : 'Fetch URL'), kind: 'fetch' }
+    }
+    case 'generate_image': {
+      const prompt = pick(input, 'Prompt', 'prompt', 'ImageName', 'image_name') ?? ''
+      return { card: 'generic', title: prompt ? `Generate Image: ${prompt}` : 'Generate Image' }
+    }
     default: {
-      const view: GenericCallView = { card: 'generic', title: name !== '' ? name : 'agy tool', rawInput: input }
+      const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+      const view: GenericCallView = { card: 'generic', title: desc ?? (name !== '' ? name : 'agy tool'), rawInput: input }
       return view
     }
   }
@@ -199,6 +375,7 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
       const view: TerminalResultView = { card: 'terminal', output: text }
       return view
     }
+    case 'replace_file_content':
     case 'write_to_file':
     case 'write_file':
     case 'create_file':

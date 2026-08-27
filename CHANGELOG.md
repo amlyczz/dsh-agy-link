@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.23 (2026-08-27)
+
+- **Enhanced: Antigravity Tool Mirroring with Native Git +/- Diff Cards & Full Tool Vocabulary.**
+  - **Tool Vocabulary & Parameter Mapping**: mapped agy's official editing tool `replace_file_content` (`TargetFile`, `TargetContent`, `ReplacementContent`, `Description`, `Instruction`) and write tool `write_to_file` (`TargetFile`, `CodeContent`, `Overwrite`, `Description`) to DSH native `DiffCallView` / `DiffResultView` cards.
+  - **Git Head Base Line Diffing**: added cross-platform `getGitHeadContent` to retrieve committed file content for full-file writes (`write_to_file`), allowing DSH to render line-by-line git `+`/`-` additions and deletions rather than treating existing modified files as blank new files.
+  - **Expanded Tool Support**: mapped `view_file` (with `AbsolutePath`/`StartLine` line location navigation), `grep_search`, `find_by_name`, `ask_question`, `read_url_content`, and `generate_image` onto their respective native/generic tool cards with descriptive titles.
+  - **Cross-Platform Hardened**: path normalization with forward-slash compatibility across Windows/macOS/Linux, `windowsHide: true`, strict subprocess timeout, and safe error fallback.
+
 ## 0.4.22 (2026-08-27)
 
 - **Fixed: `registration.adapter.prepareCall is not a function` on new DSH hosts (本轮运行失败 UNKNOWN).**
