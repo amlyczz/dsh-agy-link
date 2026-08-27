@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Fake agy CLI for offline tests. Modes via FAKE_AGY_MODE env:
-//   ok | auth | noise | exit12 | real | real-error
+//   ok | auth | noise | exit12 | exit-error | real | real-error
 //   ok            — legacy flat event shapes (kept for compat coverage)
 //   real          — real agy 1.1.15 stream-json shapes (nested step_update
 //                   envelopes, agent_response text_delta fragments,
 //                   thinking-only turns, tool ACTIVE/DONE/ERROR)
 //   real-error    — same as real, but the result envelope carries
 //                   status=ERROR together with a usable response
+//   exit-error    — stdout error envelope + exit 1 + empty stderr (the real
+//                   silent-failure shape that hid causes behind "exited 1")
 // Records its argv (JSON) to FAKE_AGY_ARGS_FILE when set.
 import { writeFileSync } from 'node:fs'
 
@@ -49,6 +51,15 @@ const conv = argv.includes('--conversation')
 if (mode === 'exit12') {
   process.stderr.write('boom: fake crash\n')
   process.exit(12)
+}
+
+// Real failure shape seen in the wild (silent server-side errors): agy
+// writes ONLY a result envelope with a human-readable error to stdout and
+// exits 1 with empty stderr. Used to regress the bare "exited with code 1"
+// message that hid the actual cause.
+if (mode === 'exit-error') {
+  emit({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error: 'upstream request failed while generating (request id 8f3ac2)', duration_seconds: 8.2, num_turns: 0, usage: { input_tokens: 0, output_tokens: 0 } } })
+  process.exit(1)
 }
 
 await sleep(Number(process.env.FAKE_AGY_DELAY_MS ?? 0))

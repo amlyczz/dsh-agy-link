@@ -273,6 +273,21 @@ test('nonzero exit without result maps to PROCESS_EXIT', async () => {
   assert.equal(finish.reason.failure?.code, Err.PROCESS_EXIT)
 })
 
+test('nonzero exit WITH a stdout error envelope surfaces the real cause', async () => {
+  // Regression: agy exits 1 with empty stderr and puts its error in the
+  // stdout result envelope. The message used to be the bare
+  // "agy exited with code 1" with no cause, which is exactly what a user
+  // session log showed while quota errors went unnoticed.
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'exit-error'
+  const chunks = await collect(adapter.stream(opts([msg('user', 'hi')])))
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
+  assert.equal(finish.reason.kind, 'error')
+  assert.equal(finish.reason.failure?.code, Err.PROCESS_EXIT)
+  assert.ok((finish.reason.failure?.message ?? '').startsWith('agy exited with code 1:'))
+  assert.ok((finish.reason.failure?.message ?? '').includes('upstream request failed while generating'))
+})
+
 test('aux calls rejected when allowAuxiliary is false', async () => {
   const { adapter } = makeAdapter({ allowAuxiliary: false })
   process.env.FAKE_AGY_MODE = 'ok'

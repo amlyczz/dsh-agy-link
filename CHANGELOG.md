@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.21 (2026-08-27)
+
+- **Fixed: Silent `agy exited with code 1` Hid the Real Cause (发送消息无回复、只见 exit 1).**
+  - **Field report**: a user session log showed every turn failing with the bare message `agy exited with code 1` (code PROCESS_EXIT, empty stderr, zero tokens) — each attempt ran ~7–10s, failed once, retried once, failed again, and the UI never surfaced WHY (no reply text at all).
+  - **Root cause of the blindness (verified live against agy 1.1.22)**: agy reports its failure as a `result` envelope on **stdout** (`{"event":"result",...,"status":"ERROR","error":"<human-readable reason>"}`) and exits 1 with EMPTY stderr — e.g. an invalid model/effort pairing fails instantly with `--model gemini-3.7-flash requires --effort (available: low, medium, high)`. The adapter's non-zero-exit branch dropped that envelope entirely: rate-limit-shaped errors were still classified (the classifier already read `lastResultError`), but any OTHER failure degraded to the bare exit-code line with no cause.
+  - **Fix**: the PROCESS_EXIT failure message now prefers the stdout envelope's error text (falling back to the stderr tail). Same error code and retry policy; users finally see agy's own reason, e.g. `agy exited with code 1: upstream request failed while generating` or `…: --model gemini-3.7-flash requires --effort (available: low, medium, high)`.
+  - **Diagnostics unaffected**: `/agy doctor` (`~/.dsh/agy-link/diagnostics/doctor-*.md`) still carries the full redacted raw stdout tail for deeper incidents.
+  - Regression test pins the exact silent-failure shape (stdout envelope + exit 1 + empty stderr) via a new `exit-error` fake-agy mode.
+
 ## 0.4.20 (2026-08-27)
 
 - **Fixed: Primary Account Quota Fetched With a STALE Token (主账号刷新/同步拿的值不对).**

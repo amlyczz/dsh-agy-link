@@ -627,7 +627,12 @@ export class AgyAdapter extends LlmAdapter {
         failure = { kind: 'error', code: Err.AGY_ERROR, message: 'Google Antigravity quota / rate limit reached: ' + bestMsg }
       } else if (!consumable) {
         if (outcome.code !== 0) {
-          failure = { kind: 'error', code: Err.PROCESS_EXIT, message: 'agy exited with code ' + outcome.code + (outcome.stderrTail !== '' ? ': ' + brief(outcome.stderrTail) : '') }
+          // agy reports its failure on STDOUT as a result envelope and often
+          // exits 1 with EMPTY stderr; dropping the envelope here used to
+          // leave users with a bare "agy exited with code 1" and no cause.
+          // Prefer the envelope's error text, then the stderr tail.
+          const detail = parser.stats.lastResultError ?? (outcome.stderrTail !== '' ? brief(outcome.stderrTail) : '')
+          failure = { kind: 'error', code: Err.PROCESS_EXIT, message: 'agy exited with code ' + outcome.code + (detail !== '' ? ': ' + detail : '') }
         } else if (parser.stats.lastResultError) {
           failure = { kind: 'error', code: Err.AGY_ERROR, message: 'agy reported an error: ' + parser.stats.lastResultError }
         } else {
