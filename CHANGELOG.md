@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.24 (2026-08-28)
+
+- **Fixed: Antigravity Models Missing From Picker When Logged In (已登录/显示余量但模型列表不显示 — issue #1).**
+  - **Decoupled Adapter Registration from Synchronous Binary Discovery**: `registerAdapter` now executes regardless of initial `bin()` probe results (using resilient fallback model catalog), ensuring the Antigravity provider is never dropped during startup even if CLI path resolution is deferred.
+  - **Expanded macOS / Linux GUI App Path Discovery**: extended `resolveAgyBin` search candidates to include `~/.bun/bin`, `~/.cargo/bin`, `~/.local/share/pnpm`, `~/Library/pnpm`, `~/.yarn/bin`, `~/.npm-global/bin`, NVM (`~/.nvm/versions/node/*/bin`), FNM, Volta, ASDF shims, Linuxbrew, etc., fixing GUI desktop apps starting with minimal default system PATH.
+  - **Account-Aware Model Discovery & Environment Isolation**: model discovery now inherits current active/primary account isolated environment and proxy settings, falling back across ready pool accounts if default system HOME is unauthenticated.
+  - **Defensive Model & Effort Sanitization**: defensive catalog cleaning against empty IDs, blank names, empty reasoning effort arrays, and out-of-bounds `defaultEffort` to strictly satisfy DSH host validation and prevent fail-all provider group drops (`INVALID_CATALOG` / `INVALID_MODEL_*`).
+  - **Cross-Platform & Unit Tests**: added defensive catalog normalization and explicit binary path resolution tests across test suites.
+
 ## 0.4.23 (2026-08-27)
 
 - **Enhanced: Antigravity Tool Mirroring with Native Git +/- Diff Cards & Full Tool Vocabulary.**

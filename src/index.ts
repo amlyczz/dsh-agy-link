@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { dshHome, overridesPath, readOverrides, resolveConfig, stateDir } from './common/config.ts'
 import { PLUGIN_ID, PROVIDER_ID, type PluginConfig } from './common/types.ts'
+import type { ManagedAccount } from './common/pool-types.ts'
 import { AgyAdapter } from './host/adapter.ts'
 import { defineAgyAskTool } from './host/ask-tool.ts'
 import { AuthHelper } from './host/auth.ts'
@@ -17,7 +18,7 @@ import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
 import { ModelCatalog } from './host/models.ts'
 import { RunRegistry } from './host/recording.ts'
-import { MIN_AGY_VERSION, compareVersions, parseVersion, probeProcess, resolveAgyBin } from './host/runner.ts'
+import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
 import { AccountPoolManager } from './host/pool.ts'
 import { PoolAuthFlow } from './host/pool-auth.ts'
@@ -83,7 +84,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
 
   const getConfig = (): PluginConfig => resolveConfig(entryConfig)
   const bin = (): string | null => {
-    if (binCache === undefined) binCache = resolveAgyBin(getConfig())
+    if (binCache === undefined || binCache === null) binCache = resolveAgyBin(getConfig())
     return binCache
   }
   const version = () => versionCache
@@ -91,13 +92,59 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   const pool = new AccountPoolManager()
   const quota = new QuotaService(pool)
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
+
+  const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv => {
+    const cfg = getConfig()
+    return {
+      ...process.env,
+      ...(cfg.disableTelemetry
+        ? {
+            DO_NOT_TRACK: '1',
+            DISABLE_TELEMETRY: '1',
+            GOOGLE_CLOUD_DISABLE_TELEMETRY: '1',
+            ANTIGRAVITY_DISABLE_TELEMETRY: '1',
+          }
+        : {}),
+      ...(account && account.dir ? isolatedHomeEnv(account.dir) : {}),
+      ...(account?.proxyUrl
+        ? {
+            ALL_PROXY: account.proxyUrl,
+            HTTPS_PROXY: account.proxyUrl,
+            HTTP_PROXY: account.proxyUrl,
+            all_proxy: account.proxyUrl,
+            https_proxy: account.proxyUrl,
+            http_proxy: account.proxyUrl,
+          }
+        : {}),
+    }
+  }
+
   const catalog = new ModelCatalog(
     async (signal) => {
       const b = bin()
       if (!b) throw new Error('agy binary not found')
       // agy models has no --output-format flag (verified against 1.1.13);
       // it prints a two-column text table. parseModelsOutput handles both.
-      const out = await probeProcess(b, ['models'], 30_000, signal)
+      const poolData = pool.getPoolData()
+      const primaryAcc = poolData.primaryAccountId ? pool.getAccount(poolData.primaryAccountId) : undefined
+      const candidateAccount = (primaryAcc && primaryAcc.enabled && !primaryAcc.authRequired)
+        ? primaryAcc
+        : pool.getAccounts().find((a) => a.enabled && !a.authRequired)
+
+      let out = await probeProcess(b, ['models'], 30_000, signal, getDiscoveryEnv(candidateAccount))
+
+      // If probe failed or prompted to sign in, and candidate had no dir (system HOME),
+      // try secondary accounts with isolated dir if available before giving up.
+      if ((out.code !== 0 || out.stdout.includes('Please sign in') || /sign in|auth|not logged in/i.test(out.stderrTail)) && (!candidateAccount || !candidateAccount.dir)) {
+        const secondary = pool.getAccounts().find((a) => a.enabled && !a.authRequired && a.dir)
+        if (secondary) {
+          const secondaryOut = await probeProcess(b, ['models'], 30_000, signal, getDiscoveryEnv(secondary))
+          if (secondaryOut.code === 0 && secondaryOut.stdout.trim() !== '') {
+            out = secondaryOut
+          }
+        }
+      }
+
       if (out.code !== 0 && out.stdout.trim() === '') {
         throw new Error('agy models failed: ' + (out.stderrTail.trim() !== '' ? out.stderrTail.trim().slice(-200) : 'exit ' + String(out.code)))
       }
@@ -165,6 +212,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     const file = overridesPath()
     const current = readOverrides(file)
     current[key] = value
+    binCache = undefined
     try {
       mkdirSync(stateDir(), { recursive: true })
       writeFileSync(file, JSON.stringify(current, null, 2), 'utf8')
@@ -180,19 +228,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       log('dormant: disabled by config')
       return
     }
-    if (!bin()) {
+    const currentBin = bin()
+    if (!currentBin) {
       dormantReason = 'agy binary not found — install via https://antigravity.google/docs/cli/install'
       log('dormant: agy binary not found')
       return
     }
     try {
-      const v = await probeProcess(bin() as string, ['--version'], 10_000)
+      const v = await probeProcess(currentBin, ['--version'], 10_000)
       versionCache = parseVersion(v.stdout)
       if (versionCache && compareVersions(versionCache, MIN_AGY_VERSION) < 0) {
         dormantReason = 'agy ' + versionCache + ' is older than ' + MIN_AGY_VERSION + ' — run: agy update'
         log('dormant: ' + dormantReason)
         return
       }
+      dormantReason = null
       log('agy detected: ' + (versionCache ?? 'unknown version'))
     } catch {
       log('version probe failed — continuing with fallback catalog')
@@ -201,7 +251,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   })();
 
   // ---- llm registration (dormant-safe) ----
-  if (getConfig().enabled && bin()) {
+  if (getConfig().enabled) {
     try {
       ctx.llm.registerAdapter([PROVIDER_ID], adapter)
       log('registered provider route: ' + PROVIDER_ID)

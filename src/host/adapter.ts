@@ -170,22 +170,26 @@ export class AgyAdapter extends LlmAdapter {
     void this.deps.catalog.refreshIfNeeded()
     const cat = this.deps.catalog.get()
     // DSH's llm.listModels rejects a provider catalog containing any
-    // duplicate model id (INVALID_CATALOG) and the model picker then drops
-    // the whole Antigravity group — dedupe as a final guard over every
+    // duplicate model id or invalid id (INVALID_CATALOG) and the model picker then drops
+    // the whole Antigravity group — dedupe and sanitize as a final guard over every
     // catalog source (discovered, fallback, user-configured fallbackModels).
     const seen = new Set<string>()
     const models: LlmModelInfo[] = []
     const dropped: string[] = []
     for (const m of cat.models) {
-      if (seen.has(m.id)) {
-        dropped.push(m.id)
+      if (!m || typeof m.id !== 'string') continue
+      const id = m.id.trim()
+      if (id === '') continue
+      if (seen.has(id)) {
+        dropped.push(id)
         continue
       }
-      seen.add(m.id)
+      seen.add(id)
+      const name = (typeof m.name === 'string' && m.name.trim() !== '') ? m.name.trim() : id
       models.push({
         provider: PROVIDER_ID,
-        id: m.id,
-        name: m.name,
+        id,
+        name,
         inputModalities: ['text', 'image'] as const,
       })
     }
@@ -204,22 +208,29 @@ export class AgyAdapter extends LlmAdapter {
   override async resolveModel(_provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     const cfg = this.deps.getConfig()
     const cat = this.deps.catalog.get()
-    const entry = findEntry(cat, model)
-    const name = entry ? entry.name : model
-    const contextWindow = cfg.contextWindowDefault
+    const rawModel = typeof model === 'string' ? model.trim() : ''
+    const cleanId = rawModel !== '' ? rawModel : cfg.defaultModel
+    const entry = findEntry(cat, cleanId)
+    const rawName = entry ? entry.name : cleanId
+    const name = (typeof rawName === 'string' && rawName.trim() !== '') ? rawName.trim() : cleanId
+    const contextWindow = typeof cfg.contextWindowDefault === 'number' && cfg.contextWindowDefault > 0 ? cfg.contextWindowDefault : 200_000
     const resolved: LlmResolvedModelInfo = {
       provider: PROVIDER_ID,
-      id: model,
+      id: cleanId,
       name,
       inputModalities: ['text', 'image'] as const,
       context: { contextWindow },
-      defaultMaxTokens: cfg.maxTokensDefault,
+      defaultMaxTokens: typeof cfg.maxTokensDefault === 'number' && cfg.maxTokensDefault > 0 ? cfg.maxTokensDefault : 8192,
     }
-    if (entry && entry.efforts) {
-      const def = defaultEffortFor(entry, cfg)
-      resolved.reasoning = {
-        efforts: entry.efforts.map((e) => ({ id: e as never, name: e })),
-        ...(def ? { defaultEffort: def as never } : {}),
+    if (entry && Array.isArray(entry.efforts) && entry.efforts.length > 0) {
+      const cleanEfforts = Array.from(new Set(entry.efforts.filter((e) => typeof e === 'string' && e.trim() !== '')))
+      if (cleanEfforts.length > 0) {
+        const def = defaultEffortFor({ ...entry, efforts: cleanEfforts }, cfg)
+        const validDef = def && cleanEfforts.includes(def) ? def : cleanEfforts[0]
+        resolved.reasoning = {
+          efforts: cleanEfforts.map((e) => ({ id: e as never, name: e })),
+          ...(validDef ? { defaultEffort: validDef as never } : {}),
+        }
       }
     }
     return resolved

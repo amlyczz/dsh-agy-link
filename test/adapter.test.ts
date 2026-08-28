@@ -535,6 +535,27 @@ test('resolveModel uniformly advertises 1M context window across all Antigravity
   assert.equal(gpt.context?.contextWindow, 1_048_576)
 })
 
+test('listModels and resolveModel defensively handle empty IDs, empty names, and empty effort lists', async () => {
+  const { adapter } = makeAdapter({
+    fallbackModels: [
+      { id: '  ', name: 'Empty Id' },
+      { id: 'valid-model', name: '  ', efforts: [''] },
+      { id: 'effort-model', name: 'Effort Model', efforts: ['high', 'low', 'high'] },
+    ],
+  })
+  const models = await adapter.listModels('antigravity')
+  assert.equal(models.some((m) => m.id.trim() === ''), false)
+  assert.ok(models.some((m) => m.id === 'valid-model' && m.name === 'valid-model'))
+
+  const resolved = await adapter.resolveModel('antigravity', 'effort-model')
+  assert.ok(resolved.reasoning)
+  assert.deepEqual(resolved.reasoning.efforts.map((e) => e.id), ['high', 'low'])
+  assert.equal(resolved.reasoning.defaultEffort, 'high')
+
+  const resolvedNoEffort = await adapter.resolveModel('antigravity', 'valid-model')
+  assert.equal(resolvedNoEffort.reasoning, undefined)
+})
+
 test('compaction detection clears stale binding and re-seeds with digest (ADR-013)', async () => {
   const { adapter, store } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'

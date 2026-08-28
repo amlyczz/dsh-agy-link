@@ -3,7 +3,7 @@
 // whole tree (agy re-spawns exec children). stderr is captured as a tail
 // for error attribution; stdout is streamed line-by-line to the caller.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, existsSync, readdirSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { PluginConfig } from '../common/types.ts'
@@ -62,16 +62,59 @@ export function resolveAgyBin(cfg: PluginConfig): string | null {
   for (const dir of pathEnv.split(delimiter)) {
     if (dir !== '') candidates.push(...binCandidates(dir))
   }
-  // Per-platform default install locations (agy ships as a native binary).
+  // Per-platform default install locations (GUI apps lack user shell PATH).
+  const home = homedir()
   if (IS_WIN) {
     const local = process.env.LOCALAPPDATA ?? ''
-    if (local !== '') candidates.push(join(local, 'Programs', 'agy', 'agy.exe'))
-    candidates.push(join(homedir(), '.local', 'bin', 'agy.exe'))
-    candidates.push(join(homedir(), 'AppData', 'Roaming', 'npm', 'agy.cmd'))
+    const appData = process.env.APPDATA ?? ''
+    if (local !== '') {
+      candidates.push(join(local, 'Programs', 'agy', 'agy.exe'))
+      candidates.push(join(local, 'pnpm', 'agy.cmd'))
+      candidates.push(join(local, 'pnpm', 'agy.exe'))
+    }
+    if (appData !== '') {
+      candidates.push(join(appData, 'npm', 'agy.cmd'))
+      candidates.push(join(appData, 'Roaming', 'npm', 'agy.cmd'))
+    }
+    candidates.push(join(home, '.local', 'bin', 'agy.exe'))
+    candidates.push(join(home, '.local', 'bin', 'agy.cmd'))
+    candidates.push(join(home, '.bun', 'bin', 'agy.exe'))
+    candidates.push(join(home, '.cargo', 'bin', 'agy.exe'))
+    candidates.push(join(home, 'scoop', 'shims', 'agy.exe'))
   } else {
-    candidates.push(join(homedir(), '.local', 'bin', 'agy'))
+    // macOS / Linux standard system and package manager paths
+    candidates.push(join(home, '.local', 'bin', 'agy'))
     candidates.push('/usr/local/bin/agy')
     candidates.push('/opt/homebrew/bin/agy')
+    candidates.push('/opt/homebrew/sbin/agy')
+    candidates.push('/home/linuxbrew/.linuxbrew/bin/agy')
+    candidates.push(join(home, '.bun', 'bin', 'agy'))
+    candidates.push(join(home, '.cargo', 'bin', 'agy'))
+    candidates.push(join(home, '.local', 'share', 'pnpm', 'agy'))
+    candidates.push(join(home, 'Library', 'pnpm', 'agy'))
+    candidates.push(join(home, '.yarn', 'bin', 'agy'))
+    candidates.push(join(home, '.npm-global', 'bin', 'agy'))
+    candidates.push(join(home, '.volta', 'bin', 'agy'))
+    candidates.push(join(home, '.asdf', 'shims', 'agy'))
+    candidates.push(join(home, '.nix-profile', 'bin', 'agy'))
+    candidates.push('/run/current-system/sw/bin/agy')
+
+    // NVM version directories (~/.nvm/versions/node/*/bin/agy)
+    try {
+      const nvmNodeDir = join(home, '.nvm', 'versions', 'node')
+      if (existsSync(nvmNodeDir)) {
+        for (const v of readdirSync(nvmNodeDir)) {
+          candidates.push(join(nvmNodeDir, v, 'bin', 'agy'))
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // FNM version directories
+    candidates.push(join(home, '.local', 'share', 'fnm', 'current', 'bin', 'agy'))
+    candidates.push(join(home, '.fnm', 'current', 'bin', 'agy'))
+    candidates.push(join(home, 'Library', 'Application Support', 'fnm', 'current', 'bin', 'agy'))
   }
   // Prefer a real executable over a cmd shim: keep the first hit of each
   // PATH dir but rank .exe/extensionless before .cmd/.bat.

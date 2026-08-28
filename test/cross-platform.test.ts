@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, isolatedHomeEnv, isCmdShim, startAgyProcess, windowsQuote } from '../src/host/runner.ts'
+import { binCandidates, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -110,4 +110,12 @@ test('startAgyProcess times out if child is completely silent', async () => {
   const outcome = await proc.outcome
   assert.equal(outcome.timedOut, true)
   assert.equal(lines.length, 0)
+})
+
+test('resolveAgyBin honors explicit agyBin config if it exists', () => {
+  const found = resolveAgyBin({ agyBin: process.execPath } as never)
+  assert.equal(found, process.execPath)
+  const missing = resolveAgyBin({ agyBin: '/nonexistent/agy/path/xyz' } as never)
+  // If explicit path does not exist, it falls back to scanning or null
+  assert.notEqual(missing, '/nonexistent/agy/path/xyz')
 })

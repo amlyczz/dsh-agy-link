@@ -37,7 +37,7 @@ export function parseModelsOutput(stdout: string): RawModel[] {
   const out: RawModel[] = []
   for (const line of text.split(/\n/)) {
     const t = line.trim();
-    if (t === '' || t.startsWith('Fetching') || t.startsWith('Error')) continue
+    if (t === '' || t.startsWith('Fetching') || t.startsWith('Error') || /^(please sign in|warning|tip:)/i.test(t)) continue
     // agy 1.1.15 prints a TAB-separated two-column table; older builds and
     // some locales use two-or-more spaces.
     const m = t.match(/^(\S+)(?:\t+|\s{2,})(.+)$/)
@@ -52,9 +52,11 @@ function dedupeBySlug(raw: readonly RawModel[]): RawModel[] {
   const seen = new Set<string>()
   const out: RawModel[] = []
   for (const r of raw) {
-    if (seen.has(r.slug)) continue
-    seen.add(r.slug)
-    out.push(r)
+    if (!r.slug || typeof r.slug !== 'string') continue
+    const slug = r.slug.trim()
+    if (slug === '' || seen.has(slug)) continue
+    seen.add(slug)
+    out.push({ slug, label: (typeof r.label === 'string' && r.label.trim() !== '') ? r.label.trim() : slug })
   }
   return out
 }
@@ -152,7 +154,13 @@ function stripEffortLabel(label: string, eff: string): string {
 }
 
 export function buildFallbackCatalog(defs: readonly FallbackModelDef[]): CatalogEntry[] {
-  return defs.map((d) => ({ id: d.id, name: d.name, efforts: d.efforts ?? null }));
+  return defs
+    .filter((d) => Boolean(d && typeof d.id === 'string' && d.id.trim() !== ''))
+    .map((d) => ({
+      id: d.id.trim(),
+      name: (typeof d.name === 'string' && d.name.trim() !== '') ? d.name.trim() : d.id.trim(),
+      efforts: Array.isArray(d.efforts) && d.efforts.length > 0 ? d.efforts.filter((e) => typeof e === 'string' && e.trim() !== '') : null,
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +250,7 @@ export function findEntry(catalog: Catalog, id: string): CatalogEntry | undefine
 }
 
 export function defaultEffortFor(entry: CatalogEntry, cfg: PluginConfig): string | undefined {
-  if (!entry.efforts) return undefined
+  if (!entry.efforts || entry.efforts.length === 0) return undefined
   if (cfg.defaultEffort !== '' && entry.efforts.includes(cfg.defaultEffort)) return cfg.defaultEffort
   // Default to the highest reasoning effort (high), then fall back down.
   for (const pref of ['high', 'medium', 'low']) {
