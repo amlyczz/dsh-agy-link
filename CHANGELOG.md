@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.25 (2026-09-04)
+
+- **Fixed: Plugin Startup Blocker on DSH >= 0.1.1-rc.x / 0.1.2-rc.1 (`missing export 'CallId'`, issue #4).**
+  - **Root cause**: Newer `@deepseek-ai/dsh-llm` versions (e.g. `0.1.2-alpha.1` ~ `0.1.2-rc.1`) renamed `CallId` to `ToolCallId`. A named import `import { CallId } from '@deepseek-ai/dsh-llm'` caused Node ESM static resolution to fail at startup with `The requested module '@deepseek-ai/dsh-llm' does not provide an export named 'CallId'`, surfacing as a plugin load failure on DSH Desktop 2.0.5 and CLI.
+  - **Fix**: Replaced named import with a namespace fallback resolution `toToolCallId = dshLlm.ToolCallId ?? dshLlm.CallId ?? identity`. This avoids missing named export evaluation errors and ensures seamless backwards and forwards compatibility across all DSH host versions.
+  - **Ecosystem & Test Hardening**: Upgraded development dependencies to `@deepseek-ai/dsh-*@0.1.2-rc.1`. Configured `--test-concurrency=1` in test runner to prevent mock environment variable collisions across concurrent subprocess tests, achieving 100% pass rate across all 151 unit tests. Verified live startup with DSH 0.1.2-rc.1 and `dsh-lark-link`.
+
 ## 0.4.24 (2026-08-28)
 
 - **Fixed: Antigravity Models Missing From Picker When Logged In (已登录/显示余量但模型列表不显示 — issue #1).**

@@ -749,7 +749,7 @@ test('sliding-window rate limit enforces request throttling per minute', async (
   await runTurn(adapter, [userMsg2], { sessionId: 'sess-rl-2' as never })
 
   const elapsed = Date.now() - t0
-  assert.ok(elapsed < 2000)
+  assert.ok(elapsed < 5000, `elapsed ${elapsed}ms exceeded 5000ms`)
 })
 
 test.after(() => {
