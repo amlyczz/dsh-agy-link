@@ -68,6 +68,7 @@ export interface PluginConfig {
 // picker when agy models cannot run (signed out / offline); the live list
 // always comes from `agy models` once signed in.
 export const DEFAULT_FALLBACK_MODELS: readonly FallbackModelDef[] = [
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', efforts: ['low', 'medium', 'high'] },
   { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', efforts: ['low', 'medium', 'high'] },
   { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', efforts: ['low', 'medium', 'high'] },
   { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', efforts: ['low', 'medium', 'high'] },

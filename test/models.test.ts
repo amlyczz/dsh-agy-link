@@ -49,13 +49,16 @@ test('parseModelsOutput handles dotted current-gen slugs', () => {
   assert.deepEqual(base?.efforts, ['medium'])
 })
 
-test('fallback catalog carries the current model line-up incl. 3.7', () => {
+test('fallback catalog carries the current model line-up incl. 3.8 and 3.7', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
   const ids = cat.map((e) => e.id)
+  assert.ok(ids.includes('gemini-3.8-flash'), '3.8 flash present')
   assert.ok(ids.includes('gemini-3.7-flash'), '3.7 flash present')
   assert.ok(ids.includes('gemini-3.6-flash'))
   assert.ok(ids.includes('claude-opus-4-6-thinking'))
   assert.ok(ids.includes('gpt-oss-120b-medium'))
+  const f38 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'gemini-3.8-flash')
+  assert.deepEqual(f38?.efforts, ['low', 'medium', 'high'])
   const f37 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'gemini-3.7-flash')
   assert.deepEqual(f37?.efforts, ['low', 'medium', 'high'])
 })
@@ -135,7 +138,9 @@ test('bare gemini base without siblings gets no efforts', () => {
 
 test('buildFallbackCatalog carries configurable efforts', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
-  assert.equal(cat.length, 7)
+  assert.equal(cat.length, 8)
+  const flash38 = cat.find((e) => e.id === 'gemini-3.8-flash')
+  assert.deepEqual(flash38?.efforts, ['low', 'medium', 'high'])
   const flash = cat.find((e) => e.id === 'gemini-3.7-flash')
   assert.deepEqual(flash?.efforts, ['low', 'medium', 'high'])
   const claude = cat.find((e) => e.id === 'claude-sonnet-4-6')

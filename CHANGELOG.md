@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.26 (2026-09-07)
+
+- **Added: Support for `gemini-3.8-flash` in Fallback Models Catalog (Issue #6).**
+  - **Root cause**: `DEFAULT_FALLBACK_MODELS` defined in `src/common/types.ts` had not been synced with Google's latest model line-up, stopping at `gemini-3.7-flash`. When DSH booted or ran offline prior to dynamic `agy models` discovery, `gemini-3.8-flash` was missing from the model picker.
+  - **Fix**: Added `{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', efforts: ['low', 'medium', 'high'] }` to `DEFAULT_FALLBACK_MODELS`.
+- **Fixed: Client Bundle `process is not defined` (PR #5 / realguan).**
+  - In `tsdown.config.ts`, marked `react-dom` and `react/jsx-runtime` as external dependencies for client bundling (`platform: "browser"`), preventing development React runtime from being inlined into `dist/client.js` and eliminating browser `ReferenceError: process is not defined`.
+- **Hardened: Test Suite Stability & Debounce Timing on macOS.**
+  - Relaxed duplicate submission debounce window in `AgyAdapter` to 10,000ms with automatic size-capped map pruning, and adjusted test thresholds to account for cold Node subprocess spawning latency on macOS. All 151 unit tests passing.
+
 ## 0.4.25 (2026-09-04)
 
 - **Fixed: Plugin Startup Blocker on DSH >= 0.1.1-rc.x / 0.1.2-rc.1 (`missing export 'CallId'`, issue #4).**

@@ -48,7 +48,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     fixedExtension: false,
-    external: [/^@deepseek-ai\//, "react"],
+    external: [/^@deepseek-ai\//, "react", "react-dom", "react/jsx-runtime"],
     outputOptions: {
       entryFileNames: "client.js",
       banner: `window.__ModuleLoader__.load({ id: "dsh-agy-link", factory: (require) => {`,

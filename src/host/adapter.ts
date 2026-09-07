@@ -528,14 +528,20 @@ export class AgyAdapter extends LlmAdapter {
 
     // In-flight duplicate submission debounce (prevents double-clicks / network repeat loops)
     if (!isAux && sessionKey !== '') {
+      const now = Date.now()
+      if (this.activeSessionPrompts.size > 100) {
+        for (const [k, v] of this.activeSessionPrompts) {
+          if (now - v.startedAt >= 10_000) this.activeSessionPrompts.delete(k)
+        }
+      }
       const activePrompt = this.activeSessionPrompts.get(sessionKey)
-      if (activePrompt !== undefined && activePrompt.prompt === prompt && Date.now() - activePrompt.startedAt < 3000) {
+      if (activePrompt !== undefined && activePrompt.prompt === prompt && now - activePrompt.startedAt < 10_000) {
         throw new LlmError(
           'Duplicate request ignored: an identical request is already running for this session.',
           Err.BUSY,
         )
       }
-      this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: Date.now() })
+      this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now })
     }
 
     // ---- spawn + record (v0.3: spans consume a shared recording) ----
@@ -631,7 +637,6 @@ export class AgyAdapter extends LlmAdapter {
       const outcome = await proc.outcome
       releaseOnce()
       if (this.activeRuns.get(sessionKey) === rec) this.activeRuns.delete(sessionKey)
-      if (!isAux && sessionKey !== '') this.activeSessionPrompts.delete(sessionKey)
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
         rec.append(ev)
