@@ -418,3 +418,26 @@ test('UI_PATHS contains all expected clean SVG paths', async () => {
   assert.ok(UI_PATHS.check.length > 5)
 })
 
+
+test('readSystemKeychainToken dispatches per platform (GH #8 Linux Secret Service)', async () => {
+  const { readLinuxSecretToken, readMacKeychainToken } = await import('../src/host/quota.ts')
+  // Both readers are hard platform gates - safe to call anywhere.
+  if (process.platform !== 'darwin') assert.equal(readMacKeychainToken(), null, 'mac reader no-ops off darwin')
+  if (process.platform !== 'linux') assert.equal(readLinuxSecretToken(), null, 'linux reader no-ops off linux')
+  // A subclass mirroring the production dispatch resolves without throwing.
+  // (Result is environment-dependent: a real keyring entry may exist.)
+  class DispatchProbe extends QuotaService {
+    override readSystemKeychainToken() {
+      if (process.platform === 'linux') return readLinuxSecretToken()
+      if (process.platform === 'darwin') return readMacKeychainToken()
+      return null
+    }
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-dispatch-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.createAccountSlot('primary')
+  primary.systemHome = true
+  const svc = new DispatchProbe(pool)
+  const tok = svc.getStoredToken(primary)
+  assert.ok(tok === null || typeof tok.accessToken === 'string', 'dispatch resolves without throwing')
+})

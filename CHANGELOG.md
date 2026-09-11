@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.27 (2026-09-11)
+
+- **Fixed: Windows binary discovery misses the official Google installer path (Issue #7).**
+  - `resolveAgyBin()` now probes `%LOCALAPPDATA%\agy\bin\agy.exe` (plus `.cmd`/`.bat` siblings and the WinGet Links shim), so installs via `irm https://antigravity.google/cli/install.ps1 | iex` no longer raise `AGY_NOT_INSTALLED` when PATH has not propagated to the GUI process.
+- **Fixed: Quota unavailable on Linux (Issue #8).**
+  - Added `readLinuxSecretToken()`: the primary account's OAuth credential is now read from the FreeDesktop Secret Service (GNOME Keyring / KDE Wallet) via `secret-tool`, with a python3-dbus fallback — the same `service="gemini" / username="antigravity"` go-keyring slot agy writes on Linux.
+  - `QuotaService.readSystemKeychainToken()` now dispatches per platform (darwin → Keychain, linux → Secret Service), restoring quota refresh on Linux where no on-disk token file exists.
+  - Shared go-keyring payload parsing (raw or `go-keyring-base64:` prefixed JSON) extracted into `parseGoKeyringPayload`.
+
 ## 0.4.26 (2026-09-07)
 
 - **Added: Support for `gemini-3.8-flash` in Fallback Models Catalog (Issue #6).**

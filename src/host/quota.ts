@@ -176,6 +176,85 @@ interface QuotaSummaryResponse {
 }
 
 /**
+ * Parse a go-keyring payload (optionally "go-keyring-base64:" prefixed) into
+ * a normalized StoredToken. Shared by the macOS and Linux keyring readers.
+ */
+function parseGoKeyringPayload(raw: string): StoredToken | null {
+  let jsonStr = raw
+  if (raw.startsWith('go-keyring-base64:')) {
+    const b64 = raw.slice('go-keyring-base64:'.length)
+    jsonStr = Buffer.from(b64, 'base64').toString('utf8')
+  }
+  try {
+    const parsed = JSON.parse(jsonStr) as Record<string, unknown>
+    const tok = normalizeStoredToken(parsed)
+    return tok && (tok.accessToken || tok.refreshToken) ? tok : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Reads the active primary Antigravity OAuth token from the Linux Secret
+ * Service (GNOME Keyring / KDE Wallet via FreeDesktop secrets). agy 1.1.15+
+ * on Linux stores primary credentials via go-keyring under service "gemini"
+ * / username "antigravity" — the same JSON shape as the macOS Keychain.
+ * GH #8: without this reader, Linux quota resolution always returned null.
+ */
+export function readLinuxSecretToken(): StoredToken | null {
+  if (process.platform !== 'linux') return null
+
+  // 1. secret-tool (standard libsecret CLI) when available.
+  try {
+    const raw = execFileSync(
+      'secret-tool',
+      ['lookup', 'service', 'gemini', 'username', 'antigravity'],
+      { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim()
+    if (raw) {
+      const tok = parseGoKeyringPayload(raw)
+      if (tok) return tok
+    }
+  } catch {
+    // fall through to the DBus fallback
+  }
+
+  // 2. Direct Secret Service query via python3 + dbus (preinstalled on most
+  //    desktop distros). Matches go-keyring's attribute pair exactly.
+  const pyScript = [
+    'import dbus, sys',
+    'try:',
+    '    bus = dbus.SessionBus()',
+    '    svc = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")',
+    '    iface = dbus.Interface(svc, "org.freedesktop.Secret.Service")',
+    '    sp = iface.OpenSession("plain", "")[1]',
+    '    res = iface.SearchItems({"service": "gemini", "username": "antigravity"})',
+    '    if res and res[0]:',
+    '        item = bus.get_object("org.freedesktop.secrets", res[0][0])',
+    '        sec = dbus.Interface(item, "org.freedesktop.Secret.Item").GetSecret(sp)',
+    '        sys.stdout.write(bytes(sec[2]).decode("utf-8"))',
+    'except Exception:',
+    '    pass',
+  ].join('\n')
+  for (const pyBin of ['python3', 'python']) {
+    try {
+      const raw = execFileSync(pyBin, ['-c', pyScript], {
+        encoding: 'utf8',
+        timeout: 4000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+      if (raw) {
+        const tok = parseGoKeyringPayload(raw)
+        if (tok) return tok
+      }
+    } catch {
+      // try next interpreter
+    }
+  }
+  return null
+}
+
+/**
  * Reads the active primary Antigravity OAuth token from the macOS Keychain.
  * agy 1.1.15+ on macOS stores primary credentials via go-keyring in the Keychain
  * under service "gemini" / account "antigravity" (base64-encoded JSON).
@@ -189,13 +268,7 @@ export function readMacKeychainToken(): StoredToken | null {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim()
     if (!raw) return null
-    let jsonStr = raw
-    if (raw.startsWith('go-keyring-base64:')) {
-      const b64 = raw.slice('go-keyring-base64:'.length)
-      jsonStr = Buffer.from(b64, 'base64').toString('utf8')
-    }
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>
-    return normalizeStoredToken(parsed)
+    return parseGoKeyringPayload(raw)
   } catch {
     return null
   }
@@ -218,7 +291,9 @@ export class QuotaService {
    * platforms) can substitute the reader without touching the real Keychain.
    */
   protected readSystemKeychainToken(): StoredToken | null {
-    return readMacKeychainToken()
+    if (process.platform === 'darwin') return readMacKeychainToken()
+    if (process.platform === 'linux') return readLinuxSecretToken()
+    return null
   }
 
   /**

@@ -68,7 +68,14 @@ export function resolveAgyBin(cfg: PluginConfig): string | null {
     const local = process.env.LOCALAPPDATA ?? ''
     const appData = process.env.APPDATA ?? ''
     if (local !== '') {
+      // Official Google installer default (irm .../install.ps1 | iex) — GH #7
+      candidates.push(join(local, 'agy', 'bin', 'agy.exe'))
+      candidates.push(join(local, 'agy', 'bin', 'agy.cmd'))
+      candidates.push(join(local, 'agy', 'bin', 'agy.bat'))
+      candidates.push(join(local, 'agy', 'agy.exe'))
       candidates.push(join(local, 'Programs', 'agy', 'agy.exe'))
+      candidates.push(join(local, 'Programs', 'agy', 'bin', 'agy.exe'))
+      candidates.push(join(local, 'Microsoft', 'WinGet', 'Links', 'agy.exe'))
       candidates.push(join(local, 'pnpm', 'agy.cmd'))
       candidates.push(join(local, 'pnpm', 'agy.exe'))
     }
