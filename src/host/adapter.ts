@@ -778,14 +778,21 @@ export class AgyAdapter extends LlmAdapter {
 }
 
 /**
- * Detect a continuation span: the request's LAST message is the tool result
- * of one of our mirrored agy tool calls. Its callId encodes the recording
- * run and the event index to resume after.
+ * Detect a continuation span: the request ends with (or has trailing plugin
+ * snapshots after) the tool result of one of our mirrored agy tool calls.
+ * Its callId encodes the recording run and the event index to resume after.
  */
 export function detectContinuation(messages: readonly Message[]): { runId: string; eventIndex: number } | null {
-  const last = messages[messages.length - 1]
-  if (last === undefined || last.role !== 'user') return null
-  const src = (last as unknown as { source?: { kind?: string; callId?: string } }).source
-  if (src === undefined || src.kind !== 'tool' || typeof src.callId !== 'string') return null
-  return parseMirrorCallId(src.callId)
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (!m) continue
+    const src = (m as unknown as { source?: { kind?: string; callId?: string } }).source
+    if (src && src.kind === 'plugin') continue
+    if (m.role !== 'user') break
+    if (src && src.kind === 'tool' && typeof src.callId === 'string') {
+      return parseMirrorCallId(src.callId)
+    }
+    break
+  }
+  return null
 }

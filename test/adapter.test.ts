@@ -161,12 +161,19 @@ test('ok run mirrors tools natively, streams text, and persists the binding', as
 test('detectContinuation keys off the trailing mirror tool-result only', () => {
   const toolResult = (callId: string): Message =>
     ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
+  const pluginSnapshot = (text: string): Message =>
+    ({ role: 'user', content: [{ type: 'text', text }], source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot' } }) as never
   assert.deepEqual(
     detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7')]),
     { runId: 'run-1', eventIndex: 7 },
   )
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7'), pluginSnapshot('Current runtime context...')]),
+    { runId: 'run-1', eventIndex: 7 },
+  )
   assert.equal(detectContinuation([msg('user', 'q')]), null)
   assert.equal(detectContinuation([msg('user', 'q'), toolResult('bash-9')]), null)
+  assert.equal(detectContinuation([msg('user', 'q'), pluginSnapshot('Current runtime context...')]), null)
 })
 
 test('second turn reuses the bound conversation id', async () => {
