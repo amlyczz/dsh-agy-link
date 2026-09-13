@@ -155,6 +155,7 @@ export function startMcpBridge(opts: {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(0, '127.0.0.1', () => {
+      server.unref()
       const addr = server.address()
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0
       opts.log?.('mcp bridge listening on 127.0.0.1:' + port)

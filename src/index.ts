@@ -699,6 +699,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     const timer = setInterval(() => {
       void sweepDir(mediaDir(), getConfig().mediaTtlMs).catch(() => undefined)
     }, Math.max(60_000, Math.min(getConfig().mediaTtlMs, 3_600_000)))
+    timer.unref?.()
     return () => clearInterval(timer)
   })
 
@@ -712,7 +713,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       void quota.refreshAllQuotas().catch(() => undefined)
     }
     const boot = setTimeout(refresh, 5_000)
+    boot.unref?.()
     const timer = setInterval(refresh, Math.max(60_000, getConfig().quotaPollIntervalMs))
+    timer.unref?.()
     return () => {
       clearTimeout(boot)
       clearInterval(timer)
@@ -754,12 +757,13 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   syncMcpBridge()
 
   ctx.effect(() => {
-    auth.dispose()
-    void poolAuth.cancel()
-    if (askToolDispose.current !== null) askToolDispose.current()
-    if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
-    bridgeState.restore?.()
-    void bridgeState.bridge?.close()
-    return () => undefined
+    return () => {
+      auth.dispose()
+      void poolAuth.cancel()
+      if (askToolDispose.current !== null) askToolDispose.current()
+      if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
+      bridgeState.restore?.()
+      void bridgeState.bridge?.close()
+    }
   })
 }
