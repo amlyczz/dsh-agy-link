@@ -524,9 +524,9 @@ export class AgyAdapter extends LlmAdapter {
     } else if (prompt.trim() === '') {
       throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
     }
-    // Recovery guidance is deliberately scoped to a missing-artifact request:
-    // it constrains recovery without perturbing unrelated conversation prompts.
-    if (!isAux && /\b(missing|not found|enoent)\b/i.test(prompt)) {
+    // Resumed turns may only say "continue": retain the artifact boundary
+    // even when the user's latest text does not repeat the preceding error.
+    if (!isAux && (binding !== undefined || /\b(missing|not found|enoent)\b/i.test(prompt))) {
       prompt += '\n\n[Recovery boundary: if an artifact is missing, first use the current known conversation artifact directory. Do not search a global brain, invent a path, or attempt to bypass any system protection.]'
     }
 

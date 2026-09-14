@@ -259,6 +259,7 @@ test('second turn reuses the bound conversation id', async () => {
   await runTurn(adapter, [msg('assistant', 'one'), msg('user', 'two')], { sessionId: 'sess-2' as never })
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   assert.equal(argv[argv.indexOf('--conversation') + 1], 'conv-fresh-1')
+  assert.match(argv[argv.indexOf('-p') + 1] ?? '', /current known conversation artifact directory/)
 })
 
 test('unbound follow-up turn gets a history digest prefix', async () => {
@@ -512,7 +513,8 @@ test('returning session digests only foreign turns since the watermark', async (
   const argv2 = JSON.parse(readFileSync(argsFile2, 'utf8')) as string[]
   const prompt2 = argv2[argv2.indexOf('-p') + 1] ?? ''
   assert.ok(!prompt2.includes('[conversation so far]'), 'clean follow-up carries no digest')
-  assert.equal(prompt2, 'third')
+  assert.equal(prompt2.split('\n\n[Recovery boundary:')[0], 'third')
+  assert.match(prompt2, /current known conversation artifact directory/)
 })
 
 test('unspawnable binary maps to PROCESS_EXIT without hanging', async () => {
