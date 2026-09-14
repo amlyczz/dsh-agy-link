@@ -84,6 +84,7 @@ async function runTurn(
   extra: Partial<GenerateOptions> = {},
   maxHops = 12,
   trailingPluginSnapshots = false,
+  replayRuns?: RunRegistry,
 ): Promise<{ chunks: StreamChunk[]; toolCalls: Array<{ id: string; args: MirrorArgs }>; messages: Message[] }> {
   const messages = [...base]
   const all: StreamChunk[] = []
@@ -114,9 +115,19 @@ async function runTurn(
     }
     toolCalls.push({ id: end.block.id, args })
     messages.push({ role: 'assistant', content: [end.block] } as unknown as Message)
+    let output = 'replayed'
+    let isError = false
+    if (replayRuns) {
+      try {
+        output = String(await defineAgyMirrorTool({ runs: replayRuns }).execute(args as never, { signal: new AbortController().signal } as never))
+      } catch (error) {
+        isError = true
+        output = String(error)
+      }
+    }
     messages.push({
       role: 'user',
-      content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: 'replayed' }] }],
+      content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: output }], isError }],
       source: { kind: 'tool', callId: end.block.id },
     } as unknown as Message)
     if (trailingPluginSnapshots) {
@@ -203,15 +214,21 @@ test('plugin snapshots continue the existing run without a duplicate spawn and r
 
 test('headless automatic denial stays raw while process success remains separate', async () => {
   const reports: Array<{ processOk: boolean; processCode: string; toolErrors: readonly string[] }> = []
-  const { adapter } = makeAdapter({}, { onRun: (info) => reports.push(info) })
+  const { adapter, runs } = makeAdapter({}, { onRun: (info) => reports.push(info) })
   process.env.FAKE_AGY_MODE = 'real-denied'
-  const { chunks } = await runTurn(adapter, [msg('user', 'inspect files')])
+  const { chunks, messages, toolCalls } = await runTurn(adapter, [msg('user', 'inspect files')], {}, 12, true, runs)
+  assert.ok(messages.some(m => JSON.stringify(m).includes('"isError":true')), 'denial must be replayed as a real error result')
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
   assert.equal(finish.reason.kind, 'stop')
   const report = await waitFor(() => reports[0])
   assert.equal(report.processOk, true)
   assert.equal(report.processCode, 'OK')
   assert.deepEqual(report.toolErrors, ['Permission denied automatically in headless plan mode: read_file ~/.agents'])
+  assert.equal(reports.length, 1, 'error replay must not spawn a second AGY process')
+  assert.equal(toolCalls.length, 2)
+  const failedResult = messages.find(m => JSON.stringify(m).includes('"isError":true'))!
+  assert.match(JSON.stringify(failedResult), /Permission denied automatically in headless plan mode: read_file ~\/.agents/)
+  assert.match(JSON.stringify(failedResult), /agy tool/)
 })
 
 test('second turn reuses the bound conversation id', async () => {
