@@ -135,7 +135,7 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
           '备用：授权完成后运行 `/agy auth-code <授权码或完整回调URL>`。',
         ].join('\n'))
       }
-      return err(st.message ?? 'failed to start the login flow')
+      return err(`failed to start the login flow (${st.code ?? 'request_failed'})`)
     }
     if (sub === 'auth-code') {
       if (arg === '') return err('usage: /agy auth-code <code-or-callback-url>')
@@ -144,9 +144,9 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
       const st = await flow.submitCode(arg)
       if (st.ok) {
         deps.store().clear()
-        return ok(st.message ?? 'Logged in to Antigravity.')
+        return ok('Logged in to Antigravity.')
       }
-      return err(st.message ?? 'login failed')
+      return err(`login failed (${st.code ?? 'request_failed'})`)
     }
     if (sub === 'models') {
       const cat = await deps.catalog().forceRefresh()

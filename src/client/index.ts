@@ -74,7 +74,7 @@ interface StatusPayload {
 		url?: string;
 		mode?: 'auto' | 'manual';
 		browserOpened?: boolean;
-		message?: string;
+		code?: string;
 	};
 	catalog?: { source: string; count: number; lastError: string | null };
 	bindings?: number;
@@ -141,7 +141,7 @@ const agyModalStore = {
 /**
  * Format reset timestamp into readable date/time + relative countdown.
  */
-function formatQuotaWindow(resetTimeStr?: string): {
+function formatQuotaWindow(t: (key: AgyLocaleKey) => string, resetTimeStr?: string): {
 	resetText: string;
 } {
 	if (!resetTimeStr) return { resetText: '' };
@@ -156,7 +156,9 @@ function formatQuotaWindow(resetTimeStr?: string): {
 		const mins = totalMins % 60;
 		const isWeekly = days >= 1;
 
-		const countdown = days > 0 ? `${days}d${hours}h` : hours > 0 ? `${hours}h${mins}m` : `${mins}m`;
+		const countdown = days > 0
+			? `${days}${t('duration.day')} ${hours}${t('duration.hour')}`
+			: hours > 0 ? `${hours}${t('duration.hour')} ${mins}${t('duration.minute')}` : `${mins}${t('duration.minute')}`;
 		const hh = d.getHours().toString().padStart(2, '0');
 		const mm = d.getMinutes().toString().padStart(2, '0');
 		const resetText = isWeekly
@@ -835,6 +837,10 @@ export function apply(ctx: ClientContext): void {
 		}, []);
 
 		const flowStartedRef = useRef(false);
+		const safeMessage = (code?: string): string => {
+			const key = `auth.code.${code ?? ''}` as AgyLocaleKey;
+			return code && key in en ? t(key) : t('api.genericError');
+		};
 		useEffect(() => {
 			if (!addingAccount || !flowStartedRef.current) return;
 			const pa = status?.poolAuth;
@@ -844,13 +850,13 @@ export function apply(ctx: ClientContext): void {
 				setAddingAccount(false);
 				setAuthCodeInput('');
 				setAliasInput('');
-				showToast(pa.message || t('auth.activated'), 'success');
+				showToast(safeMessage(pa.code), 'success');
 			} else if (pa.phase === 'failed') {
 				flowStartedRef.current = false;
-				showToast(pa.message || t('auth.failed'), 'error');
+				showToast(safeMessage(pa.code), 'error');
 			}
 			// eslint-disable-next-line react-hooks/exhaustive-deps
-		}, [addingAccount, status?.poolAuth?.phase, status?.poolAuth?.message]);
+		}, [addingAccount, status?.poolAuth?.phase, status?.poolAuth?.code]);
 
 		const showToast = (text: string, type: ToastNotice['type'] = 'info') => {
 			setToast({ text, type, id: Date.now() });
@@ -865,8 +871,8 @@ export function apply(ctx: ClientContext): void {
 
 		const handleBeginAddAccount = async (): Promise<void> => {
 			setLoadingAction('pool:beginAdd');
-			const alias = aliasInput.trim() || t('account.aliasDefault', { number: (status?.pool?.accounts?.length ?? 1) + 1 });
-			const res = await postJson('/plugins/agy-link/pool/begin-add', { alias });
+			const alias = aliasInput.trim();
+			const res = await postJson('/plugins/agy-link/pool/begin-add', alias ? { alias } : {});
 			setLoadingAction(null);
 			if (res && res.ok) {
 				flowStartedRef.current = true;
@@ -877,7 +883,7 @@ export function apply(ctx: ClientContext): void {
 					showToast(t('auth.browserManual'), 'warn');
 				}
 			} else {
-				showToast(t('auth.startFailed', { reason: res?.message || t('auth.networkHint') }), 'error');
+				showToast(res?.code ? safeMessage(res.code) : t('auth.startFailed'), 'error');
 			}
 		};
 
@@ -892,9 +898,9 @@ export function apply(ctx: ClientContext): void {
 				setAliasInput('');
 				setAddingAccount(false);
 				await refresh();
-				showToast(res.message || t('auth.added'), 'success');
+				showToast(safeMessage(res.code), 'success');
 			} else {
-				showToast(res?.message || res?.error || t('auth.codeFailed'), 'error');
+				showToast(safeMessage(res?.code), 'error');
 			}
 		};
 
@@ -993,6 +999,7 @@ export function apply(ctx: ClientContext): void {
 					type: 'button',
 					style: { background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 4px', opacity: 0.8, display: 'inline-flex', alignItems: 'center' },
 					onClick: () => setToast(null),
+					'aria-label': t('aria.closeToast'),
 				}, uiIcon('x', 12)),
 			);
 		};
@@ -1009,12 +1016,12 @@ export function apply(ctx: ClientContext): void {
 			// fraction with 0% (a ghost cooldown used to show a 98%-full account as
 			// empty). Surface it as a note next to the reset time instead.
 			const cdNote = inCooldown ? t('account.localCooldown') : '';
-			const w5h = formatQuotaWindow(info?.resetTime);
+			const w5h = formatQuotaWindow(t, info?.resetTime);
 
 			// Weekly limit
 			const hasWeekly = typeof info?.weeklyFraction === 'number' && Number.isFinite(info.weeklyFraction);
 			const pctWeekly = hasWeekly ? Math.max(0, Math.min(100, Math.round(info!.weeklyFraction! * 100))) : -1;
-			const wWeekly = formatQuotaWindow(info?.weeklyResetTime);
+			const wWeekly = formatQuotaWindow(t, info?.weeklyResetTime);
 
 			const getColors = (pct: number) => {
 				if (pct < 0) {
@@ -1103,9 +1110,10 @@ export function apply(ctx: ClientContext): void {
 			const isExpanded = expandedModels[acc.id] ?? false;
 
 			const cardStyle = isPrimary ? { ...S.cardPrimary } : { ...S.card };
-			// The host-created primary alias is data, not a locale key. Render its
-			// known default locally without changing what is persisted.
-			const displayAlias = acc.alias === '主账号 (系统登录)' ? t('account.defaultAlias') : acc.alias;
+			// Built-in aliases are canonical server data; translate display only.
+			const displayAlias = acc.defaultAlias
+				? acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(acc) + 1 })
+				: acc.alias;
 
 			const googleModels = acc.quotas.google?.models ?? [];
 			const anthropicModels = acc.quotas.anthropic?.models ?? [];
@@ -1181,6 +1189,7 @@ export function apply(ctx: ClientContext): void {
 							className: 'agy-btn',
 							style: { ...S.btnDanger, padding: '3px 7px' },
 							title: t('account.removeTitle'),
+							'aria-label': t('account.removeTitle'),
 							disabled: isBusy,
 							onClick: () => void removeAccount(acc.id, displayAlias),
 						}, loadingAction === `remove:${acc.id}` ? renderSpinner() : uiIcon('trash', 12, 'var(--agy-danger-text)')) : null,
@@ -1201,7 +1210,7 @@ export function apply(ctx: ClientContext): void {
 						allChildModels.map(({ family, model }) => {
 							const frac = model.remainingFraction ?? 1;
 							const pct = Math.round(frac * 100);
-							const w = formatQuotaWindow(model.resetTime);
+							const w = formatQuotaWindow(t, model.resetTime);
 							const pColor = pct <= 20 ? 'var(--agy-quota-low-text)' : pct <= 50 ? 'var(--agy-quota-med-text)' : 'var(--agy-quota-high-text)';
 							return h('div', { key: model.modelId, className: 'agy-submodel-row' },
 								h('span', { style: { fontWeight: 500, color: 'var(--agy-text-primary)' } }, `[${family}] ${model.displayName || model.modelId}`),
@@ -1254,6 +1263,7 @@ export function apply(ctx: ClientContext): void {
 							style: S.input,
 							value: proxyInputs[acc.id] !== undefined ? proxyInputs[acc.id] : (acc.proxyUrl ?? ''),
 							placeholder: t('proxy.placeholder'),
+							'aria-label': t('aria.proxyInput'),
 							onChange: (e: { target: { value: string } }) => setProxyInputs({ ...proxyInputs, [acc.id]: e.target.value }),
 						}),
 						h('button', {
@@ -1279,7 +1289,7 @@ export function apply(ctx: ClientContext): void {
 		const flowActive = flowPhase === 'waiting' || flowPhase === 'exchanging';
 
 		const addAccountSection = addingAccount
-			? h('div', { style: S.authModal },
+			? h('div', { style: S.authModal, role: 'group', 'aria-label': t('account.add') },
 				h('div', { style: { fontWeight: 700, fontSize: '13.5px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--agy-text-primary)' } },
 					uiIcon('plus', 13, 'var(--agy-btn-primary-bg)'),
 					t('account.add'),
@@ -1291,6 +1301,7 @@ export function apply(ctx: ClientContext): void {
 								style: S.input,
 								value: aliasInput,
 								placeholder: t('account.aliasPlaceholder'),
+								'aria-label': t('aria.aliasInput'),
 								onChange: (e: { target: { value: string } }) => setAliasInput(e.target.value),
 							}),
 							h('button', {
@@ -1307,9 +1318,9 @@ export function apply(ctx: ClientContext): void {
 								onClick: () => handleCancelAddAccount(),
 							}, t('cancel')),
 						),
-						flowPhase === 'failed' && poolAuth?.message ? h('div', {
+						flowPhase === 'failed' ? h('div', {
 							style: { ...S.muted, color: 'var(--agy-danger-text)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 },
-						}, uiIcon('alert', 12, 'var(--agy-danger-text)'), poolAuth.message) : null,
+						}, uiIcon('alert', 12, 'var(--agy-danger-text)'), safeMessage(poolAuth?.code)) : null,
 					)
 					: h('div', null,
 						h('div', { style: { display: 'flex', alignItems: 'center', color: 'var(--agy-text-secondary)', marginBottom: '8px', lineHeight: 1.5, fontSize: '12px' } },
@@ -1333,6 +1344,7 @@ export function apply(ctx: ClientContext): void {
 								style: S.input,
 								value: authCodeInput,
 								placeholder: t('auth.codePlaceholder'),
+								'aria-label': t('aria.authCodeInput'),
 								onChange: (e: { target: { value: string } }) => setAuthCodeInput(e.target.value),
 							}),
 							h('button', {
@@ -1486,7 +1498,7 @@ export function apply(ctx: ClientContext): void {
 				if (e.target === e.currentTarget) agyModalStore.setOpen(false);
 			},
 		},
-			h('div', { className: 'agy-modal-panel', role: 'dialog', 'aria-modal': true },
+			h('div', { className: 'agy-modal-panel', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'agy-console-title' },
 				h('div', {
 					style: {
 						display: 'flex',
@@ -1500,11 +1512,12 @@ export function apply(ctx: ClientContext): void {
 				},
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 						agyIcon(18),
-						h('strong', { style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--agy-text-primary)' } }, t('console.title')),
+						h('strong', { id: 'agy-console-title', style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--agy-text-primary)' } }, t('console.title')),
 					),
 					h('button', {
 						type: 'button',
 						title: t('console.close'),
+						'aria-label': t('console.close'),
 						style: {
 							background: 'var(--agy-bg-btn)',
 							border: '1px solid var(--agy-border-btn)',

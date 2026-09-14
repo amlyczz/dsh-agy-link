@@ -84,7 +84,8 @@ export class AccountPoolManager {
 
     const primary: ManagedAccount = {
       id: 'acc_primary',
-      alias: '主账号 (系统登录)',
+      alias: 'Primary account (system sign-in)',
+      defaultAlias: true,
       dir: '',
       systemHome: true,
       enabled: true,
@@ -106,10 +107,21 @@ export class AccountPoolManager {
    */
   private normalizeLegacyPrimary(): void {
     const primary = this.data.accounts.find((a) => a.id === 'acc_primary')
-    if (!primary || primary.systemHome) return
+    if (!primary) return
+    // Upgrade known historical built-in strings to the canonical default and
+    // mark them for display-only locale translation. Custom aliases survive.
+    if (primary.systemHome) {
+      if (primary.alias === '主账号 (系统登录)' || primary.alias === 'Primary account (system sign-in)') {
+        primary.alias = 'Primary account (system sign-in)'
+        primary.defaultAlias = true
+        this.persist()
+      }
+      return
+    }
     primary.dir = ''
     primary.systemHome = true
-    primary.alias = '主账号 (系统登录)'
+    primary.alias = 'Primary account (system sign-in)'
+    primary.defaultAlias = true
     this.data.primaryAccountId = primary.id
     this.persist()
   }
@@ -151,7 +163,9 @@ export class AccountPoolManager {
     const count = this.data.accounts.length + 1
     const newAccount: ManagedAccount = {
       id,
-      alias: alias || `备用 Google 账号 ${count}`,
+      // Defaults are canonical server data, never client-localized text.
+      alias: alias?.trim() || `Backup Google account ${count}`,
+      defaultAlias: !alias?.trim(),
       dir: existsSync(finalDir) ? finalDir : dir,
       ...(email ? { email } : {}),
       ...(proxyUrl ? { proxyUrl } : {}),
@@ -250,7 +264,8 @@ export class AccountPoolManager {
     const count = this.data.accounts.length + 1
     const newAccount: ManagedAccount = {
       id,
-      alias: alias || `备用账号 ${count} (Account ${count})`,
+      alias: alias?.trim() || `Backup Google account ${count}`,
+      defaultAlias: !alias?.trim(),
       dir,
       enabled: true,
       createdAt: Date.now(),
@@ -302,6 +317,7 @@ export class AccountPoolManager {
     const acc = this.getAccount(id)
     if (!acc) return false
     acc.alias = alias.trim()
+    acc.defaultAlias = false
     this.persist()
     return true
   }

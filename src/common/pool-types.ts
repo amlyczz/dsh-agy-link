@@ -48,6 +48,8 @@ export interface FamilyCooldownState {
 export interface ManagedAccount {
   id: string
   alias: string
+  /** True only when `alias` is the server-owned canonical built-in default. */
+  defaultAlias?: boolean
   email?: string
   /**
    * Absolute path to the isolated account home directory. Empty for the

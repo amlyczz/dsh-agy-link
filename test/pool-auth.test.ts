@@ -58,7 +58,7 @@ test('PoolAuthFlow rejects bogus paste and wrong-state URLs', async () => {
   const wrongState = await flow.submitCode('http://localhost:51121/oauth-callback?code=4/1AfValidLookingCode&state=WRONG')
   assert.equal(wrongState.ok, false)
   assert.equal(wrongState.phase, 'waiting')
-  assert.match(wrongState.message ?? '', /state/)
+  assert.equal(wrongState.code, 'invalid_state')
 
   await flow.cancel()
 })
@@ -75,7 +75,7 @@ test('PoolAuthFlow fails cleanly when the exchange is rejected', async () => {
     const res = await flow.submitCode('4/1AfDefinitelyInvalidCode123')
     assert.equal(res.ok, false)
     assert.equal(res.phase, 'failed')
-    assert.match(res.message ?? '', /交换失败|exchange/i)
+    assert.equal(res.code, 'exchange_failed')
     const { readdirSync } = await import('node:fs')
     assert.ok(!readdirSync(dir).some((e) => e.startsWith('staging_')))
   } catch (err) {
