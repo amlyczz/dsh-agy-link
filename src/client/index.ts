@@ -1,7 +1,9 @@
 // dsh-agy-link client half (browser). Integrated into native DSH settings, sidebar footer, and header.
 import type { Context } from '@deepseek-ai/cordis';
+import type {} from '@deepseek-ai/dsh-client-locale/client';
 import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount, ModelQuotaInfo } from '../common/pool-types.ts';
 import { BRAND_COLORS, BRAND_PATHS, UI_PATHS } from './brand-icons.ts';
+import { en, es, NS, ptBR, zh, type AgyLocaleKey } from './locales.ts';
 
 type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
@@ -34,13 +36,13 @@ const portalToBody = (node: unknown) => {
 };
 
 export const name = 'dsh-agy-link-client';
-export const inject = ['slots'];
+export const inject = ['slots', 'locale'];
 
 export interface ClientContext extends Context {
 	slots: {
 		inject(name: string, register: () => () => void): void;
 		register(
-			opts: { name: string; id: string; order?: number; label?: string },
+			opts: { name: string; id: string; order?: number; label?: string | (() => string); locale?: string },
 			Component: (props?: unknown) => unknown,
 		): () => void;
 	};
@@ -787,7 +789,21 @@ const S: Record<string, Record<string, unknown>> = {
 };
 
 export function apply(ctx: ClientContext): void {
+	ctx.effect(() => {
+		const disposePtBR = ctx.locale.addLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
+		const disposeEs = ctx.locale.addLanguage({ id: 'es', label: 'Español', fallback: 'en' });
+		const disposeBuiltIns = ctx.locale.register(NS, { zh, en });
+		const disposePtBRDictionary = ctx.locale.register(NS, 'pt-BR', ptBR);
+		const disposeEsDictionary = ctx.locale.register(NS, 'es', es);
+		return () => { disposeEsDictionary(); disposePtBRDictionary(); disposeBuiltIns(); disposeEs(); disposePtBR(); };
+	}, 'agy-link: locale dictionaries');
+	const useAgyTranslation = () => {
+		const [, rerender] = useState(0);
+		useEffect(() => ctx.locale.subscribe(() => rerender((revision) => revision + 1)), []);
+		return ctx.locale.bind(NS) as (key: AgyLocaleKey, params?: Record<string, unknown>) => string;
+	};
 	const AgySettingsSection = (props?: any): unknown => {
+		const t = useAgyTranslation();
 		const [status, setStatus] = useState<StatusPayload | null>(statusCache);
 		const [aliasInput, setAliasInput] = useState('');
 		const [proxyInputs, setProxyInputs] = useState<Record<string, string>>({});
@@ -828,10 +844,10 @@ export function apply(ctx: ClientContext): void {
 				setAddingAccount(false);
 				setAuthCodeInput('');
 				setAliasInput('');
-				showToast(pa.message || '账号已激活入池', 'success');
+				showToast(pa.message || t('auth.activated'), 'success');
 			} else if (pa.phase === 'failed') {
 				flowStartedRef.current = false;
-				showToast(pa.message || '授权失败', 'error');
+				showToast(pa.message || t('auth.failed'), 'error');
 			}
 			// eslint-disable-next-line react-hooks/exhaustive-deps
 		}, [addingAccount, status?.poolAuth?.phase, status?.poolAuth?.message]);
@@ -849,19 +865,19 @@ export function apply(ctx: ClientContext): void {
 
 		const handleBeginAddAccount = async (): Promise<void> => {
 			setLoadingAction('pool:beginAdd');
-			const alias = aliasInput.trim() || `备用 Google 账号 ${(status?.pool?.accounts?.length ?? 1) + 1}`;
+			const alias = aliasInput.trim() || t('account.aliasDefault', { number: (status?.pool?.accounts?.length ?? 1) + 1 });
 			const res = await postJson('/plugins/agy-link/pool/begin-add', { alias });
 			setLoadingAction(null);
 			if (res && res.ok) {
 				flowStartedRef.current = true;
 				await refresh();
 				if (res.browserOpened) {
-					showToast('浏览器已打开 Google 授权页，完成授权后将自动同步', 'info');
+					showToast(t('auth.browserOpened'), 'info');
 				} else {
-					showToast('无法自动打开浏览器，请点击下方链接手动完成授权', 'warn');
+					showToast(t('auth.browserManual'), 'warn');
 				}
 			} else {
-				showToast(`启动 Google 授权失败: ${res?.message || '请检查网络或代理配置'}`, 'error');
+				showToast(t('auth.startFailed', { reason: res?.message || t('auth.networkHint') }), 'error');
 			}
 		};
 
@@ -876,9 +892,9 @@ export function apply(ctx: ClientContext): void {
 				setAliasInput('');
 				setAddingAccount(false);
 				await refresh();
-				showToast(res.message || '成功添加并激活 Google 账号', 'success');
+				showToast(res.message || t('auth.added'), 'success');
 			} else {
-				showToast(res?.message || res?.error || '授权码验证失败', 'error');
+				showToast(res?.message || res?.error || t('auth.codeFailed'), 'error');
 			}
 		};
 
@@ -903,7 +919,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/primary', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast('已设为主用账号', 'success');
+			showToast(t('account.setPrimary'), 'success');
 		};
 
 		const removeAccount = async (id: string, alias: string): Promise<void> => {
@@ -911,7 +927,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/remove', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast(`已移除账号: ${alias}`, 'info');
+			showToast(t('account.removed', { alias }), 'info');
 		};
 
 		const refreshQuota = async (id?: string): Promise<void> => {
@@ -919,7 +935,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/refresh-quota', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast('额度已刷新', 'success');
+			showToast(t('quota.refreshed'), 'success');
 		};
 
 		const saveProxy = async (id: string): Promise<void> => {
@@ -929,7 +945,7 @@ export function apply(ctx: ClientContext): void {
 			setEditingProxyId(null);
 			await refresh();
 			setLoadingAction(null);
-			showToast('代理已保存', 'success');
+			showToast(t('proxy.saved'), 'success');
 		};
 
 		const setMode = async (mode: string): Promise<void> => {
@@ -944,7 +960,7 @@ export function apply(ctx: ClientContext): void {
 			await postJson('/plugins/agy-link/pool/clear-cooldown', { id });
 			await refresh();
 			setLoadingAction(null);
-			showToast('已清除冷却', 'success');
+			showToast(t('account.clearCooldown'), 'success');
 		};
 
 		const toggleExpand = (accId: string) => {
@@ -992,7 +1008,7 @@ export function apply(ctx: ClientContext): void {
 			// Cooldown is a LOCAL heuristic — never overwrite the server-reported
 			// fraction with 0% (a ghost cooldown used to show a 98%-full account as
 			// empty). Surface it as a note next to the reset time instead.
-			const cdNote = inCooldown ? ' · 本地冷却中' : '';
+			const cdNote = inCooldown ? t('account.localCooldown') : '';
 			const w5h = formatQuotaWindow(info?.resetTime);
 
 			// Weekly limit
@@ -1073,8 +1089,8 @@ export function apply(ctx: ClientContext): void {
 					brandIcon(FAMILY_BRAND[familyKey], 14),
 					h('span', null, label),
 				),
-				renderLine('5h 额度', pct5h, c5h, w5h.resetText ? w5h.resetText + cdNote : cdNote.replace(/^ · /, '')),
-				renderLine('周额度', pctWeekly, cWeekly, wWeekly.resetText),
+				renderLine(t('quota.fiveHour'), pct5h, c5h, w5h.resetText ? w5h.resetText + cdNote : cdNote.replace(/^ · /, '')),
+				renderLine(t('quota.weekly'), pctWeekly, cWeekly, wWeekly.resetText),
 			);
 		};
 
@@ -1087,6 +1103,9 @@ export function apply(ctx: ClientContext): void {
 			const isExpanded = expandedModels[acc.id] ?? false;
 
 			const cardStyle = isPrimary ? { ...S.cardPrimary } : { ...S.card };
+			// The host-created primary alias is data, not a locale key. Render its
+			// known default locally without changing what is persisted.
+			const displayAlias = acc.alias === '主账号 (系统登录)' ? t('account.defaultAlias') : acc.alias;
 
 			const googleModels = acc.quotas.google?.models ?? [];
 			const anthropicModels = acc.quotas.anthropic?.models ?? [];
@@ -1104,7 +1123,7 @@ export function apply(ctx: ClientContext): void {
 							className: 'agy-pulse-dot',
 							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}aa` },
 						}),
-						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' } }, acc.alias),
+						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' } }, displayAlias),
 						isAuthRequired ? h('span', {
 							style: {
 								...S.badgeTag,
@@ -1114,18 +1133,18 @@ export function apply(ctx: ClientContext): void {
 								gap: '4px',
 								fontWeight: 700,
 							},
-						}, uiIcon('alert', 11, '#ef4444'), '需重新登录') : null,
+						}, uiIcon('alert', 11, '#ef4444'), t('status.authRequired')) : null,
 						acc.email ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-email-bg)', color: 'var(--agy-badge-email-text)', borderColor: 'var(--agy-badge-email-border)', gap: '5px' } },
 							uiIcon('mail', 11, 'var(--agy-badge-email-text)'),
 							acc.email,
 						) : null,
 						isPrimary ? h('span', { style: { ...S.badgePrimary, gap: '4px' } },
 							uiIcon('star', 10, 'var(--agy-badge-primary-text)'),
-							'主用',
+							t('status.primary'),
 						) : null,
 						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-proxy-bg)', color: 'var(--agy-badge-proxy-text)', borderColor: 'var(--agy-badge-proxy-border)', gap: '5px' } },
 							uiIcon('globe', 11, 'var(--agy-badge-proxy-text)'),
-							'代理',
+							t('status.proxy'),
 						) : null,
 					),
 					h('div', { style: { display: 'flex', gap: '5px', alignItems: 'center' } },
@@ -1134,36 +1153,36 @@ export function apply(ctx: ClientContext): void {
 							className: 'agy-btn',
 							style: isExpanded ? { ...S.btnSmPrimary, gap: '3px' } : { ...S.btnSm, gap: '3px' },
 							onClick: () => toggleExpand(acc.id),
-						}, isExpanded ? [uiIcon('chevronUp', 11), ' 收起'] : [uiIcon('chevronDown', 11), ' 明细']) : null,
+						}, isExpanded ? [uiIcon('chevronUp', 11), ` ${t('account.collapse')}`] : [uiIcon('chevronDown', 11), ` ${t('account.details')}`]) : null,
 						h('button', {
 							type: 'button',
 							className: 'agy-btn',
 							style: { ...S.btnSm, gap: '4px' },
-							title: '刷新此账号（换号后点这里立即同步 email / 额度 / 模型）',
+							title: t('account.syncTitle'),
 							disabled: isBusy,
 							onClick: () => void refreshQuota(acc.id),
-						}, loadingAction === `refresh:${acc.id}` ? [renderSpinner(), '同步中'] : [uiIcon('refresh', 11), ' 同步']),
+						}, loadingAction === `refresh:${acc.id}` ? [renderSpinner(), t('account.syncing')] : [uiIcon('refresh', 11), ` ${t('account.sync')}`]),
 						!isPrimary ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
 							style: { ...S.btnSm, gap: '4px' },
 							disabled: isBusy,
 							onClick: () => void setPrimary(acc.id),
-						}, loadingAction === `primary:${acc.id}` ? [renderSpinner(), '设置中'] : [uiIcon('star', 11), ' 设为主用']) : null,
+						}, loadingAction === `primary:${acc.id}` ? [renderSpinner(), t('account.settingPrimary')] : [uiIcon('star', 11), ` ${t('account.setPrimary')}`]) : null,
 						h('button', {
 							type: 'button',
 							className: 'agy-btn',
 							style: isEditingProxy ? { ...S.btnSmPrimary, gap: '4px' } : { ...S.btnSm, gap: '4px' },
 							disabled: isBusy,
 							onClick: () => setEditingProxyId(isEditingProxy ? null : acc.id),
-						}, [uiIcon('globe', 11), ' 代理']),
+						}, [uiIcon('globe', 11), ` ${t('proxy.button')}`]),
 						accounts.length > 1 ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
 							style: { ...S.btnDanger, padding: '3px 7px' },
-							title: '移除此账号',
+							title: t('account.removeTitle'),
 							disabled: isBusy,
-							onClick: () => void removeAccount(acc.id, acc.alias),
+							onClick: () => void removeAccount(acc.id, displayAlias),
 						}, loadingAction === `remove:${acc.id}` ? renderSpinner() : uiIcon('trash', 12, 'var(--agy-danger-text)')) : null,
 					),
 				),
@@ -1178,7 +1197,7 @@ export function apply(ctx: ClientContext): void {
 							borderTop: '1px solid var(--agy-border-box)',
 						},
 					},
-						h('div', { style: { color: 'var(--agy-text-secondary)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, '单模型明细:'),
+						h('div', { style: { color: 'var(--agy-text-secondary)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, t('account.models')),
 						allChildModels.map(({ family, model }) => {
 							const frac = model.remainingFraction ?? 1;
 							const pct = Math.round(frac * 100);
@@ -1211,7 +1230,7 @@ export function apply(ctx: ClientContext): void {
 				},
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
 						uiIcon('alert', 13, 'var(--agy-warn-text)'),
-						h('span', null, '部分模型限流中，已自动切换账号'),
+						h('span', null, t('account.cooldown')),
 					),
 					h('button', {
 						type: 'button',
@@ -1219,7 +1238,7 @@ export function apply(ctx: ClientContext): void {
 						style: { ...S.btnSm, color: 'var(--agy-warn-btn-text)', borderColor: 'var(--agy-warn-btn-border)', background: 'var(--agy-warn-btn-bg)', gap: '4px' },
 						disabled: isBusy,
 						onClick: () => void clearCooldown(acc.id),
-					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, 'var(--agy-warn-btn-text)'), ' 清除冷却']),
+					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, 'var(--agy-warn-btn-text)'), ` ${t('account.clearCooldown')}`]),
 				) : null,
 				isEditingProxy ? h('div', {
 					style: {
@@ -1234,7 +1253,7 @@ export function apply(ctx: ClientContext): void {
 						h('input', {
 							style: S.input,
 							value: proxyInputs[acc.id] !== undefined ? proxyInputs[acc.id] : (acc.proxyUrl ?? ''),
-							placeholder: '专属代理 URL (如: http://127.0.0.1:7890，留空则使用全局)',
+							placeholder: t('proxy.placeholder'),
 							onChange: (e: { target: { value: string } }) => setProxyInputs({ ...proxyInputs, [acc.id]: e.target.value }),
 						}),
 						h('button', {
@@ -1243,13 +1262,13 @@ export function apply(ctx: ClientContext): void {
 							style: S.btnPrimary,
 							disabled: isBusy,
 							onClick: () => void saveProxy(acc.id),
-						}, loadingAction === `proxy:${acc.id}` ? [renderSpinner(), '保存'] : '保存'),
+						}, loadingAction === `proxy:${acc.id}` ? [renderSpinner(), t('proxy.save')] : t('proxy.save')),
 						h('button', {
 							type: 'button',
 							className: 'agy-btn',
 							style: S.btn,
 							onClick: () => setEditingProxyId(null),
-						}, '取消'),
+						}, t('cancel')),
 					),
 				) : null,
 			);
@@ -1263,7 +1282,7 @@ export function apply(ctx: ClientContext): void {
 			? h('div', { style: S.authModal },
 				h('div', { style: { fontWeight: 700, fontSize: '13.5px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--agy-text-primary)' } },
 					uiIcon('plus', 13, 'var(--agy-btn-primary-bg)'),
-					'添加 Google 账号',
+					t('account.add'),
 				),
 				!flowActive
 					? h('div', null,
@@ -1271,7 +1290,7 @@ export function apply(ctx: ClientContext): void {
 							h('input', {
 								style: S.input,
 								value: aliasInput,
-								placeholder: '账号别名 (例如: 备用账号 2)',
+								placeholder: t('account.aliasPlaceholder'),
 								onChange: (e: { target: { value: string } }) => setAliasInput(e.target.value),
 							}),
 							h('button', {
@@ -1280,13 +1299,13 @@ export function apply(ctx: ClientContext): void {
 								style: { ...S.btnPrimary, gap: '4px' },
 								disabled: isBusy,
 								onClick: () => void handleBeginAddAccount(),
-							}, loadingAction === 'pool:beginAdd' ? [renderSpinner(), '正在打开浏览器...'] : [uiIcon('externalLink', 12, '#ffffff'), ' 打开浏览器登录']),
+							}, loadingAction === 'pool:beginAdd' ? [renderSpinner(), t('auth.openingBrowser')] : [uiIcon('externalLink', 12, '#ffffff'), ` ${t('auth.openBrowser')}`]),
 							h('button', {
 								type: 'button',
 								className: 'agy-btn',
 								style: S.btn,
 								onClick: () => handleCancelAddAccount(),
-							}, '取消'),
+							}, t('cancel')),
 						),
 						flowPhase === 'failed' && poolAuth?.message ? h('div', {
 							style: { ...S.muted, color: 'var(--agy-danger-text)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 },
@@ -1296,24 +1315,24 @@ export function apply(ctx: ClientContext): void {
 						h('div', { style: { display: 'flex', alignItems: 'center', color: 'var(--agy-text-secondary)', marginBottom: '8px', lineHeight: 1.5, fontSize: '12px' } },
 							renderSpinner(),
 							flowPhase === 'exchanging'
-								? '正在验证授权并激活账号，请稍候...'
-								: '等待浏览器中完成 Google 授权，成功后将自动激活。',
+								? t('auth.exchanging')
+								: t('auth.waiting'),
 						),
 						poolAuth?.url ? h('div', { style: { marginBottom: '8px' } },
 							h('a', {
 								href: poolAuth.url,
 								target: '_blank',
 								style: { color: 'var(--dsw-alias-state-business-primary, #2563eb)', textDecoration: 'underline', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' },
-							}, uiIcon('externalLink', 12, 'currentColor'), '若浏览器未打开，请点击此处手动打开 Google 登录页'),
+							}, uiIcon('externalLink', 12, 'currentColor'), t('auth.openManual')),
 						) : null,
 						h('div', { style: { color: 'var(--agy-text-tertiary)', marginBottom: '6px', fontSize: '11px', fontWeight: 500 } },
-							'未完成自动回调时，可粘贴授权码或回调 URL：',
+							t('auth.pasteHint'),
 						),
 						h('div', { style: { display: 'flex', gap: '8px' } },
 							h('input', {
 								style: S.input,
 								value: authCodeInput,
-								placeholder: '授权码 或 http://localhost:51121/oauth-callback?code=... 完整链接',
+								placeholder: t('auth.codePlaceholder'),
 								onChange: (e: { target: { value: string } }) => setAuthCodeInput(e.target.value),
 							}),
 							h('button', {
@@ -1322,13 +1341,13 @@ export function apply(ctx: ClientContext): void {
 								style: { ...S.btnPrimary, gap: '4px' },
 								disabled: isBusy || !authCodeInput.trim(),
 								onClick: () => void handleCompleteAddAccount(),
-							}, loadingAction === 'pool:completeAdd' ? [renderSpinner(), '验证激活中...'] : [uiIcon('check', 12, '#ffffff'), ' 手动激活']),
+							}, loadingAction === 'pool:completeAdd' ? [renderSpinner(), t('auth.activating')] : [uiIcon('check', 12, '#ffffff'), ` ${t('auth.activate')}`]),
 							h('button', {
 								type: 'button',
 								className: 'agy-btn',
 								style: S.btn,
 								onClick: () => handleCancelAddAccount(),
-							}, '取消'),
+							}, t('cancel')),
 						),
 					),
 			)
@@ -1337,7 +1356,7 @@ export function apply(ctx: ClientContext): void {
 		if (status === null) {
 			return h('div', { style: { ...S.container, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
 				h('style', null, GLOBAL_CSS),
-				h('span', { style: S.muted }, [renderSpinner(), '正在加载 Antigravity 状态...']),
+				h('span', { style: S.muted }, [renderSpinner(), t('status.loading')]),
 			);
 		}
 
@@ -1347,7 +1366,7 @@ export function apply(ctx: ClientContext): void {
 				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 					agyIcon(16),
 					h('span', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--agy-text-primary)' } }, 'Antigravity'),
-					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? '就绪' : '待认证'),
+					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
 				),
 				h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
 					!addingAccount ? h('button', {
@@ -1355,14 +1374,14 @@ export function apply(ctx: ClientContext): void {
 						className: 'agy-btn',
 						style: { ...S.btnPrimary, gap: '4px' },
 						onClick: () => setAddingAccount(true),
-					}, [uiIcon('plus', 12, '#ffffff'), ' 添加账号']) : null,
+					}, [uiIcon('plus', 12, '#ffffff'), ` ${t('account.add')}`]) : null,
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
 						style: { ...S.btn, gap: '4px' },
 						disabled: isBusy,
 						onClick: () => void refreshQuota(),
-					}, loadingAction === 'refresh:all' ? [renderSpinner(), '刷新中'] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ' 刷新额度']),
+					}, loadingAction === 'refresh:all' ? [renderSpinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`]),
 				),
 			),
 			renderToastBanner(),
@@ -1371,63 +1390,63 @@ export function apply(ctx: ClientContext): void {
 			h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--agy-border-divider)' } },
 				h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, '权限模式:'),
+						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('permission.label')),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
 								style: status?.permissionMode === 'plan' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setCfg('permissionMode', 'plan'),
-							}, 'plan (只读)'),
+							}, t('permission.plan')),
 							h('button', {
 								type: 'button',
 								style: status?.permissionMode === 'accept-edits' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setCfg('permissionMode', 'accept-edits'),
-							}, 'accept-edits (改代码)'),
+							}, t('permission.acceptEdits')),
 							h('button', {
 								type: 'button',
 								style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: 'var(--agy-seg-danger-text)', background: 'var(--agy-seg-danger-bg)', border: '1px solid var(--agy-seg-danger-border)' } : S.segBtn,
 								onClick: () => void setCfg('permissionMode', 'skip'),
-							}, 'skip (全自动免确认)'),
+							}, t('permission.skip')),
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, '思考强度:'),
+						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('effort.label')),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
 								style: status?.defaultEffort === '' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setCfg('defaultEffort', ''),
-							}, 'auto'),
+							}, t('effort.auto')),
 							h('button', {
 								type: 'button',
 								style: status?.defaultEffort === 'low' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setCfg('defaultEffort', 'low'),
-							}, 'low'),
+							}, t('effort.low')),
 							h('button', {
 								type: 'button',
 								style: status?.defaultEffort === 'medium' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setCfg('defaultEffort', 'medium'),
-							}, 'medium'),
+							}, t('effort.medium')),
 							h('button', {
 								type: 'button',
 								style: status?.defaultEffort === 'high' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setCfg('defaultEffort', 'high'),
-							}, 'high'),
+							}, t('effort.high')),
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, '号池调度:'),
+						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('pool.label')),
 						h('div', { style: S.segGroup },
 							h('button', {
 								type: 'button',
 								style: pool?.mode === 'sequential' || !pool?.mode ? S.segBtnActive : S.segBtn,
 								onClick: () => void setMode('sequential'),
-							}, '顺次耗尽'),
+							}, t('pool.sequential')),
 							h('button', {
 								type: 'button',
 								style: pool?.mode === 'round-robin' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setMode('round-robin'),
-							}, '轮询均衡'),
+							}, t('pool.roundRobin')),
 						),
 					),
 				),
@@ -1437,6 +1456,7 @@ export function apply(ctx: ClientContext): void {
 
 	/** Modal dialog container rendered into document.body */
 	const AgyModalDialog = (): unknown => {
+		const t = useAgyTranslation();
 		const [isOpen, setIsOpen] = useState(agyModalStore.open);
 
 		useEffect(() => {
@@ -1480,11 +1500,11 @@ export function apply(ctx: ClientContext): void {
 				},
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 						agyIcon(18),
-						h('strong', { style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--agy-text-primary)' } }, 'Antigravity 管理控制台'),
+						h('strong', { style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--agy-text-primary)' } }, t('console.title')),
 					),
 					h('button', {
 						type: 'button',
-						title: '关闭 (Esc)',
+						title: t('console.close'),
 						style: {
 							background: 'var(--agy-bg-btn)',
 							border: '1px solid var(--agy-border-btn)',
@@ -1507,6 +1527,7 @@ export function apply(ctx: ClientContext): void {
 
 	/** Session Header badge in chat toolbar */
 	const AgySessionStatus = (): unknown => {
+		const t = useAgyTranslation();
 		const [status, setStatus] = useState<StatusPayload | null>(statusCache);
 		useEffect(() => {
 			let alive = true;
@@ -1537,7 +1558,7 @@ export function apply(ctx: ClientContext): void {
 		const badge = h('button',
 			{
 				type: 'button',
-				title: `Antigravity: ${accounts.length} accounts ready · 点击打开控制台`,
+				title: t('header.badgeTitle', { count: accounts.length }),
 				className: 'agy-btn',
 				onClick: () => agyModalStore.setOpen(true),
 				style: {
@@ -1572,7 +1593,8 @@ export function apply(ctx: ClientContext): void {
 				name: 'conversation.session.header.actions',
 				id: 'agy-link-status',
 				order: 10,
-				label: 'Antigravity',
+				label: () => ctx.locale.bind(NS)('section.label'),
+				locale: NS,
 			},
 			AgySessionStatus,
 		);
@@ -1586,7 +1608,8 @@ export function apply(ctx: ClientContext): void {
 				name: 'settings.section',
 				id: 'agy-link',
 				order: 20,
-				label: 'Antigravity',
+				label: () => ctx.locale.bind(NS)('section.label'),
+				locale: NS,
 			},
 			AgySettingsSection,
 		);
