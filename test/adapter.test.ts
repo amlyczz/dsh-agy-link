@@ -120,7 +120,7 @@ async function runTurn(
       source: { kind: 'tool', callId: end.block.id },
     } as unknown as Message)
     if (trailingPluginSnapshots) {
-      messages.push({ role: 'assistant', content: [], source: { kind: 'plugin' } } as unknown as Message)
+      messages.push({ role: 'user', content: [], source: { kind: 'plugin', plugin: 'runtime-context', form: 'snapshot', sections: [] } } as unknown as Message)
     }
   }
   throw new Error('runTurn exceeded the hop budget')
@@ -165,7 +165,7 @@ test('ok run mirrors tools natively, streams text, and persists the binding', as
 test('detectContinuation permits only trailing plugin snapshots after our mirror result', () => {
   const toolResult = (callId: string): Message =>
     ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
-  const pluginSnapshot = { role: 'assistant', content: [], source: { kind: 'plugin' } } as unknown as Message
+  const pluginSnapshot = { role: 'user', content: [], source: { kind: 'plugin', plugin: 'runtime-context', form: 'snapshot', sections: [] } } as unknown as Message
   assert.deepEqual(
     detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7')]),
     { runId: 'run-1', eventIndex: 7 },
@@ -175,6 +175,12 @@ test('detectContinuation permits only trailing plugin snapshots after our mirror
     { runId: 'run-1', eventIndex: 7 },
   )
   assert.equal(detectContinuation([toolResult('agytc-run-1-7'), msg('user', 'a human follow-up')]), null)
+  assert.deepEqual(detectContinuation([toolResult('agytc-run-1-7'), pluginSnapshot, pluginSnapshot]), { runId: 'run-1', eventIndex: 7 })
+  assert.equal(detectContinuation([pluginSnapshot]), null)
+  for (const form of ['notice', 'instructions', 'relay', 'recall', undefined]) {
+    const meaningfulPluginMessage = { role: 'user', content: [{ type: 'text', text: 'new instruction' }], source: { kind: 'plugin', plugin: 'test', form } } as unknown as Message
+    assert.equal(detectContinuation([toolResult('agytc-run-1-7'), meaningfulPluginMessage, pluginSnapshot]), null, `must not skip ${form}`)
+  }
   assert.equal(detectContinuation([toolResult('agytc-run-1-7'), toolResult('other-provider-4')]), null)
   assert.equal(detectContinuation([msg('user', 'q')]), null)
   assert.equal(detectContinuation([msg('user', 'q'), toolResult('bash-9')]), null)

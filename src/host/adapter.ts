@@ -794,14 +794,15 @@ export class AgyAdapter extends LlmAdapter {
  */
 export function detectContinuation(messages: readonly Message[]): { runId: string; eventIndex: number } | null {
   // DSH may append plugin-owned snapshots after it stores a tool result.
-  // They are bookkeeping, not a new turn, so skip only that narrow source
-  // kind. A human message, another provider's tool result, or any unknown
+  // Extend PR #15's backward scan using DSH's explicit snapshot form.
+  // Other plugin forms can carry new instructions and must not be skipped.
+  // A human message, another provider's tool result, or any unknown
   // boundary must stop the scan: continuing past one could replay a run for
   // the wrong request instead of spawning the requested turn.
   let i = messages.length - 1
   while (i >= 0) {
-    const snapshot = messages[i] as unknown as { source?: { kind?: string } }
-    if (snapshot.source?.kind !== 'plugin') break
+    const snapshot = messages[i] as unknown as { source?: { kind?: string; form?: string } }
+    if (snapshot.source?.kind !== 'plugin' || snapshot.source.form !== 'snapshot') break
     i--
   }
   const last = messages[i]
