@@ -9,6 +9,7 @@ import type { SessionStore } from './sessions.ts'
 import type { AccountPoolManager } from './pool.ts'
 import type { PoolAuthFlow } from './pool-auth.ts'
 import type { QuotaService } from './quota.ts'
+import { classifyToolError } from './recording.ts'
 
 export interface CommandDeps {
   cfg: () => PluginConfig
@@ -210,7 +211,8 @@ async function renderStatus(deps: CommandDeps): Promise<string> {
   const cat = deps.catalog().get()
   const bindings = Object.keys(deps.store().all()).length
   const last = deps.lastRun()
-  const hasHeadlessPermissionDenial = last?.toolErrors.some((error) => /\b(permission|denied|denial)\b/i.test(error)) ?? false
+  const errorKinds = last?.toolErrors.map(classifyToolError) ?? []
+  const hasHeadlessPermissionDenial = errorKinds.includes('approval')
   const lines = [
     '**dsh-agy-link status**',
     '- agy binary: ' + (bin ?? 'not found — install via https://antigravity.google/docs/cli/install'),
@@ -226,6 +228,12 @@ async function renderStatus(deps: CommandDeps): Promise<string> {
     ...(last && last.toolErrors.length > 0
       ? [
           '- last run tool errors (' + last.toolErrors.length + '): ' + last.toolErrors.join(' | '),
+          ...(errorKinds.includes('missing_file')
+            ? ['- Guidance: `missing_file` — verify the current conversation artifact directory; do not search a global brain or invent a path.']
+            : []),
+          ...(errorKinds.includes('system_protection')
+            ? ['- Guidance: `system_protection` — AGY hardcoded system protection remains enforced; do not attempt a bypass.']
+            : []),
           ...(hasHeadlessPermissionDenial && (cfg.permissionMode === 'plan' || cfg.permissionMode === 'accept-edits')
             ? ['- Note: in headless operation, agy can automatically deny a tool under this mode; the raw denial above is not evidence of a human approval or denial.']
             : []),

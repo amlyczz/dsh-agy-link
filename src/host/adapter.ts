@@ -484,7 +484,6 @@ export class AgyAdapter extends LlmAdapter {
     if (cfg.forwardSystemPrompt && options.system) {
       prompt = 'System instructions:\n' + options.system + '\n\n' + prompt;
     }
-
     // ---- multimodal staging (v0.2): images ride as staged files ----
     let stagedDirs: string[] = []
     if (!isAux) {
@@ -524,6 +523,11 @@ export class AgyAdapter extends LlmAdapter {
       }
     } else if (prompt.trim() === '') {
       throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
+    }
+    // Recovery guidance is deliberately scoped to a missing-artifact request:
+    // it constrains recovery without perturbing unrelated conversation prompts.
+    if (!isAux && /\b(missing|not found|enoent)\b/i.test(prompt)) {
+      prompt += '\n\n[Recovery boundary: if an artifact is missing, first use the current known conversation artifact directory. Do not search a global brain, invent a path, or attempt to bypass any system protection.]'
     }
 
     // In-flight duplicate submission debounce (prevents double-clicks / network repeat loops)

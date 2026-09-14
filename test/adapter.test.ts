@@ -12,6 +12,7 @@ import { AgyAdapter, buildDigest, detectContinuation, type AgyAdapterDeps } from
 import { ModelCatalog } from '../src/host/models.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
+import { classifyToolError } from '../src/host/recording.ts'
 import { defineAgyMirrorTool, parseMirrorInvocation } from '../src/host/mirror-tool.ts'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { defaultConfig, Err, type PluginConfig } from '../src/common/types.ts'
@@ -229,6 +230,23 @@ test('headless automatic denial stays raw while process success remains separate
   const failedResult = messages.find(m => JSON.stringify(m).includes('"isError":true'))!
   assert.match(JSON.stringify(failedResult), /Permission denied automatically in headless plan mode: read_file ~\/.agents/)
   assert.match(JSON.stringify(failedResult), /agy tool/)
+})
+
+test('tool errors distinguish missing files and non-bypassable system protection from approval', () => {
+  assert.equal(classifyToolError('ENOENT: no such file or directory, open qa-proof-stack.md'), 'missing_file')
+  assert.equal(classifyToolError('Denied by hardcoded system protection for global brain search'), 'system_protection')
+  assert.equal(classifyToolError('Permission denied automatically in headless plan mode'), 'approval')
+})
+
+test('normal prompts carry bounded artifact recovery guidance', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  await runTurn(adapter, [msg('user', 'recover the missing artifact')])
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.match(prompt, /current known conversation artifact directory/)
+  assert.match(prompt, /Do not search a global brain, invent a path, or attempt to bypass any system protection/)
 })
 
 test('second turn reuses the bound conversation id', async () => {
