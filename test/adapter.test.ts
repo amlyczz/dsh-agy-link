@@ -83,6 +83,7 @@ async function runTurn(
   base: Message[],
   extra: Partial<GenerateOptions> = {},
   maxHops = 12,
+  trailingPluginSnapshots = false,
 ): Promise<{ chunks: StreamChunk[]; toolCalls: Array<{ id: string; args: MirrorArgs }>; messages: Message[] }> {
   const messages = [...base]
   const all: StreamChunk[] = []
@@ -118,6 +119,9 @@ async function runTurn(
       content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: 'replayed' }] }],
       source: { kind: 'tool', callId: end.block.id },
     } as unknown as Message)
+    if (trailingPluginSnapshots) {
+      messages.push({ role: 'assistant', content: [], source: { kind: 'plugin' } } as unknown as Message)
+    }
   }
   throw new Error('runTurn exceeded the hop budget')
 }
@@ -158,15 +162,50 @@ test('ok run mirrors tools natively, streams text, and persists the binding', as
   assert.equal(b.lastMessageCount, 1)
 })
 
-test('detectContinuation keys off the trailing mirror tool-result only', () => {
+test('detectContinuation permits only trailing plugin snapshots after our mirror result', () => {
   const toolResult = (callId: string): Message =>
     ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
+  const pluginSnapshot = { role: 'assistant', content: [], source: { kind: 'plugin' } } as unknown as Message
   assert.deepEqual(
     detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7')]),
     { runId: 'run-1', eventIndex: 7 },
   )
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7'), pluginSnapshot]),
+    { runId: 'run-1', eventIndex: 7 },
+  )
+  assert.equal(detectContinuation([toolResult('agytc-run-1-7'), msg('user', 'a human follow-up')]), null)
+  assert.equal(detectContinuation([toolResult('agytc-run-1-7'), toolResult('other-provider-4')]), null)
   assert.equal(detectContinuation([msg('user', 'q')]), null)
   assert.equal(detectContinuation([msg('user', 'q'), toolResult('bash-9')]), null)
+})
+
+test('plugin snapshots continue the existing run without a duplicate spawn and retain tool errors', async () => {
+  const reports: Array<{ processOk: boolean; processCode: string; toolErrors: readonly string[] }> = []
+  const { adapter } = makeAdapter({}, { onRun: (info) => reports.push(info) })
+  process.env.FAKE_AGY_MODE = 'real-error'
+  const { chunks, toolCalls } = await runTurn(adapter, [msg('user', 'count the files')], {}, 12, true)
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+  assert.equal(toolCalls.length, 2)
+  const report = await waitFor(() => reports[0])
+  assert.equal(reports.length, 1, 'continuation spans must not spawn another agy process')
+  assert.equal(report.processOk, true)
+  assert.equal(report.processCode, 'OK')
+  assert.deepEqual(report.toolErrors, ['Find command timed out.'])
+})
+
+test('headless automatic denial stays raw while process success remains separate', async () => {
+  const reports: Array<{ processOk: boolean; processCode: string; toolErrors: readonly string[] }> = []
+  const { adapter } = makeAdapter({}, { onRun: (info) => reports.push(info) })
+  process.env.FAKE_AGY_MODE = 'real-denied'
+  const { chunks } = await runTurn(adapter, [msg('user', 'inspect files')])
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+  const report = await waitFor(() => reports[0])
+  assert.equal(report.processOk, true)
+  assert.equal(report.processCode, 'OK')
+  assert.deepEqual(report.toolErrors, ['Permission denied automatically in headless plan mode: read_file ~/.agents'])
 })
 
 test('second turn reuses the bound conversation id', async () => {

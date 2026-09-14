@@ -127,7 +127,7 @@ dsh plugin --profile web add dsh-agy-link
 | --- | --- | --- | --- |
 | `enabled` | `DSH_AGY_ENABLED` | `true` | 插件主开关 |
 | `agyBin` | `DSH_AGY_BIN` | 自动探测 | 显式指定 `agy` 二进制路径 |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | 权限模式：`skip`（免审批推荐）/ `plan`（只读）/ `accept-edits` |
+| `permissionMode` | `DSH_AGY_MODE` | `skip` | 权限模式：`skip`（无人值守执行）/ `plan` / `accept-edits` |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `(agy 默认)` | 默认模型 slug |
 | `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `(模型默认)` | 思考预算：`low` / `medium` / `high` |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | 单轮活跃看门狗超时（毫秒） |
@@ -263,11 +263,24 @@ dsh plugin --profile web add dsh-agy-link
 | --- | --- | --- | --- |
 | `enabled` | `DSH_AGY_ENABLED` | `true` | Master switch |
 | `agyBin` | `DSH_AGY_BIN` | auto-detected | Path to `agy` binary |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` (recommended) / `plan` (read-only) / `accept-edits` |
+| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` (unattended execution) / `plan` / `accept-edits` |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `(agy default)` | Default model slug |
 | `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `(model default)` | Thinking budget: `low` / `medium` / `high` |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Activity watchdog timeout in milliseconds |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | session cwd | Working directory root |
+
+---
+
+## Headless operation
+
+The plugin passes the selected permission mode to `agy`; it does not approve,
+deny, or bypass permissions itself. In headless/print operation, `agy` can
+automatically deny a tool request in `plan` or `accept-edits`. The raw tool
+error is retained in `/agy status`; it is not proof of a human denial.
+
+Do not assume undocumented wildcard semantics for either mode. Test the exact
+`agy` version and command set in a scoped workspace. Choose `skip` only when
+you explicitly accept unattended tool execution.
 
 ---
 

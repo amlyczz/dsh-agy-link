@@ -166,6 +166,17 @@ export class RunRecording {
     if (ev === undefined || ev.kind !== 'step' || ev.stepKind !== 'tool' || !ev.tool) return null
     return ev.tool
   }
+
+  /** Raw errors reported by completed agy tool steps, in event order. */
+  toolErrors(): string[] {
+    const errors: string[] = []
+    for (const ev of this.events) {
+      if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool?.error !== undefined) {
+        errors.push(ev.tool.error)
+      }
+    }
+    return errors
+  }
 }
 
 /** Prefix every mirrored agy tool callId carries; continuation detection key. */

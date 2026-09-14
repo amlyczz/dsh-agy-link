@@ -74,8 +74,8 @@ export interface AgyAdapterDeps {
    * Explicit config `workspaceRoot` still wins over this value.
    */
   sessionCwd?: (sessionId: string) => string | undefined
-  /** Last-run telemetry surfaced by /agy status. */
-  onRun?: (info: { ok: boolean; code: string; durationMs: number; model: string }) => void
+  /** Last-run telemetry surfaced by /agy status. Process completion and tool failures are distinct. */
+  onRun?: (info: { processOk: boolean; processCode: string; toolErrors: readonly string[]; durationMs: number; model: string }) => void
   /** Reads image bytes from DSH attachment storage (multimodal staging). */
   readImage?: (ref: ImageRefLike) => Promise<Uint8Array | null>
   /** Called with each run's parser so the host can keep the last stdout ring for /agy doctor. */
@@ -716,8 +716,18 @@ export class AgyAdapter extends LlmAdapter {
         }
       }
       this.deps.onRun?.({
-        ok: failure === null,
-        code: failure !== null ? failure.code : 'OK',
+        // A response can be usable even when agy reports an individual tool
+        // failure. Keep process health distinct from those raw tool errors:
+        // collapsing them into one "ok" bit hid real denials in /agy status.
+        processOk: !outcome.aborted && !outcome.timedOut && outcome.code === 0,
+        processCode: outcome.aborted
+          ? 'ABORTED'
+          : outcome.timedOut
+            ? Err.TIMEOUT
+            : outcome.code === 0
+              ? 'OK'
+              : 'EXIT_' + String(outcome.code),
+        toolErrors: rec.toolErrors(),
         durationMs: outcome.durationMs,
         model,
       })
@@ -783,7 +793,18 @@ export class AgyAdapter extends LlmAdapter {
  * run and the event index to resume after.
  */
 export function detectContinuation(messages: readonly Message[]): { runId: string; eventIndex: number } | null {
-  const last = messages[messages.length - 1]
+  // DSH may append plugin-owned snapshots after it stores a tool result.
+  // They are bookkeeping, not a new turn, so skip only that narrow source
+  // kind. A human message, another provider's tool result, or any unknown
+  // boundary must stop the scan: continuing past one could replay a run for
+  // the wrong request instead of spawning the requested turn.
+  let i = messages.length - 1
+  while (i >= 0) {
+    const snapshot = messages[i] as unknown as { source?: { kind?: string } }
+    if (snapshot.source?.kind !== 'plugin') break
+    i--
+  }
+  const last = messages[i]
   if (last === undefined || last.role !== 'user') return null
   const src = (last as unknown as { source?: { kind?: string; callId?: string } }).source
   if (src === undefined || src.kind !== 'tool' || typeof src.callId !== 'string') return null

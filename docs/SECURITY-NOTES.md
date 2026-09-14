@@ -17,6 +17,19 @@ Whatever agy itself may do under the configured permission mode. **skip**
 execution inside agy's workspace — treat it like giving any other agent
 skip-permissions. The GUI marks this mode red for a reason.
 
+## Headless permission behavior
+
+The bridge forwards the configured `plan` or `accept-edits` mode to the
+official `agy` process; it does not answer permission prompts or bypass them.
+In a headless/print invocation, agy may automatically deny a tool request.
+The bridge preserves that raw tool error in run status. Such an automatic
+denial is **not** evidence that a person approved or denied a prompt.
+
+Do not rely on undocumented wildcard behavior for `plan` or `accept-edits`.
+Use a deliberately scoped workspace and test the exact commands and agy
+version you intend to operate. `skip` remains an explicit unattended-execution
+choice, not a fallback applied by this plugin.
+
 ## What it never touches
 
 - The OAuth token file (see [AUTH.md](AUTH.md)).

@@ -79,7 +79,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   let binCache: string | null | undefined = undefined
   let versionCache: string | null = null
   let dormantReason: string | null = null
-  let lastRun: { ok: boolean; code: string; durationMs: number; model: string } | null = null
+  let lastRun: { processOk: boolean; processCode: string; toolErrors: readonly string[]; durationMs: number; model: string } | null = null
   let lastParser = new StreamJsonParser()
 
   const getConfig = (): PluginConfig => resolveConfig(entryConfig)
