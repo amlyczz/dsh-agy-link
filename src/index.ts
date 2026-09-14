@@ -723,6 +723,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   })
 
   const bridgeState: { bridge: Awaited<ReturnType<typeof startMcpBridge>> | null; restore: (() => void) | null } = { bridge: null, restore: null }
+  let bridgeDisposed = false
   const syncMcpBridge = (): void => {
     const cfg = getConfig()
     const want = cfg.mcpBridge && cfg.enabled
@@ -739,11 +740,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             allowlist: () => getConfig().mcpToolAllowlist,
             log,
           })
+          // A scope can be disposed before asynchronous listener startup ends.
+          // Do not publish a capability or workspace config after disposal.
+          if (bridgeDisposed) {
+            await bridge.close()
+            return
+          }
           bridgeState.bridge = bridge
           const root = cfg.workspaceRoot !== '' ? cfg.workspaceRoot : process.cwd()
           bridgeState.restore = writeMcpConfig(root, bridge)
           log('mcp bridge ready at ' + bridge.url + (toolsSvc ? '' : ' (tools service not yet available)'))
         } catch (e) {
+          bridgeState.restore?.()
+          await bridgeState.bridge?.close()
+          bridgeState.bridge = null
+          bridgeState.restore = null
           log('mcp bridge failed to start: ' + String(e))
         }
       })()
@@ -758,6 +769,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
 
   ctx.effect(() => {
     return () => {
+      bridgeDisposed = true
       auth.dispose()
       void poolAuth.cancel()
       if (askToolDispose.current !== null) askToolDispose.current()
