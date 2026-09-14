@@ -273,6 +273,9 @@ dsh plugin --profile web add dsh-agy-link
 
 ## Headless operation
 
+See [Headless permissions](docs/HEADLESS-PERMISSIONS.md) for a bounded reproduction,
+least-privilege read-rule validation, and process-versus-tool acceptance checks.
+
 The plugin passes the selected permission mode to `agy`; it does not approve,
 deny, or bypass permissions itself. In headless/print operation, `agy` can
 automatically deny a tool request in `plan` or `accept-edits`. The raw tool

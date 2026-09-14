@@ -91,6 +91,12 @@ if (mode === 'noise') {
     ? 'Permission denied automatically in headless plan mode: read_file ~/.agents'
     : 'Find command timed out.'
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 4, state: 'ERROR', step_type: 'tool', duration_seconds: 30, tool_name: 'find_by_name', tool_info: { name: 'find_by_name', parameters: { Pattern: 'note*.txt' }, error: { type: 'TOOL_ERROR', message: toolError } } } })
+  // AGY 1.2.2 can report SUCCESS and no final text despite a failed tool.
+  // This synthetic envelope mirrors that shape without private session data.
+  if (mode === 'real-denied') {
+    emit({ event: 'result', result: { conversation_id: conv, status: 'SUCCESS', response: '', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 100, output_tokens: 0 } } })
+    process.exit(0)
+  }
   // streamed answer: sequential text_delta fragments across ACTIVE -> DONE
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'There are ' } })
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: '2 files, ' } })
