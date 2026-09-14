@@ -1111,7 +1111,8 @@ export function apply(ctx: ClientContext): void {
 
 			const cardStyle = isPrimary ? { ...S.cardPrimary } : { ...S.card };
 			// Built-in aliases are canonical server data; translate display only.
-			const displayAlias = acc.defaultAlias
+			const legacyDefault = acc.defaultAlias === undefined && acc.systemHome && acc.alias === '主账号 (系统登录)';
+			const displayAlias = acc.defaultAlias || legacyDefault
 				? acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(acc) + 1 })
 				: acc.alias;
 

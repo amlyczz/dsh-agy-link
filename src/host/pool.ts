@@ -108,16 +108,8 @@ export class AccountPoolManager {
   private normalizeLegacyPrimary(): void {
     const primary = this.data.accounts.find((a) => a.id === 'acc_primary')
     if (!primary) return
-    // Upgrade known historical built-in strings to the canonical default and
-    // mark them for display-only locale translation. Custom aliases survive.
-    if (primary.systemHome) {
-      if (primary.alias === '主账号 (系统登录)' || primary.alias === 'Primary account (system sign-in)') {
-        primary.alias = 'Primary account (system sign-in)'
-        primary.defaultAlias = true
-        this.persist()
-      }
-      return
-    }
+    // Locale changes must not rewrite existing account data.
+    if (primary.systemHome) return
     primary.dir = ''
     primary.systemHome = true
     primary.alias = 'Primary account (system sign-in)'

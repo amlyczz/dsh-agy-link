@@ -72,15 +72,22 @@ test('blank aliases persist only canonical server defaults and carry a display-o
   assert.doesNotMatch(persisted.accounts[1].alias, /Conta Google reserva|Cuenta de Google de respaldo|备用 Google/)
 })
 
-test('legacy built-in primary aliases migrate to canonical display-only defaults', () => {
+test('loading legacy primary aliases never rewrites account data for localization', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-primary-alias-'))
   writeFileSync(join(dir, 'pool.json'), JSON.stringify({
     version: 1, mode: 'sequential', defaultCooldownMs: 900000, maxCooldownMs: 3600000,
     primaryAccountId: 'acc_primary', accounts: [{ id: 'acc_primary', alias: '主账号 (系统登录)', dir: '', systemHome: true, enabled: true, createdAt: 1, cooldowns: {}, quotas: {} }],
   }), 'utf8')
-  const primary = new AccountPoolManager(dir).getAccount('acc_primary')!
-  assert.equal(primary.alias, 'Primary account (system sign-in)')
-  assert.equal(primary.defaultAlias, true)
+  const before = readFileSync(join(dir, 'pool.json'), 'utf8')
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccount('acc_primary')!
+  assert.equal(primary.alias, '主账号 (系统登录)')
+  assert.equal(primary.defaultAlias, undefined)
+  assert.equal(readFileSync(join(dir, 'pool.json'), 'utf8'), before)
+  pool.setAccountAlias('acc_primary', 'Primary account (system sign-in)')
+  const reloaded = new AccountPoolManager(dir).getAccount('acc_primary')!
+  assert.equal(reloaded.alias, 'Primary account (system sign-in)')
+  assert.equal(reloaded.defaultAlias, false)
 })
 
 test('Sequential Drain: family-scoped rate limit fallback', () => {
