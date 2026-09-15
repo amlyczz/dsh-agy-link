@@ -59,6 +59,37 @@ test('AccountPoolManager bootstraps and manages isolated account slots', () => {
   assert.ok(!existsSync(acc2.dir))
 })
 
+test('blank aliases persist only canonical server defaults and carry a display-only marker', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-default-alias-'))
+  const pool = new AccountPoolManager(dir)
+  const staged = pool.createStagingSlot()
+  const account = pool.commitStagingAccount(staged.id, staged.dir)
+  assert.equal(account.alias, 'Backup Google account 2')
+  assert.equal(account.defaultAlias, true)
+  const persisted = JSON.parse(readFileSync(join(dir, 'pool.json'), 'utf8'))
+  assert.equal(persisted.accounts[1].alias, 'Backup Google account 2')
+  assert.equal(persisted.accounts[1].defaultAlias, true)
+  assert.doesNotMatch(persisted.accounts[1].alias, /Conta Google reserva|Cuenta de Google de respaldo|备用 Google/)
+})
+
+test('loading legacy primary aliases never rewrites account data for localization', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-primary-alias-'))
+  writeFileSync(join(dir, 'pool.json'), JSON.stringify({
+    version: 1, mode: 'sequential', defaultCooldownMs: 900000, maxCooldownMs: 3600000,
+    primaryAccountId: 'acc_primary', accounts: [{ id: 'acc_primary', alias: '主账号 (系统登录)', dir: '', systemHome: true, enabled: true, createdAt: 1, cooldowns: {}, quotas: {} }],
+  }), 'utf8')
+  const before = readFileSync(join(dir, 'pool.json'), 'utf8')
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccount('acc_primary')!
+  assert.equal(primary.alias, '主账号 (系统登录)')
+  assert.equal(primary.defaultAlias, undefined)
+  assert.equal(readFileSync(join(dir, 'pool.json'), 'utf8'), before)
+  pool.setAccountAlias('acc_primary', 'Primary account (system sign-in)')
+  const reloaded = new AccountPoolManager(dir).getAccount('acc_primary')!
+  assert.equal(reloaded.alias, 'Primary account (system sign-in)')
+  assert.equal(reloaded.defaultAlias, false)
+})
+
 test('Sequential Drain: family-scoped rate limit fallback', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-drain-'))
   const pool = new AccountPoolManager(dir)

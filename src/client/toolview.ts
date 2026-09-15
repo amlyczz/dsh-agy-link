@@ -503,7 +503,7 @@ export function AgyMirrorToolView(props: AgyToolViewProps): unknown {
 export function installAgyToolView(ctx: {
 	slots: {
 		inject(name: string, register: () => () => void): void
-		register(opts: { name: string; key?: string; id?: string; order?: number; label?: string }, C: (p: unknown) => unknown): () => void
+		register(opts: { name: string; key?: string; id: string; order?: number; label?: string | (() => string); locale?: string }, C: (p: unknown) => unknown): () => void
 	}
 }): void {
 	ctx.slots.inject('tool.call.toolview', () =>

@@ -26,6 +26,17 @@ import type { AccountPoolManager } from './pool.ts'
 import type { QuotaService } from './quota.ts'
 
 export type PoolAuthPhase = 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed'
+export type PoolAuthStatusCode =
+  | 'browser_manual'
+  | 'callback_failed'
+  | 'no_active_flow'
+  | 'invalid_code'
+  | 'invalid_state'
+  | 'exchange_failed'
+  | 'primary_activated'
+  | 'account_activated'
+  | 'missing_code'
+  | 'request_failed'
 
 export interface PoolAuthStatus {
   phase: PoolAuthPhase
@@ -35,7 +46,8 @@ export interface PoolAuthStatus {
   /** 'auto' = loopback listener live; 'manual' = paste the code/URL back. */
   mode?: 'auto' | 'manual'
   browserOpened?: boolean
-  message?: string
+  /** Stable, locale-neutral user-facing state. Raw diagnostic details never leave the host. */
+  code?: PoolAuthStatusCode
 }
 
 interface ActiveFlow {
@@ -134,9 +146,7 @@ export class PoolAuthFlow {
       url,
       mode,
       browserOpened,
-      message: browserOpened
-        ? undefined
-        : '无法自动打开浏览器，请手动打开下方链接',
+      code: browserOpened ? undefined : 'browser_manual',
     })
     this.log(`pool auth begun (${mode} mode, browserOpened=${browserOpened}${active.primary ? ', primary' : ''})`)
 
@@ -145,7 +155,7 @@ export class PoolAuthFlow {
         .then(({ code, state: returnedState }) => this.finishWithCode(code, returnedState))
         .catch((err: unknown) => {
           if (!this.flow || this.flow.listener !== listener) return
-          this.fail(`授权回调失败: ${err instanceof Error ? err.message : String(err)}`)
+          this.fail('callback_failed', err)
         })
     }
 
@@ -171,14 +181,14 @@ export class PoolAuthFlow {
   async submitCode(input: string): Promise<PoolAuthStatus & { ok: boolean }> {
     const flow = this.flow
     if (!flow || this.statusValue.phase !== 'waiting') {
-      return { ok: false, phase: this.statusValue.phase, message: '当前没有进行中的授权流程' }
+      return { ok: false, phase: this.statusValue.phase, code: 'no_active_flow' }
     }
     const parsed = parsePastedCode(input)
     if (!parsed) {
-      return { ok: false, phase: 'waiting', message: '无法识别的授权码，请粘贴授权码或完整的回调 URL' }
+      return { ok: false, phase: 'waiting', code: 'invalid_code' }
     }
     if (parsed.state && parsed.state !== flow.state) {
-      return { ok: false, phase: 'waiting', message: 'state 校验失败：这段 URL 不属于本次授权流程' }
+      return { ok: false, phase: 'waiting', code: 'invalid_state' }
     }
     await this.finishWithCode(parsed.code, parsed.state ?? flow.state)
     const after = this.status()
@@ -189,7 +199,7 @@ export class PoolAuthFlow {
     const flow = this.flow
     if (!flow || this.statusValue.phase !== 'waiting') return
     if (returnedState !== flow.state) {
-      this.fail('state 校验失败（可能的 CSRF 或过期回调）')
+      this.fail('invalid_state')
       return
     }
     this.setStatus({ phase: 'exchanging' })
@@ -211,7 +221,7 @@ export class PoolAuthFlow {
         this.log(`primary account signed in${email ? ` <${email}>` : ''}`)
         this.flow = null
         if (flow.listener) void flow.listener.close().catch(() => undefined)
-        this.setStatus({ phase: 'done', alias: email, message: `主账号已登录${email ? `: ${email}` : ''}` })
+        this.setStatus({ phase: 'done', alias: email, code: 'primary_activated' })
         return
       }
       const acc = this.pool.commitStagingAccount(flow.stagingId, flow.dir, flow.alias, email, flow.proxyUrl)
@@ -220,22 +230,24 @@ export class PoolAuthFlow {
       void this.quota.refreshAccountQuota(acc).catch(() => undefined)
       this.flow = null
       if (flow.listener) void flow.listener.close().catch(() => undefined)
-      this.setStatus({ phase: 'done', alias: acc.alias, message: `账号 ${acc.alias} 已激活` })
+      this.setStatus({ phase: 'done', alias: acc.alias, code: 'account_activated' })
     } catch (err) {
-      this.fail(`授权码交换失败: ${err instanceof Error ? err.message : String(err)}`)
+      this.fail('exchange_failed', err)
     }
   }
 
-  private fail(message: string): void {
+  private fail(code: PoolAuthStatusCode, detail?: unknown): void {
     const flow = this.flow
-    this.log('pool auth failed: ' + message)
+    // The existing host diagnostic sink may retain raw failure detail; never
+    // return it through the customer-facing HTTP/status contract.
+    this.log(`pool auth failed [${code}]${detail ? `: ${detail instanceof Error ? detail.message : String(detail)}` : ''}`)
     if (flow) {
       if (flow.listener) void flow.listener.close().catch(() => undefined)
       // Never delete the real HOME of a primary login attempt.
       if (!flow.primary) this.pool.cleanupStagingSlot(flow.dir)
       this.flow = null
     }
-    this.setStatus({ phase: 'failed', message })
+    this.setStatus({ phase: 'failed', code })
   }
 
   async cancel(): Promise<PoolAuthStatus & { ok: boolean }> {

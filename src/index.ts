@@ -477,14 +477,14 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const body = await readBody(req)
         const code = typeof body.code === 'string' ? body.code : ''
         if (!code) {
-          sendJson(res as RawRes, 400, { ok: false, error: 'missing code' })
+          sendJson(res as RawRes, 400, { ok: false, phase: 'waiting', code: 'missing_code' })
           return
         }
         const st = await poolAuth.submitCode(code)
         sendJson(res as RawRes, st.ok ? 200 : 400, {
           ok: st.ok,
           phase: st.phase,
-          message: st.message,
+          code: st.code,
           pool: pool.getPoolData(),
         })
       })()
