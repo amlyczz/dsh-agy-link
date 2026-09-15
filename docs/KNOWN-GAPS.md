@@ -15,6 +15,11 @@ Deliberate v1 boundaries and upstream-behavior notes.
   server (`dsh-tools`) in the workspace `.mcp.json` (merged in, restored on
   disable). `run_code` and `agy_ask` are never bridged; `mcpToolAllowlist`
   restricts the set further.
+- **Full tool args / diff cards (v0.4.28+)** - the bridge reads agy's
+  conversation SQLite DB via the `sqlite3` CLI to recover arguments that
+  `filterToolParameters` strips from stream-json. When `sqlite3` is missing
+  or the DB is unreadable, cards fall back to stream-carried metadata only
+  (no path traversal: conversation ids are whitelist-validated).
 - **Structured outputs** - `agy_ask` accepts a `schema` parameter (JSON
   Schema as a JSON string) enforced via `--json-schema` since v0.2. Wiring
   schema enforcement into DSH-native tool-call generation remains future
