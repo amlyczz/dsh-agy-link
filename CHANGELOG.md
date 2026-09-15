@@ -12,6 +12,9 @@
 - **Fix: Harden agy conversation DB reads.** Conversation ids are whitelist-validated before path join (path-traversal guard).
 - **i18n: `@deepseek-ai/dsh-client-locale` is an optional peer.** Older DSH hosts install cleanly; the client falls back to Chinese strings when `ctx.locale` is absent.
 - **CI: fork PR workflow approval documented** in `AGENTS.md` (maintainers approve `action_required` runs).
+- **Fix: Windows conhost flash from agy itself (issue #23).**
+  - Every agy spawn now defaults `AGY_CLI_DISABLE_AUTO_UPDATE=1` and `AGY_CLI_INTERACTIVE_HEADLESS=1` (present in the official binary; breaks the `--bg-updater` child chain that creates visible conhost even under `windowsHide`). Operator-set values win.
+  - Boot-time `agy --version` + catalog probe is deferred 4s (unref'd); catalog still refreshes lazily on first model list / turn.
 
 ### 中文 (Chinese)
 
@@ -22,6 +25,7 @@
 - **加固：** agy 会话库 conversation id 白名单校验，防路径穿越。
 - **i18n：** locale peer 改为可选，旧宿主可安装；无 `ctx.locale` 时回退中文。
 - **CI：** 在 `AGENTS.md` 记录 fork PR 需维护者批准 workflow。
+- **修复：Windows 上 agy 自身拉起可见 conhost（#23）。** 所有 agy spawn 默认注入 `AGY_CLI_DISABLE_AUTO_UPDATE=1` 与 `AGY_CLI_INTERACTIVE_HEADLESS=1`（阻断 `--bg-updater`）；启动探测延迟 4s。
 
 ### English
 

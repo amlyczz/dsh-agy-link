@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT } from '../src/host/runner.ts'
+import { binCandidates, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT, withAgyQuietEnv } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -167,4 +167,31 @@ test('startAgyProcess writes stdinPayload then closes stdin', async () => {
   const outcome = await proc.outcome
   assert.equal(outcome.code, 0)
   assert.ok(lines.some((l) => l.includes('GOT:20:hello-stdin-payload')), lines.join('|'))
+})
+
+// Issue #23: agy.exe --bg-updater creates visible conhost; default quiet env.
+test('withAgyQuietEnv injects disable-auto-update and headless switches', () => {
+  const injected = withAgyQuietEnv({ PATH: '/usr/bin' })
+  assert.equal(injected.AGY_CLI_DISABLE_AUTO_UPDATE, '1')
+  assert.equal(injected.AGY_CLI_INTERACTIVE_HEADLESS, '1')
+  assert.equal(injected.PATH, '/usr/bin')
+  // explicit operator override wins
+  const override = withAgyQuietEnv({ AGY_CLI_DISABLE_AUTO_UPDATE: '0', AGY_CLI_INTERACTIVE_HEADLESS: '0' })
+  assert.equal(override.AGY_CLI_DISABLE_AUTO_UPDATE, '0')
+  assert.equal(override.AGY_CLI_INTERACTIVE_HEADLESS, '0')
+})
+
+test('startAgyProcess child sees the quiet env defaults', async () => {
+  const script = `process.stdout.write([process.env.AGY_CLI_DISABLE_AUTO_UPDATE, process.env.AGY_CLI_INTERACTIVE_HEADLESS].join(','))`
+  const lines: string[] = []
+  const proc = startAgyProcess({
+    bin: process.execPath,
+    args: ['-e', script],
+    timeoutMs: 5000,
+    env: { PATH: process.env.PATH ?? '' },
+    onLine: (l) => lines.push(l),
+  })
+  const outcome = await proc.outcome
+  assert.equal(outcome.code, 0)
+  assert.ok(lines.some((l) => l.includes('1,1')), lines.join('|'))
 })

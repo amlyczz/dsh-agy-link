@@ -222,33 +222,40 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   };
 
   // ---- dormant detection + background probes ----
-  void (async () => {
-    if (!getConfig().enabled) {
-      dormantReason = 'disabled by config'
-      log('dormant: disabled by config')
-      return
-    }
-    const currentBin = bin()
-    if (!currentBin) {
-      dormantReason = 'agy binary not found — install via https://antigravity.google/docs/cli/install'
-      log('dormant: agy binary not found')
-      return
-    }
-    try {
-      const v = await probeProcess(currentBin, ['--version'], 10_000)
-      versionCache = parseVersion(v.stdout)
-      if (versionCache && compareVersions(versionCache, MIN_AGY_VERSION) < 0) {
-        dormantReason = 'agy ' + versionCache + ' is older than ' + MIN_AGY_VERSION + ' — run: agy update'
-        log('dormant: ' + dormantReason)
+  // Defer version/catalog spawns so plugin load does not immediately create
+  // agy child processes (Windows conhost flash, issue #23). Catalog refresh
+  // is also driven lazily by adapter.listModels / stream.
+  const bootProbeTimer = setTimeout(() => {
+    void (async () => {
+      if (!getConfig().enabled) {
+        dormantReason = 'disabled by config'
+        log('dormant: disabled by config')
         return
       }
-      dormantReason = null
-      log('agy detected: ' + (versionCache ?? 'unknown version'))
-    } catch {
-      log('version probe failed — continuing with fallback catalog')
-    }
-    await catalog.refreshIfNeeded().catch(() => undefined)
-  })();
+      const currentBin = bin()
+      if (!currentBin) {
+        dormantReason = 'agy binary not found — install via https://antigravity.google/docs/cli/install'
+        log('dormant: agy binary not found')
+        return
+      }
+      try {
+        const v = await probeProcess(currentBin, ['--version'], 10_000)
+        versionCache = parseVersion(v.stdout)
+        if (versionCache && compareVersions(versionCache, MIN_AGY_VERSION) < 0) {
+          dormantReason = 'agy ' + versionCache + ' is older than ' + MIN_AGY_VERSION + ' — run: agy update'
+          log('dormant: ' + dormantReason)
+          return
+        }
+        dormantReason = null
+        log('agy detected: ' + (versionCache ?? 'unknown version'))
+      } catch {
+        log('version probe failed — continuing with fallback catalog')
+      }
+      await catalog.refreshIfNeeded().catch(() => undefined)
+    })();
+  }, 4_000)
+  bootProbeTimer.unref?.()
+  ctx.effect(() => () => clearTimeout(bootProbeTimer))
 
   // ---- llm registration (dormant-safe) ----
   if (getConfig().enabled) {

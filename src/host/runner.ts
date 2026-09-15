@@ -210,6 +210,22 @@ export function shouldUsePromptStdin(argsWithPrompt: readonly string[]): boolean
   return size > ARGV_PROMPT_LIMIT;
 }
 
+/**
+ * Quiet env for every agy spawn (issue #23).
+ *
+ * agy.exe itself creates a visible conhost on Windows — especially via its
+ * `--bg-updater` auto-update child chain — even when the parent spawn used
+ * `windowsHide: true`. Both switches are present in the official binary.
+ * Existing values win so operators can opt out (`=0`).
+ */
+export function withAgyQuietEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    AGY_CLI_DISABLE_AUTO_UPDATE: env.AGY_CLI_DISABLE_AUTO_UPDATE ?? '1',
+    AGY_CLI_INTERACTIVE_HEADLESS: env.AGY_CLI_INTERACTIVE_HEADLESS ?? '1',
+  };
+}
+
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
   if (IS_WIN) {
@@ -235,7 +251,7 @@ function killTree(child: ChildProcess): void {
 export function startAgyProcess(opts: RunOptions): RunningProcess {
   const started = Date.now();
   const viaCmd = IS_WIN && isCmdShim(opts.bin)
-  const env = opts.env ?? process.env
+  const env = withAgyQuietEnv(opts.env ?? process.env)
   const child = viaCmd
     ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', [opts.bin, ...opts.args].map(windowsQuote).join(' ')], {
         cwd: opts.cwd,
