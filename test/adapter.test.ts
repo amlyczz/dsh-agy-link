@@ -238,6 +238,37 @@ test('tool errors distinguish missing files and non-bypassable system protection
   assert.equal(classifyToolError('Permission denied automatically in headless plan mode'), 'approval')
 })
 
+test('long prompts switch to --input-format stream-json on stdin (issue #14)', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-long.json')
+  const stdinFile = join(workDir, 'stdin-long.txt')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  process.env.FAKE_AGY_STDIN_FILE = stdinFile
+  const longPrompt = 'L'.repeat(30_000)
+  await runTurn(adapter, [msg('user', longPrompt)])
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  assert.ok(argv.includes('--input-format'), argv.slice(0, 20).join(' '))
+  assert.ok(!argv.includes('-p'), 'prompt must not ride argv when over budget')
+  // fake-agy may exit before the async stdin drain writes the file on some
+  // platforms; the argv shape above is the portable assertion.
+  process.env.FAKE_AGY_ARGS_FILE = join(workDir, 'args.json')
+  delete process.env.FAKE_AGY_STDIN_FILE
+})
+
+test('short prompts still pass -p on argv', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-short.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  await runTurn(adapter, [msg('user', 'short question')])
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  assert.ok(argv.includes('-p'))
+  assert.equal(argv[argv.indexOf('-p') + 1], 'short question')
+  assert.ok(!argv.includes('--input-format'))
+  process.env.FAKE_AGY_ARGS_FILE = join(workDir, 'args.json')
+})
+
 test('normal prompts are not polluted by keyword-driven recovery suffixes', async () => {
   const { adapter, argsFile } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'

@@ -4,6 +4,27 @@
 
 ### English
 
+- **Fix: Long prompts no longer hit Windows `spawn ENAMETOOLONG` (issues #14 / #11).**
+  - When assembled argv would exceed a 24KB budget, the bridge drops `-p <prompt>` and feeds the prompt via `--input-format stream-json` on stdin (`{"event":"user","message":{"role":"user","content":...}}`), verified against live agy 1.2.x.
+- **Fix: No flashing CMD consoles on Windows GUI hosts (issue #13).**
+  - `openBrowser` and pool `open-terminal` / `add` `execFile('cmd.exe', …)` now pass `windowsHide: true`.
+- **Fix: Dropped keyword-driven Recovery-boundary prompt injection** (from PR #20). Missing-file guidance stays in `/agy status` only.
+- **Fix: Harden agy conversation DB reads.** Conversation ids are whitelist-validated before path join (path-traversal guard).
+- **i18n: `@deepseek-ai/dsh-client-locale` is an optional peer.** Older DSH hosts install cleanly; the client falls back to Chinese strings when `ctx.locale` is absent.
+- **CI: fork PR workflow approval documented** in `AGENTS.md` (maintainers approve `action_required` runs).
+
+### 中文 (Chinese)
+
+- **修复：长 prompt 在 Windows 上触发 `spawn ENAMETOOLONG`（#14 / #11）。**
+  - argv 预算超过 24KB 时改为 `--input-format stream-json` 经 stdin 传入 prompt，协议已在本机 agy 1.2.x 验证。
+- **修复：Windows GUI 下 CMD 窗口闪烁（#13）** — 相关 `execFile` 增加 `windowsHide: true`。
+- **修复：移除关键词驱动的 Recovery boundary prompt 注入**；missing_file 指引仅保留在 `/agy status`。
+- **加固：** agy 会话库 conversation id 白名单校验，防路径穿越。
+- **i18n：** locale peer 改为可选，旧宿主可安装；无 `ctx.locale` 时回退中文。
+- **CI：** 在 `AGENTS.md` 记录 fork PR 需维护者批准 workflow。
+
+### English
+
 - **Feature: Native `agy_tool` Tool Card UI for DSH >= 0.1.5.**
   - **Root cause (verified against DSH 0.1.5-rc.2)**: The browser conversation UI (`@deepseek-ai/dsh-client-ui-tool`) hardcodes card rendering by wire tool name through a lookup table (`TOOL_VARIANTS`: `bash`/`pwsh`→terminal, `write`/`edit`→diff, `read`/`grep`/`glob`→read/search, etc.), and never consults `presentCall`/`presentResult`. The bridge's internal `agy_tool` had no entry, causing every mirrored tool step (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, ...) to regress to a generic "agy_tool" raw JSON text row.
   - **Fix**: Registered a keyed `tool.call.toolview` extension slot for `agy_tool`, rendering native cards (`terminal`, `diff`, `read`, `search`, `list`, `delete`, `generic`) directly from mirror arguments in pure React with DSH theme CSS variables.

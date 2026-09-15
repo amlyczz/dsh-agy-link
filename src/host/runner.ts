@@ -174,6 +174,12 @@ export interface RunOptions {
   onLine?: (line: string) => void;
   /** stdin stays writable (auth code injection). */
   keepStdin?: boolean;
+  /**
+   * Write this payload to stdin and close it (long-prompt transport).
+   * Takes precedence over the default immediate stdin close; mutually
+   * exclusive with keepStdin auth-code flows.
+   */
+  stdinPayload?: string;
 }
 
 export interface RunningProcess {
@@ -183,6 +189,26 @@ export interface RunningProcess {
 }
 
 const GRACE_MS = 5000;
+
+/**
+ * Windows CreateProcess caps the command line at ~32767 chars. Leave headroom
+ * for env, cwd, quoting, and the rest of the argv so a long `-p` prompt does
+ * not fail with spawn ENAMETOOLONG (issue #14 / #11). Above this, the prompt
+ * rides agy `--input-format stream-json` on stdin instead.
+ */
+export const ARGV_PROMPT_LIMIT = 24_000;
+
+/** One NDJSON line for agy --input-format stream-json (verified on agy 1.2.x). */
+export function buildStreamInputLine(prompt: string): string {
+  return JSON.stringify({ event: 'user', message: { role: 'user', content: prompt } }) + '\n';
+}
+
+/** Whether the assembled argv (including a trailing `-p <prompt>`) risks ENAMETOOLONG. */
+export function shouldUsePromptStdin(argsWithPrompt: readonly string[]): boolean {
+  let size = 0;
+  for (const a of argsWithPrompt) size += a.length + 1;
+  return size > ARGV_PROMPT_LIMIT;
+}
 
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
@@ -234,8 +260,16 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
   // agy reads stdin when it is a pipe and never sees EOF (observed on
   // 1.1.15: `agy models` hangs forever with an open pipe stdin, which is
   // why model discovery silently timed out). Close stdin immediately for
-  // every spawn that does not explicitly need to write to it.
-  if (!opts.keepStdin) {
+  // every spawn that does not explicitly need to write to it — unless a
+  // stdinPayload was provided (long-prompt stream-json transport).
+  if (opts.stdinPayload !== undefined) {
+    try {
+      child.stdin?.write(opts.stdinPayload);
+      child.stdin?.end();
+    } catch {
+      // ignore — child may have exited already
+    }
+  } else if (!opts.keepStdin) {
     try {
       child.stdin?.end();
     } catch {

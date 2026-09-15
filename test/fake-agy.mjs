@@ -20,6 +20,15 @@ if (process.env.FAKE_AGY_ARGS_FILE) {
 if (process.env.FAKE_AGY_CWD_FILE) {
   try { writeFileSync(process.env.FAKE_AGY_CWD_FILE, process.cwd()) } catch {}
 }
+// Capture stdin for long-prompt transport tests (issue #14/#11).
+if (process.env.FAKE_AGY_STDIN_FILE) {
+  let buf = ''
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', (d) => { buf += d })
+  process.stdin.on('end', () => {
+    try { writeFileSync(process.env.FAKE_AGY_STDIN_FILE, buf) } catch {}
+  })
+}
 
 if (argv[0] === '--version') {
   process.stdout.write('agy version 1.1.13-fake\n')

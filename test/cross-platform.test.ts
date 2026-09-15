@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote } from '../src/host/runner.ts'
+import { binCandidates, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -132,4 +132,39 @@ test('resolveAgyBin honors explicit agyBin config if it exists', () => {
   const missing = resolveAgyBin({ agyBin: '/nonexistent/agy/path/xyz' } as never)
   // If explicit path does not exist, it falls back to scanning or null
   assert.notEqual(missing, '/nonexistent/agy/path/xyz')
+})
+
+test('buildStreamInputLine emits the verified agy stream-json user event', () => {
+  const line = buildStreamInputLine('hello\nworld')
+  assert.equal(line.endsWith('\n'), true)
+  const parsed = JSON.parse(line)
+  assert.deepEqual(parsed, { event: 'user', message: { role: 'user', content: 'hello\nworld' } })
+})
+
+test('shouldUsePromptStdin switches only past the argv budget (issue #14)', () => {
+  const short = ['--output-format', 'stream-json', '-p', 'hi']
+  assert.equal(shouldUsePromptStdin(short), false)
+  const longPrompt = 'x'.repeat(ARGV_PROMPT_LIMIT)
+  const long = ['--output-format', 'stream-json', '-p', longPrompt]
+  assert.equal(shouldUsePromptStdin(long), true)
+})
+
+test('startAgyProcess writes stdinPayload then closes stdin', async () => {
+  const script = `
+    let data = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (d) => { data += d })
+    process.stdin.on('end', () => { process.stdout.write('GOT:' + data.length + ':' + data.trim()); process.exit(0) })
+  `
+  const lines: string[] = []
+  const proc = startAgyProcess({
+    bin: process.execPath,
+    args: ['-e', script],
+    timeoutMs: 5000,
+    stdinPayload: 'hello-stdin-payload\n',
+    onLine: (l) => lines.push(l),
+  })
+  const outcome = await proc.outcome
+  assert.equal(outcome.code, 0)
+  assert.ok(lines.some((l) => l.includes('GOT:20:hello-stdin-payload')), lines.join('|'))
 })

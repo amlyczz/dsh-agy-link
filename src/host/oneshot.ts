@@ -3,7 +3,7 @@
 // surface the conversation id so the caller can continue later.
 import { looksLikeAuthFailure, type PluginConfig } from '../common/types.ts'
 import { StreamJsonParser } from './parser.ts'
-import { startAgyProcess } from './runner.ts'
+import { startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -118,6 +118,13 @@ export async function runAgyOnce(
     cleanup = sa.cleanup
   }
   args.push('-p', prompt)
+  // Long prompts exceed Windows CreateProcess argv limits (issue #14/#11).
+  let stdinPayload: string | undefined
+  if (shouldUsePromptStdin(args)) {
+    args.splice(args.length - 2, 2) // drop '-p', prompt
+    args.push('--input-format', 'stream-json')
+    stdinPayload = buildStreamInputLine(prompt)
+  }
   const parser = new StreamJsonParser()
   const textParts: string[] = []
   let resultText = ''
@@ -128,6 +135,7 @@ export async function runAgyOnce(
     cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
     timeoutMs,
     signal: req.signal,
+    stdinPayload,
     onLine: (line) => {
       for (const ev of parser.feed(line + '\n')) {
         if (ev.kind === 'init' && ev.conversationId) conversationId = ev.conversationId

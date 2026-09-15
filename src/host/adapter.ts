@@ -16,7 +16,7 @@ import { parseMirrorCallId, type RunRecording, type RunRegistry } from './record
 import { defaultEffortFor, findEntry, ModelCatalog, resolveModelSlug } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
-import { isolatedHomeEnv, startAgyProcess } from './runner.ts'
+import { isolatedHomeEnv, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
 import { stateDir } from '../common/config.ts'
 import type { SessionStore } from './sessions.ts'
 import { readFullToolArgs, clearAgyDbCache } from './agy-db.ts'
@@ -273,6 +273,8 @@ export class AgyAdapter extends LlmAdapter {
     extraArgs: readonly string[]
     addDirs?: readonly string[]
     printTimeoutMinutes?: number
+    /** Omit `-p <prompt>` and add `--input-format stream-json` (prompt rides stdin). */
+    promptViaStdin?: boolean
   }): string[] {
     const ptMins = opts.printTimeoutMinutes ?? Math.max(1, Math.ceil(opts.timeoutMs / 60_000))
     const args: string[] = ['--output-format', 'stream-json', '--print-timeout', ptMins + 'm']
@@ -285,7 +287,11 @@ export class AgyAdapter extends LlmAdapter {
     if (opts.conversationId) args.push('--conversation', opts.conversationId)
     for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
     args.push(...opts.extraArgs)
-    args.push('-p', opts.prompt)
+    if (opts.promptViaStdin) {
+      args.push('--input-format', 'stream-json')
+    } else {
+      args.push('-p', opts.prompt)
+    }
     return args
   }
 
@@ -555,9 +561,10 @@ export class AgyAdapter extends LlmAdapter {
     const parser = new StreamJsonParser()
     this.deps.onParser?.(parser)
     let streamCid: string | null = null
-    const args = this.buildArgs({
+    const activeModelForArgs = activeModel === '' ? cfg.defaultModel : activeModel
+    const argsBase = this.buildArgs({
       prompt,
-      model: activeModel === '' ? cfg.defaultModel : activeModel,
+      model: activeModelForArgs,
       effort,
       conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
       permissionMode: isAux ? 'plan' : cfg.permissionMode,
@@ -566,6 +573,24 @@ export class AgyAdapter extends LlmAdapter {
       extraArgs: cfg.extraArgs,
       addDirs: stagedDirs,
     })
+    // Decide transport: keep `-p <prompt>` for normal turns; switch to stdin
+    // stream-json when the argv would approach the CreateProcess limit.
+    const promptViaStdin = shouldUsePromptStdin(argsBase)
+    const args = promptViaStdin
+      ? this.buildArgs({
+          prompt,
+          model: activeModelForArgs,
+          effort,
+          conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
+          permissionMode: isAux ? 'plan' : cfg.permissionMode,
+          timeoutMs: cfg.timeoutMs,
+          printTimeoutMinutes: Math.max(240, Math.ceil(cfg.timeoutMs / 60_000)),
+          extraArgs: cfg.extraArgs,
+          addDirs: stagedDirs,
+          promptViaStdin: true,
+        })
+      : argsBase
+    const stdinPayload = promptViaStdin ? buildStreamInputLine(prompt) : undefined
     const release = await this.deps.acquire()
     let released = false
     const releaseOnce = (): void => {
@@ -621,6 +646,7 @@ export class AgyAdapter extends LlmAdapter {
       timeoutMs: cfg.timeoutMs,
       signal: options.signal,
       env,
+      stdinPayload,
       onLine: (line) => {
         for (const ev of parser.feed(line + '\n')) {
           if (ev.kind === 'init' && ev.conversationId) streamCid = ev.conversationId
