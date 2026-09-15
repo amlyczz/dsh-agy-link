@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.4.28 (2026-09-15)
+
+### English
+
+- **Feature: Native `agy_tool` Tool Card UI for DSH >= 0.1.5.**
+  - **Root cause (verified against DSH 0.1.5-rc.2)**: The browser conversation UI (`@deepseek-ai/dsh-client-ui-tool`) hardcodes card rendering by wire tool name through a lookup table (`TOOL_VARIANTS`: `bash`/`pwsh`→terminal, `write`/`edit`→diff, `read`/`grep`/`glob`→read/search, etc.), and never consults `presentCall`/`presentResult`. The bridge's internal `agy_tool` had no entry, causing every mirrored tool step (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, ...) to regress to a generic "agy_tool" raw JSON text row.
+  - **Fix**: Registered a keyed `tool.call.toolview` extension slot for `agy_tool`, rendering native cards (`terminal`, `diff`, `read`, `search`, `list`, `delete`, `generic`) directly from mirror arguments in pure React with DSH theme CSS variables.
+- **Fix: Restore Full Tool Arguments & Real Line Diffs via Agy DB (`replace_file_content` / `write_to_file`).**
+  - **Root cause**: agy CLI's `filterToolParameters` strips large arguments (`CodeContent`, `TargetContent`, `ReplacementContent`) from `stream-json`, leaving only metadata like `TargetFile`. Diff cards could not show old vs new line contents.
+  - **Fix**:
+    - `src/host/agy-db.ts`: Sub-millisecond deterministic protobuf parser directly extracts `tool_name` and full arguments JSON from the agy SQLite conversation database (`~/.gemini/antigravity-cli/conversations/<id>.db`), copying `-wal` and `-shm` sidecars to guarantee WAL commit visibility.
+    - `src/host/adapter.ts`: Dynamically resolves `activeConvId` and step index (`parseInt(ev.stepKey, 10)`), pre-resolving full tool args. Incorporates `getGitHeadContent` for `write_to_file` to diff against committed git HEAD on full-file writes.
+    - Fixed `readFullToolArgs` cache to reload SQLite DB when newly generated steps are queried, plus added 50ms WAL flush retry.
+- **Fix: Tool Span Cutting on Completion When Output Is Omitted in Stream-JSON.**
+  - **Root cause**: In `agy stream-json`, file modification tools (`replace_file_content`, `write_to_file`) emit `state: "DONE"` without an `output` field in `tool_info`. `mapper.ts` previously checked `ev.tool.output !== undefined || ev.tool.error !== undefined`, dropping the completion event and causing the tool card to be skipped entirely (falling through to assistant text).
+  - **Fix**: Updated `EventMapper` to recognize `ev.state === 'DONE' || ev.state === 'ERROR'`, cutting the span and emitting native `agy_tool` cards even when `output` is omitted. Ensured `toolInfo.error` is populated on `state: 'ERROR'`.
+- **UI: Default Collapsed State, Content Previews, Badges, and Semantic Diff Styling.**
+  - **Default Collapsed**: Tool cards now default to collapsed state (`useToggle(false)`), keeping the conversation stream neat and compact.
+  - **Content Preview**: Collapsed cards display a concise one-line preview in the header (e.g. `± demo/old.txt` for edits, `+ demo/old.txt` for writes, first line of terminal output, search queries).
+  - **Header Badges**: Added card kind badge (`[diff]`, `[terminal]`, etc.) and wire tool name badge (`[replace_file_content]`, `[run_command]`, etc.) beside the title.
+  - **Body Output Caption**: Added an uppercase **输出** (OUTPUT) label caption above the output content in the expanded card body.
+  - **Line Diff Styling**: Line diffs format relative paths (`Edit demo/old.txt`), bold red deletion markers (`-`) on red background, and bold green addition markers (`+`) on green background.
+  - **Reliable Toggle**: Replaced raw `useState` setter with `makeToggle(setValue)` to ensure infinite multi-click collapse/expand reliability.
+- **Test Suite**: 22 new unit tests across `test/toolview.test.ts`, `test/agy-db.test.ts`, and `test/mapper.test.ts`. 173/173 tests passing.
+
+---
+
+### 中文 (Chinese)
+
+- **新特性：适配 DSH >= 0.1.5 的 `agy_tool` 原生工具卡片 UI**
+  - **根因分析（针对 DSH 0.1.5-rc.2 前端验证）**：DSH 浏览器对话界面（`@deepseek-ai/dsh-client-ui-tool`）通过硬编码变体表（`TOOL_VARIANTS`）按 wire tool name 渲染卡片，且未消费 `presentCall`/`presentResult`。桥接内部镜像工具 `agy_tool` 未在表中，导致所有工具调用（`run_command`、`write_to_file`、`replace_file_content`、`view_file`、`grep_search` 等）均退化为带有原始 JSON 参数的通用文本行。
+  - **修复方案**：为 `agy_tool` 注册专有的 keyed `tool.call.toolview` 扩展槽，直接基于镜像参数渲染高仿生的原生卡片（终端 `terminal`、代码对比 `diff`、阅读 `read`、搜索 `search`、列出目录 `list`、删除 `delete`、通用 `generic`），完全使用原生 React 与 DSH 主题 CSS 变量实现。
+- **修复：通过 Agy 会话数据库恢复完整工具参数与真实代码 Diff（`replace_file_content` / `write_to_file`）**
+  - **根因分析**：`agy` CLI 在输出 `stream-json` 时通过 `filterToolParameters` 过滤掉了大参数字段（`CodeContent`、`TargetContent`、`ReplacementContent` 等），导致前端 Diff 卡片仅能拿到 `TargetFile`，无法展示旧行与新行的代码变更。
+  - **修复方案**：
+    - `src/host/agy-db.ts`：实现确定性亚毫秒级 Protobuf 解析器，直接从本地 SQLite 会话库（`~/.gemini/antigravity-cli/conversations/<id>.db`）精准提取完整 JSON 参数，并拷贝 `-wal` 和 `-shm` 侧车文件以保证 WAL 提交完全可见。
+    - `src/host/adapter.ts`：动态获取 `activeConvId` 与真实的步骤索引（`parseInt(ev.stepKey, 10)`），提前异步解析全量参数；并在 `write_to_file` 时结合 `getGitHeadContent` 读取已提交的 Git HEAD 内容进行整文件 Diff 比对。
+    - 修复 `readFullToolArgs` 缓存：当查询会话后续新增的步骤时重新读取数据库，并加入 50ms WAL 刷盘重试容错。
+- **修复：解决 stream-json 中工具完成无 output 时卡片截断丢失问题**
+  - **根因分析**：在 `agy stream-json` 中，文件修改与写入工具（`replace_file_content`、`write_to_file`）在 `state: "DONE"` 时 `tool_info` 不输出 `output` 字段。原 `mapper.ts` 检查 `output !== undefined` 导致该完成事件被丢弃，卡片从未触发截断派发，直接滑入了后续助手正文。
+  - **修复方案**：更新 `EventMapper` 完成判断，支持 `state === 'DONE' || state === 'ERROR'`，确保无输出工具亦能正常截断并生成原生工具卡片。
+- **界面优化：默认折叠状态、单行内容预览、卡片双徽章与高亮 Diff 呈现**
+  - **默认折叠**：工具卡片默认初始为折叠状态（`useToggle(false)`），保持对话流整洁紧凑，点击卡片头部即可展开查看输出。
+  - **单行内容预览**：折叠状态下在头部展示单行内容摘要（如 Diff 显示 `± demo/old.txt` 或 `+ demo/old.txt`，终端显示首行输出，只读显示文件路径等）。
+  - **双标签徽章**：卡片头部展示卡片类型徽章（如 `[diff]`、`[terminal]`）与工具原始名（如 `[replace_file_content]`、`[run_command]`）。
+  - **正文输出标题**：卡片正文区域增设大写 **输出**（OUTPUT）标签标题。
+  - **Diff 高亮呈现**：标题展示相对工作区路径（`Edit demo/old.txt`），删除行带有加粗红底 `-`，新增行带有加粗绿底 `+`。
+  - **展开/折叠防死锁**：修复 `useToggle` 在无参调用时触发 `setState(undefined)` 导致折叠后无法再次展开的缺陷，封装为纯函数 `makeToggle` 保证多轮点击稳定翻转。
+- **测试套件**：新增 22 个单元测试用例，涵盖 `test/toolview.test.ts`、`test/agy-db.test.ts` 与 `test/mapper.test.ts`，173 个测试全部通过。
+
+---
+
 ## 0.4.27 (2026-09-11)
 
 - **Fixed: Windows binary discovery misses the official Google installer path (Issue #7).**

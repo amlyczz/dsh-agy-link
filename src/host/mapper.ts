@@ -68,6 +68,20 @@ export interface EventMapperOptions {
     noteStepUsage(raw: RawUsage): void
     finalUsage(resultRaw: RawUsage): RawUsage
   }
+  /**
+   * Resolve FULL tool args for a recorded step from the agy conversation DB
+   * (stream args are stripped by agy's filterToolParameters). Called when the
+   * mapper cuts a tool span; resolved args are stored back on the recording so
+   * the mirror's enrichArgs/execute see the same full payload.
+   */
+  fullArgsAt?: (eventIndex: number) => Promise<Record<string, unknown> | null>
+  /**
+   * Synchronously-available full args, keyed by event index. driveSpan
+   * pre-resolves these (awaiting fullArgsAt) and hands them to the mapper so
+   * the emitted tool-call arguments carry the complete payload without making
+   * map() async.
+   */
+  resolvedFullArgs?: ReadonlyMap<number, Record<string, unknown>>
 }
 
 export class EventMapper {
@@ -206,10 +220,19 @@ export class EventMapper {
         return
       }
       if (ev.stepKind === 'tool' && ev.tool) {
-        // Only a COMPLETED step (output or error recorded) becomes a card.
-        // ACTIVE envelopes arrive first with name/args only; the span waits
-        // for the DONE update that carries the payload.
-        if (!(ev.tool.output !== undefined || ev.tool.error !== undefined)) return
+        // Only a COMPLETED step becomes a card.
+        // agy ≥1.1.15 stream-json emits two envelopes per tool step:
+        //  1. state: 'ACTIVE' with name and metadata args only (payload in progress)
+        //  2. state: 'DONE' when complete. Some tools (run_command, view_file)
+        //     carry an output string in tool_info; others (replace_file_content,
+        //     write_to_file) emit no output property on success.
+        // Therefore, a step is complete if state is DONE/ERROR, or if output/error
+        // was recorded (for older agy versions or mocks where state is omitted).
+        const isCompleted =
+          ev.state === 'DONE' ||
+          ev.state === 'ERROR' ||
+          (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
+        if (!isCompleted) return
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)
         if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
@@ -222,13 +245,21 @@ export class EventMapper {
         const idx = this.blockIdx
         const useCode = this.opts.useCodeWrapper === true
         const toolName = useCode ? WRAPPER_TOOL_NAME : MIRROR_TOOL_NAME
+        // Prefer DB-resolved full args (which include CodeContent /
+        // TargetContent / ReplacementContent stripped from the stream by agy's
+        // filterToolParameters); otherwise fall back to whatever survived the
+        // stream so the card still renders what it has.
+        const fullArgs = this.opts.resolvedFullArgs?.get(absIndex)
+        const effectiveArgs = fullArgs !== undefined
+          ? { ...fullArgs, ...(typeof ev.tool.args === 'object' ? ev.tool.args as Record<string, unknown> : {}) }
+          : ev.tool.args
         const argumentsJson = useCode
           ? JSON.stringify(buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name))
           : JSON.stringify({
               run: this.opts.runId,
               step: absIndex,
               tool: ev.tool.name,
-              ...(ev.tool.args !== undefined ? { input: ev.tool.args } : {}),
+              ...(effectiveArgs !== undefined ? { input: effectiveArgs } : {}),
             })
         yield { type: 'block-start', index: idx, blockType: 'tool-call' }
         yield {

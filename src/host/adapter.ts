@@ -19,6 +19,8 @@ import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
 import { isolatedHomeEnv, startAgyProcess } from './runner.ts'
 import { stateDir } from '../common/config.ts'
 import type { SessionStore } from './sessions.ts'
+import { readFullToolArgs, clearAgyDbCache } from './agy-db.ts'
+import { getGitHeadContent } from './mirror-tool.ts'
 
 type ForeignSource = { source?: { kind?: string; provider?: string } }
 
@@ -759,16 +761,61 @@ export class AgyAdapter extends LlmAdapter {
   ): AsyncIterable<StreamChunk> {
     const queue = new ChunkQueue()
     void (async () => {
+      // Resolve FULL tool args from the agy conversation DB (agy's stream
+      // output strips CodeContent/TargetContent/ReplacementContent via
+      // filterToolParameters, leaving only metadata like TargetFile). We
+      // pre-resolve them so diff cards can render real old/new content.
+      const resolved = new Map<number, Record<string, unknown>>()
+      const convId = rec.conversationId
       const mapper = new EventMapper({
         runId: rec.runId,
         cutOnTool,
         initialSawText: rec.sawTextBefore(from),
         useCodeWrapper,
         usage: rec,
+        resolvedFullArgs: resolved,
       })
       let i = from
       try {
         for await (const ev of rec.eventsFrom(from)) {
+          if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool) {
+            const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
+            const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
+            const activeConvId =
+              rec.conversationId ??
+              (typeof rawObj?.conversation_id === 'string' ? rawObj.conversation_id : null) ??
+              (typeof stepUpdate?.conversation_id === 'string' ? stepUpdate.conversation_id : null)
+            const stepIdx = parseInt(ev.stepKey, 10)
+            if (activeConvId !== null && Number.isFinite(stepIdx)) {
+              try {
+                let full = await readFullToolArgs(activeConvId, stepIdx)
+                if (full === null) {
+                  await new Promise((r) => setTimeout(r, 50))
+                  full = await readFullToolArgs(activeConvId, stepIdx)
+                }
+                if (full !== null && full.args !== undefined) {
+                  resolved.set(i, full.args)
+                  rec.setFullArgs(i, full.args)
+                }
+              } catch {
+                // DB read failure is non-fatal; stream args still render.
+              }
+            }
+            // For write_to_file / create_file: if old content is not already present, resolve from git HEAD
+            const toolName = ev.tool.name
+            if (toolName === 'write_to_file' || toolName === 'write_file' || toolName === 'create_file') {
+              const currentArgs = resolved.get(i) ?? (typeof ev.tool.args === 'object' && ev.tool.args !== null ? (ev.tool.args as Record<string, unknown>) : {})
+              const targetFile = (currentArgs.TargetFile ?? currentArgs.target_file ?? currentArgs.path ?? currentArgs.AbsolutePath) as string | undefined
+              if (targetFile && typeof targetFile === 'string' && !currentArgs.oldText && !currentArgs.old_string && !currentArgs.TargetContent) {
+                const head = getGitHeadContent(targetFile)
+                if (head !== null) {
+                  const updated = { ...currentArgs, old_string: head }
+                  resolved.set(i, updated)
+                  rec.setFullArgs(i, updated)
+                }
+              }
+            }
+          }
           for (const ch of mapper.map(ev, i)) queue.push(ch)
           i++
           if (mapper.isFinished) break

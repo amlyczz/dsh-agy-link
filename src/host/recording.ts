@@ -44,6 +44,8 @@ export class RunRecording {
   private resultConversationId: string | null = null
   private lastStepUsageRaw: RawUsage | null = null
   private [waiters] = new Set<() => void>()
+  /** DB-resolved full tool args keyed by event index (set during span driving). */
+  private fullArgs: Map<number, Record<string, unknown>> | null = null
 
   /**
    * Set by the adapter right after spawn. A mid-turn user steer makes DSH
@@ -62,6 +64,11 @@ export class RunRecording {
     if (this.settled) return
     this.events.push(ev)
     if (ev.kind === 'result') this.resultConversationId = ev.conversationId ?? null
+    if (ev.kind === 'init' && typeof ev.conversationId === 'string' && ev.conversationId !== '') {
+      // init can carry the conversation id before the result envelope; prefer
+      // the earliest known id so continuation spans can resolve the agy DB.
+      this.resultConversationId = this.resultConversationId ?? ev.conversationId
+    }
     this.wake()
   }
 
@@ -174,6 +181,13 @@ export class RunRecording {
   toolEventAt(eventIndex: number): { name: string; args?: unknown; output?: unknown; error?: string } | null {
     const ev = this.events[eventIndex]
     if (ev === undefined || ev.kind !== 'step' || ev.stepKind !== 'tool' || !ev.tool) return null
+    const full = this.fullArgs?.get(eventIndex)
+    if (full !== undefined && full !== null) {
+      // Merge DB-resolved args (which include the content fields agy strips
+      // from the stream) over the stream-carried args. Stream fields win so the
+      // mirror always sees the freshest live values.
+      return { ...ev.tool, args: { ...full, ...(typeof ev.tool.args === 'object' ? ev.tool.args as Record<string, unknown> : {}) } }
+    }
     return ev.tool
   }
 
@@ -187,7 +201,16 @@ export class RunRecording {
     }
     return errors
   }
+
+  /** Store full DB-resolved tool args for a step (set during span driving). */
+  setFullArgs(eventIndex: number, args: Record<string, unknown>): void {
+    this.fullArgs ??= new Map()
+    this.fullArgs.set(eventIndex, args)
+  }
 }
+
+/** Full-args resolver injected into RunRecording (set in RunRegistry.create). */
+export type FullArgsResolver = (eventIndex: number) => Promise<Record<string, unknown> | null>
 
 /** Prefix every mirrored agy tool callId carries; continuation detection key. */
 export const AGY_CALL_PREFIX = 'agytc-'
