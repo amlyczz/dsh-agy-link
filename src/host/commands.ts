@@ -229,7 +229,7 @@ async function renderStatus(deps: CommandDeps): Promise<string> {
       ? [
           '- last run tool errors (' + last.toolErrors.length + '): ' + last.toolErrors.join(' | '),
           ...(errorKinds.includes('missing_file')
-            ? ['- Guidance: `missing_file` — verify the current conversation artifact directory; do not search a global brain or invent a path.']
+            ? ['- Guidance: `missing_file` — verify the expected workspace/artifact path for this conversation; do not invent paths or bypass protections.']
             : []),
           ...(errorKinds.includes('system_protection')
             ? ['- Guidance: `system_protection` — AGY hardcoded system protection remains enforced; do not attempt a bypass.']

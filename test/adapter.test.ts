@@ -238,15 +238,15 @@ test('tool errors distinguish missing files and non-bypassable system protection
   assert.equal(classifyToolError('Permission denied automatically in headless plan mode'), 'approval')
 })
 
-test('normal prompts carry bounded artifact recovery guidance', async () => {
+test('normal prompts are not polluted by keyword-driven recovery suffixes', async () => {
   const { adapter, argsFile } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'
   process.env.FAKE_AGY_ARGS_FILE = argsFile
   await runTurn(adapter, [msg('user', 'recover the missing artifact')])
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   const prompt = argv[argv.indexOf('-p') + 1] ?? ''
-  assert.match(prompt, /current known conversation artifact directory/)
-  assert.match(prompt, /Do not search a global brain, invent a path, or attempt to bypass any system protection/)
+  assert.equal(prompt, 'recover the missing artifact')
+  assert.ok(!prompt.includes('Recovery boundary'), 'no plugin-side prompt injection on missing/not-found keywords')
 })
 
 test('second turn reuses the bound conversation id', async () => {
@@ -259,7 +259,7 @@ test('second turn reuses the bound conversation id', async () => {
   await runTurn(adapter, [msg('assistant', 'one'), msg('user', 'two')], { sessionId: 'sess-2' as never })
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   assert.equal(argv[argv.indexOf('--conversation') + 1], 'conv-fresh-1')
-  assert.match(argv[argv.indexOf('-p') + 1] ?? '', /current known conversation artifact directory/)
+  assert.equal(argv[argv.indexOf('-p') + 1] ?? '', 'two', 'resumed turn forwards only the user text')
 })
 
 test('unbound follow-up turn gets a history digest prefix', async () => {
@@ -513,8 +513,7 @@ test('returning session digests only foreign turns since the watermark', async (
   const argv2 = JSON.parse(readFileSync(argsFile2, 'utf8')) as string[]
   const prompt2 = argv2[argv2.indexOf('-p') + 1] ?? ''
   assert.ok(!prompt2.includes('[conversation so far]'), 'clean follow-up carries no digest')
-  assert.equal(prompt2.split('\n\n[Recovery boundary:')[0], 'third')
-  assert.match(prompt2, /current known conversation artifact directory/)
+  assert.equal(prompt2, 'third', 'no keyword-driven recovery suffix is injected into the prompt')
 })
 
 test('unspawnable binary maps to PROCESS_EXIT without hanging', async () => {

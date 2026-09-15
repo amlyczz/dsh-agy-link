@@ -524,11 +524,10 @@ export class AgyAdapter extends LlmAdapter {
     } else if (prompt.trim() === '') {
       throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
     }
-    // Resumed turns may only say "continue": retain the artifact boundary
-    // even when the user's latest text does not repeat the preceding error.
-    if (!isAux && (binding !== undefined || /\b(missing|not found|enoent)\b/i.test(prompt))) {
-      prompt += '\n\n[Recovery boundary: if an artifact is missing, first use the current known conversation artifact directory. Do not search a global brain, invent a path, or attempt to bypass any system protection.]'
-    }
+    // Intentionally no prompt-side "recovery boundary" injection: keyword
+    // matching on user text (missing/not found/enoent) false-positives and
+    // is a plugin-side prompt injection. Guidance for missing_file lives in
+    // /agy status via classifyToolError (commands.ts).
 
     // In-flight duplicate submission debounce (prevents double-clicks / network repeat loops)
     if (!isAux && sessionKey !== '') {
