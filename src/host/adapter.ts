@@ -19,7 +19,7 @@ import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
 import { isolatedHomeEnv, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
 import { stateDir } from '../common/config.ts'
 import type { SessionStore } from './sessions.ts'
-import { readFullToolArgs, clearAgyDbCache } from './agy-db.ts'
+import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
 import { getGitHeadContent } from './mirror-tool.ts'
 
 type ForeignSource = { source?: { kind?: string; provider?: string } }
@@ -787,11 +787,12 @@ export class AgyAdapter extends LlmAdapter {
   ): AsyncIterable<StreamChunk> {
     const queue = new ChunkQueue()
     void (async () => {
-      // Resolve FULL tool args from the agy conversation DB (agy's stream
-      // output strips CodeContent/TargetContent/ReplacementContent via
-      // filterToolParameters, leaving only metadata like TargetFile). We
-      // pre-resolve them so diff cards can render real old/new content.
+      // Resolve FULL tool args and thoughts from the agy conversation DB (agy's
+      // stream output strips CodeContent/TargetContent/ReplacementContent via
+      // filterToolParameters, and strips thought text from print mode). We
+      // pre-resolve them so diff cards and reasoning blocks render real content.
       const resolved = new Map<number, Record<string, unknown>>()
+      const resolvedThoughts = new Map<number, string>()
       const convId = rec.conversationId
       const mapper = new EventMapper({
         runId: rec.runId,
@@ -800,10 +801,38 @@ export class AgyAdapter extends LlmAdapter {
         useCodeWrapper,
         usage: rec,
         resolvedFullArgs: resolved,
+        resolvedThoughts,
       })
       let i = from
       try {
         for await (const ev of rec.eventsFrom(from)) {
+          const recordedThought = rec.getThoughts(i)
+          if (recordedThought !== undefined) {
+            resolvedThoughts.set(i, recordedThought)
+          } else if (ev.kind === 'step') {
+            const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
+            const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
+            const activeConvId =
+              rec.conversationId ??
+              (typeof rawObj?.conversation_id === 'string' ? rawObj.conversation_id : null) ??
+              (typeof stepUpdate?.conversation_id === 'string' ? stepUpdate.conversation_id : null)
+            const stepIdx = parseInt(ev.stepKey, 10)
+            if (activeConvId !== null && Number.isFinite(stepIdx)) {
+              try {
+                let th = await readStepThoughts(activeConvId, stepIdx)
+                if (th === null && (ev.state === 'DONE' || (ev.usage?.thinking_tokens ?? 0) > 0 || ev.stepKind === 'thinking')) {
+                  await new Promise((r) => setTimeout(r, 50))
+                  th = await readStepThoughts(activeConvId, stepIdx)
+                }
+                if (th !== null && th.trim() !== '') {
+                  resolvedThoughts.set(i, th)
+                  rec.setThoughts(i, th)
+                }
+              } catch {
+                // DB read failure is non-fatal; fallback to token annotation.
+              }
+            }
+          }
           if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool) {
             const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
             const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null

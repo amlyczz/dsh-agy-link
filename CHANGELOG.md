@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.30 (2026-09-15)
+
+### English
+
+- **Feature: Extract and stream model thoughts/reasoning from agy database.**
+  - **Protobuf Field 20.3 Extraction (`src/host/agy-db.ts`)**: Decodes full model Chain-of-Thought (thoughts) from agy SQLite conversation databases (`steps` table, step_type `14`/`15` agent_response) via a deterministic varint protobuf scanner with sub-millisecond execution and zero external dependencies.
+  - **Live Streaming Reasoning Card (`src/host/mapper.ts` & `src/host/adapter.ts`)**: Injects resolved thoughts into native DSH reasoning blocks (`reasoning: true`), presenting the structured template `[agy thinking turn · {N} thinking tokens]\n\n{thoughtBody}` for model thinking turns. Supports both eager leading reasoning blocks and deferred trailing blocks without breaking tool spans or text fragments.
+  - **Client-Side Auto-Expansion (`src/client/reasoning.ts`)**: Auto-expands reasoning blocks when thoughts prose is present, while strictly respecting manual user collapse actions via DOM attribute tracking.
+  - **Run Traceability (`src/host/recording.ts`)**: Persists extracted thought text in `AgyRunRecording` for full lifecycle traceability and replay.
+
+### 中文 (Chinese)
+
+- **特性：从 agy 数据库提取并流式展示完整思维链（Reasoning/Thinking）。**
+  - **Protobuf Field 20.3 确定性解码（`src/host/agy-db.ts`）**：针对 agy 会话 SQLite 库（`steps` 表，step_type `14`/`15` agent_response），通过原生 Varint Protobuf 扫描器高性能提取模型完整思考正文（Field 20 -> Sub-field 3），亚毫秒级解析且无额外依赖。
+  - **原生 Reasoning 卡片流式呈现（`src/host/mapper.ts` 与 `src/host/adapter.ts`）**：将提取到的思考内容流式推送至 DSH 原生推理卡片（`reasoning: true`），格式化呈现 `[agy thinking turn · *** thinking tokens]\n\n{思维链正文}`；支持前置流式输出与延迟解析补发，与工具步骤及正文片段无缝衔接。
+  - **客户端智能展开（`src/client/reasoning.ts`）**：检测到思维链正文时自动展开 Reasoning 卡片，并通过 DOM 属性标记保证用户手动折叠行为不被覆盖。
+  - **会话持久化与回放（`src/host/recording.ts`）**：在 `AgyRunRecording` 中记录思维链内容，保障全生命周期可追溯与回放。
+
 ## 0.4.29 (2026-09-15)
 
 ### English
