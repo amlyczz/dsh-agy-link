@@ -220,3 +220,20 @@ execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${acc.dir}" && s
 | pr-22 | pass | pass | 173/173 |
 
 复验环境：macOS，Node 由本机提供；PR #21/#22 因 `package.json` 变更使用 `npm ci`。fork CI 未跑不作为否决依据。
+
+## 9. 执行记录（2026-09-15 已完成）
+
+| 步骤 | 结果 |
+| --- | --- |
+| Fork PR CI | 全部 `action_required` run 已 approve；CI 全绿。流程写入 `AGENTS.md`（GitHub 无公开 API 可关闭首次批准门） |
+| PR #17 | 已合并 |
+| PR #20 | 已合并；随后移除 Recovery boundary 关键词注入 |
+| PR #15 | 已关闭（被 #20 取代） |
+| PR #22 | 与 #20 冲突解决后合并；conversationId 白名单已加 |
+| PR #21 | 与 #22 冲突解决后合并；locale peer 改为 optional + 运行时回退 zh |
+| Issue #13 | 已修并关闭（`windowsHide: true`） |
+| Issue #14 / #11 | 已实现 stdin stream-json 传输并关闭 |
+| Issue #12 / #16 / #18 / #19 | 已关闭 |
+| 最终验证 | `check` + `build` + **197/197 tests**；main CI success |
+
+**未做（遵守 AGENTS.md）**：未 `npm publish`、未打 tag / GitHub Release。版本号为 `0.4.28`（含上述全部变更），等 maintainer 明示后再发。
