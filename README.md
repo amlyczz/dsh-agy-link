@@ -14,7 +14,10 @@
 <p align="center">
   <b>🌐 Language / 语言：</b>
   <a href="#中文">中文</a> ·
-  <a href="#english">English</a>
+  <a href="#english">English</a> ·
+  <a href="./docs/README.pt-BR.md">Português (Brasil)</a> ·
+  <a href="./docs/README.es.md">Español</a> ·
+  <a href="./docs/README.en.md">English (standalone)</a>
 </p>
 
 ---
