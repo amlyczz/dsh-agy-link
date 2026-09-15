@@ -51,6 +51,20 @@ test('isCmdShim detects cmd/bat case-insensitively', () => {
   assert.equal(isCmdShim('/usr/local/bin/agy'), false)
 })
 
+// Issue #13: GUI hosts must not flash a console for wrapper spawns.
+test('Windows execFile call sites pass windowsHide', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const oauth = await readFile(new URL('../src/host/oauth.ts', import.meta.url), 'utf8')
+  const index = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(oauth, /windowsVerbatimArguments: true, windowsHide: true/)
+  // pool/add and pool/open-terminal each spawn cmd.exe with windowsHide nearby
+  const cmdSpawns = [...index.matchAll(/execFile\('cmd\.exe'[\s\S]{0,300}?\n/g)].map((m) => m[0])
+  assert.ok(cmdSpawns.length >= 2, `expected >=2 cmd.exe spawns, found ${cmdSpawns.length}`)
+  for (const call of cmdSpawns) {
+    assert.match(call, /windowsHide:\s*true/, `missing windowsHide in: ${call.slice(0, 120)}`)
+  }
+})
+
 // CRLF tolerance: a child emitting \r\n lines must deliver clean lines.
 test('runner strips trailing CR from CRLF output', async () => {
   const lines: string[] = []

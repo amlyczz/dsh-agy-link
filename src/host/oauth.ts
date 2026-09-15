@@ -316,7 +316,7 @@ export function openBrowser(url: string): Promise<boolean> {
         execFile(
           'cmd.exe',
           ['/d', '/s', '/c', `start "" "${url}"`],
-          { windowsVerbatimArguments: true },
+          { windowsVerbatimArguments: true, windowsHide: true },
           (err) => resolve(!err),
         )
       } else {

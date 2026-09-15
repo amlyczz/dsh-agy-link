@@ -516,7 +516,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             execFile('osascript', ['-e', script], () => {})
           } else if (process.platform === 'win32') {
             // HOME alone is ignored by Node/Go on Windows — set USERPROFILE too.
-            execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${acc.dir}" && set "USERPROFILE=${acc.dir}" && agy`], () => {})
+            // windowsHide keeps the outer wrapper from flashing a console in GUI hosts.
+            execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${acc.dir}" && set "USERPROFILE=${acc.dir}" && agy`], { windowsHide: true }, () => {})
           } else {
             execFile('x-terminal-emulator', ['-e', `sh -c "export HOME='${acc.dir}'; agy; exec sh"`], () => {})
           }
@@ -542,7 +543,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           execFile('osascript', ['-e', script], () => {})
         } else if (process.platform === 'win32') {
           // HOME alone is ignored by Node/Go on Windows — set USERPROFILE too.
-          execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${acc.dir}" && set "USERPROFILE=${acc.dir}" && agy`], () => {})
+          // windowsHide keeps the outer wrapper from flashing a console in GUI hosts.
+          execFile('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${acc.dir}" && set "USERPROFILE=${acc.dir}" && agy`], { windowsHide: true }, () => {})
         } else {
           execFile('x-terminal-emulator', ['-e', `sh -c "export HOME='${acc.dir}'; agy; exec sh"`], () => {})
         }
