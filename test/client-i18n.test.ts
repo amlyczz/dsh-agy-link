@@ -69,9 +69,9 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
       register(options: { id: string; label?: string | (() => string); locale?: string }) { registeredSlots.push({ options }); return () => {} },
     },
   }
-  // locale is an optional peer — the client injects only 'slots' and uses
-  // ctx.locale when the host provides @deepseek-ai/dsh-client-locale.
-  assert.deepEqual(Array.from(plugin.inject), ['slots'])
+  // Cordis inject entries are hard deps (issue #24): locale must be listed
+  // or accessing ctx.locale throws before any fallback can run.
+  assert.deepEqual(Array.from(plugin.inject), ['slots', 'locale'])
   plugin.apply(ctx)
   assert.deepEqual([...catalog.keys()], ['zh', 'en', 'pt-BR', 'es'])
   assert.equal(dictionaries.size, 4)

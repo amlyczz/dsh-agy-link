@@ -37,7 +37,10 @@ const portalToBody = (node: unknown) => {
 };
 
 export const name = 'dsh-agy-link-client';
-export const inject = ['slots'];
+// Cordis inject entries are hard dependencies: accessing a service not listed
+// here throws ("cannot get property X without inject"). locale must be declared
+// for ctx.locale to be readable (issue #24). dsh-web-app ships dsh-client-locale.
+export const inject = ['slots', 'locale'];
 
 export interface ClientContext extends Context {
 	slots: {
@@ -792,26 +795,22 @@ const S: Record<string, Record<string, unknown>> = {
 };
 
 export function apply(ctx: ClientContext): void {
-	// locale is an optional peer: older DSH hosts may not provide the service.
-	// Fall back to the built-in zh dictionary so the panel still renders.
-	const locale = (ctx as { locale?: Context['locale'] }).locale;
-	if (locale) {
-		ctx.effect(() => {
-			const disposePtBR = locale.addLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
-			const disposeEs = locale.addLanguage({ id: 'es', label: 'Español', fallback: 'en' });
-			// Untyped single-locale form: 'agy-link' is not in the host LocaleNamespaceMap merge table.
-			const disposeZh = locale.register(NS, 'zh', zh);
-			const disposeEn = locale.register(NS, 'en', en);
-			const disposePtBRDictionary = locale.register(NS, 'pt-BR', ptBR);
-			const disposeEsDictionary = locale.register(NS, 'es', es);
-			return () => { disposeEsDictionary(); disposePtBRDictionary(); disposeEn(); disposeZh(); disposeEs(); disposePtBR(); };
-		}, 'agy-link: locale dictionaries');
-	}
-	const tFallback = ((key: AgyLocaleKey) => zh[key] as string) as (key: AgyLocaleKey, params?: Record<string, unknown>) => string;
+	// locale is declared in inject — cordis guarantees ctx.locale (issue #24).
+	const locale = ctx.locale;
+	ctx.effect(() => {
+		const disposePtBR = locale.addLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
+		const disposeEs = locale.addLanguage({ id: 'es', label: 'Español', fallback: 'en' });
+		// Untyped single-locale form: 'agy-link' is not in the host LocaleNamespaceMap merge table.
+		const disposeZh = locale.register(NS, 'zh', zh);
+		const disposeEn = locale.register(NS, 'en', en);
+		const disposePtBRDictionary = locale.register(NS, 'pt-BR', ptBR);
+		const disposeEsDictionary = locale.register(NS, 'es', es);
+		return () => { disposeEsDictionary(); disposePtBRDictionary(); disposeEn(); disposeZh(); disposeEs(); disposePtBR(); };
+	}, 'agy-link: locale dictionaries');
 	const useAgyTranslation = () => {
 		const [, rerender] = useState(0);
-		useEffect(() => locale?.subscribe(() => rerender((revision) => revision + 1)) ?? (() => {}), []);
-		return (locale?.bind(NS) ?? tFallback) as (key: AgyLocaleKey, params?: Record<string, unknown>) => string;
+		useEffect(() => locale.subscribe(() => rerender((revision) => revision + 1)), []);
+		return locale.bind(NS) as (key: AgyLocaleKey, params?: Record<string, unknown>) => string;
 	};
 	const AgySettingsSection = (props?: any): unknown => {
 		const t = useAgyTranslation();
@@ -1616,7 +1615,7 @@ export function apply(ctx: ClientContext): void {
 				name: 'conversation.session.header.actions',
 				id: 'agy-link-status',
 				order: 10,
-				label: () => (locale ? locale.bind(NS)('section.label') : zh['section.label']),
+				label: () => locale.bind(NS)('section.label'),
 				locale: NS,
 			},
 			AgySessionStatus,
@@ -1631,7 +1630,7 @@ export function apply(ctx: ClientContext): void {
 				name: 'settings.section',
 				id: 'agy-link',
 				order: 20,
-				label: () => (locale ? locale.bind(NS)('section.label') : zh['section.label']),
+				label: () => locale.bind(NS)('section.label'),
 				locale: NS,
 			},
 			AgySettingsSection,

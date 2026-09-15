@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.29 (2026-09-15)
+
+### English
+
+- **Hotfix: client blank page / `cannot get property "locale" without inject` (issue #24).**
+  - 0.4.28 removed `locale` from the client `export inject` list while still reading `ctx.locale`. Cordis treats every inject entry as a hard dependency and throws on undeclared service access, so the web client failed to load.
+  - Restored `inject = ['slots', 'locale']`, use `ctx.locale` directly, and mark `@deepseek-ai/dsh-client-locale` as a required peer (shipped with `dsh-web-app`).
+
+### 中文 (Chinese)
+
+- **热修：0.4.28 客户端白屏 / `cannot get property "locale" without inject`（#24）。**
+  - 0.4.28 把 `locale` 从 client `inject` 里拿掉却仍访问 `ctx.locale`；Cordis 对未声明服务的属性访问会直接抛错。
+  - 恢复 `inject = ['slots', 'locale']`，直接使用 `ctx.locale`，并将 `@deepseek-ai/dsh-client-locale` 标回必选 peer。
+
 ## 0.4.28 (2026-09-15)
 
 ### English
