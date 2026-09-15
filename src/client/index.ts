@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount, ModelQuotaInfo } from '../common/pool-types.ts';
 import { BRAND_COLORS, BRAND_PATHS, UI_PATHS } from './brand-icons.ts';
+import { installAgyToolView } from './toolview.ts';
 
 type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
@@ -40,7 +41,7 @@ export interface ClientContext extends Context {
 	slots: {
 		inject(name: string, register: () => () => void): void;
 		register(
-			opts: { name: string; id: string; order?: number; label?: string },
+			opts: { name: string; key?: string; id: string; order?: number; label?: string },
 			Component: (props?: unknown) => unknown,
 		): () => void;
 	};
@@ -1592,4 +1593,10 @@ export function apply(ctx: ClientContext): void {
 		);
 		return dispose;
 	});
+
+	// Native tool-card rendering for the agy_tool mirror (DSH >= 0.1.5):
+	// the browser conversation UI keys tool cards by wire name; registering
+	// `tool.call.toolview` for `agy_tool` makes every mirrored agy step render
+	// as a terminal / diff / read / search card instead of a generic text row.
+	installAgyToolView(ctx);
 }

@@ -156,6 +156,9 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
     const delta = extractTextDelta(src)
     const text = delta !== undefined ? delta : extractText(src)
     const stateV = pick(src, ['state'])
+    if (stateV === 'ERROR' && toolInfo && !toolInfo.error) {
+      toolInfo.error = 'tool execution failed'
+    }
     const usageRaw = pick(src, ['usage'])
     return {
       kind: 'step',

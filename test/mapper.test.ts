@@ -157,6 +157,28 @@ test('completed tool step cuts the span into native agy_tool call in standard mo
   assert.equal(text, 'Working on it')
 })
 
+test('completed tool step with state DONE cuts even when tool.output is undefined (replace_file_content)', () => {
+  const m = newSpan('run-xyz', false, false)
+  const chunks = mapAll(m, [
+    // ACTIVE envelope: no cut
+    { kind: 'step', stepKey: '30', stepKind: 'tool', state: 'ACTIVE', text: '', tool: { name: 'replace_file_content', args: { TargetFile: 'demo/old.txt' } } },
+    // DONE envelope with NO output property (observed with agy file writing tools)
+    { kind: 'step', stepKey: '30', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'replace_file_content', args: { TargetFile: 'demo/old.txt' } } },
+    { kind: 'step', stepKey: '31', stepKind: 'text', text: 'should not be reached' },
+  ])
+  const end = toolCallEnd(chunks)
+  assert.equal(end.block.name, 'agy_tool')
+  assert.equal(end.block.id, mirrorCallId('run-xyz', 1))
+  const args = JSON.parse(end.block.arguments) as { run: string; step: number; tool: string; input: Record<string, unknown> }
+  assert.equal(args.run, 'run-xyz')
+  assert.equal(args.step, 1)
+  assert.equal(args.tool, 'replace_file_content')
+  assert.deepEqual(args.input, { TargetFile: 'demo/old.txt' })
+  const finish = asFinish(lastChunk(chunks))
+  assert.equal(finish.reason.kind, 'tool-calls')
+  assert.equal(m.isFinished, true)
+})
+
 test('completed tool step cuts the span into run_code wrapper in Code Mode', () => {
   const m = newSpan('run-abc', false, true)
   const chunks = mapAll(m, [
