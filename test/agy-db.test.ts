@@ -1,6 +1,7 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFullToolArgs, clearAgyDbCache, isSafeConversationId, __setAgyDbDirForTest } from '../src/host/agy-db.ts'
+import { readFullToolArgs, readStepThoughts, extractStepThoughts, clearAgyDbCache, isSafeConversationId, __setAgyDbDirForTest } from '../src/host/agy-db.ts'
+
 import { join } from 'node:path'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -36,6 +37,24 @@ function buildStepPayload(toolName: string, args: Record<string, unknown>): Buff
   return Buffer.concat([header, Buffer.from([0x2a]), encodeVarint(inner.length), inner])
 }
 
+/** Realistic agent_response step_payload: outer field 20 wraps inner {f1 text, f3 thoughts, f8 text}. */
+function buildThoughtStepPayload(thoughts: string, text = 'Here is the answer'): Buffer {
+  const thoughtBuf = Buffer.from(thoughts, 'utf-8')
+  const textBuf = Buffer.from(text, 'utf-8')
+  const inner = Buffer.concat([
+    Buffer.from([0x0a]), encodeVarint(textBuf.length), textBuf,
+    Buffer.from([0x1a]), encodeVarint(thoughtBuf.length), thoughtBuf,
+    Buffer.from([0x42]), encodeVarint(textBuf.length), textBuf,
+  ])
+  const header = Buffer.from([0x08, 0x0f, 0x20, 0x03])
+  return Buffer.concat([
+    header,
+    Buffer.from([0xa2, 0x01]),
+    encodeVarint(inner.length),
+    inner,
+  ])
+}
+
 const sqliteOk = spawnSync('which', ['sqlite3'], { encoding: 'utf-8' }).status === 0
 
 test('rejects path-traversal conversation ids before joining the DB path', async () => {
@@ -46,6 +65,7 @@ test('rejects path-traversal conversation ids before joining the DB path', async
   assert.equal(isSafeConversationId('a/b'), false)
   assert.equal(isSafeConversationId(''), false)
   assert.equal(await readFullToolArgs('../../etc/passwd', 1), null)
+  assert.equal(await readStepThoughts('../../etc/passwd', 1), null)
 })
 
 let tempDir: string | null = null
@@ -56,39 +76,61 @@ after(async () => {
   }
 })
 
-test('readFullToolArgs: parses realistic nested protobuf step_payload', async (t) => {
+test('extractStepThoughts: extracts Field 20.3 from protobuf payload', () => {
+  const thought = 'I need to check why the function returns null.'
+  const payload = buildThoughtStepPayload(thought)
+  const extracted = extractStepThoughts(payload)
+  assert.equal(extracted, thought)
+})
+
+test('readFullToolArgs and readStepThoughts: parse realistic nested protobuf step_payloads', async (t) => {
   if (!sqliteOk) return t.skip('sqlite3 CLI not available')
   tempDir = await mkdtemp(join(tmpdir(), 'agy-db-test-'))
   const dbPath = join(tempDir, 'conv123.db')
 
-  const payload = buildStepPayload('write_to_file', {
+  const toolPayload = buildStepPayload('write_to_file', {
     CodeContent: 'hello\nworld',
     Description: 'Create new.txt',
     Overwrite: true,
     TargetFile: '/tmp/x/new.txt',
   })
 
+  const thoughtText = 'First I should inspect the target directory.'
+  const thoughtPayload = buildThoughtStepPayload(thoughtText, 'Done creating file.')
+
   // Create DB via sqlite3 CLI (hex literal avoids quoting issues)
-  const hex = payload.toString('hex')
+  const toolHex = toolPayload.toString('hex')
+  const thoughtHex = thoughtPayload.toString('hex')
   await execFileAsync('sqlite3', [
     dbPath,
     `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB);`,
-    `INSERT INTO steps (idx,step_type,status,step_payload) VALUES (23,132,3,X'${hex}');`,
+    `INSERT INTO steps (idx,step_type,status,step_payload) VALUES (23,132,3,X'${toolHex}');`,
+    `INSERT INTO steps (idx,step_type,status,step_payload) VALUES (22,15,3,X'${thoughtHex}');`,
   ])
 
   __setAgyDbDirForTest(tempDir)
   clearAgyDbCache()
 
-  const result = await readFullToolArgs('conv123', 23)
-  assert.ok(result !== null, 'should resolve full args')
-  assert.equal(result.name, 'write_to_file')
-  assert.equal((result as { args: { CodeContent?: string } }).args.CodeContent, 'hello\nworld')
-  assert.equal((result as { args: { TargetFile?: string } }).args.TargetFile, '/tmp/x/new.txt')
-  assert.equal((result as { args: { Overwrite?: boolean } }).args.Overwrite, true)
+  const toolResult = await readFullToolArgs('conv123', 23)
+  assert.ok(toolResult !== null, 'should resolve full args')
+  assert.equal(toolResult.name, 'write_to_file')
+  assert.equal((toolResult as { args: { CodeContent?: string } }).args.CodeContent, 'hello\nworld')
+  assert.equal((toolResult as { args: { TargetFile?: string } }).args.TargetFile, '/tmp/x/new.txt')
+  assert.equal((toolResult as { args: { Overwrite?: boolean } }).args.Overwrite, true)
 
-  // Second call hits the cache
-  const cached = await readFullToolArgs('conv123', 23)
-  assert.deepEqual(cached, result)
+  const thoughtResult = await readStepThoughts('conv123', 22)
+  assert.equal(thoughtResult, thoughtText)
+
+  // Cache hit
+  assert.equal(await readStepThoughts('conv123', 22), thoughtText)
+  assert.deepEqual(await readFullToolArgs('conv123', 23), toolResult)
+})
+
+test('readStepThoughts: returns null for missing conversation or empty thoughts', async () => {
+  __setAgyDbDirForTest(tempDir ?? 'no-such-dir')
+  clearAgyDbCache()
+  assert.equal(await readStepThoughts('10000000-0000-4000-8000-000000000000', 5), null)
+  assert.equal(await readStepThoughts('', 1), null)
 })
 
 test('readFullToolArgs: returns null for missing conversation', async () => {

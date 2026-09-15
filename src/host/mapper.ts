@@ -82,6 +82,12 @@ export interface EventMapperOptions {
    * map() async.
    */
   resolvedFullArgs?: ReadonlyMap<number, Record<string, unknown>>
+  /**
+   * Synchronously-available thoughts, keyed by event index. driveSpan
+   * pre-resolves these from the agy conversation DB so reasoning blocks stream
+   * real thought text instead of token-count annotations.
+   */
+  resolvedThoughts?: ReadonlyMap<number, string>
 }
 
 export class EventMapper {
@@ -133,11 +139,31 @@ export class EventMapper {
       : { type: 'reasoning-delta', index: this.blockIdx, text: delta }
   }
 
-  /** The honest thinking signal agy exposes: a token-count line. */
-  private *emitThinkingLine(thoughtTokens: number): Generator<StreamChunk> {
+  /**
+   * Emit thinking: always retain the [agy thinking turn · ... thinking tokens]
+   * banner. When real thought prose is present, place the banner and thought
+   * text on the same initial line so DSH's collapsed summary renders:
+   *   [agy thinking turn · *** thinking tokens] [Chain-of-Thought body]
+   */
+  private *emitThinking(absIndex: number, thoughtTokens: number): Generator<StreamChunk> {
+    const text = this.opts.resolvedThoughts?.get(absIndex)
+    const hasText = text !== undefined && text.trim() !== ''
+    if (!hasText && thoughtTokens <= 0) return
+
     yield* this.ensureBlock('reasoning')
-    const d = this.appendDelta('[agy thinking turn · ' + thoughtTokens + ' thinking tokens]\n')
-    if (d) yield d
+    const banner =
+      thoughtTokens > 0
+        ? '[agy thinking turn · ' + thoughtTokens + ' thinking tokens]'
+        : '[agy thinking turn]'
+
+    if (hasText) {
+      const combined = `${banner} ${text.trim()}\n`
+      const d = this.appendDelta(combined)
+      if (d) yield d
+    } else {
+      const d = this.appendDelta(`${banner}\n`)
+      if (d) yield d
+    }
   }
 
   /**
@@ -152,32 +178,25 @@ export class EventMapper {
     if (ev.kind === 'step') {
       if (ev.usage) this.opts.usage?.noteStepUsage(ev.usage)
       if (ev.stepKind === 'text') {
-        // agy ≥1.1.15 thinking turns: agent_response steps with usage but no
-        // text_delta. The thoughts themselves are not streamed in print mode,
-        // so surface the turn honestly as a token-annotated reasoning line.
-        //
-        // Placement: agy attaches usage (and with it thinking_tokens) to the
-        // step's DONE tail — AFTER the text fragments already streamed. So:
-        //  - nothing of this step streamed yet (thinking-only turn, one-shot
-        //    envelope) -> annotate FIRST, then the text;
-        //  - fragments already went out -> DEFER the annotation until the
-        //    step's text is complete, then emit it as a trailing reasoning
-        //    block. Emitting at arrival would wedge the chip mid-sentence
-        //    (v0.3.2 regression); dropping it hid the first turn's thinking
-        //    entirely (v0.3.3 regression). Both fixed by deferral.
         const thoughtTokens = ev.usage?.thinking_tokens ?? 0
         const stepTextEmitted = (this.emittedByKey.get(ev.stepKey) ?? '') !== ''
-        if (thoughtTokens > 0 && !stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)) {
+        const dbThought = this.opts.resolvedThoughts?.get(absIndex)
+        const hasRealThought = dbThought !== undefined && dbThought.trim() !== ''
+        const shouldAnnounce = hasRealThought || thoughtTokens > 0
+
+        // If real thoughts (or token count fallback) are available and no text has
+        // been emitted yet, stream the reasoning block FIRST before answer text.
+        if (shouldAnnounce && !stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)) {
           this.thinkingAnnounced.add(ev.stepKey)
-          yield* this.emitThinkingLine(thoughtTokens)
+          yield* this.emitThinking(absIndex, thoughtTokens)
         }
-        const deferred = thoughtTokens > 0 && stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)
+        const deferred = shouldAnnounce && stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)
         if (ev.text === '' && !ev.fragment) {
           // DONE tail carrying usage with no text: the step is already
           // complete — flush the deferred annotation now.
           if (deferred) {
             this.thinkingAnnounced.add(ev.stepKey)
-            yield* this.emitThinkingLine(thoughtTokens)
+            yield* this.emitThinking(absIndex, thoughtTokens)
           }
           return
         }
@@ -201,18 +220,27 @@ export class EventMapper {
           // This DONE closed the step's text: the chip lands after the
           // complete sentence, never between two of its fragments.
           this.thinkingAnnounced.add(ev.stepKey)
-          yield* this.emitThinkingLine(thoughtTokens)
+          yield* this.emitThinking(absIndex, thoughtTokens)
         }
         return
       }
       if (ev.stepKind === 'thinking' || ev.stepKind === 'subagent') {
         yield* this.ensureBlock('reasoning')
         if (ev.stepKind === 'thinking') {
-          const prev = this.emittedByKey.get(ev.stepKey) ?? ''
-          const delta = suffixDelta(prev, ev.text)
-          this.emittedByKey.set(ev.stepKey, ev.text)
-          const d = this.appendDelta(delta)
-          if (d) yield d
+          const dbThought = this.opts.resolvedThoughts?.get(absIndex)
+          if (dbThought && dbThought.trim() !== '') {
+            const prev = this.emittedByKey.get(ev.stepKey) ?? ''
+            const delta = suffixDelta(prev, dbThought)
+            this.emittedByKey.set(ev.stepKey, dbThought)
+            const d = this.appendDelta(delta)
+            if (d) yield d
+          } else {
+            const prev = this.emittedByKey.get(ev.stepKey) ?? ''
+            const delta = suffixDelta(prev, ev.text)
+            this.emittedByKey.set(ev.stepKey, ev.text)
+            const d = this.appendDelta(delta)
+            if (d) yield d
+          }
         } else {
           const d = this.appendDelta('[agy subagent] ' + ev.text + '\n')
           if (d) yield d
