@@ -79,7 +79,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   let binCache: string | null | undefined = undefined
   let versionCache: string | null = null
   let dormantReason: string | null = null
-  let lastRun: { ok: boolean; code: string; durationMs: number; model: string } | null = null
+  let lastRun: { processOk: boolean; processCode: string; toolErrors: readonly string[]; durationMs: number; model: string } | null = null
   let lastParser = new StreamJsonParser()
 
   const getConfig = (): PluginConfig => resolveConfig(entryConfig)
@@ -699,6 +699,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     const timer = setInterval(() => {
       void sweepDir(mediaDir(), getConfig().mediaTtlMs).catch(() => undefined)
     }, Math.max(60_000, Math.min(getConfig().mediaTtlMs, 3_600_000)))
+    timer.unref?.()
     return () => clearInterval(timer)
   })
 
@@ -712,7 +713,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       void quota.refreshAllQuotas().catch(() => undefined)
     }
     const boot = setTimeout(refresh, 5_000)
+    boot.unref?.()
     const timer = setInterval(refresh, Math.max(60_000, getConfig().quotaPollIntervalMs))
+    timer.unref?.()
     return () => {
       clearTimeout(boot)
       clearInterval(timer)
@@ -720,6 +723,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   })
 
   const bridgeState: { bridge: Awaited<ReturnType<typeof startMcpBridge>> | null; restore: (() => void) | null } = { bridge: null, restore: null }
+  let bridgeDisposed = false
   const syncMcpBridge = (): void => {
     const cfg = getConfig()
     const want = cfg.mcpBridge && cfg.enabled
@@ -736,11 +740,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             allowlist: () => getConfig().mcpToolAllowlist,
             log,
           })
+          // A scope can be disposed before asynchronous listener startup ends.
+          // Do not publish a capability or workspace config after disposal.
+          if (bridgeDisposed) {
+            await bridge.close()
+            return
+          }
           bridgeState.bridge = bridge
           const root = cfg.workspaceRoot !== '' ? cfg.workspaceRoot : process.cwd()
           bridgeState.restore = writeMcpConfig(root, bridge)
           log('mcp bridge ready at ' + bridge.url + (toolsSvc ? '' : ' (tools service not yet available)'))
         } catch (e) {
+          bridgeState.restore?.()
+          await bridgeState.bridge?.close()
+          bridgeState.bridge = null
+          bridgeState.restore = null
           log('mcp bridge failed to start: ' + String(e))
         }
       })()
@@ -754,12 +768,14 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   syncMcpBridge()
 
   ctx.effect(() => {
-    auth.dispose()
-    void poolAuth.cancel()
-    if (askToolDispose.current !== null) askToolDispose.current()
-    if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
-    bridgeState.restore?.()
-    void bridgeState.bridge?.close()
-    return () => undefined
+    return () => {
+      bridgeDisposed = true
+      auth.dispose()
+      void poolAuth.cancel()
+      if (askToolDispose.current !== null) askToolDispose.current()
+      if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
+      bridgeState.restore?.()
+      void bridgeState.bridge?.close()
+    }
   })
 }

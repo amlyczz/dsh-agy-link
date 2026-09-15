@@ -12,6 +12,7 @@ import { AgyAdapter, buildDigest, detectContinuation, type AgyAdapterDeps } from
 import { ModelCatalog } from '../src/host/models.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
+import { classifyToolError } from '../src/host/recording.ts'
 import { defineAgyMirrorTool, parseMirrorInvocation } from '../src/host/mirror-tool.ts'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { defaultConfig, Err, type PluginConfig } from '../src/common/types.ts'
@@ -83,6 +84,8 @@ async function runTurn(
   base: Message[],
   extra: Partial<GenerateOptions> = {},
   maxHops = 12,
+  trailingPluginSnapshots = false,
+  replayRuns?: RunRegistry,
 ): Promise<{ chunks: StreamChunk[]; toolCalls: Array<{ id: string; args: MirrorArgs }>; messages: Message[] }> {
   const messages = [...base]
   const all: StreamChunk[] = []
@@ -113,11 +116,24 @@ async function runTurn(
     }
     toolCalls.push({ id: end.block.id, args })
     messages.push({ role: 'assistant', content: [end.block] } as unknown as Message)
+    let output = 'replayed'
+    let isError = false
+    if (replayRuns) {
+      try {
+        output = String(await defineAgyMirrorTool({ runs: replayRuns }).execute(args as never, { signal: new AbortController().signal } as never))
+      } catch (error) {
+        isError = true
+        output = String(error)
+      }
+    }
     messages.push({
       role: 'user',
-      content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: 'replayed' }] }],
+      content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: output }], isError }],
       source: { kind: 'tool', callId: end.block.id },
     } as unknown as Message)
+    if (trailingPluginSnapshots) {
+      messages.push({ role: 'user', content: [], source: { kind: 'plugin', plugin: 'runtime-context', form: 'snapshot', sections: [] } } as unknown as Message)
+    }
   }
   throw new Error('runTurn exceeded the hop budget')
 }
@@ -158,15 +174,79 @@ test('ok run mirrors tools natively, streams text, and persists the binding', as
   assert.equal(b.lastMessageCount, 1)
 })
 
-test('detectContinuation keys off the trailing mirror tool-result only', () => {
+test('detectContinuation permits only trailing plugin snapshots after our mirror result', () => {
   const toolResult = (callId: string): Message =>
     ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
+  const pluginSnapshot = { role: 'user', content: [], source: { kind: 'plugin', plugin: 'runtime-context', form: 'snapshot', sections: [] } } as unknown as Message
   assert.deepEqual(
     detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7')]),
     { runId: 'run-1', eventIndex: 7 },
   )
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7'), pluginSnapshot]),
+    { runId: 'run-1', eventIndex: 7 },
+  )
+  assert.equal(detectContinuation([toolResult('agytc-run-1-7'), msg('user', 'a human follow-up')]), null)
+  assert.deepEqual(detectContinuation([toolResult('agytc-run-1-7'), pluginSnapshot, pluginSnapshot]), { runId: 'run-1', eventIndex: 7 })
+  assert.equal(detectContinuation([pluginSnapshot]), null)
+  for (const form of ['notice', 'instructions', 'relay', 'recall', undefined]) {
+    const meaningfulPluginMessage = { role: 'user', content: [{ type: 'text', text: 'new instruction' }], source: { kind: 'plugin', plugin: 'test', form } } as unknown as Message
+    assert.equal(detectContinuation([toolResult('agytc-run-1-7'), meaningfulPluginMessage, pluginSnapshot]), null, `must not skip ${form}`)
+  }
+  assert.equal(detectContinuation([toolResult('agytc-run-1-7'), toolResult('other-provider-4')]), null)
   assert.equal(detectContinuation([msg('user', 'q')]), null)
   assert.equal(detectContinuation([msg('user', 'q'), toolResult('bash-9')]), null)
+})
+
+test('plugin snapshots continue the existing run without a duplicate spawn and retain tool errors', async () => {
+  const reports: Array<{ processOk: boolean; processCode: string; toolErrors: readonly string[] }> = []
+  const { adapter } = makeAdapter({}, { onRun: (info) => reports.push(info) })
+  process.env.FAKE_AGY_MODE = 'real-error'
+  const { chunks, toolCalls } = await runTurn(adapter, [msg('user', 'count the files')], {}, 12, true)
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+  assert.equal(toolCalls.length, 2)
+  const report = await waitFor(() => reports[0])
+  assert.equal(reports.length, 1, 'continuation spans must not spawn another agy process')
+  assert.equal(report.processOk, true)
+  assert.equal(report.processCode, 'OK')
+  assert.deepEqual(report.toolErrors, ['Find command timed out.'])
+})
+
+test('headless automatic denial stays raw while process success remains separate', async () => {
+  const reports: Array<{ processOk: boolean; processCode: string; toolErrors: readonly string[] }> = []
+  const { adapter, runs } = makeAdapter({}, { onRun: (info) => reports.push(info) })
+  process.env.FAKE_AGY_MODE = 'real-denied'
+  const { chunks, messages, toolCalls } = await runTurn(adapter, [msg('user', 'inspect files')], {}, 12, true, runs)
+  assert.ok(messages.some(m => JSON.stringify(m).includes('"isError":true')), 'denial must be replayed as a real error result')
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+  const report = await waitFor(() => reports[0])
+  assert.equal(report.processOk, true)
+  assert.equal(report.processCode, 'OK')
+  assert.deepEqual(report.toolErrors, ['Permission denied automatically in headless plan mode: read_file ~/.agents'])
+  assert.equal(reports.length, 1, 'error replay must not spawn a second AGY process')
+  assert.equal(toolCalls.length, 2)
+  const failedResult = messages.find(m => JSON.stringify(m).includes('"isError":true'))!
+  assert.match(JSON.stringify(failedResult), /Permission denied automatically in headless plan mode: read_file ~\/.agents/)
+  assert.match(JSON.stringify(failedResult), /agy tool/)
+})
+
+test('tool errors distinguish missing files and non-bypassable system protection from approval', () => {
+  assert.equal(classifyToolError('ENOENT: no such file or directory, open qa-proof-stack.md'), 'missing_file')
+  assert.equal(classifyToolError('Denied by hardcoded system protection for global brain search'), 'system_protection')
+  assert.equal(classifyToolError('Permission denied automatically in headless plan mode'), 'approval')
+})
+
+test('normal prompts carry bounded artifact recovery guidance', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  await runTurn(adapter, [msg('user', 'recover the missing artifact')])
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.match(prompt, /current known conversation artifact directory/)
+  assert.match(prompt, /Do not search a global brain, invent a path, or attempt to bypass any system protection/)
 })
 
 test('second turn reuses the bound conversation id', async () => {
@@ -179,6 +259,7 @@ test('second turn reuses the bound conversation id', async () => {
   await runTurn(adapter, [msg('assistant', 'one'), msg('user', 'two')], { sessionId: 'sess-2' as never })
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   assert.equal(argv[argv.indexOf('--conversation') + 1], 'conv-fresh-1')
+  assert.match(argv[argv.indexOf('-p') + 1] ?? '', /current known conversation artifact directory/)
 })
 
 test('unbound follow-up turn gets a history digest prefix', async () => {
@@ -432,7 +513,8 @@ test('returning session digests only foreign turns since the watermark', async (
   const argv2 = JSON.parse(readFileSync(argsFile2, 'utf8')) as string[]
   const prompt2 = argv2[argv2.indexOf('-p') + 1] ?? ''
   assert.ok(!prompt2.includes('[conversation so far]'), 'clean follow-up carries no digest')
-  assert.equal(prompt2, 'third')
+  assert.equal(prompt2.split('\n\n[Recovery boundary:')[0], 'third')
+  assert.match(prompt2, /current known conversation artifact directory/)
 })
 
 test('unspawnable binary maps to PROCESS_EXIT without hanging', async () => {

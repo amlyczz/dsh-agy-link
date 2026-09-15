@@ -67,7 +67,7 @@ export function resolveConfig(
 ): PluginConfig {
   const base = defaultConfig()
   const e = entry ?? {}
-  const layers: Array<Record<string, unknown>> = [e, overrides]
+  const layers: Array<Record<string, unknown>> = [overrides, e]
   const get = (k: string): unknown => {
     for (const l of layers) if (l[k] !== undefined && l[k] !== null && l[k] !== '') return l[k]
     return undefined

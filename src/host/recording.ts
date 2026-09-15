@@ -23,6 +23,16 @@ export interface RecordingFailure {
   message: string
 }
 
+/** Status guidance only: retain the original tool error for replay and logs. */
+export type ToolErrorKind = 'missing_file' | 'system_protection' | 'approval' | 'tool_error'
+
+export function classifyToolError(error: string): ToolErrorKind {
+  if (/\b(no such file|file not found|cannot find (?:the )?file|enoent)\b/i.test(error)) return 'missing_file'
+  if (/\b(system protection|protected by (?:the )?system|hardcoded.*protection|cannot bypass.*protection)\b/i.test(error)) return 'system_protection'
+  if (/\b(permission|denied|denial|approval)\b/i.test(error)) return 'approval'
+  return 'tool_error'
+}
+
 const waiters: unique symbol = Symbol('waiters')
 
 /** One agy run's append-only event log plus its settlement state. */
@@ -165,6 +175,17 @@ export class RunRecording {
     const ev = this.events[eventIndex]
     if (ev === undefined || ev.kind !== 'step' || ev.stepKind !== 'tool' || !ev.tool) return null
     return ev.tool
+  }
+
+  /** Raw errors reported by completed agy tool steps, in event order. */
+  toolErrors(): string[] {
+    const errors: string[] = []
+    for (const ev of this.events) {
+      if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool?.error !== undefined) {
+        errors.push(ev.tool.error)
+      }
+    }
+    return errors
   }
 }
 

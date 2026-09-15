@@ -74,7 +74,7 @@ if (mode === 'noise') {
   process.stdout.write('\u26a0 fetching model catalog\n')
   emit({ event: 'init', conversation_id: conv, model: 'gemini-3-6-flash' })
   process.stdout.write('some progress noise\n')
-} else if (mode === 'real' || mode === 'real-error' || mode === 'real-fail') {
+} else if (mode === 'real' || mode === 'real-error' || mode === 'real-denied' || mode === 'real-fail') {
   // Shapes captured from a live agy 1.1.15 binary
   // (`--output-format stream-json --mode plan --model ... --effort ...`).
   emit({ event: 'init', conversation_id: conv, init: { model: 'gemini-3-7-flash', cwd: '/tmp', tools: ['run_command', 'read_file'] } })
@@ -87,7 +87,16 @@ if (mode === 'noise') {
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 3, state: 'DONE', step_type: 'tool', duration_seconds: 0.3, tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { CommandLine: 'ls' }, output: 'note1.txt\nnote2.txt\n' } } })
   // failed tool call: state ERROR with tool_info.error
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 4, state: 'ACTIVE', step_type: 'tool', tool_name: 'find_by_name', tool_info: { name: 'find_by_name', parameters: { Pattern: 'note*.txt' } } } })
-  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 4, state: 'ERROR', step_type: 'tool', duration_seconds: 30, tool_name: 'find_by_name', tool_info: { name: 'find_by_name', parameters: { Pattern: 'note*.txt' }, error: { type: 'TOOL_ERROR', message: 'Find command timed out.' } } } })
+  const toolError = mode === 'real-denied'
+    ? 'Permission denied automatically in headless plan mode: read_file ~/.agents'
+    : 'Find command timed out.'
+  emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 4, state: 'ERROR', step_type: 'tool', duration_seconds: 30, tool_name: 'find_by_name', tool_info: { name: 'find_by_name', parameters: { Pattern: 'note*.txt' }, error: { type: 'TOOL_ERROR', message: toolError } } } })
+  // AGY 1.2.2 can report SUCCESS and no final text despite a failed tool.
+  // This synthetic envelope mirrors that shape without private session data.
+  if (mode === 'real-denied') {
+    emit({ event: 'result', result: { conversation_id: conv, status: 'SUCCESS', response: '', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 100, output_tokens: 0 } } })
+    process.exit(0)
+  }
   // streamed answer: sequential text_delta fragments across ACTIVE -> DONE
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'There are ' } })
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: '2 files, ' } })
@@ -97,7 +106,7 @@ if (mode === 'noise') {
   } else if (mode === 'real') {
     emit({ event: 'result', result: { conversation_id: conv, status: 'DONE', response: 'There are 2 files, 6 words total.', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 900, output_tokens: 100, thinking_tokens: 95, cache_read_tokens: 200, total_tokens: 1000 } } })
   } else {
-    emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: 'There are 2 files, 6 words total.', error: 'Find command timed out. Use a more targeted search directory or pattern.: context deadline exceeded', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 900, output_tokens: 100, thinking_tokens: 95, cache_read_tokens: 200, total_tokens: 1000 } } })
+    emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: 'There are 2 files, 6 words total.', error: toolError, duration_seconds: 5, num_turns: 1, usage: { input_tokens: 900, output_tokens: 100, thinking_tokens: 95, cache_read_tokens: 200, total_tokens: 1000 } } })
   }
   process.exit(0)
 } else {
