@@ -1,98 +1,144 @@
-// Client-side auto-expansion for reasoning blocks with thought prose (dsh-agy-link).
+// Client-side reasoning presentation enhancements (dsh-agy-link).
 //
 // In DSH web, assistant reasoning rows (<div data-variant="think">) default to
-// collapsed (useState(false)). When a turn contains full model thought prose
-// (from agy SQLite), we auto-expand the row so the user can read the thoughts
-// directly without having to manually click to open.
+// collapsed (useState(false)), matching the official native DSH experience.
 //
-// If the user manually clicks the row to collapse it, we respect their action
-// and keep it collapsed. In the collapsed state, DSH displays the first line
-// of the reasoning text as the summary:
-//   [agy thinking turn · *** thinking tokens] [Chain-of-Thought body]
+// - Collapsed state:
+//   - Small thinking icon (IconThinkOutline14)
+//   - Mouse hover over icon or row automatically shows the chevron down arrow
+//   - Title + separator dot + single-line summary with ellipsis
+//
+// - Expanded state (when clicked by the user):
+//   - Leading icon is the chevron down arrow
+//   - If the thought prose is long, it provides smooth scrollable browsing
+//     (max-height: 360px, overflow-y: auto) with native-looking scrollbars
+//   - Any [agy thinking turn · X thinking tokens] metadata banner is styled
+//     cleanly as an inline metadata chip
+
+const REASONING_CSS = `
+/* Ensure thinking disclosure row hover effect works reliably across all builds */
+div[data-variant="think"] [data-disclosure-row]:hover [class*="iconIdle"],
+div[data-variant="think"] [class*="row"]:hover [class*="iconIdle"] {
+	opacity: 0 !important;
+}
+div[data-variant="think"] [data-disclosure-row]:hover [class*="chevronHover"],
+div[data-variant="think"] [class*="row"]:hover [class*="chevronHover"] {
+	opacity: 1 !important;
+}
+
+/* Scrollable thinking body when content is long */
+div[data-variant="think"] [class*="thinkBody"] {
+	max-height: 360px;
+	overflow-y: auto;
+	overflow-x: hidden;
+	white-space: pre-wrap;
+	word-break: break-word;
+	padding-right: 8px;
+	scrollbar-width: thin;
+	scrollbar-color: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.2)) transparent;
+}
+div[data-variant="think"] [class*="thinkBody"]::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+div[data-variant="think"] [class*="thinkBody"]::-webkit-scrollbar-thumb {
+	background: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.18));
+	border-radius: 6px;
+	background-clip: padding-box;
+}
+div[data-variant="think"] [class*="thinkBody"]::-webkit-scrollbar-track {
+	background: transparent;
+	margin: 4px 0;
+}
+
+/* Tasteful metadata chip for [agy thinking turn · ...] banner */
+.agy-thought-banner {
+	display: inline-block;
+	font-size: 11px;
+	line-height: 16px;
+	padding: 1px 7px;
+	margin-bottom: 6px;
+	border-radius: 4px;
+	color: var(--dsw-alias-label-tertiary, #64748b);
+	background: var(--dsw-alias-bg-layer-3, rgba(0, 0, 0, 0.04));
+	border: 0.5px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.1));
+	font-family: var(--dsw-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+	font-weight: 500;
+	user-select: none;
+}
+`;
+
+function injectStyles(): void {
+	if (typeof document === 'undefined') return;
+	const styleId = 'dsh-agy-link-reasoning-css';
+	if (document.getElementById(styleId) === null) {
+		const st = document.createElement('style');
+		st.id = styleId;
+		st.textContent = REASONING_CSS;
+		const host = document.head ?? document.documentElement;
+		if (host) host.appendChild(st);
+	}
+}
+
+/**
+ * Cleanly format any `[agy thinking turn ...]` banner in `thinkBody`
+ * into a styled metadata chip so the prose displays cleanly.
+ */
+function formatThinkingBody(thinkBodyEl: HTMLElement): void {
+	if (thinkBodyEl.dataset.agyFormatted === 'true') return;
+	const text = thinkBodyEl.textContent ?? '';
+	const match = text.match(/^\[agy thinking turn(?: · \d+ thinking tokens)?\]\s*/);
+	if (!match) return;
+
+	const bannerText = match[0].trim();
+	const restText = text.slice(match[0].length);
+
+	// Mark as formatted to prevent re-entrancy
+	thinkBodyEl.dataset.agyFormatted = 'true';
+	thinkBodyEl.textContent = '';
+
+	const bannerSpan = document.createElement('span');
+	bannerSpan.className = 'agy-thought-banner';
+	bannerSpan.textContent = bannerText;
+
+	thinkBodyEl.appendChild(bannerSpan);
+	if (restText.length > 0) {
+		thinkBodyEl.appendChild(document.createTextNode('\n' + restText));
+	}
+}
+
+function scanThinkingBlocks(): void {
+	if (typeof document === 'undefined') return;
+	const thinkBodies = document.querySelectorAll<HTMLElement>('div[data-variant="think"] [class*="thinkBody"]');
+	for (let i = 0; i < thinkBodies.length; i++) {
+		const body = thinkBodies[i];
+		if (body) formatThinkingBody(body);
+	}
+}
 
 export function installAutoExpandReasoning(): void {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+	if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-  const userCollapsed = new WeakSet<Element>();
-  const autoExpanded = new WeakSet<Element>();
+	injectStyles();
 
-  function checkElement(el: Element): void {
-    if (el.getAttribute('data-variant') !== 'think') return;
-    if (userCollapsed.has(el)) return;
-    if (autoExpanded.has(el)) return;
+	// Observe DOM mutations to format thinking body banners when expanded
+	const observer = new MutationObserver(() => {
+		scanThinkingBlocks();
+	});
 
-    // Check if it has real thinking prose beyond the banner
-    const text = (el.textContent ?? '').trim();
-    if (!text.includes('[agy thinking turn')) return;
+	const setupObserver = () => {
+		if (document.body) {
+			observer.observe(document.body, {
+				childList: true,
+				subtree: true,
+			});
+			scanThinkingBlocks();
+		}
+	};
 
-    // Match banner and check for non-empty thought prose
-    const match = text.match(/\[agy thinking turn(?: · \d+ thinking tokens)?\]\s*(.+)/s);
-    const hasProse = Boolean(match && match[1] && match[1].trim().length > 0);
-    if (!hasProse) return;
-
-    // If currently collapsed (not expanded in DSH)
-    const isExpanded = el.hasAttribute('data-expanded') && el.getAttribute('data-expanded') !== 'false';
-    if (!isExpanded) {
-      autoExpanded.add(el);
-      const clickTarget =
-        (el.querySelector('button') as HTMLElement | null) ||
-        (el.querySelector('[class*="row"]') as HTMLElement | null) ||
-        (el as HTMLElement);
-      try {
-        clickTarget.click();
-      } catch {
-        // non-fatal
-      }
-    }
-  }
-
-  function scanAll(): void {
-    const thinkRows = document.querySelectorAll('div[data-variant="think"]');
-    for (let i = 0; i < thinkRows.length; i++) {
-      const el = thinkRows[i];
-      if (el) checkElement(el);
-    }
-  }
-
-  // Track user manual clicks so we never re-expand what the user deliberately collapsed
-  document.addEventListener(
-    'click',
-    (ev) => {
-      const target = ev.target as Element | null;
-      if (!target) return;
-      const thinkRow = target.closest('div[data-variant="think"]');
-      if (!thinkRow) return;
-
-      const wasExpanded =
-        thinkRow.hasAttribute('data-expanded') && thinkRow.getAttribute('data-expanded') !== 'false';
-      if (wasExpanded) {
-        userCollapsed.add(thinkRow);
-      } else {
-        userCollapsed.delete(thinkRow);
-      }
-    },
-    true, // capture phase
-  );
-
-  // Observe streaming changes and new rows
-  const observer = new MutationObserver(() => {
-    scanAll();
-  });
-
-  const setupObserver = () => {
-    if (document.body) {
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
-      scanAll();
-    }
-  };
-
-  if (document.readyState === 'loading') {
-    window.addEventListener('DOMContentLoaded', setupObserver, { once: true });
-  } else {
-    setupObserver();
-  }
+	if (document.readyState === 'loading') {
+		window.addEventListener('DOMContentLoaded', setupObserver, { once: true });
+	} else {
+		setupObserver();
+	}
 }
