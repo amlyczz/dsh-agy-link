@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.31 (2026-09-17)
+
+### English
+
+- **UI & UX: Align thinking process and tool invocation view with native DeepSeek Harness (DSH) styling.**
+  - **Native SVG Icons & Hover Transition (`src/client/toolview.ts` & `src/client/reasoning.ts`)**: Integrated native DSH icons (`IconChevronDownOutline14`, `IconApiOutline14`, `IconCodeOutline16`, `IconEditOutline16`, `IconBrowseOutline16`, `IconSearchOutline16`, `IconCopyOutline16`, `IconCheckOutline14`). Hovering over a row smoothly transitions the leading icon into a downward chevron (`chevronHover`, opacity 0 -> 1), reproducing official DSH micro-interactions.
+  - **Tool Row & Card Restyling (`src/client/toolview.ts`)**: Replaced custom boxed badges with native 24px borderless inline rows featuring official running sweep animation (`data-state="run"`). Expanded card includes an interactive header with Cwd, command/path, and a one-click copy button with temporary checkmark feedback.
+  - **Scrollable Long Content (`src/client/toolview.ts`)**: Added scrollable bounds (`max-height: 260px` / `280px` with thin scrollbars) for terminal stdout, file edits/diffs, and file viewing, preventing long output from overwhelming the chat stream.
+  - **Reasoning Process Presentation (`src/client/reasoning.ts`)**: Adheres to official DSH default collapsed state. Implemented scrollable container (`max-height: 360px`) with slim scrollbars for expanded reasoning thoughts and styled turn metadata into clean tags (`.agy-thought-banner`).
+
+### 中文 (Chinese)
+
+- **界面与交互：深度对齐官方 DeepSeek Harness (DSH) 默认思维链与工具调用展示样式。**
+  - **原生 SVG 图标与鼠标悬停动效（`src/client/toolview.ts` 与 `src/client/reasoning.ts`）**：集成官方原生工具图标（`IconChevronDownOutline14`、`IconApiOutline14`、`IconCodeOutline16`、`IconEditOutline16`、`IconBrowseOutline16`、`IconSearchOutline16`、`IconCopyOutline16`、`IconCheckOutline14`）。鼠标悬浮整行时，小图标平滑过渡显示为下拉箭头图标（`chevronHover`，opacity 0 → 1），高度还原官方原生微动效。
+  - **工具行与卡片设计还原（`src/client/toolview.ts`）**：移除冗余徽章药丸，还原原生 24px 无边框轻量内联行与运行态扫光动画（`data-state="run"`）；展开卡片包含 Cwd、命令/路径头部与交互式「复制」按钮（带「已复制」反馈与自动复原）。
+  - **超长内容滚动浏览（`src/client/toolview.ts`）**：针对终端输出、文件查看与 Diff 代码块增加最大高度限制（`max-height: 260px` / `280px`）与微型细滚动条，避免超长内容撑乱对话流。
+  - **思维链正文呈现（`src/client/reasoning.ts`）**：遵循官方默认折叠规范；为展开后的思考过程增加独立滚动浏览区域（`max-height: 360px`）与细滚动条，并将轮次思考元数据美化为轻量圆角标签（`.agy-thought-banner`）。
+
+## 0.4.30 (2026-09-15)
+
+### English
+
+- **Feature: Extract and stream model thoughts/reasoning from agy database.**
+  - **Protobuf Field 20.3 Extraction (`src/host/agy-db.ts`)**: Decodes full model Chain-of-Thought (thoughts) from agy SQLite conversation databases (`steps` table, step_type `14`/`15` agent_response) via a deterministic varint protobuf scanner with sub-millisecond execution and zero external dependencies.
+  - **Live Streaming Reasoning Card (`src/host/mapper.ts` & `src/host/adapter.ts`)**: Injects resolved thoughts into native DSH reasoning blocks (`reasoning: true`), presenting the structured template `[agy thinking turn · {N} thinking tokens]\n\n{thoughtBody}` for model thinking turns. Supports both eager leading reasoning blocks and deferred trailing blocks without breaking tool spans or text fragments.
+  - **Client-Side Auto-Expansion (`src/client/reasoning.ts`)**: Auto-expands reasoning blocks when thoughts prose is present, while strictly respecting manual user collapse actions via DOM attribute tracking.
+  - **Run Traceability (`src/host/recording.ts`)**: Persists extracted thought text in `AgyRunRecording` for full lifecycle traceability and replay.
+
+### 中文 (Chinese)
+
+- **特性：从 agy 数据库提取并流式展示完整思维链（Reasoning/Thinking）。**
+  - **Protobuf Field 20.3 确定性解码（`src/host/agy-db.ts`）**：针对 agy 会话 SQLite 库（`steps` 表，step_type `14`/`15` agent_response），通过原生 Varint Protobuf 扫描器高性能提取模型完整思考正文（Field 20 -> Sub-field 3），亚毫秒级解析且无额外依赖。
+  - **原生 Reasoning 卡片流式呈现（`src/host/mapper.ts` 与 `src/host/adapter.ts`）**：将提取到的思考内容流式推送至 DSH 原生推理卡片（`reasoning: true`），格式化呈现 `[agy thinking turn · *** thinking tokens]\n\n{思维链正文}`；支持前置流式输出与延迟解析补发，与工具步骤及正文片段无缝衔接。
+  - **客户端智能展开（`src/client/reasoning.ts`）**：检测到思维链正文时自动展开 Reasoning 卡片，并通过 DOM 属性标记保证用户手动折叠行为不被覆盖。
+  - **会话持久化与回放（`src/host/recording.ts`）**：在 `AgyRunRecording` 中记录思维链内容，保障全生命周期可追溯与回放。
+
 ## 0.4.29 (2026-09-15)
 
 ### English

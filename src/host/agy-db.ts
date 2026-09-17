@@ -35,8 +35,20 @@ interface AgyDbCache {
   conversationId: string
   /** stepIndex → parsed tool info (name + args) */
   steps: Map<number, CachedStep>
+  /** stepIndex → extracted thought text */
+  thoughts: Map<number, string>
+  /** Step indices that were present in the database when loaded */
+  checkedSteps: Set<number>
   loaded: boolean
 }
+
+interface AgyDbData {
+  steps: Map<number, CachedStep>
+  thoughts: Map<number, string>
+  seenSteps: Set<number>
+}
+
+const TOOL_STEP_TYPES = new Set([5, 7, 8, 9, 17, 21, 33, 101, 132, 138, 139])
 
 const MAX_CACHE_AGE_MS = 300_000 // 5 minutes
 let cache: AgyDbCache | null = null
@@ -49,21 +61,110 @@ export function isSafeConversationId(id: string): boolean {
   return SAFE_CONVERSATION_ID.test(id)
 }
 
+function readVarint(b: Buffer, offset: number): { val: number; next: number } | null {
+  let val = 0
+  let shift = 0
+  let pos = offset
+  while (pos < b.length) {
+    const byte = b[pos++]!
+    val |= (byte & 0x7f) << shift
+    shift += 7
+    if ((byte & 0x80) === 0) return { val, next: pos }
+    if (shift > 35) return null
+  }
+  return null
+}
+
+/**
+ * Extract model thought text from a protobuf step_payload.
+ *
+ * In agy SQLite databases (steps table, step_type = 15 agent_response),
+ * the thought text is stored inside Protobuf field 20 (response body) ->
+ * sub-field 3 (length-delimited UTF-8 string).
+ */
+export function extractStepThoughts(payload: Buffer): string | null {
+  let pos = 0
+  while (pos < payload.length) {
+    const res = readVarint(payload, pos)
+    if (res === null) break
+    pos = res.next
+    const tag = res.val
+    const wireType = tag & 0x7
+    const fieldNum = tag >>> 3
+    if (wireType === 2) {
+      const lenRes = readVarint(payload, pos)
+      if (lenRes === null) break
+      pos = lenRes.next
+      const len = lenRes.val
+      if (pos + len > payload.length) break
+      const slice = payload.subarray(pos, pos + len)
+      pos += len
+      if (fieldNum === 20) {
+        let p20 = 0
+        while (p20 < slice.length) {
+          const t20Res = readVarint(slice, p20)
+          if (t20Res === null) break
+          p20 = t20Res.next
+          const t20 = t20Res.val
+          const w20 = t20 & 0x7
+          const f20 = t20 >>> 3
+          if (w20 === 2) {
+            const l20Res = readVarint(slice, p20)
+            if (l20Res === null) break
+            p20 = l20Res.next
+            const l20 = l20Res.val
+            if (p20 + l20 > slice.length) break
+            const s20 = slice.subarray(p20, p20 + l20)
+            p20 += l20
+            if (f20 === 3) {
+              const str = s20.toString('utf-8')
+              if (str.length > 0) return str
+            }
+          } else if (w20 === 0) {
+            const v20Res = readVarint(slice, p20)
+            if (v20Res === null) break
+            p20 = v20Res.next
+          } else if (w20 === 1) {
+            p20 += 8
+          } else if (w20 === 5) {
+            p20 += 4
+          } else {
+            break
+          }
+        }
+      }
+    } else if (wireType === 0) {
+      const vRes = readVarint(payload, pos)
+      if (vRes === null) break
+      pos = vRes.next
+    } else if (wireType === 1) {
+      pos += 8
+    } else if (wireType === 5) {
+      pos += 4
+    } else {
+      break
+    }
+  }
+  return null
+}
+
 /**
  * Copy the agy SQLite DB to a temp path (avoiding WAL lock issues), then
- * query tool step payloads via sqlite3 CLI. Returns a Map of stepIndex →
- * {name, args} for every tool step found.
+ * query tool and thought step payloads via sqlite3 CLI.
  */
-async function loadToolSteps(conversationId: string): Promise<Map<number, CachedStep>> {
-  const result = new Map<number, CachedStep>()
-  if (!isSafeConversationId(conversationId)) return result
+async function loadAgyDbData(conversationId: string): Promise<AgyDbData> {
+  const steps = new Map<number, CachedStep>()
+  const thoughts = new Map<number, string>()
+  const seenSteps = new Set<number>()
+  if (!isSafeConversationId(conversationId)) return { steps, thoughts, seenSteps }
   const dbPath = join(AGY_DB_DIR, `${conversationId}.db`)
+
 
   try {
     const st = await stat(dbPath)
-    if (st.size === 0) return result
+    if (st.size === 0) return { steps, thoughts, seenSteps }
   } catch {
-    return result // DB doesn't exist
+    return { steps, thoughts, seenSteps } // DB doesn't exist
   }
 
   // Copy to temp to avoid WAL/shared-lock issues. Also copy -wal and -shm so
@@ -74,27 +175,39 @@ async function loadToolSteps(conversationId: string): Promise<Map<number, Cached
     try { await copyFile(dbPath + '-wal', tmpDb + '-wal') } catch { /* ignore */ }
     try { await copyFile(dbPath + '-shm', tmpDb + '-shm') } catch { /* ignore */ }
 
-    // Query all tool-type steps (step_type in {5,7,8,9,17,21,33,101,132})
-    // that have a non-empty step_payload containing a JSON string.
-    const sql = `SELECT idx, hex(step_payload) FROM steps WHERE step_type IN (5,7,8,9,17,21,33,101,132) AND length(step_payload) > 20`
+    // Query tool-type steps AND text/thinking steps with payload > 20 bytes
+    const sql = `SELECT idx, step_type, hex(step_payload) FROM steps WHERE (step_type IN (5,7,8,9,14,15,17,21,33,101,132,138,139)) AND length(step_payload) > 20`
     const { stdout } = await execFileAsync('sqlite3', [tmpDb, sql], {
       timeout: 5_000,
       encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
+      maxBuffer: 25 * 1024 * 1024,
     })
 
     for (const line of stdout.split('\n')) {
-      const pipeIdx = line.indexOf('|')
-      if (pipeIdx < 0) continue
-      const idx = parseInt(line.slice(0, pipeIdx), 10)
+      const firstPipe = line.indexOf('|')
+      if (firstPipe < 0) continue
+      const secondPipe = line.indexOf('|', firstPipe + 1)
+      if (secondPipe < 0) continue
+
+      const idx = parseInt(line.slice(0, firstPipe), 10)
+      const stepType = parseInt(line.slice(firstPipe + 1, secondPipe), 10)
       if (!Number.isFinite(idx)) continue
-      const hexPayload = line.slice(pipeIdx + 1).trim()
+      seenSteps.add(idx)
+      const hexPayload = line.slice(secondPipe + 1).trim()
       if (hexPayload === '' || hexPayload === 'NULL') continue
 
       const payload = Buffer.from(hexPayload, 'hex')
-      const info = extractToolInfo(payload)
-      if (info !== null) {
-        result.set(idx, info)
+      if (TOOL_STEP_TYPES.has(stepType)) {
+        const info = extractToolInfo(payload)
+        if (info !== null) {
+          steps.set(idx, info)
+        }
+      }
+      if (stepType === 14 || stepType === 15) {
+        const th = extractStepThoughts(payload)
+        if (th !== null && th.trim() !== '') {
+          thoughts.set(idx, th)
+        }
       }
     }
   } catch {
@@ -105,7 +218,7 @@ async function loadToolSteps(conversationId: string): Promise<Map<number, Cached
     try { await unlink(tmpDb + '-shm') } catch { /* ignore */ }
   }
 
-  return result
+  return { steps, thoughts, seenSteps }
 }
 
 /**
@@ -246,14 +359,53 @@ export async function readFullToolArgs(
   if (cache?.conversationId === conversationId && cache.loaded && (now - cacheTime) < MAX_CACHE_AGE_MS) {
     const cached = cache.steps.get(stepIndex)
     if (cached !== undefined) return cached
+    if (cache.checkedSteps.has(stepIndex)) return null
   }
 
-  // Load (or reload) the full tool step map
-  const steps = await loadToolSteps(conversationId)
-  cache = { conversationId, steps, loaded: true }
+  // Load (or reload) the full tool step and thought map
+  const data = await loadAgyDbData(conversationId)
+  cache = {
+    conversationId,
+    steps: data.steps,
+    thoughts: data.thoughts,
+    checkedSteps: data.seenSteps,
+    loaded: true,
+  }
   cacheTime = now
 
-  return steps.get(stepIndex) ?? null
+  return data.steps.get(stepIndex) ?? null
+}
+
+/**
+ * Read the full thought/reasoning text for a given step index from the agy
+ * conversation database. Returns null when the DB is unavailable or the
+ * step does not contain thought text.
+ */
+export async function readStepThoughts(
+  conversationId: string,
+  stepIndex: number,
+): Promise<string | null> {
+  if (!isSafeConversationId(conversationId)) return null
+
+  const now = Date.now()
+  if (cache?.conversationId === conversationId && cache.loaded && (now - cacheTime) < MAX_CACHE_AGE_MS) {
+    const cached = cache.thoughts.get(stepIndex)
+    if (cached !== undefined) return cached
+    if (cache.checkedSteps.has(stepIndex)) return null
+  }
+
+  // Load (or reload) the full tool step and thought map
+  const data = await loadAgyDbData(conversationId)
+  cache = {
+    conversationId,
+    steps: data.steps,
+    thoughts: data.thoughts,
+    checkedSteps: data.seenSteps,
+    loaded: true,
+  }
+  cacheTime = now
+
+  return data.thoughts.get(stepIndex) ?? null
 }
 
 /** Clear the DB cache (e.g. when a run settles). */

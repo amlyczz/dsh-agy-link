@@ -5,6 +5,8 @@ import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount, ModelQuotaInfo }
 import { BRAND_COLORS, BRAND_PATHS, UI_PATHS } from './brand-icons.ts';
 import { installAgyToolView } from './toolview.ts';
 import { en, es, NS, ptBR, zh, type AgyLocaleKey } from './locales.ts';
+import { installAutoExpandReasoning } from './reasoning.ts';
+
 
 type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
@@ -1643,4 +1645,7 @@ export function apply(ctx: ClientContext): void {
 	// `tool.call.toolview` for `agy_tool` makes every mirrored agy step render
 	// as a terminal / diff / read / search card instead of a generic text row.
 	installAgyToolView(ctx);
+
+	// Auto-expand reasoning blocks containing full model thought prose
+	installAutoExpandReasoning();
 }

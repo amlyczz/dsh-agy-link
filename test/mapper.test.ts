@@ -336,6 +336,99 @@ test('DONE tail with usage but no text still annotates after streamed text', () 
   assert.equal(text, 'Answer.')
 })
 
+test('thinking turn with resolvedThoughts emits real thought text into reasoning block', () => {
+  const thoughtsMap = new Map<number, string>([
+    [1, 'Plan: check file status first, then decide whether to edit.'],
+  ])
+  const m = new EventMapper({
+    runId: 'r-thoughts',
+    cutOnTool: true,
+    resolvedThoughts: thoughtsMap,
+  })
+  const chunks = mapAll(m, [
+    { kind: 'init', conversationId: 'c1' },
+    // absIndex = 1
+    { kind: 'step', stepKey: '2', stepKind: 'text', text: '', usage: { thinking_tokens: 42 } },
+    // absIndex = 2
+    { kind: 'step', stepKey: '3', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'run_command', args: { command: 'ls' }, output: 'ok' } },
+  ])
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning, '[agy thinking turn · 42 thinking tokens] Plan: check file status first, then decide whether to edit.\n')
+  // Block types order: reasoning start/delta/end, then tool-call
+  const blockStarts = chunks.filter((c) => c.type === 'block-start').map((c) => (c as { blockType: string }).blockType)
+  assert.deepEqual(blockStarts, ['reasoning', 'tool-call'])
+})
+
+test('streamed answer with deferred resolvedThoughts emits real thought text in trailing reasoning block', () => {
+  const thoughtsMap = new Map<number, string>([
+    [1, 'Double-checked 1+1=2, calculation is sound.'],
+  ])
+  const m = new EventMapper({
+    runId: 'r-tail-thoughts',
+    cutOnTool: true,
+    resolvedThoughts: thoughtsMap,
+  })
+  const chunks = mapAll(m, [
+    { kind: 'step', stepKey: '5', stepKind: 'text', text: 'Result is 2.', fragment: true },
+    // absIndex = 1: DONE tail with usage
+    { kind: 'step', stepKey: '5', stepKind: 'text', text: '', usage: { thinking_tokens: 15 } },
+    { kind: 'result', conversationId: 'c9', ok: true, response: 'Result is 2.', usage: {} },
+  ])
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning, '[agy thinking turn · 15 thinking tokens] Double-checked 1+1=2, calculation is sound.\n')
+  const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(text, 'Result is 2.')
+})
+
+test('streamed answer with eager resolvedThoughts emits leading reasoning block before first text fragment', () => {
+  const thoughtsMap = new Map<number, string>([
+    [0, 'Analyzing problem constraints and deciding algorithm.'],
+  ])
+  const m = new EventMapper({
+    runId: 'r-lead-thoughts',
+    cutOnTool: true,
+    resolvedThoughts: thoughtsMap,
+  })
+  const chunks = mapAll(m, [
+    // absIndex = 0: first ACTIVE text fragment
+    { kind: 'step', stepKey: '1', stepKind: 'text', text: 'Hello ', fragment: true },
+    // absIndex = 1: second text fragment
+    { kind: 'step', stepKey: '1', stepKind: 'text', text: 'world!', fragment: true },
+    // absIndex = 2: DONE tail
+    { kind: 'step', stepKey: '1', stepKind: 'text', text: '', usage: { thinking_tokens: 45 } },
+    { kind: 'result', conversationId: 'c11', ok: true, response: 'Hello world!', usage: {} },
+  ])
+  // Block types order MUST be reasoning then text
+  const blockStarts = chunks.filter((c) => c.type === 'block-start').map((c) => (c as { blockType: string }).blockType)
+  assert.deepEqual(blockStarts, ['reasoning', 'text'])
+
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning, '[agy thinking turn] Analyzing problem constraints and deciding algorithm.\n')
+
+  const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(text, 'Hello world!')
+})
+
+test('stepKind === thinking uses resolvedThoughts when available', () => {
+  const thoughtsMap = new Map<number, string>([
+    [0, 'In-depth multi-turn planning logic here.'],
+  ])
+  const m = new EventMapper({
+    runId: 'r-thinking-step',
+    cutOnTool: false,
+    resolvedThoughts: thoughtsMap,
+  })
+  const chunks = mapAll(m, [
+    { kind: 'step', stepKey: '1', stepKind: 'thinking', text: 'Thinking...' },
+    { kind: 'step', stepKey: '2', stepKind: 'text', text: 'Final answer.' },
+    { kind: 'result', conversationId: 'c10', ok: true, response: 'Final answer.', usage: {} },
+  ])
+  const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning, 'In-depth multi-turn planning logic here.')
+  const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(text, 'Final answer.')
+})
+
 test('emitFailure closes blocks and finishes with error', () => {
   const m = newSpan()
   const chunks = mapAll(m, [

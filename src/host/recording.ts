@@ -46,6 +46,8 @@ export class RunRecording {
   private [waiters] = new Set<() => void>()
   /** DB-resolved full tool args keyed by event index (set during span driving). */
   private fullArgs: Map<number, Record<string, unknown>> | null = null
+  /** DB-resolved thoughts keyed by event index (set during span driving). */
+  private thoughts: Map<number, string> | null = null
 
   /**
    * Set by the adapter right after spawn. A mid-turn user steer makes DSH
@@ -206,6 +208,17 @@ export class RunRecording {
   setFullArgs(eventIndex: number, args: Record<string, unknown>): void {
     this.fullArgs ??= new Map()
     this.fullArgs.set(eventIndex, args)
+  }
+
+  /** Store DB-resolved thoughts for a step (set during span driving). */
+  setThoughts(eventIndex: number, text: string): void {
+    this.thoughts ??= new Map()
+    this.thoughts.set(eventIndex, text)
+  }
+
+  /** Retrieve DB-resolved thoughts for a step if previously resolved. */
+  getThoughts(eventIndex: number): string | undefined {
+    return this.thoughts?.get(eventIndex)
   }
 }
 
