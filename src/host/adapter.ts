@@ -562,6 +562,11 @@ export class AgyAdapter extends LlmAdapter {
     this.deps.onParser?.(parser)
     let streamCid: string | null = null
     const activeModelForArgs = activeModel === '' ? cfg.defaultModel : activeModel
+    // agy does not treat process cwd as its Active Workspace — it requires
+    // --add-dir. Always attach the resolved workspace root (issue #26).
+    const effectiveAddDirs = workspaceRoot !== ''
+      ? (stagedDirs.includes(workspaceRoot) ? stagedDirs : [workspaceRoot, ...stagedDirs])
+      : stagedDirs
     const argsBase = this.buildArgs({
       prompt,
       model: activeModelForArgs,
@@ -571,7 +576,7 @@ export class AgyAdapter extends LlmAdapter {
       timeoutMs: cfg.timeoutMs,
       printTimeoutMinutes: Math.max(240, Math.ceil(cfg.timeoutMs / 60_000)),
       extraArgs: cfg.extraArgs,
-      addDirs: stagedDirs,
+      addDirs: effectiveAddDirs,
     })
     // Decide transport: keep `-p <prompt>` for normal turns; switch to stdin
     // stream-json when the argv would approach the CreateProcess limit.
@@ -586,7 +591,7 @@ export class AgyAdapter extends LlmAdapter {
           timeoutMs: cfg.timeoutMs,
           printTimeoutMinutes: Math.max(240, Math.ceil(cfg.timeoutMs / 60_000)),
           extraArgs: cfg.extraArgs,
-          addDirs: stagedDirs,
+          addDirs: effectiveAddDirs,
           promptViaStdin: true,
         })
       : argsBase

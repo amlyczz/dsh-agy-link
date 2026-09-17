@@ -580,6 +580,11 @@ test('adapter spawns agy in the DSH session cwd when workspaceRoot is not config
   process.env.FAKE_AGY_CWD_FILE = cwdFile
   await collect(adapter.stream(opts([msg('user', 'hi')], { sessionId: 'sess-cwd' as never })))
   assert.equal(readFileSync(cwdFile, 'utf8'), realpathSync(sessionDir))
+  // agy ignores cwd for Active Workspace — the root must also ride --add-dir (issue #26)
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  assert.ok(argv.includes('--add-dir'), argv.join(' '))
+  const addIdx = argv.indexOf('--add-dir')
+  assert.equal(argv[addIdx + 1], sessionDir)
   rmSync(sessionDir, { recursive: true, force: true })
 })
 
@@ -596,6 +601,10 @@ test('explicit workspaceRoot wins over the DSH session cwd', async () => {
   process.env.FAKE_AGY_CWD_FILE = cwdFile
   await collect(adapter.stream(opts([msg('user', 'hi')], { sessionId: 'sess-cwd-explicit' as never })))
   assert.equal(readFileSync(cwdFile, 'utf8'), realpathSync(explicitDir))
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const addIdx = argv.indexOf('--add-dir')
+  assert.ok(addIdx >= 0, 'explicit workspaceRoot also rides --add-dir')
+  assert.equal(argv[addIdx + 1], explicitDir)
   rmSync(explicitDir, { recursive: true, force: true })
   rmSync(sessionDir, { recursive: true, force: true })
 })

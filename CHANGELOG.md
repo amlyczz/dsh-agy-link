@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.32 (2026-09-17)
+
+### English
+
+- **Fix: agy Active Workspace falls back to C-drive scratch (issue #26).**
+  - agy ignores process `cwd` for workspace activation; the resolved DSH/session workspace root is now always passed via `--add-dir` (in addition to media staging dirs).
+- **Fix: `/agy <subcommand>` treated as plain chat (issue #27).**
+  - Registered `input.hint` on the `/agy` command so DSH's composer intercepts `/agy workspace`, `/agy status`, etc. instead of silently falling back to a prompt.
+- **Feature (via PR #25): stream full model thoughts** from agy SQLite (protobuf field 20.3) as native reasoning blocks.
+
+### 中文 (Chinese)
+
+- **修复：agy 无 Active Workspace、落到 C 盘 scratch（#26）** — 工作区根目录现在会通过 `--add-dir` 传入。
+- **修复：`/agy` 子命令被当普通对话（#27）** — 补上 `input.hint` 声明。
+- **特性（PR #25）：** 从 agy SQLite 提取并流式展示完整思维链。
+
 ## 0.4.31 (2026-09-17)
 
 ### English
