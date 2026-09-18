@@ -274,6 +274,61 @@ export function readMacKeychainToken(): StoredToken | null {
   }
 }
 
+/**
+ * Read the primary Antigravity OAuth token from Windows Credential Manager.
+ * agy on Windows stores it via go-keyring under target `gemini:antigravity`
+ * (user `antigravity`) as a UTF-8 JSON blob with the same shape as macOS
+ * Keychain / Linux Secret Service. Without this reader the quota panel stays
+ * empty on Windows: the on-disk `antigravity-oauth-token` file is often
+ * absent while agy itself still authenticates via CredRead (issue #30).
+ */
+export function readWindowsCredentialToken(): StoredToken | null {
+  if (process.platform !== 'win32') return null
+  try {
+    const script = [
+      "$sig = @'",
+      'using System;',
+      'using System.Runtime.InteropServices;',
+      'public class AgyCred {',
+      '  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]',
+      '  public static extern bool CredRead(string target, int type, int flags, out IntPtr credential);',
+      '  [DllImport("advapi32.dll", SetLastError=true)]',
+      '  public static extern void CredFree(IntPtr cred);',
+      '  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]',
+      '  public struct CREDENTIAL {',
+      '    public int Flags; public int Type; public IntPtr TargetName;',
+      '    public IntPtr Comment; public long LastWritten; public int CredentialBlobSize;',
+      '    public IntPtr CredentialBlob; public int Persist; public int AttributeCount;',
+      '    public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName;',
+      '  }',
+      '  public static byte[] Read(string target) {',
+      '    IntPtr p;',
+      '    if (!CredRead(target, 1, 0, out p)) return null;',
+      '    CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));',
+      '    byte[] b = new byte[c.CredentialBlobSize];',
+      '    Marshal.Copy(c.CredentialBlob, b, 0, c.CredentialBlobSize);',
+      '    CredFree(p);',
+      '    return b;',
+      '  }',
+      '}',
+      "'@",
+      'Add-Type -TypeDefinition $sig -ErrorAction Stop',
+      "$b = [AgyCred]::Read('gemini:antigravity')",
+      'if ($b -eq $null) { exit 1 }',
+      '[Console]::Out.Write([System.Text.Encoding]::UTF8.GetString($b))',
+    ].join('\n')
+    const raw = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
+    ).trim()
+    if (!raw) return null
+    return parseGoKeyringPayload(raw)
+  } catch {
+    return null
+  }
+}
+
 export class QuotaService {
   private preferredEndpointIndex = 0
 
@@ -293,6 +348,7 @@ export class QuotaService {
   protected readSystemKeychainToken(): StoredToken | null {
     if (process.platform === 'darwin') return readMacKeychainToken()
     if (process.platform === 'linux') return readLinuxSecretToken()
+    if (process.platform === 'win32') return readWindowsCredentialToken()
     return null
   }
 

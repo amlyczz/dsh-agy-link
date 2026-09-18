@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.36 (2026-09-18)
+
+### English
+
+- **Fix (issue #30): Windows quota panel empty.** `readSystemKeychainToken()` had no win32 branch; primary credentials live in Windows Credential Manager (`gemini:antigravity`), not a disk token file. Added a PowerShell `CredRead` reader (same zero-dep pattern as macOS `security` / Linux `secret-tool`).
+- **Fix: thinking blank after a reply finishes.** The client no longer rewrites React-managed `thinkBody` DOM (that wiped thought text on post-turn re-render). Styling is CSS-only; auto-expand uses the host disclosure control when prose is present.
+
+### 中文 (Chinese)
+
+- **修复 #30：** Windows 额度读取 — 从 Credential Manager 读 `gemini:antigravity`。
+- **修复：思考结束后变空** — 不再改写宿主 React 的 thinkBody；仅 CSS + 非破坏性展开。
+
 ## 0.4.35 (2026-09-18)
 
 ### English

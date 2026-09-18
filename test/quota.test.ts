@@ -419,17 +419,19 @@ test('UI_PATHS contains all expected clean SVG paths', async () => {
 })
 
 
-test('readSystemKeychainToken dispatches per platform (GH #8 Linux Secret Service)', async () => {
-  const { readLinuxSecretToken, readMacKeychainToken } = await import('../src/host/quota.ts')
+test('readSystemKeychainToken dispatches per platform (GH #8 / GH #30)', async () => {
+  const { readLinuxSecretToken, readMacKeychainToken, readWindowsCredentialToken } = await import('../src/host/quota.ts')
   // Both readers are hard platform gates - safe to call anywhere.
   if (process.platform !== 'darwin') assert.equal(readMacKeychainToken(), null, 'mac reader no-ops off darwin')
   if (process.platform !== 'linux') assert.equal(readLinuxSecretToken(), null, 'linux reader no-ops off linux')
+  if (process.platform !== 'win32') assert.equal(readWindowsCredentialToken(), null, 'windows reader no-ops off win32')
   // A subclass mirroring the production dispatch resolves without throwing.
   // (Result is environment-dependent: a real keyring entry may exist.)
   class DispatchProbe extends QuotaService {
     override readSystemKeychainToken() {
       if (process.platform === 'linux') return readLinuxSecretToken()
       if (process.platform === 'darwin') return readMacKeychainToken()
+      if (process.platform === 'win32') return readWindowsCredentialToken()
       return null
     }
   }
