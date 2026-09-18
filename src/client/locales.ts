@@ -4,6 +4,8 @@ export const NS = 'agy-link'
 /** Simplified Chinese is preserved as the original UI language and key source. */
 export const zh = {
   'section.label': 'Antigravity',
+  'code.title': '代码', 'code.inspect': '检查',
+  'code.copy': '复制', 'code.copied': '已复制',
   'console.title': 'Antigravity 管理控制台',
   'status.ready': '就绪', 'status.needsAuth': '待认证', 'status.loading': '正在加载 Antigravity 状态...',
   'status.authRequired': '需重新登录', 'status.primary': '主用', 'status.proxy': '代理',
@@ -46,6 +48,8 @@ export type AgyDictionary = Record<AgyLocaleKey, string>
 
 export const en: AgyDictionary = {
   'section.label': 'Antigravity', 'console.title': 'Antigravity Management Console',
+  'code.title': 'Code', 'code.inspect': 'Inspect',
+  'code.copy': 'Copy', 'code.copied': 'Copied',
   'status.ready': 'Ready', 'status.needsAuth': 'Authentication required', 'status.loading': 'Loading Antigravity status...',
   'status.authRequired': 'Sign in again required', 'status.primary': 'Primary', 'status.proxy': 'Proxy',
   'account.add': 'Add Google account', 'account.aliasDefault': 'Backup Google account {number}', 'account.defaultAlias': 'Primary account (system sign-in)',
@@ -84,6 +88,8 @@ export const en: AgyDictionary = {
 
 export const ptBR: AgyDictionary = {
   'section.label': 'Antigravity', 'console.title': 'Console de gerenciamento do Antigravity',
+  'code.title': 'Código', 'code.inspect': 'Inspecionar',
+  'code.copy': 'Copiar', 'code.copied': 'Copiado',
   'status.ready': 'Pronto', 'status.needsAuth': 'Autenticação necessária', 'status.loading': 'Carregando o status do Antigravity...',
   'status.authRequired': 'É necessário entrar novamente', 'status.primary': 'Principal', 'status.proxy': 'Proxy',
   'account.add': 'Adicionar conta Google', 'account.aliasDefault': 'Conta Google reserva {number}', 'account.defaultAlias': 'Conta principal (login do sistema)',
@@ -122,6 +128,8 @@ export const ptBR: AgyDictionary = {
 
 export const es: AgyDictionary = {
   'section.label': 'Antigravity', 'console.title': 'Consola de administración de Antigravity',
+  'code.title': 'Código', 'code.inspect': 'Inspeccionar',
+  'code.copy': 'Copiar', 'code.copied': 'Copiado',
   'status.ready': 'Listo', 'status.needsAuth': 'Se requiere autenticación', 'status.loading': 'Cargando el estado de Antigravity...',
   'status.authRequired': 'Debe iniciar sesión de nuevo', 'status.primary': 'Principal', 'status.proxy': 'Proxy',
   'account.add': 'Añadir cuenta de Google', 'account.aliasDefault': 'Cuenta de Google de respaldo {number}', 'account.defaultAlias': 'Cuenta principal (inicio de sesión del sistema)',

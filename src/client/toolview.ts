@@ -8,6 +8,8 @@
 // - Expanded card: rounded 12px card with header (prompt/cwd/path + Copy button)
 //   and scrollable content (max-height with custom scrollbars) for long outputs.
 
+import { NS } from './locales.ts';
+
 type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
 	useState: <S>(initial: S) => [S, (next: S | ((prev: S) => S)) => void];
@@ -244,6 +246,8 @@ export interface AgyToolViewProps {
 	openFile?: (path: string, opts?: unknown) => void;
 	inspect?: () => void;
 	loadImage?: unknown;
+	/** Standard locale seat, supplied when the registration declares a namespace. */
+	t?: (key: string, params?: Record<string, unknown>) => string;
 }
 
 // ---- argument parsing -----------------------------------------------------
@@ -504,8 +508,10 @@ function diffStat(model: MirrorCardModel): string | null {
 
 // ---- Copy button component ------------------------------------------------
 
-function CopyButton({ text }: { text: string }): unknown {
+function CopyButton({ text, labels }: { text: string; labels?: readonly [string, string] }): unknown {
 	const [copied, setCopied] = react().useState(false);
+	const copyLabel = labels?.[0] ?? '复制';
+	const copiedLabel = labels?.[1] ?? '已复制';
 	const onCopy = (e: { stopPropagation: () => void }) => {
 		e.stopPropagation();
 		if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -519,10 +525,10 @@ function CopyButton({ text }: { text: string }): unknown {
 		type: 'button',
 		className: 'agy-tv-copy-btn',
 		onClick: onCopy,
-		title: copied ? '已复制' : '复制内容',
+		title: copied ? copiedLabel : copyLabel,
 	},
 		copied ? IconCheckOutline14(11) : IconCopyOutline16(11),
-		hx('span', null, copied ? '已复制' : '复制')
+		hx('span', null, copied ? copiedLabel : copyLabel)
 	);
 }
 
@@ -778,30 +784,113 @@ function parseAgyMirrorFromCode(argsRaw: string): { run: string; step: number; t
 	return null;
 }
 
+/** Project a run_code program into the fields the code card renders. */
+export function runCodeModel(block?: ToolBlock): { code: string; title: string } {
+	const raw = block !== undefined ? parsedArgsRaw(block) : '{}';
+	let code = raw;
+	let description: string | undefined;
+	try {
+		const parsed = JSON.parse(raw) as { code?: unknown; description?: unknown };
+		if (typeof parsed?.code === 'string') code = parsed.code;
+		if (typeof parsed?.description === 'string' && parsed.description !== '') description = parsed.description;
+	} catch { /* raw args are not JSON — show them verbatim */ }
+	const firstLine = code.split('\n').find((line) => line.trim() !== '');
+	const title = description
+		?? (firstLine !== undefined && firstLine.trim() !== '' ? firstLine.trim().slice(0, 120) : 'run_code');
+	return { code, title };
+}
+
+/**
+ * Ordinary run_code toolview.
+ *
+ * The keyed `tool.call.toolview` registration for `run_code` REPLACES the
+ * host's built-in code row rather than adding to it, so this branch owns the
+ * icon, title, summary and expandable body for every non-mirror program. It
+ * reuses the same styled vocabulary as the mirror card (`agy-tv-row` and
+ * friends) so an ordinary Code Mode call reads exactly like a native tool row.
+ */
+export function AgyCodeToolView(props?: AgyToolViewProps): unknown {
+	const [open, setOpen] = useToggle(false);
+	const h = hx;
+	const { block, inspect, t } = props ?? ({} as AgyToolViewProps);
+	const model = runCodeModel(block);
+	const settle = block !== undefined && isSettled(block);
+	const err = block !== undefined && isError(block);
+	const state: 'ok' | 'err' | 'run' = !settle ? 'run' : err ? 'err' : 'ok';
+	const translate = (key: string): string => (typeof t === 'function' ? t(key) : key);
+
+	const leading = open
+		? h('span', { className: 'agy-tv-chevron-open' }, IconChevronDownOutline14(14))
+		: h('span', { className: 'agy-tv-leading' },
+			h('span', { className: 'agy-tv-icon-idle' }, IconCodeOutline16(14)),
+			h('span', { className: 'agy-tv-chevron-hover' }, IconChevronDownOutline14(14)),
+		);
+
+	const header = h('div', {
+		className: 'agy-tv-row',
+		role: 'button',
+		tabIndex: 0,
+		'aria-expanded': open,
+		onClick: (e: { stopPropagation: () => void }) => {
+			e.stopPropagation();
+			setOpen();
+		},
+		onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				setOpen();
+			}
+		},
+		title: inspect !== undefined
+			? (open ? 'Click to collapse · right-click to inspect' : 'Click to expand · right-click to inspect')
+			: (open ? 'Click to collapse' : 'Click to expand'),
+		onContextMenu: inspect !== undefined ? (e: { preventDefault: () => void }) => { e.preventDefault(); inspect(); } : undefined,
+	},
+		leading,
+		h('span', { className: 'agy-tv-title' }, translate('code.title')),
+		h('span', { className: 'agy-tv-sep', 'aria-hidden': true }),
+		h('span', { className: cls('agy-tv-summary', err && 'agy-tv-summary-err'), title: model.title }, model.title),
+	);
+
+	const inspectNode = inspect !== undefined
+		? h('div', { key: 'ins', style: { padding: '4px 8px 6px' } },
+			h('button', { type: 'button', className: 'agy-tv-inspect-btn', onClick: inspect },
+				IconInspectOutline12(12), translate('code.inspect')))
+		: null;
+
+	const body = h('div', { className: 'agy-tv-card' },
+		h('div', { className: 'agy-tv-card-header' },
+			h('div', { className: 'agy-tv-card-header-left' },
+				IconCodeOutline16(13),
+				h('span', { className: 'agy-tv-card-path' }, model.title),
+			),
+			h(CopyButton, { text: model.code, labels: [translate('code.copy'), translate('code.copied')] }),
+		),
+		h('pre', { className: 'agy-tv-card-content' }, clip(model.code, 16_000)),
+		inspectNode,
+	);
+
+	return h('div', {
+		className: cls('agy-tv-root', open && 'agy-tv-open'),
+		'data-state': state,
+		'data-kind': 'code',
+	},
+		header,
+		...(open ? [h('div', { key: 'wrap', className: 'agy-tv-body-wrap' }, body)] : [])
+	);
+}
+
 /**
  * run_code toolview: when the program is an agy mirror wrapper, render the
- * native Antigravity card instead of a raw code row. Other run_code calls
- * fall through to the host renderer via a minimal wrapper that still shows
- * something useful.
+ * native Antigravity card instead of a raw code row; every other run_code
+ * program renders through {@link AgyCodeToolView}.
  */
 function AgyRunCodeToolView(props?: unknown): unknown {
-	const block = (props as { block?: ToolBlock } | undefined)?.block;
+	const typed = props as AgyToolViewProps | undefined;
+	const block = typed?.block;
 	const raw = block !== undefined ? parsedArgsRaw(block) : '{}';
 	const mirror = parseAgyMirrorFromCode(raw);
-	if (mirror === null) {
-		let code = '';
-		try {
-			const parsed = JSON.parse(raw) as { code?: unknown; description?: unknown };
-			code = typeof parsed?.code === 'string' ? parsed.code : raw;
-		} catch { code = raw; }
-		return hx('div', { className: cls('agy-tv-root') },
-			hx('div', { className: 'agy-tv-header' },
-				hx('span', { className: 'agy-tv-title' }, 'run_code'),
-				hx('span', { className: 'agy-tv-badge' }, 'code'),
-			),
-			hx('pre', { className: 'agy-tv-pre', style: { margin: 0, whiteSpace: 'pre-wrap', fontSize: '12px' } }, code.slice(0, 400)),
-		);
-	}
+	if (mirror === null) return AgyCodeToolView(typed);
 	const synthetic = {
 		...block,
 		call: {
@@ -828,9 +917,12 @@ export function installAgyToolView(ctx: {
 			{ name: 'tool.call.toolview', key: 'agy_tool', id: 'agy-tool-view', label: 'Antigravity tool' },
 			AgyMirrorToolView as (p: unknown) => unknown,
 		);
-		// Code Mode wraps the mirror in run_code — render our card for those too.
+		// Code Mode wraps the mirror in run_code. This keyed registration REPLACES
+		// the host's built-in code row (a keyed slot is a takeover, not an
+		// addition), so AgyRunCodeToolView also owns the presentation of ordinary
+		// non-mirror programs — hence the locale namespace for its title/copy labels.
 		const d2 = ctx.slots.register(
-			{ name: 'tool.call.toolview', key: 'run_code', id: 'agy-run-code-view', label: 'Antigravity (code mode)' },
+			{ name: 'tool.call.toolview', key: 'run_code', id: 'agy-run-code-view', label: 'Antigravity (code mode)', locale: NS },
 			AgyRunCodeToolView as (p: unknown) => unknown,
 		);
 		return () => { d2(); d1(); };
