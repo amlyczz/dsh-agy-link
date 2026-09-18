@@ -75,10 +75,11 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
   plugin.apply(ctx)
   assert.deepEqual([...catalog.keys()], ['zh', 'en', 'pt-BR', 'es'])
   assert.equal(dictionaries.size, 4)
-  // settings.section + conversation.session.header.actions + tool.call.toolview
-  assert.equal(registeredSlots.length, 3)
+  // settings.section + conversation.session.header.actions + agy_tool + run_code toolviews
+  assert.equal(registeredSlots.length, 4)
   assert.equal(registeredSlots[0]!.options.locale, 'agy-link')
   assert.equal(registeredSlots[2]!.options.id, 'agy-tool-view')
+  assert.equal(registeredSlots[3]!.options.id, 'agy-run-code-view')
   const t = locale.bind('agy-link')
   locale.setLocale('pt-BR'); assert.equal(t('account.add'), 'Adicionar conta Google')
   locale.setLocale('es'); assert.equal(t('account.add'), 'Añadir cuenta de Google')

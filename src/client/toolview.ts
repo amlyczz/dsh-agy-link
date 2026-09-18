@@ -763,18 +763,78 @@ export function AgyMirrorToolView(props: AgyToolViewProps): unknown {
 
 // ---- Register into DSH slots ----------------------------------------------
 
+/** Extract the agy mirror cursor (and tool name) from a run_code program. */
+function parseAgyMirrorFromCode(argsRaw: string): { run: string; step: number; tool?: string } | null {
+	try {
+		const parsed = JSON.parse(argsRaw) as { code?: unknown };
+		const code = typeof parsed?.code === 'string' ? parsed.code : '';
+		const m = /tools\['agy_tool'\]\((\{.*?"step":\d+\})\)/.exec(code);
+		if (!m) return null;
+		const v = JSON.parse(m[1] as string) as { run?: unknown; step?: unknown };
+		if (typeof v.run !== 'string' || typeof v.step !== 'number') return null;
+		const tm = /replay recorded agy tool step \d+ \(([^)]+)\)/.exec(code);
+		return { run: v.run, step: v.step, tool: tm?.[1] };
+	} catch { /* not a mirror program */ }
+	return null;
+}
+
+/**
+ * run_code toolview: when the program is an agy mirror wrapper, render the
+ * native Antigravity card instead of a raw code row. Other run_code calls
+ * fall through to the host renderer via a minimal wrapper that still shows
+ * something useful.
+ */
+function AgyRunCodeToolView(props?: unknown): unknown {
+	const block = (props as { block?: ToolBlock } | undefined)?.block;
+	const raw = block !== undefined ? parsedArgsRaw(block) : '{}';
+	const mirror = parseAgyMirrorFromCode(raw);
+	if (mirror === null) {
+		let code = '';
+		try {
+			const parsed = JSON.parse(raw) as { code?: unknown; description?: unknown };
+			code = typeof parsed?.code === 'string' ? parsed.code : raw;
+		} catch { code = raw; }
+		return hx('div', { className: cls('agy-tv-root') },
+			hx('div', { className: 'agy-tv-header' },
+				hx('span', { className: 'agy-tv-title' }, 'run_code'),
+				hx('span', { className: 'agy-tv-badge' }, 'code'),
+			),
+			hx('pre', { className: 'agy-tv-pre', style: { margin: 0, whiteSpace: 'pre-wrap', fontSize: '12px' } }, code.slice(0, 400)),
+		);
+	}
+	const synthetic = {
+		...block,
+		call: {
+			...((block as { call?: { name?: string; argsRaw?: string } } | undefined)?.call ?? {}),
+			name: 'agy_tool',
+			argsRaw: JSON.stringify({
+				run: mirror.run,
+				step: mirror.step,
+				...(mirror.tool !== undefined ? { tool: mirror.tool } : {}),
+			}),
+		},
+	} as unknown as ToolBlock;
+	return AgyMirrorToolView({ block: synthetic } as never);
+}
+
 export function installAgyToolView(ctx: {
 	slots: {
 		inject(name: string, register: () => () => void): void;
 		register(opts: { name: string; key?: string; id: string; order?: number; label?: string | (() => string); locale?: string }, C: (p: unknown) => unknown): () => void;
 	};
 }): void {
-	ctx.slots.inject('tool.call.toolview', () =>
-		ctx.slots.register(
+	ctx.slots.inject('tool.call.toolview', () => {
+		const d1 = ctx.slots.register(
 			{ name: 'tool.call.toolview', key: 'agy_tool', id: 'agy-tool-view', label: 'Antigravity tool' },
 			AgyMirrorToolView as (p: unknown) => unknown,
-		),
-	);
+		);
+		// Code Mode wraps the mirror in run_code — render our card for those too.
+		const d2 = ctx.slots.register(
+			{ name: 'tool.call.toolview', key: 'run_code', id: 'agy-run-code-view', label: 'Antigravity (code mode)' },
+			AgyRunCodeToolView as (p: unknown) => unknown,
+		);
+		return () => { d2(); d1(); };
+	});
 }
 
 // ---- Official CSS Styles --------------------------------------------------

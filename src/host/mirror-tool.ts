@@ -77,8 +77,12 @@ export function buildMirrorRunCode(
   runId: string,
   eventIndex: number,
   toolName: string,
+  brief?: string,
 ): { code: string; description: string } {
   const invocation = JSON.stringify({ run: runId, step: eventIndex })
+  const label = brief !== undefined && brief !== ''
+    ? brief
+    : toolName
   return {
     code:
       '// dsh-agy-link mirror: replay recorded agy tool step ' +
@@ -89,8 +93,42 @@ export function buildMirrorRunCode(
       "return await tools['agy_tool'](" +
       invocation +
       ')',
-    description: 'replay agy tool step ' + eventIndex + ' · ' + toolName,
+    // Keep the wire tool name visible but surface a human preview first so
+    // Code Mode rows are not a wall of "replay agy tool step N".
+    description: brief !== undefined && brief !== '' ? brief + ' · ' + toolName : toolName,
   }
+}
+
+/** Short human preview for a recorded tool step (used in Code Mode titles). */
+export function toolStepBrief(toolName: string, args: unknown): string {
+  const a = (args !== null && typeof args === 'object' ? args : {}) as Record<string, unknown>
+  const pickStr = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = a[k]
+      if (typeof v === 'string' && v.trim() !== '') return v.trim()
+    }
+    return ''
+  }
+  if (toolName === 'run_command' || toolName === 'execute_command') {
+    const cmd = pickStr('Command', 'command', 'Cmd', 'cmd')
+    return cmd !== '' ? '$ ' + cmd.slice(0, 80) : 'run command'
+  }
+  if (toolName === 'view_file' || toolName === 'read_file') {
+    return 'read ' + (pickStr('Path', 'path', 'TargetFile', 'File') || 'file')
+  }
+  if (toolName === 'write_to_file' || toolName === 'create_file') {
+    return 'write ' + (pickStr('Path', 'path', 'TargetFile', 'File') || 'file')
+  }
+  if (toolName === 'replace_file_content' || toolName === 'edit_file') {
+    return 'edit ' + (pickStr('Path', 'path', 'TargetFile', 'File') || 'file')
+  }
+  if (toolName === 'grep_search' || toolName === 'search') {
+    return 'search ' + (pickStr('Query', 'query', 'SearchPattern') || '')
+  }
+  if (toolName === 'list_dir' || toolName === 'list_directory') {
+    return 'ls ' + (pickStr('Path', 'path', 'DirectoryPath') || '.')
+  }
+  return toolName
 }
 
 /** Extract the (run, step) cursor embedded by buildMirrorRunCode. */

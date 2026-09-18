@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { RunRecording, RunRegistry } from '../src/host/recording.ts'
-import { defineAgyMirrorTool, presentMirrorCall, buildMirrorRunCode, parseMirrorInvocation } from '../src/host/mirror-tool.ts'
+import { defineAgyMirrorTool, presentMirrorCall, buildMirrorRunCode, parseMirrorInvocation, toolStepBrief } from '../src/host/mirror-tool.ts'
 
 function fakeSignal(): AbortSignal {
   return new AbortController().signal
@@ -73,10 +73,12 @@ test('cursor-only invocations: execute + presenters resolve detail from the reco
 
 test('run_code wrapper round-trip: build -> parse recovers the cursor', () => {
   const built = buildMirrorRunCode('7d246c00-c0d1-4e3c-a25b-848881b81042', 15, 'run_command')
-  assert.equal(built.description, 'replay agy tool step 15 · run_command')
+  assert.equal(built.description, 'run_command')
   assert.ok(built.code.includes("tools['agy_tool']({\"run\":\"7d246c00-c0d1-4e3c-a25b-848881b81042\",\"step\":15})"), built.code)
   assert.deepEqual(parseMirrorInvocation(built.code), { run: '7d246c00-c0d1-4e3c-a25b-848881b81042', step: 15 })
   assert.equal(parseMirrorInvocation('unrelated code'), null)
+  const pretty = buildMirrorRunCode('r', 1, 'run_command', toolStepBrief('run_command', { command: 'ls -la' }))
+  assert.equal(pretty.description, '$ ls -la · run_command')
 })
 
 test('cards read PascalCase agy arg keys (CommandLine, AbsolutePath, …)', () => {

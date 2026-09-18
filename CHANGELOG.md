@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.34 (2026-09-18)
+
+### English
+
+- **UI: cleaner tool cards in Code Mode.** When DSH registers `agy_tool`, the bridge now emits native tool-call blocks instead of `run_code` wrappers. Code Mode titles use a human preview (`$ ls · run_command`) instead of `replay agy tool step N`. A `run_code` toolview renders Antigravity cards when the program is still a mirror wrapper.
+- **UI: less thinking spam.** Banner-only `[agy thinking turn · N tokens]` chips (no prose) emit at most once per run; turns that extract thought prose still show full reasoning.
+
+### 中文 (Chinese)
+
+- **界面：** Code Mode 下工具卡片更干净；有 prose 的思考仍完整展示，无正文的 token 横幅每轮最多一条。
+
 ## 0.4.33 (2026-09-18)
 
 ### English

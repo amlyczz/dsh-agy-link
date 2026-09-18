@@ -303,7 +303,13 @@ export class AgyAdapter extends LlmAdapter {
     if (isAux && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
-    const isCodeMode = options.tools ? options.tools.some((t) => t.name === 'run_code') : false
+    // Prefer direct native agy_tool cards when the host registered the mirror
+    // tool. Code Mode (`run_code` only) still wraps, because that host rejects
+    // non-run_code tool-call blocks — but when agy_tool is callable we emit it
+    // so DSH's toolview can render terminal/diff cards instead of "replay agy
+    // tool step N · run_command" code rows.
+    const toolNames = new Set((options.tools ?? []).map((t) => t.name))
+    const isCodeMode = toolNames.has('run_code') && !toolNames.has('agy_tool')
     const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
     // cwd precedence: explicit config > the DSH session's own workspace >
     // the host process cwd. The last fallback can land agy in an UNRELATED

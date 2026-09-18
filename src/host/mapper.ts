@@ -18,7 +18,7 @@ import type { StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as dshLlm from '@deepseek-ai/dsh-llm'
 import type { AgyEvent, RawUsage } from '../common/types.ts'
 import { mirrorCallId } from './recording.ts'
-import { buildMirrorRunCode, MIRROR_TOOL_NAME, WRAPPER_TOOL_NAME } from './mirror-tool.ts'
+import { buildMirrorRunCode, MIRROR_TOOL_NAME, WRAPPER_TOOL_NAME, toolStepBrief } from './mirror-tool.ts'
 
 const toToolCallId: (id: string) => ToolCallId =
   (dshLlm as { ToolCallId?: (id: string) => ToolCallId; CallId?: (id: string) => ToolCallId }).ToolCallId ??
@@ -97,6 +97,7 @@ export class EventMapper {
   private readonly emittedByKey = new Map<string, string>()
   private readonly announcedTools = new Set<string>()
   private readonly thinkingAnnounced = new Set<string>()
+  private bannerOnlyThinkingEmitted = false
   private sawTextStep: boolean
   private finished = false
 
@@ -149,6 +150,9 @@ export class EventMapper {
     const text = this.opts.resolvedThoughts?.get(absIndex)
     const hasText = text !== undefined && text.trim() !== ''
     if (!hasText && thoughtTokens <= 0) return
+    // Banner-only chips (no prose) are noise after the first one in a run:
+    // tool-heavy turns report thinking_tokens on every agent text step.
+    if (!hasText && this.bannerOnlyThinkingEmitted) return
 
     yield* this.ensureBlock('reasoning')
     const banner =
@@ -161,6 +165,7 @@ export class EventMapper {
       const d = this.appendDelta(combined)
       if (d) yield d
     } else {
+      this.bannerOnlyThinkingEmitted = true
       const d = this.appendDelta(`${banner}\n`)
       if (d) yield d
     }
@@ -282,7 +287,7 @@ export class EventMapper {
           ? { ...fullArgs, ...(typeof ev.tool.args === 'object' ? ev.tool.args as Record<string, unknown> : {}) }
           : ev.tool.args
         const argumentsJson = useCode
-          ? JSON.stringify(buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name))
+          ? JSON.stringify(buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name, toolStepBrief(ev.tool.name, effectiveArgs)))
           : JSON.stringify({
               run: this.opts.runId,
               step: absIndex,

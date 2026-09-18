@@ -170,24 +170,17 @@ test('mirrorCardModel: errored tool keeps card kind + state', () => {
 })
 
 test('installAgyToolView registers a keyed agy_tool toolview', () => {
-  const registrations: Array<{ opts: Record<string, unknown> }> = []
-  const ctx = {
+  const registrations: { opts: { key?: string; id?: string } }[] = [];
+  installAgyToolView({
     slots: {
-      inject(name: string, register: () => () => void) {
-        assert.equal(name, 'tool.call.toolview')
-        const dispose = register()
-        assert.equal(typeof dispose, 'function')
-      },
-      register(opts: Record<string, unknown>, _component: unknown) {
-        registrations.push({ opts })
-        return () => undefined
-      },
+      inject(_n: string, cb: () => () => void) { cb(); },
+      register(opts: { key?: string; id?: string }) { registrations.push({ opts }); return () => {}; },
     },
-  }
-  installAgyToolView(ctx as never)
-  assert.equal(registrations.length, 1)
-  assert.equal(registrations[0]?.opts.name, 'tool.call.toolview')
-  assert.equal(registrations[0]?.opts.key, 'agy_tool')
+  } as never);
+  const keys = registrations.map((r) => r.opts.key);
+  assert.ok(keys.includes('agy_tool'), 'agy_tool toolview registered');
+  assert.ok(keys.includes('run_code'), 'run_code toolview registered for Code Mode wrappers');
+  assert.equal(registrations.find((r) => r.opts.key === 'agy_tool')?.opts.id, 'agy-tool-view');
 })
 
 test('previewLine: terminal card previews the first non-empty output line', () => {
