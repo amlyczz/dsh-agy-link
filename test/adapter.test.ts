@@ -148,7 +148,8 @@ test('ok run mirrors tools natively, streams text, and persists the binding', as
   assert.equal(finish.type, 'finish')
   assert.equal(finish.reason.kind, 'stop')
   assert.equal(types[types.length - 2], 'usage')
-  assert.ok(types.includes('reasoning-delta'))
+  // reasoning-delta only when thought prose is available; fake ok mode may
+  // report thinking_tokens without DB prose — empty chips are suppressed.
   assert.ok(types.includes('text-delta'))
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
   assert.ok(!text.includes('[agy tool:'), 'no text-body tool annotations in v0.3: ' + text)
@@ -312,7 +313,7 @@ test('agy 1.1.15 stream mirrors tools as native cards across spans', async () =>
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
   assert.equal(finish.reason.kind, 'stop')
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as unknown as { text: string }).text).join('')
-  assert.ok(reasoning.includes('[agy thinking turn · 80 thinking tokens]'), reasoning)
+  // Banner-only chips are suppressed; prose still renders when extracted.
   assert.ok(!reasoning.includes('[agy tool:'), 'no tool annotations in reasoning')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
   assert.ok(!text.includes('note1.txt'), 'tool output no longer pasted into the text body')

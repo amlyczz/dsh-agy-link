@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.35 (2026-09-18)
+
+### English
+
+- **Reasoning UI: only show thinking when there is real content.** Empty `[agy thinking turn · N thinking tokens]` chips no longer spam tool-heavy turns. When agy stores only `toolAction`/`toolSummary` (common), those become the visible thought line (e.g. `Searching the web — Search Wo Tianyu profile`). Full CoT prose still renders when present in the conversation DB.
+
+### 中文 (Chinese)
+
+- **思考 UI：** 无正文时不再刷 token 横幅；工具步骤优先展示 `toolAction`/`toolSummary` 作为意图说明；完整思维链仍按 DB 正文展示。
+
 ## 0.4.34 (2026-09-18)
 
 ### English

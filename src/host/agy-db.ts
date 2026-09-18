@@ -122,73 +122,140 @@ function readVarint(b: Buffer, offset: number): { val: number; next: number } | 
 /**
  * Extract model thought text from a protobuf step_payload.
  *
- * In agy SQLite databases (steps table, step_type = 15 agent_response),
- * the thought text is stored inside Protobuf field 20 (response body) ->
- * sub-field 3 (length-delimited UTF-8 string).
+ * Primary: field 20 -> sub-field 3 (verified on simple print-mode turns).
+ * Fallback: longest non-JSON prose string, then toolAction/toolSummary
+ * embedded in tool-arg JSON (tool-heavy agent turns often store only those).
  */
 export function extractStepThoughts(payload: Buffer): string | null {
-  let pos = 0
-  while (pos < payload.length) {
-    const res = readVarint(payload, pos)
-    if (res === null) break
-    pos = res.next
-    const tag = res.val
-    const wireType = tag & 0x7
-    const fieldNum = tag >>> 3
-    if (wireType === 2) {
-      const lenRes = readVarint(payload, pos)
-      if (lenRes === null) break
-      pos = lenRes.next
-      const len = lenRes.val
-      if (pos + len > payload.length) break
-      const slice = payload.subarray(pos, pos + len)
-      pos += len
-      if (fieldNum === 20) {
-        let p20 = 0
-        while (p20 < slice.length) {
-          const t20Res = readVarint(slice, p20)
-          if (t20Res === null) break
-          p20 = t20Res.next
-          const t20 = t20Res.val
-          const w20 = t20 & 0x7
-          const f20 = t20 >>> 3
-          if (w20 === 2) {
-            const l20Res = readVarint(slice, p20)
-            if (l20Res === null) break
-            p20 = l20Res.next
-            const l20 = l20Res.val
-            if (p20 + l20 > slice.length) break
-            const s20 = slice.subarray(p20, p20 + l20)
-            p20 += l20
-            if (f20 === 3) {
-              const str = s20.toString('utf-8')
-              if (str.length > 0) return str
-            }
-          } else if (w20 === 0) {
-            const v20Res = readVarint(slice, p20)
-            if (v20Res === null) break
-            p20 = v20Res.next
-          } else if (w20 === 1) {
-            p20 += 8
-          } else if (w20 === 5) {
-            p20 += 4
-          } else {
-            break
-          }
-        }
+  const proseCandidates: string[] = []
+  const actionCandidates: string[] = []
+
+  const consider = (str: string): void => {
+    const t = str.trim()
+    if (t.length < 8) return
+    // Never treat system prompts / plan templates / ids as thinking prose.
+    if (/^SYSTEM ROLE/i.test(t)) return
+    if (t.startsWith('/plan ') || t.includes('<PLAN>The user is requesting that you think')) return
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t)) return
+    if (/^bot-|^call_/.test(t)) return
+    // toolAction/toolSummary may sit inside a larger binary-ish blob.
+    const act = /"toolAction"\s*:\s*"([^"]{3,200})"/.exec(t)
+    const sum = /"toolSummary"\s*:\s*"([^"]{3,200})"/.exec(t)
+    if (act || sum) {
+      const line = [act?.[1] ?? '', sum?.[1] ?? ''].filter((s) => s !== '').join(' — ')
+      if (line !== '') actionCandidates.push(line)
+    }
+    const looksJson = t.startsWith('{') || t.startsWith('[')
+    if (!looksJson && t.length >= 24 && t.length <= 4000 && /[a-zA-Z一-鿿]/.test(t) && !/^[0-9a-f-]{30,}$/i.test(t)) {
+      // Must look like sentences, not an opaque id blob.
+      if ((t.match(/[.!?]|，|。| /g) ?? []).length >= 2 || /[a-zA-Z]{4,}\s+[a-zA-Z]{3,}/.test(t)) {
+        proseCandidates.push(t)
       }
-    } else if (wireType === 0) {
-      const vRes = readVarint(payload, pos)
-      if (vRes === null) break
-      pos = vRes.next
-    } else if (wireType === 1) {
-      pos += 8
-    } else if (wireType === 5) {
-      pos += 4
-    } else {
-      break
+      return
+    }
+    if (looksJson) {
+      try {
+        const obj = JSON.parse(t) as Record<string, unknown>
+        const action = typeof obj.toolAction === 'string' ? obj.toolAction.trim() : ''
+        const summary = typeof obj.toolSummary === 'string' ? obj.toolSummary.trim() : ''
+        const line = [action, summary].filter((s) => s !== '').join(' — ')
+        if (line !== '') actionCandidates.push(line)
+      } catch {
+        // not a tool-args object
+      }
     }
   }
+
+  const walk = (buf: Buffer, depth: number): void => {
+    if (depth > 3) return
+    let pos = 0
+    while (pos < buf.length) {
+      const res = readVarint(buf, pos)
+      if (res === null) break
+      pos = res.next
+      const tag = res.val
+      const wireType = tag & 0x7
+      const fieldNum = tag >>> 3
+      if (wireType === 2) {
+        const lenRes = readVarint(buf, pos)
+        if (lenRes === null) break
+        pos = lenRes.next
+        const len = lenRes.val
+        if (pos + len > buf.length) break
+        const slice = buf.subarray(pos, pos + len)
+        pos += len
+        // Preferred field 20.3
+        if (fieldNum === 20) {
+          let p20 = 0
+          while (p20 < slice.length) {
+            const t20Res = readVarint(slice, p20)
+            if (t20Res === null) break
+            p20 = t20Res.next
+            const t20 = t20Res.val
+            const w20 = t20 & 0x7
+            const f20 = t20 >>> 3
+            if (w20 === 2) {
+              const l20Res = readVarint(slice, p20)
+              if (l20Res === null) break
+              p20 = l20Res.next
+              const l20 = l20Res.val
+              if (p20 + l20 > slice.length) break
+              const s20 = slice.subarray(p20, p20 + l20)
+              p20 += l20
+              if (f20 === 3) {
+                const str = s20.toString('utf-8')
+                if (str.trim() !== '') {
+                  consider(str)
+                  if (!str.trim().startsWith('{') && str.trim().length >= 24) {
+                    proseCandidates.unshift(str.trim())
+                  }
+                }
+              } else if (f20 === 2 || f20 === 1) {
+                consider(s20.toString('utf-8'))
+              }
+            } else if (w20 === 0) {
+              const v20Res = readVarint(slice, p20)
+              if (v20Res === null) break
+              p20 = v20Res.next
+            } else if (w20 === 1) {
+              p20 += 8
+            } else if (w20 === 5) {
+              p20 += 4
+            } else {
+              break
+            }
+          }
+        }
+        if (len >= 8 && len < 200_000) walk(slice, depth + 1)
+      } else if (wireType === 0) {
+        const vRes = readVarint(buf, pos)
+        if (vRes === null) break
+        pos = vRes.next
+      } else if (wireType === 1) {
+        pos += 8
+      } else if (wireType === 5) {
+        pos += 4
+      } else {
+        break
+      }
+    }
+  }
+
+  walk(payload, 0)
+  // Last-resort scan of the raw buffer: toolAction often sits inside a
+  // length-delimited blob that protobuf walk splits oddly.
+  const full = payload.toString('utf8')
+  const act = /"toolAction"\s*:\s*"([^"]{3,200})"/.exec(full)
+  const sum = /"toolSummary"\s*:\s*"([^"]{3,200})"/.exec(full)
+  if (act || sum) {
+    const line = [act?.[1] ?? '', sum?.[1] ?? ''].filter((s) => s !== '').join(' — ')
+    if (line !== '') actionCandidates.push(line)
+  }
+  if (proseCandidates.length > 0) {
+    proseCandidates.sort((a, b) => b.length - a.length)
+    return proseCandidates[0] as string
+  }
+  if (actionCandidates.length > 0) return actionCandidates[0] as string
   return null
 }
 
@@ -240,9 +307,11 @@ async function loadAgyDbData(conversationId: string, accountHome?: string): Prom
           steps.set(idx, info)
         }
       }
-      if (stepType === 14 || stepType === 15) {
+      // Thought/intent prose: agent_response steps, plus tool steps that
+      // carry toolAction/toolSummary (common in tool-heavy turns).
+      if (stepType === 14 || stepType === 15 || TOOL_STEP_TYPES.has(stepType)) {
         const th = extractStepThoughts(payload)
-        if (th !== null && th.trim() !== '') {
+        if (th !== null && th.trim() !== '' && !/^SYSTEM ROLE/i.test(th.trim())) {
           thoughts.set(idx, th)
         }
       }

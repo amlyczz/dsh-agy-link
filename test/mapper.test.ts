@@ -260,11 +260,11 @@ test('agy 1.1.15 stream maps onto spans: thinking turn, tool cuts, fragments, re
     { kind: 'step', stepKey: '5', stepKind: 'text', text: '2 files.', fragment: true },
     { kind: 'result', conversationId: 'c15', ok: true, response: 'There are 2 files.', usage: { input_tokens: 9, output_tokens: 8, thinking_tokens: 95 } },
   ]
-  // Span 1: thinking annotation + first tool cut
+  // Span 1: no empty thinking chip (no DB prose) + first tool cut
   const s1 = newSpan('run15')
   const c1 = mapAll(s1, events, 0)
   const reasoning1 = c1.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.ok(reasoning1.includes('[agy thinking turn · 80 thinking tokens]'), reasoning1)
+  assert.equal(reasoning1, '', 'no prose → no reasoning row')
   assert.equal(toolCallEnd(c1).block.id, mirrorCallId('run15', 3))
   assert.equal(asFinish(lastChunk(c1)).reason.kind, 'tool-calls')
   // Span 2: second tool cut (the errored one)
@@ -280,31 +280,19 @@ test('agy 1.1.15 stream maps onto spans: thinking turn, tool cuts, fragments, re
   assert.equal(asFinish(lastChunk(c3)).reason.kind, 'stop')
 })
 
-test('one-shot answer step (text + usage together) still annotates thinking', () => {
-  // agy answers trivial questions in a single DONE envelope: no separate
-  // thinking-only step ever arrives. Regression (v0.3.2): these turns used
-  // to show no thinking at all.
+test('one-shot answer step without DB prose does not invent a thinking row', () => {
   const m = newSpan('r-oneshot')
   const chunks = mapAll(m, [
     { kind: 'step', stepKey: '2', stepKind: 'text', text: '1 + 1 等于 2。', usage: { input_tokens: 100, output_tokens: 50, thinking_tokens: 154 } },
     { kind: 'result', conversationId: 'c9', ok: true, response: '1 + 1 等于 2。', usage: {} },
   ])
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.ok(reasoning.includes('[agy thinking turn · 154 thinking tokens]'), reasoning)
+  assert.equal(reasoning, '')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
   assert.equal(text, '1 + 1 等于 2。')
-  // protocol order: the reasoning annotation precedes the answer text
-  const types = chunks.map((c) => c.type)
-  const rIdx = types.indexOf('reasoning-delta')
-  const tIdx = types.indexOf('text-delta')
-  assert.ok(rIdx >= 0 && tIdx > rIdx, 'reasoning annotation precedes the answer text')
 })
 
-test('streamed answer: DONE-tail usage annotates AFTER the complete text', () => {
-  // v0.3.2 wedged the chip mid-sentence (annotated at DONE arrival, between
-  // fragments); v0.3.3 then dropped it entirely (first turn showed no
-  // thinking). Now the annotation is deferred to the step's text completion:
-  // present, but strictly after the last fragment.
+test('streamed answer: no empty thinking chip when only token counts exist', () => {
   const m = newSpan('r-tail')
   const chunks = mapAll(m, [
     { kind: 'step', stepKey: '5', stepKind: 'text', text: 'There are ', fragment: true },
@@ -312,18 +300,12 @@ test('streamed answer: DONE-tail usage annotates AFTER the complete text', () =>
     { kind: 'result', conversationId: 'c9', ok: true, response: 'There are 2 files.', usage: {} },
   ])
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.ok(reasoning.includes('[agy thinking turn · 15 thinking tokens]'), reasoning)
+  assert.equal(reasoning, '')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
   assert.equal(text, 'There are 2 files.')
-  // the annotation trails the LAST text delta — never between fragments
-  const types = chunks.map((c) => c.type)
-  const lastTextIdx = types.lastIndexOf('text-delta')
-  const reasoningIdx = types.indexOf('reasoning-delta')
-  assert.ok(lastTextIdx >= 0 && reasoningIdx > lastTextIdx, 'annotation trails the step text')
-  assert.equal(asFinish(lastChunk(chunks)).reason.kind, 'stop')
 })
 
-test('DONE tail with usage but no text still annotates after streamed text', () => {
+test('DONE tail with usage but no text does not emit banner-only thinking', () => {
   const m = newSpan('r-tail2')
   const chunks = mapAll(m, [
     { kind: 'step', stepKey: '7', stepKind: 'text', text: 'Answer.', fragment: true },
@@ -331,7 +313,7 @@ test('DONE tail with usage but no text still annotates after streamed text', () 
     { kind: 'result', conversationId: 'c9', ok: true, response: 'Answer.', usage: {} },
   ])
   const reasoning = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.ok(reasoning.includes('[agy thinking turn · 9 thinking tokens]'), reasoning)
+  assert.equal(reasoning, '', 'no prose → no reasoning row')
   const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
   assert.equal(text, 'Answer.')
 })

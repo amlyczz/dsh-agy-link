@@ -149,26 +149,18 @@ export class EventMapper {
   private *emitThinking(absIndex: number, thoughtTokens: number): Generator<StreamChunk> {
     const text = this.opts.resolvedThoughts?.get(absIndex)
     const hasText = text !== undefined && text.trim() !== ''
-    if (!hasText && thoughtTokens <= 0) return
-    // Banner-only chips (no prose) are noise after the first one in a run:
-    // tool-heavy turns report thinking_tokens on every agent text step.
-    if (!hasText && this.bannerOnlyThinkingEmitted) return
+    // Only surface a reasoning row when we actually have thought/intent prose.
+    // Banner-only token chips clutter tool-heavy turns and teach nothing.
+    if (!hasText) return
 
     yield* this.ensureBlock('reasoning')
     const banner =
       thoughtTokens > 0
         ? '[agy thinking turn · ' + thoughtTokens + ' thinking tokens]'
         : '[agy thinking turn]'
-
-    if (hasText) {
-      const combined = `${banner} ${text.trim()}\n`
-      const d = this.appendDelta(combined)
-      if (d) yield d
-    } else {
-      this.bannerOnlyThinkingEmitted = true
-      const d = this.appendDelta(`${banner}\n`)
-      if (d) yield d
-    }
+    const combined = `${banner} ${text!.trim()}\n`
+    const d = this.appendDelta(combined)
+    if (d) yield d
   }
 
   /**
