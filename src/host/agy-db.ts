@@ -17,6 +17,7 @@
 // these to construct accurate agy_tool arguments — enabling diff cards to
 // show the real oldText/newText content.
 import { execFile } from 'node:child_process'
+import { existsSync, readdirSync } from 'node:fs'
 import { readFile, unlink, copyFile, stat, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -25,6 +26,49 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 let AGY_DB_DIR = join(homedir(), '.gemini', 'antigravity-cli', 'conversations')
+
+/**
+ * Candidate conversations directories for a conversation id.
+ * Pool/isolated accounts write agy state under their own HOME
+ * (~/.dsh/agy-accounts/<id>/.gemini/...), NOT the system ~/.gemini
+ * (issue: thinking/tool-args invisible when using isolated accounts).
+ */
+export function conversationsDirCandidates(accountHome?: string): string[] {
+  const dirs: string[] = []
+  const push = (d: string) => { if (!dirs.includes(d)) dirs.push(d) }
+  if (accountHome !== undefined && accountHome !== '') {
+    push(join(accountHome, '.gemini', 'antigravity-cli', 'conversations'))
+  }
+  const gch = process.env.GEMINI_CLI_HOME
+  if (gch !== undefined && gch !== '') push(join(gch, 'antigravity-cli', 'conversations'))
+  push(AGY_DB_DIR)
+  push(join(homedir(), '.gemini', 'antigravity-cli', 'conversations'))
+  const poolBase = join(homedir(), '.dsh', 'agy-accounts')
+  try {
+    for (const ent of readdirSync(poolBase)) {
+      if (ent.startsWith('.')) continue
+      push(join(poolBase, ent, '.gemini', 'antigravity-cli', 'conversations'))
+    }
+  } catch {
+    // pool not installed
+  }
+  return dirs
+}
+
+/** Locate an existing conversation DB across system + pool homes. */
+export function findConversationDb(conversationId: string, accountHome?: string): string | null {
+  if (!isSafeConversationId(conversationId)) return null
+  const name = `${conversationId}.db`
+  for (const dir of conversationsDirCandidates(accountHome)) {
+    const p = join(dir, name)
+    try {
+      if (existsSync(p)) return p
+    } catch {
+      // ignore
+    }
+  }
+  return null
+}
 
 interface CachedStep {
   name: string
@@ -152,20 +196,13 @@ export function extractStepThoughts(payload: Buffer): string | null {
  * Copy the agy SQLite DB to a temp path (avoiding WAL lock issues), then
  * query tool and thought step payloads via sqlite3 CLI.
  */
-async function loadAgyDbData(conversationId: string): Promise<AgyDbData> {
+async function loadAgyDbData(conversationId: string, accountHome?: string): Promise<AgyDbData> {
   const steps = new Map<number, CachedStep>()
   const thoughts = new Map<number, string>()
   const seenSteps = new Set<number>()
   if (!isSafeConversationId(conversationId)) return { steps, thoughts, seenSteps }
-  const dbPath = join(AGY_DB_DIR, `${conversationId}.db`)
-
-
-  try {
-    const st = await stat(dbPath)
-    if (st.size === 0) return { steps, thoughts, seenSteps }
-  } catch {
-    return { steps, thoughts, seenSteps } // DB doesn't exist
-  }
+  const dbPath = findConversationDb(conversationId, accountHome)
+  if (dbPath === null) return { steps, thoughts, seenSteps }
 
   // Copy to temp to avoid WAL/shared-lock issues. Also copy -wal and -shm so
   // recent writes in WAL mode are visible.
@@ -352,6 +389,7 @@ function scanFallbackJson(payload: Buffer): CachedStep | null {
 export async function readFullToolArgs(
   conversationId: string,
   stepIndex: number,
+  accountHome?: string,
 ): Promise<{ name: string; args: Record<string, unknown> } | null> {
   if (!isSafeConversationId(conversationId)) return null
 
@@ -363,7 +401,7 @@ export async function readFullToolArgs(
   }
 
   // Load (or reload) the full tool step and thought map
-  const data = await loadAgyDbData(conversationId)
+  const data = await loadAgyDbData(conversationId, accountHome)
   cache = {
     conversationId,
     steps: data.steps,
@@ -384,6 +422,7 @@ export async function readFullToolArgs(
 export async function readStepThoughts(
   conversationId: string,
   stepIndex: number,
+  accountHome?: string,
 ): Promise<string | null> {
   if (!isSafeConversationId(conversationId)) return null
 
@@ -395,7 +434,7 @@ export async function readStepThoughts(
   }
 
   // Load (or reload) the full tool step and thought map
-  const data = await loadAgyDbData(conversationId)
+  const data = await loadAgyDbData(conversationId, accountHome)
   cache = {
     conversationId,
     steps: data.steps,

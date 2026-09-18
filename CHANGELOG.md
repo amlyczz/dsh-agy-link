@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.33 (2026-09-18)
+
+### English
+
+- **Fix: thinking / tool-args invisible for pool accounts.** agy conversation SQLite DBs for isolated accounts live under `~/.dsh/agy-accounts/<id>/.gemini/antigravity-cli/conversations`, not system `~/.gemini`. The reader now searches the run's account home, `GEMINI_CLI_HOME`, system home, and pool account dirs.
+- **Fix: `/agy status` could hang the command UI.** Auth probe is now bounded (8s) so command results always return (issue #29 symptom).
+
+### 中文 (Chinese)
+
+- **修复：号池隔离账号看不到思维链/工具参数** — 会话库在账号自己的 HOME 下，读取时会搜索账号目录。
+- **修复：`/agy status` 可能挂起导致命令无输出** — 探测加 8s 超时。
+
 ## 0.4.32 (2026-09-17)
 
 ### English

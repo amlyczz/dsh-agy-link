@@ -48,6 +48,8 @@ export class RunRecording {
   private fullArgs: Map<number, Record<string, unknown>> | null = null
   /** DB-resolved thoughts keyed by event index (set during span driving). */
   private thoughts: Map<number, string> | null = null
+  /** Isolated pool-account HOME used for this run's agy conversation DB. */
+  accountHome: string | undefined = undefined
 
   /**
    * Set by the adapter right after spawn. A mid-turn user steer makes DSH

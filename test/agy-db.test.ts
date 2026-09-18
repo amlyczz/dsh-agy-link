@@ -1,6 +1,6 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFullToolArgs, readStepThoughts, extractStepThoughts, clearAgyDbCache, isSafeConversationId, __setAgyDbDirForTest } from '../src/host/agy-db.ts'
+import { readFullToolArgs, readStepThoughts, extractStepThoughts, clearAgyDbCache, isSafeConversationId, findConversationDb, conversationsDirCandidates, __setAgyDbDirForTest } from '../src/host/agy-db.ts'
 
 import { join } from 'node:path'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -142,4 +142,23 @@ test('readFullToolArgs: returns null for missing conversation', async () => {
 
 test('readFullToolArgs: empty conversation id returns null', async () => {
   assert.equal(await readFullToolArgs('', 1), null)
+})
+
+test('findConversationDb searches isolated pool account homes (thinking path)', async (t) => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const accHome = await mkdtemp(join(tmpdir(), 'agy-acc-home-'))
+  const conv = 'conv-isolated-1'
+  const dbDir = join(accHome, '.gemini', 'antigravity-cli', 'conversations')
+  const { mkdir } = await import('node:fs/promises')
+  await mkdir(dbDir, { recursive: true })
+  await writeFile(join(dbDir, `${conv}.db`), Buffer.from([0x00]))
+  t.after(async () => { await rm(accHome, { recursive: true, force: true }) })
+  clearAgyDbCache()
+  __setAgyDbDirForTest(join(tmpdir(), 'agy-empty-system-dir'))
+  assert.equal(findConversationDb(conv, accHome), join(dbDir, `${conv}.db`))
+  const cands = conversationsDirCandidates(accHome)
+  assert.equal(cands[0], dbDir)
+  assert.ok(cands.length >= 2)
 })

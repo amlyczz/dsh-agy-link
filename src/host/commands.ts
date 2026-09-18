@@ -210,7 +210,13 @@ async function renderStatus(deps: CommandDeps): Promise<string> {
   const cfg = deps.cfg()
   const bin = deps.bin()
   const authHelper = deps.auth()
-  const auth = authHelper ? await authHelper.resolvedStatus() : undefined
+  // Bound the auth probe so /agy status never hangs the command UI (issue #29).
+  const auth = authHelper
+    ? await Promise.race([
+        authHelper.resolvedStatus(),
+        new Promise<undefined>((r) => setTimeout(() => r(undefined), 8_000)),
+      ])
+    : undefined
   const cat = deps.catalog().get()
   const bindings = Object.keys(deps.store().all()).length
   const last = deps.lastRun()

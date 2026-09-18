@@ -558,6 +558,7 @@ export class AgyAdapter extends LlmAdapter {
     // ---- spawn + record (v0.3: spans consume a shared recording) ----
     const before = snapshotConversations()
     const rec = this.deps.runs.create()
+    rec.accountHome = account && account.dir ? account.dir : undefined
     const parser = new StreamJsonParser()
     this.deps.onParser?.(parser)
     let streamCid: string | null = null
@@ -824,10 +825,10 @@ export class AgyAdapter extends LlmAdapter {
             const stepIdx = parseInt(ev.stepKey, 10)
             if (activeConvId !== null && Number.isFinite(stepIdx)) {
               try {
-                let th = await readStepThoughts(activeConvId, stepIdx)
+                let th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
                 if (th === null && (ev.state === 'DONE' || (ev.usage?.thinking_tokens ?? 0) > 0 || ev.stepKind === 'thinking')) {
                   await new Promise((r) => setTimeout(r, 50))
-                  th = await readStepThoughts(activeConvId, stepIdx)
+                  th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
                 }
                 if (th !== null && th.trim() !== '') {
                   resolvedThoughts.set(i, th)
@@ -848,10 +849,10 @@ export class AgyAdapter extends LlmAdapter {
             const stepIdx = parseInt(ev.stepKey, 10)
             if (activeConvId !== null && Number.isFinite(stepIdx)) {
               try {
-                let full = await readFullToolArgs(activeConvId, stepIdx)
+                let full = await readFullToolArgs(activeConvId, stepIdx, rec.accountHome)
                 if (full === null) {
                   await new Promise((r) => setTimeout(r, 50))
-                  full = await readFullToolArgs(activeConvId, stepIdx)
+                  full = await readFullToolArgs(activeConvId, stepIdx, rec.accountHome)
                 }
                 if (full !== null && full.args !== undefined) {
                   resolved.set(i, full.args)
