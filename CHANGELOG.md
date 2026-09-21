@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.38 (2026-09-21)
+
+### English
+
+- **Fix (issue #32): "Duplicate request ignored" dead-end after a failed turn.** The in-flight debounce used a 10-second time wall keyed only on identical prompt text, and never cleared when a run settled. DSH auto-retries after a fast agy failure; that retry was rejected as `BUSY`, so every subsequent turn looked like "model unreachable" even with quota at 100% and a healthy proxy. Debounce now rejects only while a live (unsettled) run owns the session, or during a tight pre-spawn double-submit race. Settled runs (success / error / abort) never block a retry. A stream that itself preempts a live run always proceeds.
+
+### 中文 (Chinese)
+
+- **修复 #32：失败后重试被「Duplicate request ignored」卡死。** 旧的防抖只按「同 prompt + 10 秒」拦截，且请求结束后不清理。agy 快速失败后 DSH 会自动重试，结果被当成 BUSY 拒掉，后续每一轮都看起来像「模型不可访问」（额度 100%、代理正常也会中招）。现在只有会话上仍存在未结束的 live run，或 spawn 前极短窗口内的真双击，才会拒绝；已 settle 的请求（成功/失败/中止）一律放行重试；由本请求抢占 live run 的新回合一定放行。
+
 ## 0.4.37 (2026-09-18)
 
 ### English

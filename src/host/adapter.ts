@@ -131,8 +131,12 @@ export class AgyAdapter extends LlmAdapter {
   private readonly warnedKeys = new Set<string>()
   /** sessionKey -> in-flight run, for steer-time preemption. */
   private readonly activeRuns = new Map<string, RunRecording>()
-  /** sessionKey -> prompt info for duplicate submission debounce */
-  private readonly activeSessionPrompts = new Map<string, { prompt: string; startedAt: number }>()
+  /**
+   * sessionKey -> prompt info for duplicate submission debounce.
+   * `inFlight` is true from submit until the run settles (or spawn throws),
+   * so a settled failure can never wall a legitimate retry.
+   */
+  private readonly activeSessionPrompts = new Map<string, { prompt: string; startedAt: number; inFlight: boolean }>()
   /** accountId -> timestamp of last spawn for spacing throttling */
   private readonly lastAccountSpawnTime = new Map<string, number>()
   private readonly minSpawnIntervalMs = 500
@@ -147,6 +151,14 @@ export class AgyAdapter extends LlmAdapter {
     if (this.warnedKeys.has(key)) return
     this.warnedKeys.add(key)
     this.deps.log?.('WARNING: ' + msg)
+  }
+
+  /** Mark a session prompt as no longer in flight so retries are not debounced. */
+  private clearInFlightPrompt(sessionKey: string, prompt: string): void {
+    if (sessionKey === '') return
+    const ap = this.activeSessionPrompts.get(sessionKey)
+    if (ap === undefined || ap.prompt !== prompt) return
+    this.activeSessionPrompts.set(sessionKey, { ...ap, inFlight: false })
   }
 
   /**
@@ -361,9 +373,15 @@ export class AgyAdapter extends LlmAdapter {
     // The previous run's agy process is still alive and would keep appending
     // to the SAME conversation concurrently — abort it first. Auxiliary calls
     // (compaction/title) neither preempt nor get tracked.
+    // When we preempt, this turn owns the session: the duplicate debounce
+    // below must not reject it just because the aborted run shares a prompt.
+    let sessionPreempted = false
     if (!isAux && sessionKey !== '') {
       const prev = this.activeRuns.get(sessionKey)
-      if (prev !== undefined && !prev.isSettled) prev.requestAbort?.()
+      if (prev !== undefined && !prev.isSettled) {
+        prev.requestAbort?.()
+        sessionPreempted = true
+      }
     }
     const catalog = this.deps.catalog.get()
     const rawModel = options.model
@@ -543,22 +561,47 @@ export class AgyAdapter extends LlmAdapter {
     // is a plugin-side prompt injection. Guidance for missing_file lives in
     // /agy status via classifyToolError (commands.ts).
 
-    // In-flight duplicate submission debounce (prevents double-clicks / network repeat loops)
+    // Duplicate-submission debounce (double-clicks / network repeat loops).
+    //
+    // Reject ONLY while a live (unsettled) run still owns this session, or
+    // during the pre-spawn race where two identical stream() calls both pass
+    // the live-run check before either registers activeRuns. Once a run has
+    // settled — success, error, abort — a retry of the same prompt must go
+    // through: DSH auto-retries after failures, and a time-only wall turned
+    // every fast agy failure into a BUSY dead-end (issue #32).
+    //
+    // When this call itself preempted a live run, the session is free for
+    // this turn — never debounce it.
     if (!isAux && sessionKey !== '') {
       const now = Date.now()
       if (this.activeSessionPrompts.size > 100) {
         for (const [k, v] of this.activeSessionPrompts) {
-          if (now - v.startedAt >= 10_000) this.activeSessionPrompts.delete(k)
+          if (now - v.startedAt >= 30_000) this.activeSessionPrompts.delete(k)
         }
       }
-      const activePrompt = this.activeSessionPrompts.get(sessionKey)
-      if (activePrompt !== undefined && activePrompt.prompt === prompt && now - activePrompt.startedAt < 10_000) {
-        throw new LlmError(
-          'Duplicate request ignored: an identical request is already running for this session.',
-          Err.BUSY,
-        )
+      const prevPrompt = this.activeSessionPrompts.get(sessionKey)
+      const liveRun = this.activeRuns.get(sessionKey)
+      const runLive = liveRun !== undefined && !liveRun.isSettled
+      if (!sessionPreempted && prevPrompt !== undefined && prevPrompt.prompt === prompt) {
+        // True concurrent live duplicate for the same session.
+        if (runLive) {
+          throw new LlmError(
+            'Duplicate request ignored: an identical request is already running for this session.',
+            Err.BUSY,
+          )
+        }
+        // Pre-spawn race: identical prompt, still marked inFlight, no run
+        // record yet (or the prior attempt already settled — then inFlight
+        // is false and we fall through). Keep the window tight so a user
+        // re-send after a fast failure is never swallowed.
+        if (prevPrompt.inFlight && liveRun === undefined && now - prevPrompt.startedAt < 2_000) {
+          throw new LlmError(
+            'Duplicate request ignored: an identical request is already running for this session.',
+            Err.BUSY,
+          )
+        }
       }
-      this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now })
+      this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
     }
 
     // ---- spawn + record (v0.3: spans consume a shared recording) ----
@@ -673,6 +716,7 @@ export class AgyAdapter extends LlmAdapter {
       }
     } catch (e) {
       releaseOnce()
+      this.clearInFlightPrompt(sessionKey, prompt)
       throw new LlmError('failed to spawn agy: ' + brief(String(e)), Err.PROCESS_EXIT)
     }
 
@@ -680,6 +724,7 @@ export class AgyAdapter extends LlmAdapter {
       const outcome = await proc.outcome
       releaseOnce()
       if (this.activeRuns.get(sessionKey) === rec) this.activeRuns.delete(sessionKey)
+      this.clearInFlightPrompt(sessionKey, prompt)
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
         rec.append(ev)

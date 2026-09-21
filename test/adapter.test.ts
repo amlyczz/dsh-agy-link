@@ -812,7 +812,7 @@ test('multimodal: stages attached images and forwards path with view_file instru
   assert.ok(prompt2.includes('[Please inspect the attached image(s) using view_file and assist the user.]'))
 })
 
-test('duplicate request with identical prompt within debounce window is rejected with BUSY', async () => {
+test('identical prompt while a live run owns the session preempts and proceeds (issue #32)', async () => {
   const { adapter } = makeAdapter()
   const userMsg = msg('user', 'Please perform task X')
   const sessionOptions = opts([userMsg], { sessionId: 'sess-dup-test' as never })
@@ -822,22 +822,84 @@ test('duplicate request with identical prompt within debounce window is rejected
   const firstChunk = await iter1.next()
   assert.ok(!firstChunk.done)
 
-  // Immediately attempt second identical stream for same session
-  await assert.rejects(
-    async () => {
-      const iter2 = adapter.stream(sessionOptions)
-      for await (const _ of iter2) {}
-    },
-    (err: unknown) => {
-      assert.ok(err instanceof LlmError)
-      assert.equal(err.code, Err.BUSY)
-      assert.ok(err.message.includes('Duplicate request ignored'))
-      return true
-    },
+  // Second identical stream preempts the live predecessor and runs — it must
+  // NOT be rejected as BUSY. Blocking here is what turned DSH auto-retries
+  // into a permanent "model unreachable" dead-end (issue #32).
+  const res2 = await collect(adapter.stream(sessionOptions))
+  const finish2 = res2[res2.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish2.type, 'finish')
+  assert.notEqual(
+    finish2.reason.kind,
+    'error',
+    'preempting same-prompt turn must not surface Duplicate/BUSY',
   )
 
-  // Drain first stream so it finishes cleanly
-  while (!(await iter1.next()).done) {}
+  // Drain the preempted first stream (aborted or completed).
+  try {
+    if (!(await iter1.next()).done) {
+      while (!(await iter1.next()).done) {}
+    }
+  } catch { /* aborted runs may reject */ }
+})
+
+test('retry after a settled failure is not blocked by debounce (issue #32)', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
+  process.env.FAKE_AGY_MODE = 'exit-error'
+  try {
+    const { adapter } = makeAdapter()
+    const userMsg = msg('user', 'Please perform task X')
+    const sessionOptions = opts([userMsg], { sessionId: 'sess-retry-after-fail' as never })
+
+    // First attempt fails the way a fast agy error does (exit 1 + envelope).
+    const res1 = await collect(adapter.stream(sessionOptions))
+    const finish1 = res1[res1.length - 1] as { type: string; reason: { kind: string } }
+    assert.equal(finish1.type, 'finish')
+    assert.equal(finish1.reason.kind, 'error')
+
+    // DSH auto-retries the same prompt. A time-only debounce wall used to
+    // swallow this as BUSY; settled runs must not block the retry.
+    process.env.FAKE_AGY_MODE = 'ok'
+    const res2 = await collect(adapter.stream(sessionOptions))
+    const finish2 = res2[res2.length - 1] as { type: string; reason: { kind: string } }
+    assert.equal(finish2.type, 'finish')
+    assert.notEqual(finish2.reason.kind, 'error', 'retry must not surface Duplicate/BUSY')
+  } finally {
+    process.env.FAKE_AGY_MODE = prevMode
+  }
+})
+
+test('a stream that preempts a live run is not debounced even with the same prompt (issue #32)', async () => {
+  const prevDelay = process.env.FAKE_AGY_DELAY_MS
+  const { adapter } = makeAdapter()
+  const userMsg = msg('user', 'Please perform task X')
+  const sessionOptions = opts([userMsg], { sessionId: 'sess-preempt-same' as never })
+
+  try {
+    process.env.FAKE_AGY_DELAY_MS = '8000'
+    const iter1 = adapter.stream(sessionOptions)[Symbol.asyncIterator]()
+    const firstChunkPromise = iter1.next()
+    // Let the first run spawn and register as the session's live run.
+    await new Promise((r) => setTimeout(r, 80))
+
+    // Same prompt again: preemption aborts the hung predecessor, so this
+    // turn owns the session and must not be rejected as a duplicate.
+    process.env.FAKE_AGY_DELAY_MS = '0'
+    const res2 = await collect(adapter.stream(sessionOptions))
+    const finish2 = res2[res2.length - 1] as { type: string; reason: { kind: string } }
+    assert.equal(finish2.type, 'finish')
+    assert.notEqual(finish2.reason.kind, 'error', 'preempting turn must not be BUSY')
+
+    // Drain the aborted first stream.
+    try {
+      const first = await firstChunkPromise
+      if (!first.done) {
+        while (!(await iter1.next()).done) {}
+      }
+    } catch { /* aborted runs may reject; that's fine */ }
+  } finally {
+    if (prevDelay === undefined) delete process.env.FAKE_AGY_DELAY_MS
+    else process.env.FAKE_AGY_DELAY_MS = prevDelay
+  }
 })
 
 test('rate limit error from agy maps to AGY_ERROR without retryable PROCESS_EXIT', async () => {
