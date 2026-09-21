@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.37 (2026-09-18)
+
+### English
+
+- **Fix: ordinary `run_code` calls lost the code card.** The keyed `tool.call.toolview` registration for `run_code` **replaces** the host's built-in code row (a keyed slot is a takeover, not an addition), so every non-mirror Code Mode program was rendered by the plugin's fallback wrapper instead of DSH's code card. That wrapper used three classes — `agy-tv-header`, `agy-tv-badge`, `agy-tv-pre` — that carry **no CSS rule at all** in this package or in the host, so the icon, title and copy affordance disappeared and the body rendered as unstyled block text; the program was also silently truncated to 400 characters.
+  - Non-mirror programs now render through a new `AgyCodeToolView` that reuses the mirror card's own styled vocabulary (`agy-tv-row`, `agy-tv-leading`, `agy-tv-title`, `agy-tv-sep`, `agy-tv-summary`, `agy-tv-card`, `agy-tv-card-content`, `agy-tv-copy-btn`): tool icon, localized title, `description` (or first program line) as the summary, click-to-expand full program, and a copy button.
+  - Mirror wrappers are unaffected: they still delegate to `AgyMirrorToolView`, and the classification is byte-for-byte unchanged.
+  - Added `code.title` / `code.inspect` / `code.copy` / `code.copied` to all four locale dictionaries, and declared `locale: NS` on the `run_code` registration so the standard `t` seat resolves them.
+
+### 中文 (Chinese)
+
+- **修复：普通 `run_code` 调用丢失代码卡片。** `run_code` 的 keyed `tool.call.toolview` 注册是**接管**而非叠加，因此每一次非镜像的 Code Mode 程序都落到插件的兜底包装上，而该包装用的 `agy-tv-header` / `agy-tv-badge` / `agy-tv-pre` 三个类在本包与宿主中**都没有任何 CSS 规则**——图标、标题与复制入口消失，正文变成无样式块级文本，程序还被静默截断到 400 字。
+  - 非镜像程序改由新的 `AgyCodeToolView` 渲染，复用镜像卡片自身的样式词汇：工具图标、本地化标题、`description`（或程序首行）摘要、点击展开全文、复制按钮。
+  - 镜像包装不受影响：仍委托 `AgyMirrorToolView`，分类结果逐字节不变。
+  - 四份词典补齐 `code.title` / `code.inspect` / `code.copy` / `code.copied`，并在 `run_code` 注册上声明 `locale: NS`，让标准 `t` 座位解析这些键。
+
 ## 0.4.36 (2026-09-18)
 
 ### English
