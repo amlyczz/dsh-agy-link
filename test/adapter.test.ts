@@ -812,34 +812,44 @@ test('multimodal: stages attached images and forwards path with view_file instru
   assert.ok(prompt2.includes('[Please inspect the attached image(s) using view_file and assist the user.]'))
 })
 
-test('identical prompt while a live run owns the session preempts and proceeds (issue #32)', async () => {
+test('identical prompt while a live run owns the session is rejected with BUSY (issue #33)', async () => {
+  const prevDelay = process.env.FAKE_AGY_DELAY_MS
   const { adapter } = makeAdapter()
   const userMsg = msg('user', 'Please perform task X')
   const sessionOptions = opts([userMsg], { sessionId: 'sess-dup-test' as never })
 
-  // Start first stream (pulling first chunk starts the generator body)
-  const iter1 = adapter.stream(sessionOptions)[Symbol.asyncIterator]()
-  const firstChunk = await iter1.next()
-  assert.ok(!firstChunk.done)
-
-  // Second identical stream preempts the live predecessor and runs — it must
-  // NOT be rejected as BUSY. Blocking here is what turned DSH auto-retries
-  // into a permanent "model unreachable" dead-end (issue #32).
-  const res2 = await collect(adapter.stream(sessionOptions))
-  const finish2 = res2[res2.length - 1] as { type: string; reason: { kind: string } }
-  assert.equal(finish2.type, 'finish')
-  assert.notEqual(
-    finish2.reason.kind,
-    'error',
-    'preempting same-prompt turn must not surface Duplicate/BUSY',
-  )
-
-  // Drain the preempted first stream (aborted or completed).
   try {
-    if (!(await iter1.next()).done) {
+    // Keep the first agy child alive long enough for the second submission
+    // to observe a live run (a long tool is silent for minutes — issue #33).
+    process.env.FAKE_AGY_DELAY_MS = '4000'
+    const iter1 = adapter.stream(sessionOptions)[Symbol.asyncIterator]()
+    const firstChunkPromise = iter1.next()
+    // Let stream() spawn and register the live run; do NOT wait for output.
+    await new Promise((r) => setTimeout(r, 80))
+
+    // Identical retry must NOT preempt/kill the live long tool — BUSY only.
+    await assert.rejects(
+      async () => {
+        const iter2 = adapter.stream(sessionOptions)
+        for await (const _ of iter2) {}
+      },
+      (err: unknown) => {
+        assert.ok(err instanceof LlmError)
+        assert.equal(err.code, Err.BUSY)
+        assert.ok(err.message.includes('Duplicate request ignored'))
+        return true
+      },
+    )
+
+    // Drain first stream so it finishes cleanly.
+    const first = await firstChunkPromise
+    if (!first.done) {
       while (!(await iter1.next()).done) {}
     }
-  } catch { /* aborted runs may reject */ }
+  } finally {
+    if (prevDelay === undefined) delete process.env.FAKE_AGY_DELAY_MS
+    else process.env.FAKE_AGY_DELAY_MS = prevDelay
+  }
 })
 
 test('retry after a settled failure is not blocked by debounce (issue #32)', async () => {
@@ -868,28 +878,24 @@ test('retry after a settled failure is not blocked by debounce (issue #32)', asy
   }
 })
 
-test('a stream that preempts a live run is not debounced even with the same prompt (issue #32)', async () => {
+test('a NEW (steered) prompt preempts a live run instead of debouncing', async () => {
   const prevDelay = process.env.FAKE_AGY_DELAY_MS
   const { adapter } = makeAdapter()
-  const userMsg = msg('user', 'Please perform task X')
-  const sessionOptions = opts([userMsg], { sessionId: 'sess-preempt-same' as never })
-
+  const firstMsg = msg('user', 'Please perform task X')
+  const steeredMsg = msg('user', 'Actually please perform task Y instead')
   try {
     process.env.FAKE_AGY_DELAY_MS = '8000'
-    const iter1 = adapter.stream(sessionOptions)[Symbol.asyncIterator]()
+    const iter1 = adapter.stream(opts([firstMsg], { sessionId: 'sess-steer-same' as never }))[Symbol.asyncIterator]()
     const firstChunkPromise = iter1.next()
-    // Let the first run spawn and register as the session's live run.
     await new Promise((r) => setTimeout(r, 80))
 
-    // Same prompt again: preemption aborts the hung predecessor, so this
-    // turn owns the session and must not be rejected as a duplicate.
+    // Different prompt = mid-turn steer: abort the predecessor and run.
     process.env.FAKE_AGY_DELAY_MS = '0'
-    const res2 = await collect(adapter.stream(sessionOptions))
+    const res2 = await collect(adapter.stream(opts([steeredMsg], { sessionId: 'sess-steer-same' as never })))
     const finish2 = res2[res2.length - 1] as { type: string; reason: { kind: string } }
     assert.equal(finish2.type, 'finish')
-    assert.notEqual(finish2.reason.kind, 'error', 'preempting turn must not be BUSY')
+    assert.notEqual(finish2.reason.kind, 'error', 'steering turn must not be BUSY')
 
-    // Drain the aborted first stream.
     try {
       const first = await firstChunkPromise
       if (!first.done) {

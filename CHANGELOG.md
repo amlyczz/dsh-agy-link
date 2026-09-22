@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.39 (2026-09-21)
+
+### English
+
+- **Fix (issue #33): DSH session interrupt during long tools (maven / compile).** An ACTIVE agy tool is silent on stdout for many minutes while it builds. The idle watchdog used the normal `timeoutMs` (default 10 min) and killed the healthy run mid-compile. While any tool step is outstanding the idle budget now rises to the print-mode ceiling (≥ 4 h) and restores to `timeoutMs` when the last tool completes (`RunningProcess.noteActivity`).
+- **Fix (issue #33): identical retries no longer preempt a live long tool.** Session ownership is decided after prompt assembly: same prompt + live run → `BUSY` (leave the maven/compile alone); different prompt + live run → steer-preempt; settled run → retry allowed (still honors issue #32).
+
+### 中文 (Chinese)
+
+- **修复 #33：耗时工具（Maven/编译）期间会话被中断。** 工具 ACTIVE 后 agy 在 stdout 上长时间静默是正常的；旧空闲看门狗按 `timeoutMs`（默认 10 分钟）把还在编译的进程杀掉。现在只要存在未完成的工具步骤，空闲预算就抬到 print-mode 上限（≥ 4 小时），工具全部结束后恢复 `timeoutMs`。
+- **修复 #33：同 prompt 重试不再抢占正在跑的长任务。** 会话所有权在 prompt 组装之后判定：同 prompt + live run → `BUSY`（不杀 Maven/编译）；不同 prompt + live run → 作为 steer 抢占；已 settle 的请求仍放行重试（兼容 #32）。
+
 ## 0.4.38 (2026-09-21)
 
 ### English

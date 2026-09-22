@@ -186,6 +186,13 @@ export interface RunningProcess {
   child: ChildProcess;
   outcome: Promise<RunOutcome>;
   kill(reason: 'timeout' | 'abort'): void;
+  /**
+   * Re-arm the activity watchdog, optionally on a different idle budget.
+   * Long-running tools (maven/compile, issue #33) go silent on stdout while
+   * they work — the adapter raises the budget when a tool step is ACTIVE and
+   * restores the normal budget when the tool completes.
+   */
+  noteActivity(budgetMs?: number): void;
 }
 
 const GRACE_MS = 5000;
@@ -294,13 +301,14 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
   }
 
   let watchdog: NodeJS.Timeout | null = null;
+  let idleBudgetMs = opts.timeoutMs;
   const refreshWatchdog = () => {
-    if (!opts.timeoutMs || opts.timeoutMs <= 0 || settled) return;
+    if (!idleBudgetMs || idleBudgetMs <= 0 || settled) return;
     if (watchdog) clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       timedOut = true;
       killTree(child);
-    }, opts.timeoutMs);
+    }, idleBudgetMs);
   };
   refreshWatchdog();
 
@@ -360,6 +368,10 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
   return {
     child,
     outcome,
+    noteActivity: (budgetMs?: number) => {
+      if (budgetMs !== undefined) idleBudgetMs = budgetMs;
+      refreshWatchdog();
+    },
     kill: (reason) => {
       if (reason === 'timeout') timedOut = true;
       else aborted = true;

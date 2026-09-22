@@ -368,21 +368,9 @@ export class AgyAdapter extends LlmAdapter {
       yield* this.driveSpan(rec, continuation.eventIndex + 1, true, isCodeMode)
       return
     }
-    // Mid-turn steer preemption: DSH claims the steered message at the next
-    // step boundary and calls stream() again (a NEW run, not a continuation).
-    // The previous run's agy process is still alive and would keep appending
-    // to the SAME conversation concurrently — abort it first. Auxiliary calls
-    // (compaction/title) neither preempt nor get tracked.
-    // When we preempt, this turn owns the session: the duplicate debounce
-    // below must not reject it just because the aborted run shares a prompt.
-    let sessionPreempted = false
-    if (!isAux && sessionKey !== '') {
-      const prev = this.activeRuns.get(sessionKey)
-      if (prev !== undefined && !prev.isSettled) {
-        prev.requestAbort?.()
-        sessionPreempted = true
-      }
-    }
+    // Session ownership (steer preemption + duplicate debounce) is decided
+    // AFTER prompt assembly below, so an identical retry can never abort a
+    // live long-running tool (issue #33), while a true steer still can.
     const catalog = this.deps.catalog.get()
     const rawModel = options.model
     const model = resolveModelSlug(rawModel)
@@ -561,17 +549,16 @@ export class AgyAdapter extends LlmAdapter {
     // is a plugin-side prompt injection. Guidance for missing_file lives in
     // /agy status via classifyToolError (commands.ts).
 
-    // Duplicate-submission debounce (double-clicks / network repeat loops).
+    // Session ownership: steer preemption + duplicate-submission debounce.
     //
-    // Reject ONLY while a live (unsettled) run still owns this session, or
-    // during the pre-spawn race where two identical stream() calls both pass
-    // the live-run check before either registers activeRuns. Once a run has
-    // settled — success, error, abort — a retry of the same prompt must go
-    // through: DSH auto-retries after failures, and a time-only wall turned
-    // every fast agy failure into a BUSY dead-end (issue #32).
-    //
-    // When this call itself preempted a live run, the session is free for
-    // this turn — never debounce it.
+    // - Identical prompt while a live run owns the session → BUSY. Never
+    //   abort it: a mid-maven/compile agy tool is silent on stdout for many
+    //   minutes (issue #33), and killing it to "retry" destroys the work.
+    // - Different prompt while a live run owns the session → preempt (steer).
+    // - Once a run has settled (success / error / abort) a retry of the same
+    //   prompt must go through: DSH auto-retries after failures, and a
+    //   time-only wall turned every fast agy failure into a BUSY dead-end
+    //   (issue #32).
     if (!isAux && sessionKey !== '') {
       const now = Date.now()
       if (this.activeSessionPrompts.size > 100) {
@@ -582,25 +569,31 @@ export class AgyAdapter extends LlmAdapter {
       const prevPrompt = this.activeSessionPrompts.get(sessionKey)
       const liveRun = this.activeRuns.get(sessionKey)
       const runLive = liveRun !== undefined && !liveRun.isSettled
-      if (!sessionPreempted && prevPrompt !== undefined && prevPrompt.prompt === prompt) {
-        // True concurrent live duplicate for the same session.
-        if (runLive) {
-          throw new LlmError(
-            'Duplicate request ignored: an identical request is already running for this session.',
-            Err.BUSY,
-          )
-        }
-        // Pre-spawn race: identical prompt, still marked inFlight, no run
-        // record yet (or the prior attempt already settled — then inFlight
-        // is false and we fall through). Keep the window tight so a user
-        // re-send after a fast failure is never swallowed.
-        if (prevPrompt.inFlight && liveRun === undefined && now - prevPrompt.startedAt < 2_000) {
-          throw new LlmError(
-            'Duplicate request ignored: an identical request is already running for this session.',
-            Err.BUSY,
-          )
-        }
+      const samePrompt = prevPrompt !== undefined && prevPrompt.prompt === prompt
+      if (runLive && samePrompt) {
+        throw new LlmError(
+          'Duplicate request ignored: an identical request is already running for this session.',
+          Err.BUSY,
+        )
       }
+      // Pre-spawn race: identical prompt, still marked inFlight, no run
+      // record yet. Keep the window tight so a user re-send after a fast
+      // failure is never swallowed.
+      if (
+        samePrompt &&
+        prevPrompt !== undefined &&
+        prevPrompt.inFlight &&
+        liveRun === undefined &&
+        now - prevPrompt.startedAt < 2_000
+      ) {
+        throw new LlmError(
+          'Duplicate request ignored: an identical request is already running for this session.',
+          Err.BUSY,
+        )
+      }
+      // Steer: a NEW prompt arrives while the previous run is still live.
+      // Abort it so two agy processes never append to the same conversation.
+      if (runLive && !samePrompt) liveRun.requestAbort?.()
       this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
     }
 
@@ -611,6 +604,17 @@ export class AgyAdapter extends LlmAdapter {
     const parser = new StreamJsonParser()
     this.deps.onParser?.(parser)
     let streamCid: string | null = null
+    // In-progress agy tool steps (ACTIVE without DONE/ERROR). While any is
+    // outstanding the child is legitimately silent on stdout (maven compile,
+    // language-server build, …) — issue #33. Raise the idle budget to the
+    // print-mode ceiling so the watchdog does not kill healthy long tools.
+    const openToolKeys = new Set<string>()
+    const printTimeoutMinutes = Math.max(240, Math.ceil(cfg.timeoutMs / 60_000))
+    const longToolIdleMs = printTimeoutMinutes * 60_000
+    let runningProc: ReturnType<typeof startAgyProcess> | null = null
+    const applyToolIdleBudget = (): void => {
+      runningProc?.noteActivity(openToolKeys.size > 0 ? longToolIdleMs : cfg.timeoutMs)
+    }
     const activeModelForArgs = activeModel === '' ? cfg.defaultModel : activeModel
     // agy does not treat process cwd as its Active Workspace — it requires
     // --add-dir. Always attach the resolved workspace root (issue #26).
@@ -624,7 +628,7 @@ export class AgyAdapter extends LlmAdapter {
       conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
       permissionMode: isAux ? 'plan' : cfg.permissionMode,
       timeoutMs: cfg.timeoutMs,
-      printTimeoutMinutes: Math.max(240, Math.ceil(cfg.timeoutMs / 60_000)),
+      printTimeoutMinutes,
       extraArgs: cfg.extraArgs,
       addDirs: effectiveAddDirs,
     })
@@ -639,7 +643,7 @@ export class AgyAdapter extends LlmAdapter {
           conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
           permissionMode: isAux ? 'plan' : cfg.permissionMode,
           timeoutMs: cfg.timeoutMs,
-          printTimeoutMinutes: Math.max(240, Math.ceil(cfg.timeoutMs / 60_000)),
+          printTimeoutMinutes,
           extraArgs: cfg.extraArgs,
           addDirs: effectiveAddDirs,
           promptViaStdin: true,
@@ -706,10 +710,30 @@ export class AgyAdapter extends LlmAdapter {
         for (const ev of parser.feed(line + '\n')) {
           if (ev.kind === 'init' && ev.conversationId) streamCid = ev.conversationId
           if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
+          if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool) {
+            // Mirror mapper's completion rule: DONE/ERROR state, or legacy
+            // events that carry output/error without an explicit state.
+            const completed =
+              ev.state === 'DONE' ||
+              ev.state === 'ERROR' ||
+              (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
+            if (!completed) {
+              if (!openToolKeys.has(ev.stepKey)) {
+                openToolKeys.add(ev.stepKey)
+                applyToolIdleBudget()
+              }
+            } else if (openToolKeys.delete(ev.stepKey)) {
+              applyToolIdleBudget()
+            }
+          }
           rec.append(ev)
         }
       },
       })
+      runningProc = proc
+      // stdout can deliver the first lines before this assignment lands —
+      // re-apply whatever tool-idle budget those events already requested.
+      applyToolIdleBudget()
       if (!isAux && sessionKey !== '') {
         rec.requestAbort = () => proc.kill('abort')
         this.activeRuns.set(sessionKey, rec)

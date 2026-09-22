@@ -126,6 +126,56 @@ test('startAgyProcess times out if child is completely silent', async () => {
   assert.equal(lines.length, 0)
 })
 
+test('noteActivity raises the idle budget so long tools are not killed (issue #33)', async () => {
+  // timeoutMs is 200ms, but the child is silent for 600ms — the same gap
+  // that would trip the watchdog if the budget were not raised. A real
+  // maven/compile tool goes quiet for many minutes while it builds.
+  const script = `
+    setTimeout(() => {
+      process.stdout.write('done\\n');
+      process.exit(0);
+    }, 600);
+  `
+  const lines: string[] = []
+  const proc = startAgyProcess({
+    bin: process.execPath,
+    args: ['-e', script],
+    timeoutMs: 200,
+    onLine: (l) => lines.push(l),
+  })
+  // Tool ACTIVE observed → adapter raises the budget (print-mode ceiling).
+  proc.noteActivity(5_000)
+  const outcome = await proc.outcome
+  assert.equal(outcome.timedOut, false, 'long silent tool must not be idle-killed')
+  assert.equal(outcome.code, 0)
+  assert.deepEqual(lines, ['done'])
+})
+
+test('noteActivity can restore the normal idle budget after a tool completes', async () => {
+  // Raise, then restore to a tiny budget: a later silent stretch must kill.
+  const script = `
+    process.stdout.write('active\\n');
+    setTimeout(() => {
+      process.stdout.write('after\\n');
+    }, 400);
+    setTimeout(() => {}, 1200);
+  `
+  const lines: string[] = []
+  const proc = startAgyProcess({
+    bin: process.execPath,
+    args: ['-e', script],
+    timeoutMs: 5_000,
+    onLine: (l) => {
+      lines.push(l)
+      if (l === 'active') proc.noteActivity(5_000)
+      if (l === 'after') proc.noteActivity(150)
+    },
+  })
+  const outcome = await proc.outcome
+  assert.equal(outcome.timedOut, true, 'restored short budget must kill the silent tail')
+  assert.deepEqual(lines, ['active', 'after'])
+})
+
 test('resolveAgyBin honors explicit agyBin config if it exists', () => {
   const found = resolveAgyBin({ agyBin: process.execPath } as never)
   assert.equal(found, process.execPath)
