@@ -78,6 +78,10 @@ type MirrorArgs = { run: string; step: number; tool: string; input?: unknown }
  * Drive one full agy turn the way DSH's agent loop would: collect a span,
  * and whenever it finishes with tool-calls, append the assistant tool-call
  * message plus the mirrored tool-result message and call stream() again.
+ *
+ * `toolResultSchema` selects how DSH stores the tool result:
+ *  - `'user'` (default, dsh-llm 0.1.x): `role: 'user'` + `source.callId`
+ *  - `'tool'` (dsh-llm 0.1.7+): `role: 'tool'` + `message.toolCallId`
  */
 async function runTurn(
   adapter: AgyAdapter,
@@ -86,6 +90,7 @@ async function runTurn(
   maxHops = 12,
   trailingPluginSnapshots = false,
   replayRuns?: RunRegistry,
+  toolResultSchema: 'user' | 'tool' = 'user',
 ): Promise<{ chunks: StreamChunk[]; toolCalls: Array<{ id: string; args: MirrorArgs }>; messages: Message[] }> {
   const messages = [...base]
   const all: StreamChunk[] = []
@@ -126,11 +131,20 @@ async function runTurn(
         output = String(error)
       }
     }
-    messages.push({
-      role: 'user',
-      content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: output }], isError }],
-      source: { kind: 'tool', callId: end.block.id },
-    } as unknown as Message)
+    if (toolResultSchema === 'tool') {
+      messages.push({
+        role: 'tool',
+        toolCallId: end.block.id,
+        content: [{ type: 'text', text: output }],
+        source: { kind: 'tool', callId: end.block.id },
+      } as unknown as Message)
+    } else {
+      messages.push({
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: end.block.id, content: [{ type: 'text', text: output }], isError }],
+        source: { kind: 'tool', callId: end.block.id },
+      } as unknown as Message)
+    }
     if (trailingPluginSnapshots) {
       messages.push({ role: 'user', content: [], source: { kind: 'plugin', plugin: 'runtime-context', form: 'snapshot', sections: [] } } as unknown as Message)
     }
@@ -495,6 +509,132 @@ test('buildDigest bounds output and keeps newest turns', () => {
   const full = buildDigest(msgs, 0, 10_000)
   assert.ok(full.includes('turn-one'))
   assert.ok(full.includes('turn-three'))
+})
+
+test('buildDigest never lets tool-result bulk eat the live task (issue #35)', () => {
+  const huge = 'x'.repeat(4_000)
+  const msgs = [
+    msg('user', 'please read block LOg2xNRy3'),
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'agy_tool', arguments: '{}' }] } as unknown as Message,
+    {
+      role: 'user',
+      content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: huge }] }],
+      source: { kind: 'tool', callId: 'c1' },
+    } as unknown as Message,
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c2', name: 'agy_tool', arguments: '{}' }] } as unknown as Message,
+    {
+      role: 'user',
+      content: [{ type: 'tool-result', toolCallId: 'c2', content: [{ type: 'text', text: huge }] }],
+      source: { kind: 'tool', callId: 'c2' },
+    } as unknown as Message,
+  ]
+  const d = buildDigest(msgs, 0, 8_000)
+  assert.ok(d.includes('please read block LOg2xNRy3'), 'task line must survive a digest saturated by tool results')
+  assert.ok(d.includes('Tool result:'), 'tool results are labeled distinctly')
+})
+
+function toolResultMsg(opts: {
+  role?: string
+  callId?: string
+  toolCallIdOnMessage?: string
+  nestedText?: string
+  sourceKind?: string
+}): Message {
+  const m: Record<string, unknown> = {
+    role: opts.role ?? 'user',
+    content: opts.nestedText !== undefined
+      ? [{ type: 'tool-result', toolCallId: opts.callId ?? 'agytc-run-1-7', content: [{ type: 'text', text: opts.nestedText }] }]
+      : [{ type: 'tool-result', toolCallId: opts.callId ?? 'agytc-run-1-7', content: [] }],
+  }
+  if (opts.toolCallIdOnMessage !== undefined) m.toolCallId = opts.toolCallIdOnMessage
+  if (opts.callId !== undefined || opts.sourceKind !== undefined) {
+    m.source = { kind: opts.sourceKind ?? 'tool', callId: opts.callId ?? 'agytc-run-1-7' }
+  }
+  return m as unknown as Message
+}
+
+test('detectContinuation accepts dsh-llm 0.1.7 role:tool results (issue #34)', () => {
+  // 0.1.7: role 'tool', callId on the message
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResultMsg({ role: 'tool', toolCallIdOnMessage: 'agytc-run-1-7' })]),
+    { runId: 'run-1', eventIndex: 7 },
+  )
+  // callId only in source, role still 'tool'
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResultMsg({ role: 'tool', callId: 'agytc-run-2-3' })]),
+    { runId: 'run-2', eventIndex: 3 },
+  )
+  // callId only on the nested tool-result block
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResultMsg({ role: 'tool' })]),
+    { runId: 'run-1', eventIndex: 7 },
+  )
+  // role 'tool' but NOT our mirror call id
+  assert.equal(
+    detectContinuation([msg('user', 'q'), toolResultMsg({ role: 'tool', toolCallIdOnMessage: 'bash-9' })]),
+    null,
+  )
+  // human message still wins over a preceding tool result
+  assert.equal(
+    detectContinuation([toolResultMsg({ role: 'tool', toolCallIdOnMessage: 'agytc-run-1-7' }), msg('user', 'follow up')]),
+    null,
+  )
+})
+
+test('prompt keeps the user task when the trailing span is tool-results only (issue #34)', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-taskkeep.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  // Simulate a post-tool hop that is NOT recognized as a mirror continuation
+  // (foreign/legacy call id): trailing span is tool-role only and must still
+  // carry the live task plus the nested tool-result text.
+  const messages = [
+    msg('user', 'do the Roam thing'),
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'legacy-1', name: 'other_tool', arguments: '{}' }] } as unknown as Message,
+    toolResultMsg({ role: 'tool', toolCallIdOnMessage: 'legacy-1', callId: 'legacy-1', nestedText: 'partial tool output' }),
+  ]
+  await collect(adapter.stream(opts(messages, { sessionId: 'sess-task' as never })))
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt.includes('do the Roam thing'), 'task text must be in the prompt: ' + prompt.slice(0, 200))
+  assert.ok(prompt.includes('partial tool output'), 'nested tool-result text is forwarded')
+})
+
+test('role:tool continuation (dsh-llm 0.1.7) resumes one process across spans (issues #34/#35)', async () => {
+  const reports: Array<{ processOk: boolean; processCode: string; toolErrors: readonly string[] }> = []
+  const { adapter } = makeAdapter({}, { onRun: (info) => reports.push(info) })
+  process.env.FAKE_AGY_MODE = 'real-error'
+  const { toolCalls, chunks } = await runTurn(
+    adapter,
+    [msg('user', 'count the files')],
+    { sessionId: 'sess-toolrole' as never },
+    12,
+    false,
+    undefined,
+    'tool',
+  )
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+  assert.equal(toolCalls.length, 2, 'both tool spans should cut and continue')
+  const report = await waitFor(() => reports[0])
+  assert.equal(reports.length, 1, 'role:tool results must resume the same run, not spawn a new agy process')
+  assert.equal(report.processOk, true)
+})
+
+test('region eligibility refusal maps to a clear AGY_ERROR (issue #32)', async () => {
+  const { adapter } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'exit-eligible'
+  const chunks = await collect(adapter.stream(opts([msg('user', '测试')], { sessionId: 'sess-elig' as never })))
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string; failure?: { message: string; code: string } } }
+  assert.equal(finish.type, 'finish')
+  assert.equal(finish.reason.kind, 'error')
+  assert.equal(finish.reason.failure?.code, 'AGY_ERROR')
+  assert.ok(
+    finish.reason.failure?.message.includes('not eligible') || finish.reason.failure?.message.includes('Antigravity'),
+    'message should explain the eligibility/region refusal: ' + finish.reason.failure?.message,
+  )
+  assert.ok(finish.reason.failure?.message.includes('location'), finish.reason.failure?.message)
 })
 
 function msgSrc(role: 'user' | 'assistant', text: string, provider?: string): Message {

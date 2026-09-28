@@ -191,6 +191,21 @@ export function looksLikeAuthFailure(text: string): boolean {
   )
 }
 
+/**
+ * Google-side account/region eligibility refusals (issue #32). agy exits 1
+ * with "Eligibility check failed: … not currently available in your
+ * location" — not an auth bug and not something the bridge can retry past.
+ */
+export function looksLikeEligibilityFailure(text: string): boolean {
+  return /eligibility check failed|not eligible for antigravity|not currently available in your (?:location|country|region)|not available in your (?:location|country|region)/i.test(
+    text,
+  )
+}
+
+/** One-line guidance for an eligibility refusal (shown in the turn error). */
+export const ELIGIBILITY_ERROR_HINT =
+  'Google Antigravity is not eligible for this account/region. Use an account and network location where Antigravity is available (see https://antigravity.google).'
+
 // Google OAuth consent URL pattern; trailing punctuation is trimmed.
 export function extractAuthUrl(text: string): string | undefined {
   const m = text.match(/https:\/\/accounts\.google\.com\/\S+/)

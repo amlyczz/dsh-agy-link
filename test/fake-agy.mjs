@@ -62,6 +62,23 @@ if (mode === 'exit12') {
   process.exit(12)
 }
 
+// Google-side account/region eligibility refusal (issue #32).
+if (mode === 'exit-eligible') {
+  emit({
+    event: 'result',
+    result: {
+      conversation_id: '',
+      status: 'ERROR',
+      response: '',
+      error: 'Eligibility check failed: Your current account is not eligible for Antigravity, because it is not currently available in your location.',
+      duration_seconds: 0.4,
+      num_turns: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  })
+  process.exit(1)
+}
+
 // Real failure shape seen in the wild (silent server-side errors): agy
 // writes ONLY a result envelope with a human-readable error to stdout and
 // exits 1 with empty stderr. Used to regress the bare "exited with code 1"

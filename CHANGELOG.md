@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.40 (unreleased)
+
+### English
+
+- **Fix (issue #34): post-tool hops dropped the task text and images.** dsh-llm 0.1.7 promotes tool results to `role: 'tool'` (0.1.x used `role: 'user'` + `source.callId`). `detectContinuation` and the trailing-span extractor only accepted the 0.1.x shape, so every hop after the first tool round-trip lost the mirror continuation, assembled an empty/digest-only prompt (`request carries no user text` or "what should I do next?"), and silently dropped image attachments. Both schemas are now accepted (`message.toolCallId`, `source.callId`, nested `tool-result` blocks); nested tool-result text and images are forwarded.
+- **Fix (issue #35): continuation prompts must keep the live task.** `buildDigest` used to let a wall of tool-result text consume the 8K budget and truncate the user's question away. The latest real user turn is now reserved at the head of the digest; the assembled prompt always re-states it whenever the trailing span is tool-results only. A dead loop of "read my own agy logs" with no task can no longer start.
+- **Fix (issue #35): aborted runs now persist the agy conversation id.** Binding was only written when `failure === null`, but a tool-cut / caller abort / timeout is exactly the path that used to drop it — so the next hop always started a brand-new agy conversation (`conversationID=""`) with digest-only prompt. The id is now harvested from a live run before steer-preemption and persisted on abort/timeout/process-exit (auth / rate-limit / conversation-rejected still drop the binding).
+- **Fix (issue #32): region eligibility refusals get a clear cause.** agy exits 1 with `Eligibility check failed: … not currently available in your location` (e.g. Seoul). This is a Google-side account/region restriction, not a proxy or quota bug. The bridge now classifies it and surfaces an explicit `AGY_ERROR` with guidance instead of a bare `PROCESS_EXIT`.
+
+### 中文 (Chinese)
+
+- **修复 #34：工具往返之后任务文本和图片丢失。** dsh-llm 0.1.7 把工具结果提升为 `role: 'tool'`（0.1.x 是 `role: 'user'` + `source.callId`）。`detectContinuation` 与尾部消息提取只认 0.1.x 形态，于是第一次工具往返之后的每一跳都丢掉镜像续跑，拼出空 prompt 或纯 digest（`request carries no user text`，或 agy 反问「接下来做什么」），图片附件也一并丢失。现在两种 schema 都识别（`message.toolCallId` / `source.callId` / 嵌套 `tool-result`），嵌套工具结果文本与图片会一并转发。
+- **修复 #35：续跑提示词必须保住任务。** 旧 `buildDigest` 允许大段工具结果吃掉 8K 预算，把用户的问题截掉。现在最新一条真实用户消息固定保留在 digest 开头；只要尾部只有工具结果，组装出的 prompt 也会重申该任务。「反复读自己日志、没有题目」的死循环不会再出现。
+- **修复 #35：aborted 路径也会落库 conversationId。** 旧逻辑只在 `failure === null` 时写 binding，而工具切断 / 调用方中止 / 超时恰恰是最容易丢 id 的路径——下一跳于是每次都开全新 agy 会话（`conversationID=""`）+ 纯 digest。现在会在 steer 抢占前从 live run 收割 id，并在 abort/timeout/process-exit 时落库（auth / 限流 / 会话失效仍会删除 binding）。
+- **修复 #32：地区资格拒绝给出明确原因。** agy 以 `Eligibility check failed: … not currently available in your location` 退出（例如首尔）。这是 Google 账号/地区限制，不是代理或额度问题。桥接层现在会识别并给出明确的 `AGY_ERROR` 与指引，而不是裸的 `PROCESS_EXIT`。
+
 ## 0.4.39 (2026-09-21)
 
 ### English

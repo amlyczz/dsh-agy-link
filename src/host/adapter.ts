@@ -7,7 +7,7 @@
 // first bind (ADR-7).
 import { join } from 'node:path'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Err, looksLikeAuthFailure, looksLikeHardRateLimit, looksLikeRateLimit, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { Err, looksLikeAuthFailure, looksLikeEligibilityFailure, looksLikeHardRateLimit, looksLikeRateLimit, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
@@ -22,13 +22,70 @@ import type { SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
 import { getGitHeadContent } from './mirror-tool.ts'
 
-type ForeignSource = { source?: { kind?: string; provider?: string } }
+type ForeignSource = { source?: { kind?: string; provider?: string; callId?: string } }
 
+/** Loose content-block view spanning dsh-llm schema revisions. */
+type UnknownBlock = {
+  type?: string
+  text?: string
+  content?: readonly unknown[]
+  toolCallId?: unknown
+  attachment?: unknown
+  attachmentId?: unknown
+}
+
+/**
+ * True for a tool-result message across dsh-llm schema revisions.
+ *
+ * 0.1.x: `role: 'user'` + `source: { kind: 'tool', callId }` and a sole
+ * `tool-result` content block. 0.1.7+ promotes tool results to
+ * `role: 'tool'` with `toolCallId` on the message itself. A call that only
+ * looks at `role === 'user'` drops the whole trailing span after the first
+ * tool round-trip (issues #34 / #35).
+ */
+function isToolResultMessage(m: Message): boolean {
+  const role = (m as { role?: string }).role
+  if (role === 'tool') return true
+  const src = (m as unknown as ForeignSource).source
+  if (src?.kind === 'tool') return true
+  const content = m.content
+  return (
+    Array.isArray(content) &&
+    content.length > 0 &&
+    content.every((b) => (b as UnknownBlock | undefined)?.type === 'tool-result')
+  )
+}
+
+/**
+ * Correlation id of a tool-result message. Accepts `message.toolCallId`
+ * (0.1.7+), `source.callId` (0.1.x), and nested `tool-result` blocks.
+ */
+export function toolCallIdOf(m: Message): string | null {
+  const direct = (m as { toolCallId?: unknown }).toolCallId
+  if (typeof direct === 'string' && direct !== '') return direct
+  const src = (m as unknown as ForeignSource).source
+  if (typeof src?.callId === 'string' && src.callId !== '') return src.callId
+  for (const raw of (m.content as readonly UnknownBlock[] | undefined) ?? []) {
+    const b = raw as UnknownBlock | undefined
+    if (b?.type === 'tool-result' && typeof b.toolCallId === 'string' && b.toolCallId !== '') {
+      return b.toolCallId
+    }
+  }
+  return null
+}
+
+/** Flatten visible text, including nested tool-result payloads. */
 function textOf(m: Message): string {
   const parts: string[] = []
-  for (const b of m.content) {
-    if (b.type === 'text') parts.push(b.text)
+  const walk = (blocks: readonly unknown[] | undefined): void => {
+    for (const raw of blocks ?? []) {
+      const b = raw as UnknownBlock | undefined
+      if (b === undefined) continue
+      if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text)
+      else if (b.type === 'tool-result' && Array.isArray(b.content)) walk(b.content)
+    }
   }
+  walk(m.content as readonly unknown[] | undefined)
   return parts.filter((s) => s !== '').join('\n')
 }
 
@@ -38,25 +95,91 @@ function isForeignAssistant(m: Message): boolean {
   return !src || src.provider !== PROVIDER_ID
 }
 
-/** Rolling digest of turns this agy conversation has not seen (ADR-7). */
+/**
+ * Latest real human turn (not a tool result, not assistant). This is the
+ * live task; a digest or tool-result-only trailing span must never drop it
+ * (issue #35: "续跑提示词里没有任务").
+ */
+export function latestUserTaskText(messages: readonly Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m === undefined || m.role === 'system' || m.role === 'assistant') continue
+    if (isToolResultMessage(m)) continue
+    const text = textOf(m)
+    if (text !== '') return text
+  }
+  return ''
+}
+
+/** Collect image refs from a message, walking nested tool-result payloads. */
+function collectImageRefs(m: Message, out: ImageRefLike[]): void {
+  const walk = (blocks: readonly unknown[] | undefined): void => {
+    for (const raw of blocks ?? []) {
+      const b = raw as UnknownBlock | undefined
+      if (b === undefined) continue
+      if (b.type === 'image') {
+        if (b.attachment && typeof b.attachment === 'object') {
+          out.push(b.attachment as ImageRefLike)
+        } else if (typeof b.attachmentId === 'string') {
+          out.push(b as unknown as ImageRefLike)
+        }
+      } else if (b.type === 'tool-result' && Array.isArray(b.content)) {
+        walk(b.content)
+      }
+    }
+  }
+  walk(m.content as readonly unknown[] | undefined)
+}
+
+function digestLabel(m: Message): string {
+  if (isToolResultMessage(m)) return 'Tool result: '
+  return m.role === 'user' ? 'User: ' : 'Assistant: '
+}
+
+/**
+ * Rolling digest of turns this agy conversation has not seen (ADR-7).
+ *
+ * Budget policy (issue #35): the latest real user task is reserved first so
+ * a wall of tool-result text can never truncate the question away. Remaining
+ * budget is filled from the newest other turns.
+ */
 export function buildDigest(messages: readonly Message[], fromIdx: number, maxChars: number): string {
-  const parts: string[] = []
-  let budget = maxChars
-  for (let i = messages.length - 1; i >= fromIdx; i--) {
+  const taskText = latestUserTaskText(messages.slice(fromIdx))
+  const taskLine = taskText !== '' ? 'User: ' + taskText : ''
+  const otherLines: string[] = []
+  for (let i = fromIdx; i < messages.length; i++) {
     const m = messages[i]
     if (m === undefined || m.role === 'system') continue
     const text = textOf(m)
     if (text === '') continue
-    const line = (m.role === 'user' ? 'User: ' : 'Assistant: ') + text
+    if (taskLine !== '' && !isToolResultMessage(m) && m.role === 'user' && text === taskText) continue
+    otherLines.push(digestLabel(m) + text)
+  }
+
+  let budget = maxChars
+  const kept: string[] = []
+  if (taskLine !== '') {
+    if (taskLine.length > budget) {
+      kept.push(taskLine.slice(0, Math.max(0, budget)))
+      budget = 0
+    } else {
+      kept.push(taskLine)
+      budget -= taskLine.length
+    }
+  }
+  const keptOther: string[] = []
+  for (let i = otherLines.length - 1; i >= 0 && budget > 0; i--) {
+    const line = otherLines[i]!
     if (line.length > budget) {
-      parts.unshift(line.slice(0, Math.max(0, budget)))
+      keptOther.unshift(line.slice(0, Math.max(0, budget)))
       break
     }
+    keptOther.unshift(line)
     budget -= line.length
-    parts.unshift(line)
   }
-  if (parts.length === 0) return ''
-  return '[conversation so far]\n' + parts.join('\n\n') + '\n[end of conversation so far]\n\n'
+  kept.push(...keptOther)
+  if (kept.length === 0) return ''
+  return '[conversation so far]\n' + kept.join('\n\n') + '\n[end of conversation so far]\n\n'
 }
 
 export interface AgyAdapterDeps {
@@ -406,7 +529,13 @@ export class AgyAdapter extends LlmAdapter {
         break
       }
     }
-    const trailingUser = messages.slice(lastAssistantIdx + 1).filter((m) => m.role === 'user')
+    // Include tool-role messages (dsh-llm 0.1.7+) in the trailing span. A
+    // post-tool hop's trailing run is otherwise empty and the call is
+    // dispatched with no task at all (issue #34).
+    const trailingUser = messages.slice(lastAssistantIdx + 1).filter((m) => {
+      const role = (m as { role?: string }).role
+      return role === 'user' || role === 'tool'
+    })
 
     // Sliding-window rate limit protection per minute (for overnight batch / /goal stability)
     if (!isAux && cfg.rateLimitPerMinute > 0) {
@@ -451,6 +580,23 @@ export class AgyAdapter extends LlmAdapter {
     const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
     let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
 
+    // If a live run already owns this session and has named an agy
+    // conversation, adopt it before prompt assembly. A tool-cut or caller
+    // abort used to drop that id entirely, so the next hop started a brand
+    // new conversation with a digest-only prompt (issue #35).
+    if (binding === undefined && !isAux && sessionKey !== '') {
+      const live = this.activeRuns.get(sessionKey)
+      const liveCid = live !== undefined && !live.isSettled ? live.conversationId : null
+      if (liveCid) {
+        binding = {
+          conversationId: liveCid,
+          lastMessageCount: Math.max(0, lastAssistantIdx + 1),
+          updatedAt: Date.now(),
+          model: activeModel === '' ? cfg.defaultModel : activeModel,
+        }
+      }
+    }
+
     // Model switch detection: If model changed in the session, drop stale agy conversation binding
     const currentModel = activeModel === '' ? cfg.defaultModel : activeModel
     if (!isAux && binding !== undefined && binding.model && binding.model !== currentModel) {
@@ -482,7 +628,19 @@ export class AgyAdapter extends LlmAdapter {
       prompt = '[summarize this conversation for context compaction]\n\n' + parts.join('\n\n') + '\n\nProduce a compact summary that preserves decisions, file paths, and open tasks.'
     } else {
       const trailingText = trailingUser.map(textOf).filter((s) => s !== '')
-      prompt = trailingText.join('\n\n')
+      // A tool-result-only trailing span used to assemble an empty prompt
+      // (or a digest that had already eaten the task). Always re-state the
+      // latest real user turn so agy never runs without a question
+      // (issues #34 / #35).
+      const taskText = latestUserTaskText(messages)
+      const trailingJoined = trailingText.join('\n\n')
+      if (taskText !== '') {
+        prompt = trailingText.includes(taskText) || trailingJoined.includes(taskText)
+          ? trailingJoined
+          : (trailingJoined === '' ? taskText : taskText + '\n\n' + trailingJoined)
+      } else {
+        prompt = trailingJoined
+      }
       if (binding === undefined && lastAssistantIdx >= 0) {
         // First contact: bring agy up to speed with a bounded digest.
         prompt = buildDigest(messages, 0, cfg.digestMaxChars) + prompt
@@ -509,15 +667,16 @@ export class AgyAdapter extends LlmAdapter {
     if (!isAux) {
       const imageRefs: ImageRefLike[] = []
       for (const m of trailingUser) {
-        for (const b of (m as { content?: readonly unknown[] }).content ?? []) {
-          const blk = b as { type?: string; attachment?: ImageRefLike; attachmentId?: string }
-          if (blk && blk.type === 'image') {
-            if (blk.attachment && typeof blk.attachment === 'object') {
-              imageRefs.push(blk.attachment)
-            } else if (typeof blk.attachmentId === 'string') {
-              imageRefs.push(blk as unknown as ImageRefLike)
-            }
-          }
+        // Walk nested tool-result payloads too — attachments after a tool
+        // hop used to be silently dropped on exactly those calls (issue #34).
+        collectImageRefs(m, imageRefs)
+      }
+      // Also pick up images attached to earlier user turns in this request
+      // when the trailing span itself carries none (tool-hop case).
+      if (imageRefs.length === 0) {
+        for (const m of messages) {
+          if (m.role !== 'user' || isToolResultMessage(m)) continue
+          collectImageRefs(m, imageRefs)
         }
       }
       if (imageRefs.length > 0 && this.deps.readImage) {
@@ -593,7 +752,27 @@ export class AgyAdapter extends LlmAdapter {
       }
       // Steer: a NEW prompt arrives while the previous run is still live.
       // Abort it so two agy processes never append to the same conversation.
-      if (runLive && !samePrompt) liveRun.requestAbort?.()
+      if (runLive && !samePrompt) {
+        // Harvest the live conversation id BEFORE aborting: a tool-cut or
+        // caller abort used to drop the binding entirely, so the replacement
+        // process started a brand-new agy conversation with digest-only
+        // prompt (issue #35 root cause ②).
+        const liveCid = liveRun.conversationId
+        if (
+          liveCid !== null &&
+          binding === undefined &&
+          !isAux &&
+          sessionAccountKey !== ''
+        ) {
+          binding = {
+            conversationId: liveCid,
+            lastMessageCount: Math.max(0, lastAssistantIdx + 1),
+            updatedAt: Date.now(),
+            model: currentModel,
+          }
+        }
+        liveRun.requestAbort?.()
+      }
       this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
     }
 
@@ -777,6 +956,15 @@ export class AgyAdapter extends LlmAdapter {
       } else if (isRateLimit) {
         const bestMsg = parser.stats.lastResultError || (outcome.stderrTail ? brief(outcome.stderrTail) : 'Rate limit or quota reached')
         failure = { kind: 'error', code: Err.AGY_ERROR, message: 'Google Antigravity quota / rate limit reached: ' + bestMsg }
+      } else if (looksLikeEligibilityFailure(rawErrText) || looksLikeEligibilityFailure(parser.stats.lastResultError ?? '')) {
+        // Region/account eligibility refusal (issue #32): a clear cause, not a
+        // generic PROCESS_EXIT. Not retryable from this bridge.
+        const detail = parser.stats.lastResultError ?? (outcome.stderrTail !== '' ? brief(outcome.stderrTail) : '')
+        failure = {
+          kind: 'error',
+          code: Err.AGY_ERROR,
+          message: ELIGIBILITY_ERROR_HINT + (detail !== '' ? ' (' + detail + ')' : ''),
+        }
       } else if (!consumable) {
         if (outcome.code !== 0) {
           // agy reports its failure on STDOUT as a result envelope and often
@@ -816,14 +1004,27 @@ export class AgyAdapter extends LlmAdapter {
         if (account && (failure.code === Err.AUTH || /invalid_grant|not signed in|auth/i.test(failure.message))) {
           this.deps.pool?.markAuthRequired(account.id, failure.message)
         }
-        if (!isAux && sessionAccountKey !== '') {
-          if (
-            failure.code === Err.AUTH ||
-            effectiveRateLimit ||
-            (failure.message && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
-          ) {
-            // If auth expired or rate limit hit or conversation rejected, drop stale binding
-            this.deps.store.delete(sessionAccountKey)
+        const staleConversation =
+          failure.code === Err.AUTH ||
+          effectiveRateLimit ||
+          (failure.message && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
+        if (!isAux && sessionAccountKey !== '' && staleConversation) {
+          // If auth expired or rate limit hit or conversation rejected, drop stale binding
+          this.deps.store.delete(sessionAccountKey)
+        } else if (!isAux && sessionAccountKey !== '' && !staleConversation) {
+          // Abort / timeout / process-exit still leave a usable agy
+          // conversation behind once init or the result envelope named one.
+          // Persisting it here is what lets the next hop continue instead of
+          // starting a fresh conversation with a digest-only prompt
+          // (issue #35 root cause ②: "aborted 分支永远存不下来").
+          const finalId = binding !== undefined ? binding.conversationId : conversationId
+          if (finalId) {
+            this.deps.store.set(sessionAccountKey, {
+              conversationId: finalId,
+              lastMessageCount: messages.length,
+              updatedAt: Date.now(),
+              model: activeModel,
+            })
           }
         }
       }
@@ -977,6 +1178,11 @@ export class AgyAdapter extends LlmAdapter {
  * Detect a continuation span: the request's LAST message is the tool result
  * of one of our mirrored agy tool calls. Its callId encodes the recording
  * run and the event index to resume after.
+ *
+ * Accepts both dsh-llm tool-result shapes: `role: 'user'` + `source.callId`
+ * (0.1.x) and `role: 'tool'` + `message.toolCallId` (0.1.7+). Rejecting the
+ * latter made every post-tool hop spawn a fresh agy process with a
+ * digest-only prompt (issues #34 / #35).
  */
 export function detectContinuation(messages: readonly Message[]): { runId: string; eventIndex: number } | null {
   // DSH may append plugin-owned snapshots after it stores a tool result.
@@ -992,8 +1198,11 @@ export function detectContinuation(messages: readonly Message[]): { runId: strin
     i--
   }
   const last = messages[i]
-  if (last === undefined || last.role !== 'user') return null
-  const src = (last as unknown as { source?: { kind?: string; callId?: string } }).source
-  if (src === undefined || src.kind !== 'tool' || typeof src.callId !== 'string') return null
-  return parseMirrorCallId(src.callId)
+  if (last === undefined) return null
+  const role = (last as { role?: string }).role
+  if (role !== 'user' && role !== 'tool') return null
+  if (!isToolResultMessage(last)) return null
+  const callId = toolCallIdOf(last)
+  if (callId === null) return null
+  return parseMirrorCallId(callId)
 }
