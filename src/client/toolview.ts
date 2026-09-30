@@ -1095,7 +1095,7 @@ const ROW_CSS = `
 
 /* Diff stat badge (+10 -2) */
 .agy-tv-diff-stat {
-	font-family: var(--dsw-font-family-code, ui-monospace, monospace);
+	font-family: var(--ds-font-family-code, ui-monospace, monospace);
 	font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 2px);
 	color: var(--dsw-alias-label-caption, #94a3b8);
 	margin-left: 10px;
@@ -1104,7 +1104,7 @@ const ROW_CSS = `
 
 /* Preview text */
 .agy-tv-preview {
-	font-family: var(--dsw-font-family-code, ui-monospace, monospace);
+	font-family: var(--ds-font-family-code, ui-monospace, monospace);
 	font-size: 11px;
 	color: var(--dsw-alias-label-caption, #94a3b8);
 	margin-left: 8px;
@@ -1125,7 +1125,7 @@ const ROW_CSS = `
 .agy-tv-card {
 	border: 0.5px solid var(--dsw-alias-border-l1, #e2e8f0);
 	background: var(--dsw-alias-markdown-code-block, #f8fafc);
-	font-family: var(--dsw-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+	font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
 	font-size: 12px;
 	line-height: 1.55;
 	border-radius: 12px;

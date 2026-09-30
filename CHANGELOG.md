@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix: code cards referenced a non-existent font token, so the code font silently fell back to the hardcoded stack.** `ROW_CSS` spelled the DSH code-font token as `--dsw-font-family-code`, but the real token is `--ds-font-family-code` (no `w`). The mistyped name has zero definitions anywhere in DSH, so every `var(--dsw-font-family-code, <fallback>)` resolved to its hardcoded fallback (`ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`), which carries no CJK coverage — Chinese text inside agy tool cards rendered in the OS default (SimSun / Microsoft YaHei) instead of the host's configured code font. The three affected selectors are `.agy-tv-card` (whose `font-family` is inherited by the header, copy button and body), `.agy-tv-preview` and `.agy-tv-diff-stat`.
+
+### 中文 (Chinese)
+
+- **修复：代码卡片引用了一个不存在的字体 token，导致代码字体静默回落到硬编码兜底栈。** `ROW_CSS` 里把 DSH 的代码字体 token 写成了 `--dsw-font-family-code`，而真实 token 是 `--ds-font-family-code`（无 `w`）。这个拼错的名称在整个 DSH 代码库里零定义，因此每一处 `var(--dsw-font-family-code, <兜底>)` 都取到硬编码兜底值 `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`——该栈不含中文字形，导致 agy 工具卡片里的中文以系统默认字体（宋体 / 微软雅黑）渲染，而非宿主配置的代码字体。受影响的三个选择器是 `.agy-tv-card`（其 `font-family` 会向下继承到标题栏、复制按钮与正文）、`.agy-tv-preview` 与 `.agy-tv-diff-stat`。
+
 ## 0.4.42 (2026-09-30)
 
 ### English
