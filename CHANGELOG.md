@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.42 (2026-09-30)
+
+### English
+
+- **Fix: provisioned pool keychains are now set to never auto-lock.** A created keychain can lock later (system sleep / lock policy); a locked keychain turns every agy keyring save into an unanswerable password dialog — the keychain password is random and only the plugin knows it, so the user's login password is always rejected. `ensureIsolatedKeychain` now applies never-auto-lock settings on every boot/spawn/login (idempotent), not just at creation.
+
+### 中文 (Chinese)
+
+- **修复：预置的池账号钥匙串现在设置为永不自动锁。** 新建的钥匙串之后可能被系统上锁（系统睡眠/锁定策略）；一旦上锁，agy 的每次 keyring 保存都会弹一个**无法回答**的密码框——钥匙串密码是随机的、只有插件自己知道，用户输登录密码永远不对。`ensureIsolatedKeychain` 现在在每次启动/拉起/登录时都会幂等地套用"永不自动锁"设置，而不仅仅在创建时。
+
 ## 0.4.41 (2026-09-30)
 
 ### English
