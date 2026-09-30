@@ -110,6 +110,7 @@ export function resolveConfig(
     logRetentionDays: asNum(get('logRetentionDays')) ?? base.logRetentionDays,
     disableTelemetry: asBool(get('disableTelemetry')) ?? base.disableTelemetry,
     quotaPollIntervalMs: asNum(get('quotaPollIntervalMs')) ?? base.quotaPollIntervalMs,
+    proxyUrl: asString(get('proxyUrl')) ?? base.proxyUrl,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -162,5 +163,6 @@ export function resolveConfig(
     const q = asNum(env.DSH_AGY_QUOTA_POLL_INTERVAL_MS)
     if (q && q >= 60_000) cfg.quotaPollIntervalMs = q
   }
+  if (env.DSH_AGY_PROXY_URL) cfg.proxyUrl = env.DSH_AGY_PROXY_URL
   return cfg
 }

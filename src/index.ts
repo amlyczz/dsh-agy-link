@@ -18,7 +18,7 @@ import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
 import { ModelCatalog } from './host/models.ts'
 import { RunRegistry } from './host/recording.ts'
-import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess, resolveAgyBin } from './host/runner.ts'
+import { MIN_AGY_VERSION, compareVersions, ensureIsolatedKeychain, isolatedHomeEnv, parseVersion, probeProcess, proxyEnvFor, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
 import { AccountPoolManager } from './host/pool.ts'
 import { PoolAuthFlow } from './host/pool-auth.ts'
@@ -90,7 +90,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   const version = () => versionCache
   const store = new SessionStore(join(stateDir(), 'sessions.json'))
   const pool = new AccountPoolManager()
-  const quota = new QuotaService(pool)
+  const quota = new QuotaService(pool, () => getConfig().proxyUrl)
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
 
   const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv => {
@@ -106,16 +106,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           }
         : {}),
       ...(account && account.dir ? isolatedHomeEnv(account.dir) : {}),
-      ...(account?.proxyUrl
-        ? {
-            ALL_PROXY: account.proxyUrl,
-            HTTPS_PROXY: account.proxyUrl,
-            HTTP_PROXY: account.proxyUrl,
-            all_proxy: account.proxyUrl,
-            https_proxy: account.proxyUrl,
-            http_proxy: account.proxyUrl,
-          }
-        : {}),
+      ...proxyEnvFor(account?.proxyUrl || cfg.proxyUrl || undefined),
     }
   }
 
@@ -162,6 +153,15 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   if (swept > 0) log('swept ' + swept + ' stale staging dir(s)')
   const logsSwept = pool.sweepOldLogs(getConfig().logRetentionDays)
   if (logsSwept > 0) log('swept ' + logsSwept + ' old log file(s)')
+  // Provision per-account login keychains for isolated pool homes (macOS):
+  // without one, agy's keyring save pops the system "create login keychain"
+  // password dialog on every token refresh. Idempotent; pre-existing homes
+  // from older versions are covered here too.
+  let kcProvisioned = 0
+  for (const acc of pool.getAccounts()) {
+    if (acc.dir && ensureIsolatedKeychain(acc.dir)) kcProvisioned++
+  }
+  if (kcProvisioned > 0) log('provisioned isolated keychains for ' + kcProvisioned + ' pool account(s)')
 
   const adapter = new AgyAdapter({
     getConfig,
@@ -418,7 +418,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const body = await readBody(req)
         const homeDir = typeof body.homeDir === 'string' ? body.homeDir : undefined
         const accountId = typeof body.accountId === 'string' ? body.accountId : undefined
-        const st = await auth.begin(homeDir, accountId)
+        const proxyUrl = typeof body.proxyUrl === 'string' && body.proxyUrl.trim() !== ''
+          ? body.proxyUrl.trim()
+          : (getConfig().proxyUrl.trim() || undefined)
+        const st = await auth.begin(homeDir, accountId, proxyUrl)
         sendJson(res as RawRes, 200, st)
       })()
     }})
@@ -470,7 +473,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const alias = typeof body.alias === 'string' ? body.alias : undefined
-        const proxyUrl = typeof body.proxyUrl === 'string' ? body.proxyUrl : undefined
+        const proxyUrl = typeof body.proxyUrl === 'string' && body.proxyUrl.trim() !== ''
+          ? body.proxyUrl.trim()
+          : (getConfig().proxyUrl.trim() || undefined)
         const st = await poolAuth.begin(alias, proxyUrl)
         sendJson(res as RawRes, st.ok ? 200 : 500, st)
       })()

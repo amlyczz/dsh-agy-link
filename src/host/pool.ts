@@ -331,6 +331,7 @@ export class AccountPoolManager {
     const acc = this.getAccount(id)
     if (!acc) return
     acc.authRequired = true
+    acc.authMarkedAt = Date.now()
     acc.authError = reason || 'Authentication expired or revoked (invalid_grant)'
     if (this.data.activeAccountIds) {
       for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
@@ -354,6 +355,7 @@ export class AccountPoolManager {
     acc.quotas = {}
     delete acc.authRequired
     delete acc.authError
+    delete acc.authMarkedAt
     this.persist()
   }
 
@@ -362,6 +364,7 @@ export class AccountPoolManager {
     if (!acc) return
     delete acc.authRequired
     delete acc.authError
+    delete acc.authMarkedAt
     this.persist()
   }
 
@@ -462,6 +465,7 @@ export class AccountPoolManager {
     if (acc.authRequired) {
       delete acc.authRequired
       delete acc.authError
+      delete acc.authMarkedAt
     }
     if (acc.cooldowns[family]) {
       delete acc.cooldowns[family]

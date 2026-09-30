@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.4.40 (unreleased)
+## 0.4.41 (2026-09-30)
+
+### English
+
+- **Fix: the UI Stop button could not kill an offline wedged run.** `killTree` sent a single SIGTERM to the process group; agy's graceful-shutdown path ignores it while the process is wedged in offline dial retries (verified live: the run survived `kill <pid>` and only died on `kill -9`). The runner now escalates to SIGKILL for the whole group 3s after SIGTERM, so Stop always wins.
+- **Fix: offline runs spun on "thinking" forever.** The idle watchdog treated stderr chatter as activity — agy logs a dial-retry line to stderr every ~35s when it cannot reach Google, so a run that never emitted one stdout event stayed "active" until the 240m print-timeout. The watchdog is now **stdout-only**; login flows opt back in via the new `stderrKeepalive` run option (a browser login is legitimately stdout-silent for minutes). A timeout with zero stdout events now reports the likely cause: the run cannot reach Google (check proxy/network).
+- **Add: global `proxyUrl` config (`DSH_AGY_PROXY_URL` env works too).** GUI hosts don't inherit shell proxy env — the #1 reason plugin runs time out while the same command in a terminal works. An account's dedicated `proxyUrl` wins, then the global config; the effective proxy is injected into every agy spawn (`ALL_PROXY`/`HTTP(S)_PROXY`) and used by the quota / OAuth fetches. `/agy pool` now shows the effective proxy per account.
+- **Fix (macOS): recurring "create login keychain" password popup.** Pool accounts run with an isolated HOME, and macOS has **no login keychain inside it** (`security default-keychain` → "A default keychain could not be found"), so agy's keyring save triggered the `system.keychain.create.loginkc` password dialog on every ~hourly token refresh; denying it fell back to the on-disk token (auth kept working — exit status 45/154 in agy logs). The plugin now provisions a throwaway per-account keychain and sets it as the default under that HOME — idempotently at boot, before every spawn and before every login — so keyring writes are silent and truly per-account.
+- **Fix: transient network errors no longer flag accounts as "needs re-login".** Both flagging paths were too eager: the run-failure path matched any message containing `/auth/i` (e.g. `oauth2.googleapis.com … i/o timeout` transport noise) and the token-refresh path flagged **any** `token endpoint 400` — including captive-portal / proxy error pages. Both now require an authoritative OAuth state (`invalid_grant` / `invalid_client` / `revoked` / `disabled` / `unauthorized_client`) and transport-shaped failures are exempt — even a genuine AUTH classification is not trusted when the message is transport-shaped. A false flag also **removed the account from pool rotation** (`selectAccount` skips authRequired), so this was silent capacity loss plus a scary badge that the next manual quota refresh would immediately disprove.
+- **Add: flagged accounts self-heal in the background.** `markAuthRequired` now stamps `authMarkedAt`; after 10 minutes the background poll includes the flagged account for one token verification — if the stored refresh token still works the flag clears itself (previously this required a manual 刷新额度 click); if it is truly dead the flag is re-stamped. Risk-control exposure: at most one token-endpoint call per 10 minutes per flagged account.
+- **Add: "In use" badge in the Antigravity console.** Each account card now shows a green zap badge when the sticky scheduler is currently routing runs to it (per model family, from the pool's `activeAccountIds`), answering "which account is agy using right now" at a glance. Localized (zh/en/pt-BR/es).
+## 0.4.40 (2026-09-28)
 
 ### English
 
@@ -8,6 +19,17 @@
 - **Fix (issue #35): continuation prompts must keep the live task.** `buildDigest` used to let a wall of tool-result text consume the 8K budget and truncate the user's question away. The latest real user turn is now reserved at the head of the digest; the assembled prompt always re-states it whenever the trailing span is tool-results only. A dead loop of "read my own agy logs" with no task can no longer start.
 - **Fix (issue #35): aborted runs now persist the agy conversation id.** Binding was only written when `failure === null`, but a tool-cut / caller abort / timeout is exactly the path that used to drop it — so the next hop always started a brand-new agy conversation (`conversationID=""`) with digest-only prompt. The id is now harvested from a live run before steer-preemption and persisted on abort/timeout/process-exit (auth / rate-limit / conversation-rejected still drop the binding).
 - **Fix (issue #32): region eligibility refusals get a clear cause.** agy exits 1 with `Eligibility check failed: … not currently available in your location` (e.g. Seoul). This is a Google-side account/region restriction, not a proxy or quota bug. The bridge now classifies it and surfaces an explicit `AGY_ERROR` with guidance instead of a bare `PROCESS_EXIT`.
+
+### 中文 (Chinese)
+
+- **修复：UI 的 Stop 按钮杀不掉离线卡死的 run。** `killTree` 只对进程组发一次 SIGTERM；而 agy 困在离线拨号重试里时会无视 SIGTERM（实测 `kill <pid>` 无效、只有 `kill -9` 能杀掉）。现在 runner 在 SIGTERM 3 秒后对整组升级 SIGKILL，Stop 按钮必定生效。
+- **修复：连不上 Google 时 run 永远转圈。** 旧看门狗把 stderr 输出当作活动——agy 连不上 Google 时每 ~35 秒往 stderr 写一条拨号重试日志，于是一个连一条 stdout 事件都没有的 run 一直“活着”，直到 240 分钟的 print-timeout。看门狗现在**只认 stdout**；登录流程通过新的 `stderrKeepalive` 选项继续保活（浏览器登录本来就会长时间没有 stdout）。零 stdout 事件的超时现在会直接说明原因：无法连接 Google（检查代理/网络）。
+- **新增：全局 `proxyUrl` 配置（也支持 `DSH_AGY_PROXY_URL` 环境变量）。** GUI 应用不继承 shell 的代理环境变量——这是“终端里没问题、插件里必超时”的头号原因。账号专属 `proxyUrl` 优先，其次全局配置；生效代理会注入每个 agy 进程（`ALL_PROXY`/`HTTP(S)_PROXY`），额度 / OAuth 请求同样走代理。`/agy pool` 现在会显示每个账号的生效代理。
+- **修复（macOS）：反复弹出“创建登录钥匙串”密码框。** 池账号使用隔离 HOME，而隔离 HOME 里**没有登录钥匙串**（`security default-keychain` → "A default keychain could not be found"），agy 每次约每小时的 token 续期写入都会触发 `system.keychain.create.loginkc` 密码弹窗；取消后回退磁盘 token（认证不受影响——agy 日志里的 exit status 45/154 即此）。插件现在会为每个池账号预置一个专属的一次性钥匙串并设为该 HOME 的默认——在启动时、每次拉起前、每次登录前幂等执行——钥匙串写入从此静默，且真正做到按账号隔离。
+- **修复：瞬时网络错误不再把账号标记为「需重新登录」（误判修复）。** 两条标记路径都过于激进：run 失败路径会匹配任何包含 `/auth/i` 的报错（比如 `oauth2.googleapis.com … i/o timeout` 这种纯传输噪音）；token 刷新路径会把**任何** `token endpoint 400` 都当成认证死亡——包括代理/门户返回的错误页。现在两条路径都要求出现权威的 OAuth 状态（`invalid_grant` / `invalid_client` / `revoked` / `disabled` / `unauthorized_client`），传输型失败一律豁免——即使带 AUTH 分类，只要报错文本是传输形态也不标记。误判的代价不只是吓人的徽标：被标记的账号会被调度器**排除出轮换**，等于静默损失一个账号，直到手动「刷新额度」把它证伪。
+- **新增：被标记的账号后台自动复验。** `markAuthRequired` 现在会记录 `authMarkedAt`；10 分钟后后台轮询会把该账号放进来做一次 token 验证——刷新令牌若仍可用，标记自动清除（以前必须手动点「刷新额度」）；若真的失效则重新盖章。风控代价：每个被标记账号至多每 10 分钟一次 token endpoint 调用。
+- **新增：控制台「当前使用」标识。** 账号卡片现在会显示绿色 ⚡「当前使用」徽标（基于号池调度器的 `activeAccountIds`，按模型族标注），一眼看出 agy 当前正在用哪个账号。四种语言（zh/en/pt-BR/es）均已本地化。
+## 0.4.40 (2026-09-28)
 
 ### 中文 (Chinese)
 

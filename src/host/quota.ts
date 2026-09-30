@@ -13,12 +13,14 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   modelFamilyOf,
+  needsAuthReverify,
   shouldPollAccount,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
   type ModelQuotaInfo,
 } from '../common/pool-types.ts'
+import { shouldMarkAuthRequired } from '../common/types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { AGY_ENDPOINTS, refreshTokens } from './oauth.ts'
 import { agyFetch } from './net.ts'
@@ -332,7 +334,19 @@ export function readWindowsCredentialToken(): StoredToken | null {
 export class QuotaService {
   private preferredEndpointIndex = 0
 
-  constructor(private readonly pool: AccountPoolManager) {}
+  /**
+   * @param globalProxy resolves the plugin-wide proxy URL; used when the
+   * account has no dedicated proxyUrl. Injected so tests stay network-free.
+   */
+  constructor(
+    private readonly pool: AccountPoolManager,
+    private readonly globalProxy: () => string = () => '',
+  ) {}
+
+  /** Dedicated account proxy wins, then the global config proxy. */
+  private proxyFor(account: ManagedAccount): string | undefined {
+    return account.proxyUrl || this.globalProxy() || undefined
+  }
 
   private getTokenFilePath(account: ManagedAccount): string {
     // The primary account rides the real system HOME (Keychain-backed);
@@ -433,7 +447,7 @@ export class QuotaService {
     // Expired or missing access token — refresh if we have a refresh_token
     if (tok.refreshToken) {
       try {
-        const refreshed = await refreshTokens(tok.refreshToken, account.proxyUrl)
+        const refreshed = await refreshTokens(tok.refreshToken, this.proxyFor(account))
         if (refreshed?.access_token) {
           this.persistRefreshedToken(account, {
             access_token: refreshed.access_token,
@@ -446,7 +460,9 @@ export class QuotaService {
         }
       } catch (err: unknown) {
         const errMsg = String(err)
-        if (/invalid_grant|revoked|disabled|unauthorized_client|token endpoint 400/i.test(errMsg)) {
+        // Only authoritative OAuth states flag the account; a bare 400
+        // (captive portal / proxy error page) or a transport failure must not.
+        if (shouldMarkAuthRequired(undefined, errMsg)) {
           this.pool.markAuthRequired(account.id, errMsg)
         }
       }
@@ -585,7 +601,7 @@ export class QuotaService {
     // explicit user click re-anchors the identity; background polls keep
     // the zero-network log-scan path below.
     if (force) {
-      const info = await this.fetchUserInfo(accessToken, account.proxyUrl)
+      const info = await this.fetchUserInfo(accessToken, this.proxyFor(account))
       if (info?.email) email = info.email
     }
 
@@ -599,8 +615,8 @@ export class QuotaService {
     }
 
     const [summary, discovered] = await Promise.all([
-      this.fetchQuotaSummary(accessToken, account.proxyUrl),
-      this.fetchAvailableModels(accessToken, account.proxyUrl),
+      this.fetchQuotaSummary(accessToken, this.proxyFor(account)),
+      this.fetchAvailableModels(accessToken, this.proxyFor(account)),
     ])
 
     // Query the userinfo endpoint ONLY when the email is still unknown.
@@ -608,7 +624,7 @@ export class QuotaService {
     // detectEmailFromAgyLogs (no network); calling userinfo every poll cycle
     // was pure risk-control exposure for a value that never changes.
     if (!email) {
-      const info = await this.fetchUserInfo(accessToken, account.proxyUrl)
+      const info = await this.fetchUserInfo(accessToken, this.proxyFor(account))
       if (info?.email) email = info.email
     }
 
@@ -745,7 +761,11 @@ export class QuotaService {
           this.pool.resetAccountIdentity(acc.id, detected)
         }
       }
-      accounts = accounts.filter(shouldPollAccount)
+      // Auth-flagged accounts re-enter the poll once their flag is stale
+      // enough: one token-endpoint verification either clears the flag (the
+      // common transient false positive) or re-stamps it. This is what makes
+      // "needs re-login" self-heal without a manual quota refresh.
+      accounts = accounts.filter((acc) => shouldPollAccount(acc) || needsAuthReverify(acc))
     }
     await Promise.allSettled(accounts.map((acc) => this.refreshAccountQuota(acc, force)))
   }

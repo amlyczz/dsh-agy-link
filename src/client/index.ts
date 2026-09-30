@@ -1111,8 +1111,12 @@ export function apply(ctx: ClientContext): void {
 			);
 		};
 
+		// Accounts the sticky scheduler currently routes runs to (per family):
+		// the badge answers "which account is agy using right now".
+		const inUseIds = new Set(Object.values(pool?.activeAccountIds ?? {}));
 		const renderedAccountCards = accounts.map((acc: ManagedAccount) => {
 			const isPrimary = acc.id === pool?.primaryAccountId;
+			const isInUse = inUseIds.has(acc.id);
 			const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
 			const isAuthRequired = acc.authRequired;
 			const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : hasCooldown ? '#f59e0b' : '#10b981';
@@ -1161,6 +1165,16 @@ export function apply(ctx: ClientContext): void {
 							uiIcon('star', 10, 'var(--agy-badge-primary-text)'),
 							t('status.primary'),
 						) : null,
+						isInUse ? h('span', {
+							style: {
+								...S.badgeTag,
+								background: 'rgba(16, 185, 129, 0.12)',
+								color: '#10b981',
+								borderColor: 'rgba(16, 185, 129, 0.45)',
+								gap: '4px',
+								fontWeight: 700,
+							},
+						}, uiIcon('zap', 11, '#10b981'), t('status.inUse')) : null,
 						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-proxy-bg)', color: 'var(--agy-badge-proxy-text)', borderColor: 'var(--agy-badge-proxy-border)', gap: '5px' } },
 							uiIcon('globe', 11, 'var(--agy-badge-proxy-text)'),
 							t('status.proxy'),

@@ -73,6 +73,8 @@ export interface ManagedAccount {
   authRequired?: boolean
   /** Last authentication failure reason. */
   authError?: string
+  /** When authRequired was last set (drives the background re-verification cadence). */
+  authMarkedAt?: number
   /** Cooldown state tracked per model family. */
   cooldowns: Partial<Record<ModelFamily, FamilyCooldownState>>
   /** Cached real-time quota statistics per model family. */
@@ -102,6 +104,25 @@ export function shouldPollAccount(account: ManagedAccount): boolean {
     if (cd && cd.cooldownUntil > now) return false
   }
   return true
+}
+
+/**
+ * After this long, an authRequired flag becomes eligible for ONE background
+ * re-verification per poll cycle: a single transient failure used to
+ * quarantine an account until a manual quota refresh cleared it.
+ */
+export const AUTH_REVERIFY_DELAY_MS = 10 * 60_000
+
+/**
+ * A flagged account whose flag is old enough (or whose flag predates the
+ * authMarkedAt bookkeeping) may be re-verified in the background. If the
+ * stored token still works the flag clears itself; if not, the flag is
+ * simply re-stamped.
+ */
+export function needsAuthReverify(account: ManagedAccount, now = Date.now()): boolean {
+  if (!account.authRequired) return false
+  if (typeof account.authMarkedAt !== 'number') return true
+  return now - account.authMarkedAt > AUTH_REVERIFY_DELAY_MS
 }
 
 /** Compute real-time health indicator for an account. */

@@ -62,6 +62,13 @@ export interface PluginConfig {
   disableTelemetry: boolean
   /** Background quota polling interval in ms (default 15 min; clamped >= 60s). Lower = more risk-control exposure. */
   quotaPollIntervalMs: number
+  /**
+   * Global proxy URL (http:// or socks5://) applied to every agy spawn and
+   * Google API call. An account's dedicated proxyUrl wins over this; empty
+   * string = direct connection. GUI apps don't inherit shell proxy env, so
+   * desktop installs need this (or per-account proxies) to reach Google.
+   */
+  proxyUrl: string
 }
 
 // Full fallback line-up, mined from the agy 1.1.13 binary. Serves the
@@ -109,7 +116,35 @@ export function defaultConfig(): PluginConfig {
     logRetentionDays: 7,
     disableTelemetry: true,
     quotaPollIntervalMs: 15 * 60_000,
+    proxyUrl: '',
   }
+}
+
+/**
+ * Authoritative OAuth/token states that genuinely prove a login is dead.
+ * A bare 400 (captive portal, proxy error page) or a body without an OAuth
+ * error code must NOT flag an account — that used to produce "needs
+ * re-login" false positives which a manual quota refresh immediately
+ * disproved.
+ */
+export function isAuthoritativeAuthError(message: string): boolean {
+  return /invalid_grant|invalid_client|revoked|disabled|unauthorized_client/i.test(message)
+}
+
+/** Transient transport failures — never proof that a login is dead. */
+export function looksLikeNetworkError(message: string): boolean {
+  return /dial tcp|fetch failed|econn(?:refused|reset|aborted)|enotfound|ehostunreach|enetunreach|socket hang up|getaddrinfo|bad gateway|service unavailable/i.test(message)
+}
+
+/**
+ * Decide whether a failed call may flag an account as "needs re-login".
+ * Genuine AUTH classification wins (unless the failure was transport-shaped),
+ * and the message must name an authoritative token state otherwise.
+ */
+export function shouldMarkAuthRequired(code: string | undefined, message: string): boolean {
+  if (looksLikeNetworkError(message)) return false
+  if (code === 'AUTH') return true
+  return isAuthoritativeAuthError(message)
 }
 
 // Stable LlmError codes surfaced by the adapter (spec error table).

@@ -86,7 +86,7 @@ async function handle(deps: CommandDeps, raw: string): Promise<CommandResult> {
         }
         lines.push(
           `${i + 1}. **${a.alias}** (${a.email || a.id})${isPrimary ? ' ⭐ primary' : ''}`,
-          `   - Proxy: ${a.proxyUrl || 'system default'}`,
+          `   - Proxy: ${a.proxyUrl || deps.cfg().proxyUrl || 'system default'}`,
           `   - Quota: Gemini ${qG} | Claude ${qC} | GPT-OSS ${qO}`,
           cds.length > 0 ? `   - ⚠️ ${cds.join('; ')}` : '   - Status: 🟢 Ready'
         )

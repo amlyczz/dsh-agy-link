@@ -5,7 +5,7 @@
 // move the OAuth token file itself — the official binary owns credentials.
 import { extractAuthUrl, looksLikeAuthFailure } from '../common/types.ts'
 import { openBrowser } from './oauth.ts'
-import { isolatedHomeEnv, probeProcess, startAgyProcess, type RunningProcess } from './runner.ts'
+import { ensureIsolatedKeychain, isolatedHomeEnv, probeProcess, proxyEnvFor, startAgyProcess, type RunningProcess } from './runner.ts'
 
 export type AuthPhase = 'idle' | 'pending' | 'submitting' | 'ok' | 'failed' | 'signed-out'
 
@@ -95,23 +95,20 @@ export class AuthHelper {
     if (!bin) return null;
     this.cancel();
     this.capturedUrl = null;
+    if (homeDir) ensureIsolatedKeychain(homeDir)
     const env = {
       ...process.env,
       ...(homeDir ? isolatedHomeEnv(homeDir) : {}),
-      ...(proxyUrl ? {
-        ALL_PROXY: proxyUrl,
-        HTTPS_PROXY: proxyUrl,
-        HTTP_PROXY: proxyUrl,
-        all_proxy: proxyUrl,
-        https_proxy: proxyUrl,
-        http_proxy: proxyUrl,
-      } : {}),
+      ...proxyEnvFor(proxyUrl),
     }
     const proc = startAgyProcess({
       bin,
       args: ['-p', 'ping', '--output-format', 'stream-json', '--print-timeout', '4m'],
       timeoutMs: 5 * 60_000,
       keepStdin: true,
+      // A browser login is legitimately silent on stdout for minutes; let
+      // agy's stderr chatter keep the idle watchdog fed (run-scoped only).
+      stderrKeepalive: true,
       env,
       onLine: (line) => {
         if (this.capturedUrl) return;

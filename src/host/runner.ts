@@ -2,8 +2,9 @@
 // `agy -p` process as its own process group; abort and watchdog kill the
 // whole tree (agy re-spawns exec children). stderr is captured as a tail
 // for error attribution; stdout is streamed line-by-line to the caller.
-import { spawn, type ChildProcess } from 'node:child_process'
-import { accessSync, constants, existsSync, readdirSync } from 'node:fs'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { accessSync, constants, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { PluginConfig } from '../common/types.ts'
@@ -51,6 +52,55 @@ export function isolatedHomeEnv(dir: string): Record<string, string> {
     }
   }
   return env
+}
+
+/**
+ * Standard proxy env block for one proxy URL. agy is a Go binary and only
+ * honors HTTP(S)_PROXY / ALL_PROXY; GUI hosts don't inherit shell proxy
+ * env, so the plugin injects this explicitly (global config or per-account).
+ * Exported for tests.
+ */
+export function proxyEnvFor(proxyUrl: string | undefined | null): Record<string, string> {
+  const url = proxyUrl?.trim()
+  if (!url) return {}
+  return {
+    ALL_PROXY: url,
+    HTTPS_PROXY: url,
+    HTTP_PROXY: url,
+    all_proxy: url,
+    https_proxy: url,
+    http_proxy: url,
+  }
+}
+
+/**
+ * macOS: an isolated HOME has no login keychain, so the first keyring write
+ * makes the Security framework pop the "create login keychain" password
+ * dialog (right system.keychain.create.loginkc) on every token refresh.
+ * Provisioning a throwaway per-account keychain and making it the default
+ * under that HOME keeps keyring writes silent and fully per-account.
+ * No-op on other platforms or when already provisioned. Never throws.
+ * Exported for tests.
+ */
+export function ensureIsolatedKeychain(
+  dir: string,
+  platform: string = process.platform,
+  run: (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => unknown = (file, args, env) =>
+    execFileSync(file, args, { stdio: 'ignore', env, timeout: 10_000 }),
+): boolean {
+  if (platform !== 'darwin') return false
+  if (dir === '') return false
+  const kc = join(dir, 'Library', 'Keychains', 'login.keychain-db')
+  if (existsSync(kc)) return false
+  try {
+    mkdirSync(join(dir, 'Library', 'Keychains'), { recursive: true })
+    const env = { ...process.env, HOME: dir }
+    run('security', ['create-keychain', '-p', randomBytes(18).toString('base64url'), kc], env)
+    run('security', ['default-keychain', '-s', kc], env)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export const MIN_AGY_VERSION = '1.1.8'
@@ -180,6 +230,13 @@ export interface RunOptions {
    * exclusive with keepStdin auth-code flows.
    */
   stdinPayload?: string;
+  /**
+   * Let stderr activity re-arm the idle watchdog. Off by default: agy logs
+   * dial-retry noise to stderr forever when offline, which used to keep a
+   * dead run "active" until the 240m print-timeout. Login flows opt in —
+   * a browser login is legitimately silent on stdout for minutes.
+   */
+  stderrKeepalive?: boolean;
 }
 
 export interface RunningProcess {
@@ -233,6 +290,9 @@ export function withAgyQuietEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Pr
   };
 }
 
+// Children that already have a SIGKILL escalation armed (SIGTERM sent once).
+const escalating = new WeakSet<ChildProcess>()
+
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
   if (IS_WIN) {
@@ -252,7 +312,23 @@ function killTree(child: ChildProcess): void {
     } catch {
       // already gone'
     }
+    return;
   }
+  // agy installs graceful-shutdown handlers; a run wedged in a dial-retry
+  // loop (offline) ignores SIGTERM forever, which made the UI Stop button
+  // a no-op. Escalate to SIGKILL for the whole group shortly after.
+  if (escalating.has(child)) return;
+  escalating.add(child);
+  const pid = child.pid;
+  const escalate = setTimeout(() => {
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* group already gone */ }
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+  }, 3000);
+  escalate.unref?.();
+  child.once('exit', () => {
+    clearTimeout(escalate);
+    escalating.delete(child);
+  });
 }
 
 export function startAgyProcess(opts: RunOptions): RunningProcess {
@@ -334,7 +410,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     }
   });
   child.stderr?.on('data', (chunk: string) => {
-    refreshWatchdog();
+    if (opts.stderrKeepalive) refreshWatchdog();
     stderr = (stderr + chunk).slice(-4096);
   });
 

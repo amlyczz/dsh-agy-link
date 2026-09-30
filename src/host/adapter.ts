@@ -7,7 +7,7 @@
 // first bind (ADR-7).
 import { join } from 'node:path'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Err, looksLikeAuthFailure, looksLikeEligibilityFailure, looksLikeHardRateLimit, looksLikeRateLimit, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { Err, looksLikeAuthFailure, looksLikeEligibilityFailure, looksLikeHardRateLimit, looksLikeRateLimit, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
@@ -16,7 +16,7 @@ import { parseMirrorCallId, type RunRecording, type RunRegistry } from './record
 import { defaultEffortFor, findEntry, ModelCatalog, resolveModelSlug } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
-import { isolatedHomeEnv, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
+import { ensureIsolatedKeychain, isolatedHomeEnv, proxyEnvFor, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
 import { stateDir } from '../common/config.ts'
 import type { SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
@@ -840,6 +840,7 @@ export class AgyAdapter extends LlmAdapter {
     // account rides the real system HOME (agy 1.1.15 keeps credentials in
     // the macOS Keychain); injecting HOME there signs agy out ("Please
     // sign in") and every turn fails with an auth error.
+    if (account && account.dir) ensureIsolatedKeychain(account.dir)
     const env = {
       ...process.env,
       ...(cfg.disableTelemetry
@@ -851,16 +852,8 @@ export class AgyAdapter extends LlmAdapter {
           }
         : {}),
       ...(account && account.dir ? isolatedHomeEnv(account.dir) : {}),
-      ...(account?.proxyUrl
-        ? {
-            ALL_PROXY: account.proxyUrl,
-            HTTPS_PROXY: account.proxyUrl,
-            HTTP_PROXY: account.proxyUrl,
-            all_proxy: account.proxyUrl,
-            https_proxy: account.proxyUrl,
-            http_proxy: account.proxyUrl,
-          }
-        : {}),
+      // Dedicated account proxy wins; otherwise the global config proxy.
+      ...proxyEnvFor(account?.proxyUrl || cfg.proxyUrl || undefined),
     }
 
     // Per-account burst spacing throttle with randomized jitter (prevents high-frequency flood to Google endpoints)
@@ -950,7 +943,11 @@ export class AgyAdapter extends LlmAdapter {
       if (outcome.aborted) {
         failure = { kind: 'aborted', code: 'ABORTED', message: 'agy run aborted by caller' }
       } else if (outcome.timedOut) {
-        failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run was idle for ' + cfg.timeoutMs + 'ms without output' }
+        const neverSpoke = outcome.stdout.trim() === ''
+        failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run was idle for ' + cfg.timeoutMs + 'ms without output'
+          + (neverSpoke
+            ? ' — agy never emitted a single event; it is likely unable to reach Google (check proxy/network). 无法连接 Google，请检查代理或网络配置'
+            : '') }
       } else if (sawAuthFailure(parser, outcome)) {
         failure = { kind: 'error', code: Err.AUTH, message: 'agy is not signed in — run /agy auth (or run agy once in a terminal) to login' }
       } else if (isRateLimit) {
@@ -1001,7 +998,11 @@ export class AgyAdapter extends LlmAdapter {
         if (account && looksLikeHardRateLimit(rawErrText)) {
           this.deps.pool?.recordFailure(account.id, family, failure.message)
         }
-        if (account && (failure.code === Err.AUTH || /invalid_grant|not signed in|auth/i.test(failure.message))) {
+        // Only authoritative auth states may flag an account: the old
+        // /auth/i substring matched "oauth2.googleapis.com … i/o timeout"
+        // transport noise and quarantined healthy accounts until a manual
+        // quota refresh disproved the flag.
+        if (account && shouldMarkAuthRequired(failure.code, failure.message)) {
           this.deps.pool?.markAuthRequired(account.id, failure.message)
         }
         const staleConversation =
