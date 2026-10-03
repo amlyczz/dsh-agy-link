@@ -51,6 +51,21 @@ function asNum(v: unknown): number | undefined {
   return undefined
 }
 
+/** Trimmed, de-duplicated string list; non-string / blank entries are dropped. */
+function asStringArray(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const x of v) {
+    if (typeof x !== 'string') continue
+    const s = x.trim()
+    if (s === '' || seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+  }
+  return out
+}
+
 const MODES: readonly PermissionMode[] = ['skip', 'plan', 'accept-edits']
 
 function asMode(v: unknown): PermissionMode | undefined {
@@ -98,6 +113,7 @@ export function resolveConfig(
             !!x && typeof x === 'object' && typeof (x as { id?: unknown }).id === 'string',
         )
       : base.fallbackModels,
+    hiddenModels: asStringArray(get('hiddenModels')) ?? base.hiddenModels,
     askTool: asBool(get('askTool')) ?? base.askTool,
     mediaDir: asString(get('mediaDir')) ?? base.mediaDir,
     mediaTtlMs: asNum(get('mediaTtlMs')) ?? base.mediaTtlMs,
@@ -131,6 +147,10 @@ export function resolveConfig(
   }
   if (env.DSH_AGY_EXTRA_ARGS) {
     cfg.extraArgs = env.DSH_AGY_EXTRA_ARGS.split(/\s+/).filter(Boolean)
+  }
+  if (env.DSH_AGY_HIDDEN_MODELS) {
+    const list = asStringArray(env.DSH_AGY_HIDDEN_MODELS.split(','))
+    if (list) cfg.hiddenModels = list
   }
   if (env.DSH_AGY_WORKSPACE_ROOT) cfg.workspaceRoot = env.DSH_AGY_WORKSPACE_ROOT
   if (env.DSH_AGY_MEDIA_DIR) cfg.mediaDir = env.DSH_AGY_MEDIA_DIR

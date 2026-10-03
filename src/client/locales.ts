@@ -39,6 +39,8 @@ export const zh = {
   'permission.label': '权限模式：', 'permission.plan': 'plan（只读）', 'permission.acceptEdits': 'accept-edits（改代码）', 'permission.skip': 'skip（自动批准；AGY 内部保护仍生效）',
   'effort.label': '思考强度：', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': '号池调度：', 'pool.sequential': '顺次耗尽', 'pool.roundRobin': '轮询均衡',
+  'models.label': '模型显示：', 'models.empty': '模型目录还没有可用模型，发一次对话或点“刷新额度”后再来管理',
+  'models.hint': '点击切换显示/隐藏；关闭的模型不在模型选择器中列出，进行中的会话不受影响。',
   'header.refreshQuota': '刷新额度', 'header.refreshing': '刷新中',
   'console.close': '关闭（Esc）', 'header.badgeTitle': 'Antigravity：{count} 个账号已就绪 · 点击打开控制台',
 } as const
@@ -82,6 +84,8 @@ export const en: AgyDictionary = {
   'permission.label': 'Permission mode:', 'permission.plan': 'plan (read-only)', 'permission.acceptEdits': 'accept-edits (edit code)', 'permission.skip': 'skip (auto-approve; AGY internal protections remain)',
   'effort.label': 'Thinking effort:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': 'Account-pool scheduling:', 'pool.sequential': 'Use sequentially', 'pool.roundRobin': 'Round-robin',
+  'models.label': 'Model visibility:', 'models.empty': 'No models in the catalog yet — send a message or click "Refresh quota", then come back to manage them',
+  'models.hint': 'Click to show/hide. Hidden models are not listed in the model picker; ongoing sessions are unaffected.',
   'header.refreshQuota': 'Refresh quota', 'header.refreshing': 'Refreshing...',
   'console.close': 'Close (Esc)', 'header.badgeTitle': 'Antigravity: {count} accounts ready · click to open the console',
 }
@@ -122,6 +126,8 @@ export const ptBR: AgyDictionary = {
   'permission.label': 'Modo de permissão:', 'permission.plan': 'plan (somente leitura)', 'permission.acceptEdits': 'accept-edits (editar código)', 'permission.skip': 'skip (aprovação automática; proteções internas do AGY permanecem)',
   'effort.label': 'Intensidade de raciocínio:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': 'Agendamento do pool de contas:', 'pool.sequential': 'Usar em sequência', 'pool.roundRobin': 'Rodízio',
+  'models.label': 'Visibilidade dos modelos:', 'models.empty': 'Ainda não há modelos no catálogo — envie uma mensagem ou clique em "Atualizar cota" e volte para gerenciá-los',
+  'models.hint': 'Clique para mostrar/ocultar. Modelos ocultos não aparecem no seletor de modelos; as sessões em andamento não são afetadas.',
   'header.refreshQuota': 'Atualizar cota', 'header.refreshing': 'Atualizando...',
   'console.close': 'Fechar (Esc)', 'header.badgeTitle': 'Antigravity: {count} contas prontas · clique para abrir o console',
 }
@@ -162,6 +168,8 @@ export const es: AgyDictionary = {
   'permission.label': 'Modo de permisos:', 'permission.plan': 'plan (solo lectura)', 'permission.acceptEdits': 'accept-edits (editar código)', 'permission.skip': 'skip (aprobación automática; se mantienen las protecciones internas de AGY)',
   'effort.label': 'Intensidad de razonamiento:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': 'Programación del pool de cuentas:', 'pool.sequential': 'Usar en secuencia', 'pool.roundRobin': 'Turno rotativo',
+  'models.label': 'Visibilidad de modelos:', 'models.empty': 'Aún no hay modelos en el catálogo: envía un mensaje o haz clic en "Actualizar cuota" y vuelve para gestionarlos',
+  'models.hint': 'Haz clic para mostrar/ocultar. Los modelos ocultos no aparecen en el selector de modelos; las sesiones en curso no se ven afectadas.',
   'header.refreshQuota': 'Actualizar cuota', 'header.refreshing': 'Actualizando...',
   'console.close': 'Cerrar (Esc)', 'header.badgeTitle': 'Antigravity: {count} cuentas listas · haga clic para abrir la consola',
 }

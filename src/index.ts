@@ -16,7 +16,7 @@ import { AuthHelper } from './host/auth.ts'
 import { agyCommandDefinition } from './host/commands.ts'
 import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
-import { ModelCatalog } from './host/models.ts'
+import { ModelCatalog, sanitizeCatalogEntries } from './host/models.ts'
 import { RunRegistry } from './host/recording.ts'
 import { MIN_AGY_VERSION, compareVersions, ensureIsolatedKeychain, isolatedHomeEnv, parseVersion, probeProcess, proxyEnvFor, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
@@ -404,6 +404,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           poolAuth: poolAuth.status(),
           pool: pool.getPoolData(),
           catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
+          // Full sanitized catalog + the current deny-list so the settings UI's
+          // model-visibility toggles show every known model, hidden ones included.
+          catalogModels: sanitizeCatalogEntries(cat.models).entries,
+          hiddenModels: cfg.hiddenModels,
           bindings: Object.keys(store.all()).length,
           lastRun,
         })
@@ -655,9 +659,13 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
-        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot']
+        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels']
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
+          return
+        }
+        if (key === 'hiddenModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
+          sendJson(res as RawRes, 400, { error: 'hiddenModels must be an array of model ids' })
           return
         }
         setOverride(key, body.value)
