@@ -83,6 +83,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   let lastParser = new StreamJsonParser()
 
   const getConfig = (): PluginConfig => resolveConfig(entryConfig)
+  // The webview model picker caches its catalog snapshot and only re-reads
+  // after the payload-free `llm/adapters-updated` event (consumers re-read
+  // the registries instead of receiving state). Emit it whenever picker
+  // output can change: hiddenModels writes and async catalog refreshes.
+  const notifyPicker = (): void => {
+    try {
+      ctx.emit('llm/adapters-updated')
+    } catch {
+      // Host without the event — the picker simply stays on its snapshot.
+    }
+  }
   const bin = (): string | null => {
     if (binCache === undefined || binCache === null) binCache = resolveAgyBin(getConfig())
     return binCache
@@ -252,6 +263,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         log('version probe failed — continuing with fallback catalog')
       }
       await catalog.refreshIfNeeded().catch(() => undefined)
+      notifyPicker()
     })();
   }, 4_000)
   bootProbeTimer.unref?.()
@@ -450,7 +462,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             void quota.refreshAllQuotas().catch(() => undefined)
           }
           store.clear()
-          void catalog.forceRefresh().catch(() => undefined)
+          void catalog.forceRefresh().then(() => notifyPicker()).catch(() => undefined)
         }
         sendJson(res as RawRes, 200, st)
       })()
@@ -634,7 +646,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         // re-login the subscription tier (and thus model list) may differ.
         // One `agy models` spawn per explicit user click only — the
         // background poller never touches the catalog.
-        void catalog.forceRefresh().catch(() => undefined)
+        void catalog.forceRefresh().then(() => notifyPicker()).catch(() => undefined)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
@@ -671,6 +683,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         setOverride(key, body.value)
         syncAskTool()
         syncMirrorTool()
+        // Picker visibility changed — the webview re-reads the catalog only
+        // after this event, so the toggle must announce itself.
+        if (key === 'hiddenModels') notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
       })()
     }})
