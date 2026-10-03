@@ -434,8 +434,9 @@ export class AgyAdapter extends LlmAdapter {
     const cfg = this.deps.getConfig()
     const bin = this.deps.bin()
     if (!bin) throw new LlmError('agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install', Err.AGY_NOT_INSTALLED)
-    const isAux = options.purpose === 'compaction' || options.purpose === 'session-title'
-    if (isAux && !cfg.allowAuxiliary) {
+    const isReview = typeof options.system === 'string' && options.system.includes('REVIEW_POLICY')
+    const isAux = options.purpose === 'compaction' || options.purpose === 'session-title' || isReview
+    if (isAux && !isReview && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
     // Prefer direct native agy_tool cards when the host registered the mirror
@@ -445,6 +446,7 @@ export class AgyAdapter extends LlmAdapter {
     // tool step N · run_command" code rows.
     const toolNames = new Set((options.tools ?? []).map((t) => t.name))
     const isCodeMode = toolNames.has('run_code') && !toolNames.has('agy_tool')
+    const hasToolSupport = options.tools === undefined || toolNames.has('agy_tool') || toolNames.has('run_code')
     const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
     // cwd precedence: explicit config > the DSH session's own workspace >
     // the host process cwd. The last fallback can land agy in an UNRELATED
@@ -474,22 +476,14 @@ export class AgyAdapter extends LlmAdapter {
     const continuation = detectContinuation(options.messages)
     if (continuation !== null) {
       const rec = this.deps.runs.get(continuation.runId)
-      if (rec === undefined) {
-        yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
-        yield {
-          type: 'finish',
-          reason: {
-            kind: 'error',
-            failure: {
-              message: 'agy run ' + continuation.runId + ' is no longer available (server restarted?) — please resend your message',
-              code: Err.AGY_ERROR,
-            },
-          },
-        }
+      if (rec !== undefined) {
+        yield* this.driveSpan(rec, continuation.eventIndex + 1, hasToolSupport, isCodeMode)
         return
       }
-      yield* this.driveSpan(rec, continuation.eventIndex + 1, true, isCodeMode)
-      return
+      this.warnOnce(
+        'stale-continuation:' + continuation.runId,
+        'agy run ' + continuation.runId + ' is no longer available in memory (server restarted?) — falling back to fresh turn prompt assembly',
+      )
     }
     // Session ownership (steer preemption + duplicate debounce) is decided
     // AFTER prompt assembly below, so an identical retry can never abort a
@@ -1052,7 +1046,7 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* this.driveSpan(rec, 0, !isAux, isCodeMode)
+    yield* this.driveSpan(rec, 0, !isAux && hasToolSupport, isCodeMode)
   }
 
   /**

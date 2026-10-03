@@ -1082,6 +1082,79 @@ test('sliding-window rate limit enforces request throttling per minute', async (
   assert.ok(elapsed < 15_000, `elapsed ${elapsed}ms exceeded 15000ms`)
 })
 
+test('auto-review calls with REVIEW_POLICY do not cut on tools and finish with stop', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const chunks = await collect(
+    adapter.stream(
+      opts([msg('user', 'review')], {
+        system: 'REVIEW_POLICY\nYou are the final authorization reviewer for exactly one pending tool call.',
+      }),
+    ),
+  )
+  const toolCallChunks = chunks.filter(
+    (c) =>
+      (c.type === 'block-start' && (c as { blockType?: string }).blockType === 'tool-call') ||
+      (c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call'),
+  )
+  assert.equal(toolCallChunks.length, 0)
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  assert.equal(finish.reason.kind, 'stop')
+})
+
+test('calls with explicit empty tools: [] do not cut on tools and finish with stop', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const chunks = await collect(
+    adapter.stream(
+      opts([msg('user', 'no tools')], {
+        tools: [],
+      }),
+    ),
+  )
+  const toolCallChunks = chunks.filter(
+    (c) =>
+      (c.type === 'block-start' && (c as { blockType?: string }).blockType === 'tool-call') ||
+      (c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call'),
+  )
+  assert.equal(toolCallChunks.length, 0)
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  assert.equal(finish.reason.kind, 'stop')
+})
+
+test('stale continuation with missing run in memory falls back to fresh turn prompt assembly instead of failing', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const toolResult = (callId: string): Message =>
+    ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [{ type: 'text', text: 'stale result' }] }], source: { kind: 'tool', callId } }) as never
+
+  // Simulate a turn that begins on a trailing tool result from an evicted/restarted runId:
+  const chunks = await collect(
+    adapter.stream(
+      opts([msg('user', 'original task before restart'), toolResult('agytc-missing-run-3')]),
+    ),
+  )
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  // First span cuts on agy's tool-call as designed, rather than hard-failing with AGY_ERROR:
+  assert.equal(finish.reason.kind, 'tool-calls')
+
+  // Verify that fresh process was spawned and prompt was assembled with the original task:
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const promptArg = argv[argv.length - 1]!
+  assert.ok(promptArg.includes('original task before restart'), 'assembled prompt includes the user task')
+
+  // Also verify that a full runTurn loop drives the healed conversation to completion:
+  const turnResult = await runTurn(adapter, [msg('user', 'original task'), toolResult('agytc-missing-run-4')])
+  const turnFinish = turnResult.chunks[turnResult.chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(turnFinish.reason.kind, 'stop')
+})
+
 test.after(() => {
   rmSync(workDir, { recursive: true, force: true })
 })
