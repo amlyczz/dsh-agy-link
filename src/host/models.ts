@@ -163,6 +163,34 @@ export function buildFallbackCatalog(defs: readonly FallbackModelDef[]): Catalog
     }));
 }
 
+/**
+ * Sanitized (id, name) projection of a catalog: trimmed non-empty ids with
+ * first occurrence winning — exactly what listModels serves to DSH. Shared
+ * with the settings UI's model-visibility list so the picker and the UI can
+ * never disagree about which models exist.
+ */
+export function sanitizeCatalogEntries(models: readonly CatalogEntry[]): {
+  entries: Array<{ id: string; name: string }>
+  dropped: string[]
+} {
+  const seen = new Set<string>()
+  const entries: Array<{ id: string; name: string }> = []
+  const dropped: string[] = []
+  for (const m of models) {
+    if (!m || typeof m.id !== 'string') continue
+    const id = m.id.trim()
+    if (id === '') continue
+    if (seen.has(id)) {
+      dropped.push(id)
+      continue
+    }
+    seen.add(id)
+    const name = typeof m.name === 'string' && m.name.trim() !== '' ? m.name.trim() : id
+    entries.push({ id, name })
+  }
+  return { entries, dropped }
+}
+
 // ---------------------------------------------------------------------------
 // Catalog cache with TTL + stale-while-revalidate (pi-bridge pattern).
 
