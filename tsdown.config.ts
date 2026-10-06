@@ -37,6 +37,9 @@ export default defineConfig([
     outputOptions: { entryFileNames: "bridge.mjs" },
     onSuccess: () => {
       cpSync(join(import.meta.dirname, "src/host/bridge.mjs"), join(import.meta.dirname, "dist/bridge.mjs"));
+      try {
+        cpSync(join(import.meta.dirname, "assets/mermaid.min.js"), join(import.meta.dirname, "dist/mermaid.min.js"));
+      } catch {}
     },
   },
   {

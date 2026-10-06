@@ -175,9 +175,11 @@ test('stageImages writes files and builds prompt lines', async () => {
     })
     assert.equal(res.staged.length, 2)
     assert.equal(res.skipped, 1)
+    assert.deepEqual(res.stagedIds, ['a1', 'a2'], 'stagedIds lists only written attachments')
     assert.ok(res.promptSuffix.includes('[image attached: "shot.png"'))
     const p0 = res.staged[0]!
-    assert.equal(p0.path, join(dir, 'sess-1-0.png'))
+    assert.equal(p0.path, join(dir, 'sess-1-a1.png'), 'path is keyed by attachment id, not call index')
+    assert.equal(p0.attachmentId, 'a1')
     const written = await readFile(p0.path)
     assert.deepEqual(written, png)
     // unreadable image -> note line, still counts as skipped
@@ -249,7 +251,8 @@ test('sweepDir removes only stale files', async () => {
 })
 
 test('stagedPath and defaultMediaDir are deterministic', () => {
-  assert.equal(stagedPath('/m', 'k', 2, 'image/jpeg'), join('/m', 'k-2.jpg'))
+  assert.equal(stagedPath('/m', 'k', 'a2', 'image/jpeg'), join('/m', 'k-a2.jpg'))
+  assert.equal(stagedPath('/m', 'k', 'a2', 'image/jpeg'), join('/m', 'k-a2.jpg'), 'same attachment id → same path')
   assert.equal(defaultMediaDir('/s'), join('/s', 'media'))
 })
 

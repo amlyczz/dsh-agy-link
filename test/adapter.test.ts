@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest, detectContinuation, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, mergeSentImageIds, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
@@ -531,6 +531,112 @@ test('buildDigest never lets tool-result bulk eat the live task (issue #35)', ()
   const d = buildDigest(msgs, 0, 8_000)
   assert.ok(d.includes('please read block LOg2xNRy3'), 'task line must survive a digest saturated by tool results')
   assert.ok(d.includes('Tool result:'), 'tool results are labeled distinctly')
+})
+
+function imgMsg(id: string, text = 'shot'): Message {
+  return {
+    role: 'user',
+    content: [
+      { type: 'text', text },
+      { type: 'image', attachmentId: id, mediaType: 'image/png', bytes: 10, width: 1, height: 1 },
+    ],
+  } as unknown as Message
+}
+
+test('collectUnsentImageRefs skips already-sent ids and dedupes', () => {
+  const history = [imgMsg('a1'), imgMsg('a2')]
+  const trailing = [imgMsg('a2', 'again'), imgMsg('a3', 'new')]
+  const got = collectUnsentImageRefs(history, trailing, 0, ['a1'])
+  assert.deepEqual(got.map((r) => r.attachmentId), ['a2', 'a3'], 'trailing first, a1 already sent')
+})
+
+test('collectUnsentImageRefs on a tool hop only takes unseen ids since the watermark', () => {
+  // history: user image a1 (already inside the watermark), then a tool hop
+  // with no new attachments. The old fallback re-sent a1 on every hop.
+  const history = [
+    imgMsg('a1'),
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'agy_tool', arguments: '{}' }] } as unknown as Message,
+    {
+      role: 'tool',
+      toolCallId: 'c1',
+      content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] }],
+    } as unknown as Message,
+  ]
+  const trailing = [history[2]!]
+  const got = collectUnsentImageRefs(history, trailing, 3, [])
+  assert.deepEqual(got.map((r) => r.attachmentId), [], 'no unseen images after a tool hop')
+  // …but a first-contact / account-switch call (fromIdx 0, nothing sent) still carries it
+  const fresh = collectUnsentImageRefs(history, trailing, 0, [])
+  assert.deepEqual(fresh.map((r) => r.attachmentId), ['a1'])
+})
+
+test('mergeSentImageIds dedupes and keeps the newest under the cap', () => {
+  assert.deepEqual(mergeSentImageIds(['a', 'b'], ['b', 'c']), ['a', 'b', 'c'])
+  const many = mergeSentImageIds(['x0'], Array.from({ length: 70 }, (_, i) => 'i' + i), 64)
+  assert.equal(many.length, 64)
+  assert.equal(many[many.length - 1], 'i69', 'newest kept')
+  assert.ok(!many.includes('x0'), 'oldest evicted')
+})
+
+test('first contact seeds a new conversation with contextTransferMaxChars, not digestMaxChars', async () => {
+  const { adapter } = makeAdapter({
+    digestMaxChars: 40,
+    contextTransferMaxChars: 4_000,
+    mediaMaxImages: 0,
+  })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-transfer.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const old = 'OLD-CONTEXT-' + 'x'.repeat(200)
+  await runTurn(adapter, [msg('assistant', old), msg('user', 'carry on')])
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt.includes('OLD-CONTEXT'), 'transfer digest keeps the old turn')
+  assert.ok(prompt.includes('carry on'))
+})
+
+test('returning hop does not re-attach historical screenshots (image watermark)', async () => {
+  const reads: string[] = []
+  const { adapter, store } = makeAdapter(
+    { mediaMaxImages: 8, mediaDir: join(workDir, 'media-wm') },
+    {
+      readImage: async (ref) => {
+        reads.push(ref.attachmentId)
+        return new Uint8Array([1, 2, 3])
+      },
+    },
+  )
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-wm.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  // Hop 1: user attaches a1. It must be staged and recorded.
+  const first = [imgMsg('a1', 'look at this UI')]
+  await runTurn(adapter, first, { sessionId: 'sess-wm' as never })
+  await waitFor(() => store.get('sess-wm'))
+  assert.deepEqual(reads, ['a1'])
+  assert.deepEqual(store.get('sess-wm')?.sentImageIds, ['a1'])
+
+  // Hop 2: tool-hop continuation with no new attachment — a1 must NOT be re-read.
+  reads.length = 0
+  const second = [
+    ...first,
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'agy_tool', arguments: '{}' }] } as unknown as Message,
+    {
+      role: 'tool',
+      toolCallId: 'c1',
+      content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] }],
+    } as unknown as Message,
+  ]
+  await runTurn(adapter, second, { sessionId: 'sess-wm' as never })
+  assert.deepEqual(reads, [], 'historical image must not be re-staged on a tool hop')
+
+  // Hop 3: a NEW attachment is still forwarded.
+  reads.length = 0
+  const third = [...second, imgMsg('a2', 'another look')]
+  await runTurn(adapter, third, { sessionId: 'sess-wm' as never })
+  assert.deepEqual(reads, ['a2'], 'only the unseen attachment is staged')
+  assert.deepEqual(store.get('sess-wm')?.sentImageIds, ['a1', 'a2'])
 })
 
 function toolResultMsg(opts: {

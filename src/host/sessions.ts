@@ -11,7 +11,17 @@ export interface SessionBinding {
   lastMessageCount: number
   updatedAt: number
   model?: string
+  /**
+   * Attachment ids already forwarded to this agy conversation. Images ride
+   * as staged files referenced from the prompt; without this watermark every
+   * tool-hop continuation re-attached the whole history's screenshots.
+   * Capped (see `SENT_IMAGE_IDS_MAX`) — order is oldest-first.
+   */
+  sentImageIds?: string[]
 }
+
+/** Keep the binding file small; the oldest ids are dropped first. */
+export const SENT_IMAGE_IDS_MAX = 64
 
 export class SessionStore {
   private data: Record<string, SessionBinding> = {};

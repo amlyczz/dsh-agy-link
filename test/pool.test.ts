@@ -20,6 +20,30 @@ test('modelFamilyOf correctly categorizes models', () => {
   assert.equal(modelFamilyOf(undefined), 'unknown')
 })
 
+test('markAccountActive records exactly one in-use account and persists it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-active-'))
+  const pool = new AccountPoolManager(dir)
+  const a = pool.getAccounts()[0]!
+  assert.equal(pool.getPoolData().lastActiveAccountId, undefined, 'nothing in use before the first spawn')
+
+  pool.markAccountActive(a.id)
+  assert.equal(pool.getPoolData().lastActiveAccountId, a.id)
+
+  // A reload from disk must see the same single pointer.
+  const reloaded = new AccountPoolManager(dir)
+  assert.equal(reloaded.getPoolData().lastActiveAccountId, a.id)
+
+  // Moving to another account leaves exactly one active account (no per-family fan-out).
+  const b = reloaded.createAccountSlot('Second')
+  reloaded.markAccountActive(b.id)
+  assert.equal(reloaded.getPoolData().lastActiveAccountId, b.id)
+  const data = reloaded.getPoolData()
+  const activeIds = [data.lastActiveAccountId, ...Object.values(data.activeAccountIds ?? {})].filter(
+    (id): id is string => typeof id === 'string',
+  )
+  assert.equal(activeIds.includes(b.id), true)
+})
+
 test('AccountPoolManager bootstraps and manages isolated account slots', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-test-'))
   const pool = new AccountPoolManager(dir)
@@ -323,5 +347,59 @@ test('sweepOldLogs sweeps log files older than retention days', () => {
   assert.ok(swept >= 1)
   assert.equal(existsSync(oldLog), false)
   assert.equal(existsSync(freshLog), true)
+})
+
+test('getActiveAccountId and proactive rotation when account enters cooldown or exhausts quota', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-active-rotate-'))
+  const pool = new AccountPoolManager(dir)
+  const accA = pool.getAccounts()[0]!
+  const accB = pool.createAccountSlot('Account B')
+
+  // Initially getActiveAccountId picks Account A
+  assert.equal(pool.getActiveAccountId('google'), accA.id)
+  assert.equal(pool.getPoolData().lastActiveAccountId, accA.id)
+
+  // When A fails and hits 429, pool proactively rotates to Account B immediately
+  pool.recordFailure(accA.id, 'google', '429 Rate Limit')
+  assert.equal(pool.getPoolData().lastActiveAccountId, accB.id)
+  assert.equal(pool.getActiveAccountId('google'), accB.id)
+
+  // When B quota is exhausted via updateAccountQuotas, and A is still in cooldown:
+  // getActiveAccountId returns primaryAccountId / first account fallback
+  const futureReset = new Date(Date.now() + 300_000).toISOString()
+  pool.updateAccountQuotas(accB.id, {
+    google: {
+      remainingFraction: 0.01,
+      resetTime: futureReset,
+      models: [],
+    },
+  })
+  // Both are exhausted, but getActiveAccountId doesn't throw and falls back gracefully
+  assert.equal(pool.getActiveAccountId('google'), accA.id)
+})
+
+test('lastActiveAccountId is cleared when the active account is deleted, disabled or requires auth', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-cleanup-active-'))
+  const pool = new AccountPoolManager(dir)
+  const accB = pool.createAccountSlot('Account B')
+
+  pool.markAccountActive(accB.id)
+  assert.equal(pool.getPoolData().lastActiveAccountId, accB.id)
+
+  // Disable B -> lastActiveAccountId cleared
+  pool.setAccountEnabled(accB.id, false)
+  assert.equal(pool.getPoolData().lastActiveAccountId, undefined)
+
+  // Re-enable and mark active, then markAuthRequired -> cleared
+  pool.setAccountEnabled(accB.id, true)
+  pool.markAccountActive(accB.id)
+  pool.markAuthRequired(accB.id, 'revoked')
+  assert.equal(pool.getPoolData().lastActiveAccountId, undefined)
+
+  // Clear auth and mark active, then delete -> cleared
+  pool.clearAuthRequired(accB.id)
+  pool.markAccountActive(accB.id)
+  pool.deleteAccount(accB.id)
+  assert.equal(pool.getPoolData().lastActiveAccountId, undefined)
 })
 

@@ -288,6 +288,9 @@ export class AccountPoolManager {
       // reserved for the system-HOME login and is re-bootstrapped on load.
       this.data.primaryAccountId = undefined
     }
+    if (this.data.lastActiveAccountId === id) {
+      this.data.lastActiveAccountId = undefined
+    }
     if (this.data.activeAccountIds) {
       for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
         if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
@@ -318,13 +321,28 @@ export class AccountPoolManager {
     const acc = this.getAccount(id)
     if (!acc) return false
     acc.enabled = enabled
-    if (!enabled && this.data.activeAccountIds) {
-      for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
-        if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
+    if (!enabled) {
+      if (this.data.lastActiveAccountId === id) {
+        this.data.lastActiveAccountId = undefined
+      }
+      if (this.data.activeAccountIds) {
+        for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
+          if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
+        }
       }
     }
     this.persist()
     return true
+  }
+
+  /**
+   * Record the account a run actually spawned with. The console derives its
+   * single "in use" badge from this; exactly one account runs agy at a time.
+   */
+  markAccountActive(id: string): void {
+    if (this.data.lastActiveAccountId === id) return
+    this.data.lastActiveAccountId = id
+    this.persist()
   }
 
   markAuthRequired(id: string, reason?: string): void {
@@ -333,6 +351,9 @@ export class AccountPoolManager {
     acc.authRequired = true
     acc.authMarkedAt = Date.now()
     acc.authError = reason || 'Authentication expired or revoked (invalid_grant)'
+    if (this.data.lastActiveAccountId === id) {
+      this.data.lastActiveAccountId = undefined
+    }
     if (this.data.activeAccountIds) {
       for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
         if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
@@ -381,6 +402,7 @@ export class AccountPoolManager {
       anthropic: id,
       openai: id,
     }
+    this.data.lastActiveAccountId = id
     this.persist()
     return true
   }
@@ -409,6 +431,50 @@ export class AccountPoolManager {
     this.persist()
   }
 
+  /**
+   * Check whether an account is eligible to serve requests for the given family.
+   */
+  isAccountEligible(acc: ManagedAccount, family: ModelFamily, now = Date.now()): boolean {
+    if (!acc.enabled || acc.authRequired) return false
+    const cd = acc.cooldowns[family]
+    if (cd && cd.cooldownUntil > now) return false
+    // If 5h quota remaining is <= 2% and reset time is in future, treat as in cooldown
+    const quota = acc.quotas[family]
+    if (quota && typeof quota.remainingFraction === 'number' && quota.remainingFraction <= 0.02) {
+      if (quota.resetTime) {
+        const resetMs = Date.parse(quota.resetTime)
+        if (!Number.isNaN(resetMs) && resetMs > now) return false
+      }
+    }
+    // If weekly quota remaining is <= 1% and weekly reset time is in future, treat as in cooldown
+    if (quota && typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= 0.01) {
+      if (quota.weeklyResetTime) {
+        const resetMs = Date.parse(quota.weeklyResetTime)
+        if (!Number.isNaN(resetMs) && resetMs > now) return false
+      }
+    }
+    return true
+  }
+
+  /**
+   * Returns the currently active and healthy account ID.
+   * If the recorded lastActiveAccountId is healthy, returns it;
+   * otherwise falls back to selectAccount(family) to advance to the next healthy candidate,
+   * or primaryAccountId if all are exhausted.
+   */
+  getActiveAccountId(family: ModelFamily = 'google'): string | undefined {
+    const now = Date.now()
+    if (this.data.lastActiveAccountId) {
+      const active = this.getAccount(this.data.lastActiveAccountId)
+      if (active && this.isAccountEligible(active, family, now)) {
+        return active.id
+      }
+    }
+    const next = this.selectAccount(family)
+    if (next) return next.id
+    return this.data.primaryAccountId ?? this.data.accounts[0]?.id
+  }
+
   updateAccountQuotas(id: string, quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>, email?: string): void {
     const acc = this.getAccount(id)
     if (!acc) return
@@ -417,6 +483,22 @@ export class AccountPoolManager {
       ...quotas,
     }
     if (email) acc.email = email
+
+    // If an updated family has exhausted its quota, proactively advance to the next account
+    const now = Date.now()
+    for (const [famKey, info] of Object.entries(quotas) as [ModelFamily, FamilyQuotaInfo][]) {
+      if (!info) continue
+      const isExhausted5h = typeof info.remainingFraction === 'number' && info.remainingFraction <= 0.02 &&
+        (!info.resetTime || Date.parse(info.resetTime) > now)
+      const isExhaustedWeekly = typeof info.weeklyFraction === 'number' && info.weeklyFraction <= 0.01 &&
+        (!info.weeklyResetTime || Date.parse(info.weeklyResetTime) > now)
+      if (isExhausted5h || isExhaustedWeekly) {
+        if (this.data.activeAccountIds?.[famKey] === id || this.data.lastActiveAccountId === id) {
+          this.selectAccount(famKey)
+        }
+      }
+    }
+
     this.persist()
   }
 
@@ -451,6 +533,10 @@ export class AccountPoolManager {
       cooldownUntil,
       reason,
       consecutiveFailures: failures,
+    }
+    // If the failed account was the active one, advance to the next candidate immediately
+    if (this.data.activeAccountIds?.[family] === id || this.data.lastActiveAccountId === id) {
+      this.selectAccount(family)
     }
     this.persist()
   }
@@ -495,34 +581,21 @@ export class AccountPoolManager {
    */
   selectAccount(family: ModelFamily): ManagedAccount | null {
     const now = Date.now()
-    const candidates = this.data.accounts.filter((acc) => {
-      if (!acc.enabled || acc.authRequired) return false
-      const cd = acc.cooldowns[family]
-      if (cd && cd.cooldownUntil > now) return false
-      // If 5h quota remaining is <= 2% and reset time is in future, treat as in cooldown
-      const quota = acc.quotas[family]
-      if (quota && typeof quota.remainingFraction === 'number' && quota.remainingFraction <= 0.02) {
-        if (quota.resetTime) {
-          const resetMs = Date.parse(quota.resetTime)
-          if (!Number.isNaN(resetMs) && resetMs > now) return false
-        }
-      }
-      // If weekly quota remaining is <= 1% and weekly reset time is in future, treat as in cooldown
-      if (quota && typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= 0.01) {
-        if (quota.weeklyResetTime) {
-          const resetMs = Date.parse(quota.weeklyResetTime)
-          if (!Number.isNaN(resetMs) && resetMs > now) return false
-        }
-      }
-      return true
-    })
+    const candidates = this.data.accounts.filter((acc) => this.isAccountEligible(acc, family, now))
 
     if (candidates.length === 0) return null
 
     if (this.data.mode === 'round-robin' && candidates.length > 1) {
       // Pick least recently used candidate
       const sorted = candidates.slice().sort((a, b) => (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0))
-      return sorted[0] ?? null
+      const picked = sorted[0] ?? null
+      if (picked) {
+        if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
+        this.data.activeAccountIds[family] = picked.id
+        this.data.lastActiveAccountId = picked.id
+        this.persist()
+      }
+      return picked
     }
 
     // Default 'sequential' (Sticky Sequential Drain):
@@ -531,6 +604,10 @@ export class AccountPoolManager {
     if (activeId) {
       const activeCandidate = candidates.find((a) => a.id === activeId)
       if (activeCandidate) {
+        if (this.data.lastActiveAccountId !== activeCandidate.id) {
+          this.data.lastActiveAccountId = activeCandidate.id
+          this.persist()
+        }
         return activeCandidate
       }
     }
@@ -553,6 +630,7 @@ export class AccountPoolManager {
 
     if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
     this.data.activeAccountIds[family] = nextAccount.id
+    this.data.lastActiveAccountId = nextAccount.id
     this.persist()
     return nextAccount
   }

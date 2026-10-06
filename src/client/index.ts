@@ -4,6 +4,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client';
 import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount, ModelQuotaInfo } from '../common/pool-types.ts';
 import { BRAND_COLORS, BRAND_PATHS, UI_PATHS } from './brand-icons.ts';
 import { installAgyToolView } from './toolview.ts';
+import { installMermaidRendering } from './mermaid.ts';
 import { en, es, NS, ptBR, zh, type AgyLocaleKey } from './locales.ts';
 import { installAutoExpandReasoning } from './reasoning.ts';
 
@@ -1111,14 +1112,26 @@ export function apply(ctx: ClientContext): void {
 			);
 		};
 
-		// Accounts the sticky scheduler currently routes runs to (per family):
-		// the badge answers "which account is agy using right now".
-		const inUseIds = new Set(Object.values(pool?.activeAccountIds ?? {}));
+		// Exactly ONE account runs agy at any moment. Prefer lastActiveAccountId if valid,
+		// falling back to activeAccountIds.google or primaryAccountId.
+		const rawActiveId = pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
+		const isHealthyAccount = (a: ManagedAccount): boolean => {
+			if (!a.enabled || a.authRequired) return false;
+			const hasCd = Object.entries(a.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
+			if (hasCd) return false;
+			const googleQuota = a.quotas?.google;
+			if (googleQuota && typeof googleQuota.remainingFraction === 'number' && googleQuota.remainingFraction <= 0.02) {
+				if (googleQuota.resetTime && Date.parse(googleQuota.resetTime) > Date.now()) return false;
+			}
+			return true;
+		};
+		const healthyActiveAccount = accounts.find((a) => a.id === rawActiveId && isHealthyAccount(a));
+		const activeAccountId = healthyActiveAccount ? healthyActiveAccount.id : (accounts.find(isHealthyAccount)?.id ?? rawActiveId);
 		const renderedAccountCards = accounts.map((acc: ManagedAccount) => {
 			const isPrimary = acc.id === pool?.primaryAccountId;
-			const isInUse = inUseIds.has(acc.id);
 			const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
 			const isAuthRequired = acc.authRequired;
+			const isInUse = !hasCooldown && !isAuthRequired && acc.enabled && activeAccountId !== undefined && activeAccountId === acc.id;
 			const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : hasCooldown ? '#f59e0b' : '#10b981';
 			const isEditingProxy = editingProxyId === acc.id;
 			const isExpanded = expandedModels[acc.id] ?? false;
@@ -1174,6 +1187,7 @@ export function apply(ctx: ClientContext): void {
 								gap: '4px',
 								fontWeight: 700,
 							},
+							title: t('status.inUse'),
 						}, uiIcon('zap', 11, '#10b981'), t('status.inUse')) : null,
 						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-proxy-bg)', color: 'var(--agy-badge-proxy-text)', borderColor: 'var(--agy-badge-proxy-border)', gap: '5px' } },
 							uiIcon('globe', 11, 'var(--agy-badge-proxy-text)'),
@@ -1593,10 +1607,21 @@ export function apply(ctx: ClientContext): void {
 		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
 		const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : hasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
 
+		const rawActiveId = pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
+		const activeAcc = accounts.find((a) => a.id === rawActiveId && a.enabled && !a.authRequired)
+			?? accounts.find((a) => a.enabled && !a.authRequired)
+			?? accounts[0];
+		const legacyDefault = activeAcc && activeAcc.defaultAlias === undefined && activeAcc.systemHome && activeAcc.alias === '主账号 (系统登录)';
+		const displayAlias = activeAcc ? (activeAcc.defaultAlias || legacyDefault
+			? activeAcc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(activeAcc) + 1 })
+			: activeAcc.alias) : '';
+		const activeDetail = activeAcc ? ` · ${t('status.inUse')}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}` : '';
+		const badgeTitle = `${t('header.badgeTitle', { count: accounts.length })}${activeDetail}`;
+
 		const badge = h('button',
 			{
 				type: 'button',
-				title: t('header.badgeTitle', { count: accounts.length }),
+				title: badgeTitle,
 				className: 'agy-btn',
 				onClick: () => agyModalStore.setOpen(true),
 				style: {
@@ -1662,4 +1687,8 @@ export function apply(ctx: ClientContext): void {
 
 	// Auto-expand reasoning blocks containing full model thought prose
 	installAutoExpandReasoning();
+
+	// Draw ```mermaid fences (DSH's shiki pass has no mermaid grammar and
+	// leaves them as plain code blocks).
+	installMermaidRendering();
 }

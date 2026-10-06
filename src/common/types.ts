@@ -31,6 +31,14 @@ export interface PluginConfig {
   maxTokensDefault: number
   forwardSystemPrompt: boolean
   digestMaxChars: number
+  /**
+   * Character budget for the history digest used to seed a brand-new agy
+   * conversation (first contact, account switch, model switch, compaction
+   * re-seed). Generous on purpose: modern models are 1M-token class, and a
+   * small budget silently dropped most of a long session on every account
+   * switch. Default 660K, sized for 1M-token-class models.
+   */
+  contextTransferMaxChars: number
   modelsCacheTtlMs: number
   /** Allow compaction / session-title auxiliary calls to spawn agy. */
   allowAuxiliary: boolean
@@ -99,6 +107,7 @@ export function defaultConfig(): PluginConfig {
     maxTokensDefault: 65_536,
     forwardSystemPrompt: false,
     digestMaxChars: 8_000,
+    contextTransferMaxChars: 660_000,
     modelsCacheTtlMs: 300_000,
     allowAuxiliary: true,
     compactionMaxChars: 800_000,

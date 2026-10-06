@@ -18,7 +18,7 @@ import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
 import { ensureIsolatedKeychain, isolatedHomeEnv, proxyEnvFor, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
 import { stateDir } from '../common/config.ts'
-import type { SessionStore } from './sessions.ts'
+import { SENT_IMAGE_IDS_MAX, type SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
 import { getGitHeadContent } from './mirror-tool.ts'
 
@@ -137,6 +137,58 @@ function digestLabel(m: Message): string {
 }
 
 /**
+ * Images this hop should forward, minus what the current agy conversation
+ * has already received. Trailing-span attachments come first (this hop's
+ * screenshots), then any user-turn attachments since `fromIdx` that carry
+ * unseen ids (tool-hop continuations and foreign-model turns used to fall
+ * into a "re-send every historical screenshot" path).
+ */
+export function collectUnsentImageRefs(
+  messages: readonly Message[],
+  trailingUser: readonly Message[],
+  fromIdx: number,
+  sentIds: readonly string[],
+): ImageRefLike[] {
+  const sent = new Set(sentIds)
+  const seen = new Set<string>()
+  const out: ImageRefLike[] = []
+  const push = (m: Message): void => {
+    const refs: ImageRefLike[] = []
+    collectImageRefs(m, refs)
+    for (const r of refs) {
+      const id = r.attachmentId
+      if (typeof id !== 'string' || id === '' || sent.has(id) || seen.has(id)) continue
+      seen.add(id)
+      out.push(r)
+    }
+  }
+  for (const m of trailingUser) push(m)
+  const start = Math.max(0, Math.min(fromIdx, messages.length))
+  for (let i = start; i < messages.length; i++) {
+    const m = messages[i]
+    if (m === undefined || m.role !== 'user' || isToolResultMessage(m)) continue
+    push(m)
+  }
+  return out
+}
+
+/** Merge newly forwarded attachment ids into a bounded, oldest-first list. */
+export function mergeSentImageIds(
+  existing: readonly string[] | undefined,
+  added: readonly string[],
+  max = SENT_IMAGE_IDS_MAX,
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of [...(existing ?? []), ...added]) {
+    if (typeof id !== 'string' || id === '' || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out.length > max ? out.slice(out.length - max) : out
+}
+
+/**
  * Rolling digest of turns this agy conversation has not seen (ADR-7).
  *
  * Budget policy (issue #35): the latest real user task is reserved first so
@@ -248,6 +300,17 @@ function brief(s: string): string {
 function sawAuthFailure(parser: StreamJsonParser, outcome: { stderrTail: string; stdout: string }): boolean {
   if (parser.stats.sawAuthFailure) return true
   return looksLikeAuthFailure(outcome.stderrTail) || looksLikeAuthFailure(outcome.stdout.slice(0, 4000))
+}
+
+/**
+ * Bounded wait for an aborted run to settle, so a steer replacement never
+ * overlaps the process it just killed on the same agy conversation.
+ */
+async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!run.isSettled && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
 }
 
 export class AgyAdapter extends LlmAdapter {
@@ -577,6 +640,11 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
 
+    // The account is final here: record it as *the* in-use account so the
+    // console shows exactly one badge (per-family pointers may point at
+    // families the user is not currently running).
+    if (account && !isAux) this.deps.pool?.markAccountActive(account.id)
+
     const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
     let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
 
@@ -642,8 +710,12 @@ export class AgyAdapter extends LlmAdapter {
         prompt = trailingJoined
       }
       if (binding === undefined && lastAssistantIdx >= 0) {
-        // First contact: bring agy up to speed with a bounded digest.
-        prompt = buildDigest(messages, 0, cfg.digestMaxChars) + prompt
+        // First contact / account switch / model switch / compaction re-seed:
+        // the new agy conversation has seen NOTHING, so seed it with the
+        // full-transfer budget (1M-token class models can absorb it). The
+        // follow-up `digestMaxChars` is only for foreign turns on a live
+        // conversation that already carries the rest natively.
+        prompt = buildDigest(messages, 0, cfg.contextTransferMaxChars) + prompt
       } else if (binding !== undefined) {
         // Returning session: digest only the foreign turns since our
         // watermark (the user may have talked to another model in between).
@@ -664,24 +736,20 @@ export class AgyAdapter extends LlmAdapter {
     }
     // ---- multimodal staging (v0.2): images ride as staged files ----
     let stagedDirs: string[] = []
+    const newlySentImageIds: string[] = []
     if (!isAux) {
-      const imageRefs: ImageRefLike[] = []
-      for (const m of trailingUser) {
-        // Walk nested tool-result payloads too — attachments after a tool
-        // hop used to be silently dropped on exactly those calls (issue #34).
-        collectImageRefs(m, imageRefs)
-      }
-      // Also pick up images attached to earlier user turns in this request
-      // when the trailing span itself carries none (tool-hop case).
-      if (imageRefs.length === 0) {
-        for (const m of messages) {
-          if (m.role !== 'user' || isToolResultMessage(m)) continue
-          collectImageRefs(m, imageRefs)
-        }
-      }
+      // Only forward attachments this agy conversation has not seen.
+      // First contact (new account / model / post-compaction) has no
+      // watermark, so the whole history is new; returning hops only carry
+      // the trailing span plus unseen user-turn attachments. The old
+      // "trailing empty → re-collect every historical screenshot" fallback
+      // re-attached the same 4-5 images on every tool-hop continuation.
+      const sentIds = binding?.sentImageIds ?? []
+      const fromIdx = binding !== undefined ? binding.lastMessageCount : 0
+      const imageRefs = collectUnsentImageRefs(messages, trailingUser, fromIdx, sentIds)
       if (imageRefs.length > 0 && this.deps.readImage) {
         const dir = cfg.mediaDir !== '' ? cfg.mediaDir : defaultMediaDir(stateDir())
-        const key = (sessionKey !== '' ? sessionKey.replace(/[^a-zA-Z0-9_-]+/g, '_') : 'anon') + '-' + messages.length
+        const key = sessionKey !== '' ? sessionKey.replace(/[^a-zA-Z0-9_-]+/g, '_') : 'anon'
         const res = await stageImages({
           dir,
           key,
@@ -696,6 +764,9 @@ export class AgyAdapter extends LlmAdapter {
             : (prompt + '\n\n' + res.promptSuffix)
         }
         if (res.staged.length > 0) stagedDirs = [dir]
+        // Mark ids we actually staged (not skipped/unreadable) so the next
+        // hop does not re-attach them. Persisted with the binding below.
+        newlySentImageIds.push(...res.stagedIds)
       }
       if (prompt.trim() === '') {
         throw new LlmError('request carries no user text or images to forward to agy', Err.AGY_ERROR)
@@ -772,6 +843,10 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
         liveRun.requestAbort?.()
+        // Two agy processes must never append to one conversation at the same
+        // time. Give the aborted process a bounded moment to actually exit
+        // (SIGTERM, then the SIGKILL escalation) before the replacement spawns.
+        await waitForRunSettle(liveRun, 3_500)
       }
       this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
     }
@@ -987,6 +1062,7 @@ export class AgyAdapter extends LlmAdapter {
               lastMessageCount: messages.length,
               updatedAt: Date.now(),
               model: activeModel,
+              sentImageIds: mergeSentImageIds(binding?.sentImageIds, newlySentImageIds),
             })
           }
         }
@@ -1025,6 +1101,7 @@ export class AgyAdapter extends LlmAdapter {
               lastMessageCount: messages.length,
               updatedAt: Date.now(),
               model: activeModel,
+              sentImageIds: mergeSentImageIds(binding?.sentImageIds, newlySentImageIds),
             })
           }
         }
