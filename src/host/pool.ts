@@ -488,6 +488,57 @@ export class AccountPoolManager {
   }
 
   /**
+   * Next moment this account's quota state refreshes for one family: the
+   * sooner of the 5h window reset and the weekly cap reset. NaN when unknown.
+   */
+  private nextQuotaResetAt(acc: ManagedAccount, family: ModelFamily): number {
+    const q = acc.quotas[family]
+    const stamps = [q?.resetTime, q?.weeklyResetTime]
+      .filter((v): v is string => typeof v === 'string' && v !== '')
+      .map((v) => Date.parse(v))
+      .filter((t) => !Number.isNaN(t))
+    return stamps.length === 0 ? Number.NaN : Math.min(...stamps)
+  }
+
+  /** Cyclic distance from `fromId` (0 = itself), so ties keep pool order. */
+  private cyclicDistance(fromId: string | undefined, id: string): number {
+    const total = this.data.accounts.length
+    const idx = this.data.accounts.findIndex((a) => a.id === id)
+    if (idx === -1) return Number.MAX_SAFE_INTEGER
+    if (fromId === undefined) return idx
+    const start = this.data.accounts.findIndex((a) => a.id === fromId)
+    if (start === -1) return idx
+    return (idx - start + total) % total
+  }
+
+  /**
+   * "Use it or lose it" rotation order. When the sticky account is drained we
+   * prefer the eligible account whose quota window refreshes SOONEST: residual
+   * quota disappears at that reset, so draining it first is free capacity the
+   * pool would otherwise throw away. Accounts with no quota metadata yet keep
+   * the legacy cyclic order (which also keeps a drained slot from bouncing
+   * straight back to the primary).
+   */
+  private orderByExpiry(
+    candidates: readonly ManagedAccount[],
+    family: ModelFamily,
+    fromId?: string,
+  ): ManagedAccount[] {
+    return candidates
+      .map((acc, index) => ({ acc, index, at: this.nextQuotaResetAt(acc, family) }))
+      .sort((a, b) => {
+        const aKnown = !Number.isNaN(a.at)
+        const bKnown = !Number.isNaN(b.at)
+        if (aKnown !== bKnown) return aKnown ? -1 : 1
+        if (aKnown && bKnown && a.at !== b.at) return a.at - b.at
+        const da = this.cyclicDistance(fromId, a.acc.id)
+        const db = this.cyclicDistance(fromId, b.acc.id)
+        return da !== db ? da - db : a.index - b.index
+      })
+      .map((e) => e.acc)
+  }
+
+  /**
    * Move the active pointer past `fromId` for one family WITHOUT cooling the
    * account down, and return the account the next run should use. Used when a
    * run produced no output at all (silent timeout): the retry must try another
@@ -500,19 +551,7 @@ export class AccountPoolManager {
       (a) => a.id !== fromId && this.isAccountEligible(a, family, now),
     )
     if (candidates.length === 0) return null
-    const startIndex = this.data.accounts.findIndex((a) => a.id === fromId)
-    let next: ManagedAccount | undefined
-    if (startIndex !== -1) {
-      const total = this.data.accounts.length
-      for (let i = 1; i < total; i++) {
-        const check = this.data.accounts[(startIndex + i) % total]!
-        if (candidates.some((c) => c.id === check.id)) {
-          next = check
-          break
-        }
-      }
-    }
-    next ??= candidates[0]!
+    const next = this.orderByExpiry(candidates, family, fromId)[0]!
     if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
     this.data.activeAccountIds[family] = next.id
     this.data.lastActiveAccountId = next.id
@@ -657,21 +696,11 @@ export class AccountPoolManager {
       }
     }
 
-    // 2. Active account is drained or unavailable -> advance to next healthy candidate in cyclic order
-    let nextAccount: ManagedAccount = candidates[0]!
-    if (activeId) {
-      const currentIndex = this.data.accounts.findIndex((a) => a.id === activeId)
-      if (currentIndex !== -1) {
-        const total = this.data.accounts.length
-        for (let i = 1; i < total; i++) {
-          const checkAcc = this.data.accounts[(currentIndex + i) % total]!
-          if (candidates.some((c) => c.id === checkAcc.id)) {
-            nextAccount = checkAcc
-            break
-          }
-        }
-      }
-    }
+    // 2. Active account is drained or unavailable -> rotate to the eligible
+    //    account whose quota expires SOONEST (use-it-or-lose-it: residual
+    //    quota is discarded at the window reset). With no quota metadata yet
+    //    this degrades to the previous cyclic order.
+    const nextAccount: ManagedAccount = this.orderByExpiry(candidates, family, activeId)[0]!
 
     if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
     this.data.activeAccountIds[family] = nextAccount.id

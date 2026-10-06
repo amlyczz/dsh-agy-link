@@ -471,3 +471,40 @@ test('advanceAccount returns null when no other account is eligible', () => {
   assert.equal(pool.getPoolData().lastActiveAccountId, a.id)
 })
 
+test('rotation drains the account whose quota expires soonest (use it or lose it)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-expiry-'))
+  const pool = new AccountPoolManager(dir)
+  const a = pool.getAccounts()[0]!
+  const later = pool.createAccountSlot('Later')
+  const sooner = pool.createAccountSlot('Sooner')
+  const iso = (ms: number): string => new Date(ms).toISOString()
+  const now = Date.now()
+  // "later" sits next in pool order and is full; "sooner" has less quota but
+  // its window refreshes in 20 minutes, so its residual is about to be lost.
+  pool.updateAccountQuotas(later.id, { google: { remainingFraction: 1, resetTime: iso(now + 4 * 3600_000) } })
+  pool.updateAccountQuotas(sooner.id, { google: { remainingFraction: 0.6, resetTime: iso(now + 20 * 60_000) } })
+  pool.markAccountActive(a.id)
+
+  // a is drained -> rotation must pick "sooner", not the next slot in order.
+  pool.recordFailure(a.id, 'google', '429 Rate Limit')
+  assert.equal(pool.getPoolData().lastActiveAccountId, sooner.id, 'soonest expiry wins over pool order')
+
+  // And the no-cooldown timeout rotation follows the same policy.
+  pool.markAccountActive(a.id)
+  assert.equal(pool.advanceAccount(a.id, 'google'), sooner.id)
+  assert.equal(pool.getAccount(sooner.id)?.cooldowns.google, undefined, 'rotation must not cool it down')
+})
+
+test('rotation falls back to pool order when no quota metadata exists yet', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-expiry-none-'))
+  const pool = new AccountPoolManager(dir)
+  const a = pool.getAccounts()[0]!
+  const b = pool.createAccountSlot('Second')
+  pool.createAccountSlot('Third')
+  pool.markAccountActive(a.id)
+  // No resetTime anywhere: keep the legacy cyclic advance (next slot over,
+  // never a bounce back to the drained primary).
+  pool.recordFailure(a.id, 'google', '429 Rate Limit')
+  assert.equal(pool.getPoolData().lastActiveAccountId, b.id)
+})
+
