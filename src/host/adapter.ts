@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Err, looksLikeAuthFailure, looksLikeEligibilityFailure, looksLikeHardRateLimit, looksLikeRateLimit, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
-import { modelFamilyOf } from '../common/pool-types.ts'
+import { modelFamilyOf, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
 import { EventMapper } from './mapper.ts'
@@ -350,12 +350,17 @@ export class AgyAdapter extends LlmAdapter {
   /**
    * Fail fast on auth and abort; allow one retry for transient process
    * failures (timeout, crash, malformed stream) per ADR-11.
+   *
+   * RATE_LIMIT is retryable on purpose: the failed account was put into
+   * cooldown and the sticky pointer advanced before the error surfaced, so the
+   * retry is served by the NEXT account in the pool — quota exhaustion used to
+   * dead-end in a user-visible error even though a healthy account was idle.
    */
   override providerRetryPolicy(_provider: string) {
     return {
       mode: 'normal' as const,
       maxRetries: 1,
-      retryableCodes: [Err.TIMEOUT, Err.PROCESS_EXIT, Err.INVALID_OUTPUT],
+      retryableCodes: [Err.TIMEOUT, Err.PROCESS_EXIT, Err.INVALID_OUTPUT, Err.RATE_LIMIT],
       initialDelayMs: 2_000,
       maxDelayMs: 10_000,
       jitterRatio: 0.1,
@@ -621,14 +626,23 @@ export class AgyAdapter extends LlmAdapter {
     let account = this.deps.pool ? this.deps.pool.selectAccount(family) : undefined
     if (this.deps.pool && this.deps.pool.getAccounts().length > 0 && !account) {
       if (cfg.autoFallbackModel) {
-        const fallbackSlugs = ['gemini-3.5-flash', 'gemini-3.6-flash']
-        for (const fb of fallbackSlugs) {
-          const fbFam = modelFamilyOf(fb)
+        // Quota pools are per FAMILY (Gemini / Claude / GPT-OSS). Downgrading
+        // within the requested family shares the exhausted pool, so the old
+        // hardcoded gemini-3.5/3.6 list could never rescue a drained Google
+        // family. Fail over across families instead, then pin a model id of the
+        // family the scheduler just picked.
+        const familyModel: Partial<Record<ModelFamily, string>> = {
+          google: 'gemini-3.8-flash',
+          anthropic: 'claude-sonnet-4-6',
+          openai: 'gpt-oss-120b-medium',
+        }
+        for (const fbFam of ['google', 'anthropic', 'openai'] as ModelFamily[]) {
+          if (fbFam === family) continue
           const fbAcc = this.deps.pool.selectAccount(fbFam)
           if (fbAcc) {
             account = fbAcc
             family = fbFam
-            activeModel = fb
+            activeModel = familyModel[fbFam] ?? activeModel
             break
           }
         }
@@ -1014,20 +1028,34 @@ export class AgyAdapter extends LlmAdapter {
       // error and slapping a ghost cooldown on a healthy account.
       const rawErrText = [outcome.stderrTail, parser.stats.lastResultError].filter(Boolean).join(' ')
       const isRateLimit = looksLikeRateLimit(rawErrText)
+      // A timeout that never produced a single stdout event is an account-level
+      // black hole (unreachable Google / wedged credential), not a long tool:
+      // the retry must try a different account rather than the same dead one.
+      const silentTimeout = outcome.timedOut === true && outcome.stdout.trim() === ''
       let failure: { kind: 'error' | 'aborted'; code: string; message: string } | null = null
       if (outcome.aborted) {
         failure = { kind: 'aborted', code: 'ABORTED', message: 'agy run aborted by caller' }
       } else if (outcome.timedOut) {
-        const neverSpoke = outcome.stdout.trim() === ''
         failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run was idle for ' + cfg.timeoutMs + 'ms without output'
-          + (neverSpoke
+          + (silentTimeout
             ? ' — agy never emitted a single event; it is likely unable to reach Google (check proxy/network). 无法连接 Google，请检查代理或网络配置'
             : '') }
       } else if (sawAuthFailure(parser, outcome)) {
         failure = { kind: 'error', code: Err.AUTH, message: 'agy is not signed in — run /agy auth (or run agy once in a terminal) to login' }
       } else if (isRateLimit) {
         const bestMsg = parser.stats.lastResultError || (outcome.stderrTail ? brief(outcome.stderrTail) : 'Rate limit or quota reached')
-        failure = { kind: 'error', code: Err.AGY_ERROR, message: 'Google Antigravity quota / rate limit reached: ' + bestMsg }
+        // Only HARD server-issued refusals are retryable: that path cools the
+        // account down and advances the sticky pointer, so DSH's automatic
+        // retry is served by the NEXT account instead of dead-ending the turn.
+        // Soft capacity signals ("model overloaded") keep the deterministic
+        // AGY_ERROR code — nothing was cooled, so a retry would only re-hit the
+        // same overloaded model.
+        const hard = looksLikeHardRateLimit(rawErrText)
+        failure = {
+          kind: 'error',
+          code: hard ? Err.RATE_LIMIT : Err.AGY_ERROR,
+          message: 'Google Antigravity quota / rate limit reached: ' + bestMsg,
+        }
       } else if (looksLikeEligibilityFailure(rawErrText) || looksLikeEligibilityFailure(parser.stats.lastResultError ?? '')) {
         // Region/account eligibility refusal (issue #32): a clear cause, not a
         // generic PROCESS_EXIT. Not retryable from this bridge.
@@ -1071,8 +1099,18 @@ export class AgyAdapter extends LlmAdapter {
         // Cooldown is a costly local penalty (account leaves rotation): only
         // HARD server-issued signatures may trigger it. Soft signals (model
         // overloaded) shape the message above but never cool the account.
-        if (account && looksLikeHardRateLimit(rawErrText)) {
+        // Caller-aborted runs (stop button / steer preemption) are NOT server
+        // rate limits and must never slap a cooldown on the account.
+        if (account && !outcome.aborted && looksLikeHardRateLimit(rawErrText)) {
           this.deps.pool?.recordFailure(account.id, family, failure.message)
+        }
+        // Silent timeout: rotate to the next account for the automatic retry
+        // WITHOUT a cooldown. A 15-minute penalty for what may be a transient
+        // network blip would pull every account out of rotation and turn the
+        // accurate "cannot reach Google" hint into a misleading "all accounts
+        // in cooldown".
+        if (account && silentTimeout) {
+          this.deps.pool?.advanceAccount(account.id, family)
         }
         // Only authoritative auth states may flag an account: the old
         // /auth/i substring matched "oauth2.googleapis.com … i/o timeout"

@@ -162,6 +162,13 @@ export const Err = {
   AGY_NOT_INSTALLED: 'AGY_NOT_INSTALLED',
   AGY_VERSION_UNSUPPORTED: 'AGY_VERSION_UNSUPPORTED',
   AGY_ERROR: 'AGY_ERROR',
+  /**
+   * Hard server-issued quota / rate-limit refusal. Distinct from AGY_ERROR so
+   * the provider retry policy can retry it (the failed account is already in
+   * cooldown, so the retry lands on the next account) without also retrying
+   * deterministic AGY_ERRORs (bad region, empty request, dead pool).
+   */
+  RATE_LIMIT: 'RATE_LIMIT',
   TIMEOUT: 'TIMEOUT',
   PROCESS_EXIT: 'PROCESS_EXIT',
   INVALID_OUTPUT: 'INVALID_OUTPUT',

@@ -38,6 +38,15 @@ export class AccountPoolManager {
         const raw = readFileSync(this.file, 'utf8')
         const parsed = JSON.parse(raw) as AccountPoolData
         if (parsed && Array.isArray(parsed.accounts)) {
+          for (const acc of parsed.accounts) {
+            if (acc.cooldowns) {
+              for (const [fam, cd] of Object.entries(acc.cooldowns)) {
+                if (cd && cd.reason === 'agy run aborted by caller') {
+                  delete acc.cooldowns[fam as ModelFamily]
+                }
+              }
+            }
+          }
           return {
             ...defaultPoolData(),
             ...parsed,
@@ -119,7 +128,10 @@ export class AccountPoolManager {
   }
 
   getPoolData(): Readonly<AccountPoolData> {
-    return this.data
+    return {
+      ...this.data,
+      activeAccountId: this.getActiveAccountId('google'),
+    }
   }
 
   getAccounts(): readonly ManagedAccount[] {
@@ -473,6 +485,39 @@ export class AccountPoolManager {
     const next = this.selectAccount(family)
     if (next) return next.id
     return this.data.primaryAccountId ?? this.data.accounts[0]?.id
+  }
+
+  /**
+   * Move the active pointer past `fromId` for one family WITHOUT cooling the
+   * account down, and return the account the next run should use. Used when a
+   * run produced no output at all (silent timeout): the retry must try another
+   * account, but a healthy account should not be punished with a cooldown
+   * because the network blipped.
+   */
+  advanceAccount(fromId: string, family: ModelFamily): string | null {
+    const now = Date.now()
+    const candidates = this.data.accounts.filter(
+      (a) => a.id !== fromId && this.isAccountEligible(a, family, now),
+    )
+    if (candidates.length === 0) return null
+    const startIndex = this.data.accounts.findIndex((a) => a.id === fromId)
+    let next: ManagedAccount | undefined
+    if (startIndex !== -1) {
+      const total = this.data.accounts.length
+      for (let i = 1; i < total; i++) {
+        const check = this.data.accounts[(startIndex + i) % total]!
+        if (candidates.some((c) => c.id === check.id)) {
+          next = check
+          break
+        }
+      }
+    }
+    next ??= candidates[0]!
+    if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
+    this.data.activeAccountIds[family] = next.id
+    this.data.lastActiveAccountId = next.id
+    this.persist()
+    return next.id
   }
 
   updateAccountQuotas(id: string, quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>, email?: string): void {

@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, mergeSentImageIds, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
+import { AccountPoolManager } from '../src/host/pool.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
 import { classifyToolError } from '../src/host/recording.ts'
@@ -1154,7 +1155,7 @@ test('a NEW (steered) prompt preempts a live run instead of debouncing', async (
   }
 })
 
-test('rate limit error from agy maps to AGY_ERROR without retryable PROCESS_EXIT', async () => {
+test('soft rate limit signal (model overloaded) stays a deterministic AGY_ERROR', async () => {
   const prevMode = process.env.FAKE_AGY_MODE
   process.env.FAKE_AGY_MODE = 'real-fail'
   try {
@@ -1166,6 +1167,37 @@ test('rate limit error from agy maps to AGY_ERROR without retryable PROCESS_EXIT
     assert.equal(finish.reason.kind, 'error')
     assert.equal(finish.reason.failure?.code, Err.AGY_ERROR)
     assert.ok(finish.reason.failure?.message.includes('rate limit'))
+  } finally {
+    process.env.FAKE_AGY_MODE = prevMode
+  }
+})
+
+test('quota exhaustion and timeouts are retried so the next account can serve them', () => {
+  const { adapter } = makeAdapter()
+  const policy = adapter.providerRetryPolicy('agy')
+  // Quota exhaustion was a dead end before: the account cooled down and the
+  // sticky pointer advanced, but no retry was ever attempted.
+  assert.ok(policy.retryableCodes.includes(Err.RATE_LIMIT), 'rate limit must retry onto the next account')
+  assert.ok(policy.retryableCodes.includes(Err.TIMEOUT), 'silent timeouts must retry onto the next account')
+  assert.ok(!(policy.retryableCodes as readonly string[]).includes(Err.AGY_ERROR), 'deterministic AGY_ERRORs stay single-shot')
+})
+
+test('hard quota refusal cools the spent account and hands the retry to the next one', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
+  process.env.FAKE_AGY_MODE = 'real-quota'
+  const pool = new AccountPoolManager(join(workDir, 'pool-hard-quota'))
+  const second = pool.createAccountSlot('Second')
+  try {
+    const { adapter } = makeAdapter({}, { pool })
+    const res = await runTurn(adapter, [msg('user', 'hi')], { sessionId: 'sess-hard-quota' as never })
+    const finish = res.chunks[res.chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
+    assert.equal(finish.reason.kind, 'error')
+    assert.equal(finish.reason.failure?.code, Err.RATE_LIMIT, 'hard quota must use the retryable code')
+    const primary = pool.getAccounts()[0]!
+    // Spent account left rotation...
+    assert.ok((primary.cooldowns.google?.cooldownUntil ?? 0) > Date.now(), 'hard quota must cool the account down')
+    // ...and the pointer already moved on, so the retry lands on the next one.
+    assert.equal(pool.getPoolData().lastActiveAccountId, second.id)
   } finally {
     process.env.FAKE_AGY_MODE = prevMode
   }

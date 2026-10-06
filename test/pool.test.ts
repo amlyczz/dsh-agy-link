@@ -403,3 +403,71 @@ test('lastActiveAccountId is cleared when the active account is deleted, disable
   assert.equal(pool.getPoolData().lastActiveAccountId, undefined)
 })
 
+test('getPoolData exposes authoritative activeAccountId and purges ghost abort cooldowns', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-ghost-cd-'))
+  const rawPool = {
+    version: 1,
+    accounts: [
+      {
+        id: 'acc_primary',
+        alias: 'Primary',
+        systemHome: true,
+        dir: '',
+        enabled: true,
+        cooldowns: {
+          google: {
+            cooldownUntil: Date.now() + 600_000,
+            reason: 'agy run aborted by caller',
+          },
+        },
+        quotas: {},
+      },
+      {
+        id: 'acc_sec',
+        alias: 'Secondary',
+        systemHome: false,
+        dir: join(dir, 'acc_sec'),
+        enabled: true,
+        cooldowns: {},
+        quotas: {},
+      },
+    ],
+  }
+  writeFileSync(join(dir, 'pool.json'), JSON.stringify(rawPool), 'utf8')
+
+  const pool = new AccountPoolManager(dir)
+  // Ghost cooldown on primary was purged
+  assert.equal(pool.getAccount('acc_primary')?.cooldowns.google, undefined)
+  // getPoolData exposes activeAccountId
+  const data = pool.getPoolData()
+  assert.equal(data.activeAccountId, 'acc_primary')
+})
+
+test('advanceAccount rotates to the next eligible account without a cooldown', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-advance-'))
+  const pool = new AccountPoolManager(dir)
+  const a = pool.getAccounts()[0]!
+  const b = pool.createAccountSlot('Second')
+  const c = pool.createAccountSlot('Third')
+  pool.markAccountActive(a.id)
+
+  // Second is unavailable (disabled): the pointer must skip it.
+  pool.setAccountEnabled(b.id, false)
+  assert.equal(pool.advanceAccount(a.id, 'google'), c.id)
+  assert.equal(pool.getPoolData().lastActiveAccountId, c.id)
+  // No cooldown penalty is applied to the account we rotated away from.
+  assert.equal(pool.getAccount(a.id)?.cooldowns.google, undefined)
+  assert.equal(pool.getAccount(c.id)?.cooldowns.google, undefined)
+
+})
+
+test('advanceAccount returns null when no other account is eligible', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-advance-none-'))
+  const pool = new AccountPoolManager(dir)
+  const a = pool.getAccounts()[0]!
+  pool.markAccountActive(a.id)
+  // Only the account we are rotating away from exists: no move, no throw.
+  assert.equal(pool.advanceAccount(a.id, 'google'), null)
+  assert.equal(pool.getPoolData().lastActiveAccountId, a.id)
+})
+

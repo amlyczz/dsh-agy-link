@@ -1112,26 +1112,14 @@ export function apply(ctx: ClientContext): void {
 			);
 		};
 
-		// Exactly ONE account runs agy at any moment. Prefer lastActiveAccountId if valid,
-		// falling back to activeAccountIds.google or primaryAccountId.
-		const rawActiveId = pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
-		const isHealthyAccount = (a: ManagedAccount): boolean => {
-			if (!a.enabled || a.authRequired) return false;
-			const hasCd = Object.entries(a.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
-			if (hasCd) return false;
-			const googleQuota = a.quotas?.google;
-			if (googleQuota && typeof googleQuota.remainingFraction === 'number' && googleQuota.remainingFraction <= 0.02) {
-				if (googleQuota.resetTime && Date.parse(googleQuota.resetTime) > Date.now()) return false;
-			}
-			return true;
-		};
-		const healthyActiveAccount = accounts.find((a) => a.id === rawActiveId && isHealthyAccount(a));
-		const activeAccountId = healthyActiveAccount ? healthyActiveAccount.id : (accounts.find(isHealthyAccount)?.id ?? rawActiveId);
+		// Authoritative active account: trust pool.activeAccountId computed by
+		// the scheduler, falling back to lastActiveAccountId, activeAccountIds.google, or primaryAccountId.
+		const activeAccountId = pool?.activeAccountId ?? pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
 		const renderedAccountCards = accounts.map((acc: ManagedAccount) => {
 			const isPrimary = acc.id === pool?.primaryAccountId;
 			const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
 			const isAuthRequired = acc.authRequired;
-			const isInUse = !hasCooldown && !isAuthRequired && acc.enabled && activeAccountId !== undefined && activeAccountId === acc.id;
+			const isInUse = acc.enabled && !isAuthRequired && activeAccountId !== undefined && activeAccountId === acc.id;
 			const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : hasCooldown ? '#f59e0b' : '#10b981';
 			const isEditingProxy = editingProxyId === acc.id;
 			const isExpanded = expandedModels[acc.id] ?? false;
@@ -1603,20 +1591,22 @@ export function apply(ctx: ClientContext): void {
 
 		const pool = status?.pool;
 		const accounts = pool?.accounts ?? [];
-		const hasCooldown = accounts.some((a) => Object.entries(a.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now()));
-		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
-		const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : hasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
-
-		const rawActiveId = pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
+		const rawActiveId = pool?.activeAccountId ?? pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
 		const activeAcc = accounts.find((a) => a.id === rawActiveId && a.enabled && !a.authRequired)
 			?? accounts.find((a) => a.enabled && !a.authRequired)
 			?? accounts[0];
+		const activeHasCooldown = activeAcc ? Object.entries(activeAcc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now()) : false;
+		const allInCooldown = accounts.length > 0 && accounts.every((a) => !a.enabled || a.authRequired || Object.entries(a.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now()));
+		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
+		const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : allInCooldown ? '#f59e0b' : activeHasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
+
 		const legacyDefault = activeAcc && activeAcc.defaultAlias === undefined && activeAcc.systemHome && activeAcc.alias === '主账号 (系统登录)';
 		const displayAlias = activeAcc ? (activeAcc.defaultAlias || legacyDefault
 			? activeAcc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(activeAcc) + 1 })
 			: activeAcc.alias) : '';
 		const activeDetail = activeAcc ? ` · ${t('status.inUse')}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}` : '';
 		const badgeTitle = `${t('header.badgeTitle', { count: accounts.length })}${activeDetail}`;
+		const buttonLabel = displayAlias ? `AGY · ${displayAlias}` : `AGY (${accounts.length})`;
 
 		const badge = h('button',
 			{
@@ -1641,7 +1631,7 @@ export function apply(ctx: ClientContext): void {
 				},
 			},
 			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color } }),
-			`AGY (${accounts.length})`,
+			buttonLabel,
 		);
 		return h('div', { style: { display: 'inline-block' } },
 			badge,

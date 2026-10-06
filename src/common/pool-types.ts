@@ -155,6 +155,8 @@ export interface AccountPoolData {
    * are not running anything (that badge showed two accounts at once).
    */
   lastActiveAccountId?: string
+  /** Authoritative currently active account ID computed by the pool scheduler */
+  activeAccountId?: string
   accounts: ManagedAccount[]
 }
 
