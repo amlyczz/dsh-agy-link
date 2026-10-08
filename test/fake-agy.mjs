@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Fake agy CLI for offline tests. Modes via FAKE_AGY_MODE env:
 //   ok | auth | noise | exit12 | exit-error | real | real-error | real-quota
+//   location-denied — result envelope with the real "User location is not supported" refusal, exit 3
 //   ok            — legacy flat event shapes (kept for compat coverage)
 //   real          — real agy 1.1.15 stream-json shapes (nested step_update
 //                   envelopes, agent_response text_delta fragments,
@@ -60,6 +61,24 @@ const conv = argv.includes('--conversation')
 if (mode === 'exit12') {
   process.stderr.write('boom: fake crash\n')
   process.exit(12)
+}
+
+// Real location refusal observed live: agy exits 3 after a result envelope
+// carrying FAILED_PRECONDITION (code 400).
+if (mode === 'location-denied') {
+  emit({
+    event: 'result',
+    result: {
+      conversation_id: '',
+      status: 'ERROR',
+      response: '',
+      error: 'FAILED_PRECONDITION (code 400): User location is not supported for the API use.',
+      duration_seconds: 0.4,
+      num_turns: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  })
+  process.exit(3)
 }
 
 // Google-side account/region eligibility refusal (issue #32).

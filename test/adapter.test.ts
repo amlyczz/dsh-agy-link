@@ -729,19 +729,43 @@ test('role:tool continuation (dsh-llm 0.1.7) resumes one process across spans (i
   assert.equal(report.processOk, true)
 })
 
-test('region eligibility refusal maps to a clear AGY_ERROR (issue #32)', async () => {
+test('region eligibility refusal maps to a clear ELIGIBILITY error (issue #32)', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'exit-eligible'
   const chunks = await collect(adapter.stream(opts([msg('user', '测试')], { sessionId: 'sess-elig' as never })))
+  process.env.FAKE_AGY_MODE = prevMode
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string; failure?: { message: string; code: string } } }
   assert.equal(finish.type, 'finish')
   assert.equal(finish.reason.kind, 'error')
-  assert.equal(finish.reason.failure?.code, 'AGY_ERROR')
+  assert.equal(finish.reason.failure?.code, 'ELIGIBILITY')
   assert.ok(
     finish.reason.failure?.message.includes('not eligible') || finish.reason.failure?.message.includes('Antigravity'),
     'message should explain the eligibility/region refusal: ' + finish.reason.failure?.message,
   )
   assert.ok(finish.reason.failure?.message.includes('location'), finish.reason.failure?.message)
+})
+
+test('live location refusal rotates the refused account away (retry can serve another)', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
+  process.env.FAKE_AGY_MODE = 'location-denied'
+  const pool = new AccountPoolManager(join(workDir, 'pool-location'))
+  const second = pool.createAccountSlot('Proxied')
+  try {
+    const { adapter } = makeAdapter({}, { pool })
+    const res = await runTurn(adapter, [msg('user', 'hi')], { sessionId: 'sess-location' as never })
+    const finish = res.chunks[res.chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
+    assert.equal(finish.reason.failure?.code, Err.ELIGIBILITY)
+    assert.ok(finish.reason.failure?.message.includes('location'), finish.reason.failure?.message)
+    // ELIGIBILITY is retryable AND the sticky pointer already moved off the
+    // refused account, so the retry is served by a different account instead of
+    // hitting the same unsupported location again and again.
+    assert.equal(pool.getPoolData().lastActiveAccountId, second.id)
+    // Rotating away is not a cooldown penalty on a healthy account.
+    assert.equal(pool.getAccounts()[0]!.cooldowns.google, undefined)
+  } finally {
+    process.env.FAKE_AGY_MODE = prevMode
+  }
 })
 
 function msgSrc(role: 'user' | 'assistant', text: string, provider?: string): Message {

@@ -360,7 +360,7 @@ export class AgyAdapter extends LlmAdapter {
     return {
       mode: 'normal' as const,
       maxRetries: 1,
-      retryableCodes: [Err.TIMEOUT, Err.PROCESS_EXIT, Err.INVALID_OUTPUT, Err.RATE_LIMIT],
+      retryableCodes: [Err.TIMEOUT, Err.PROCESS_EXIT, Err.INVALID_OUTPUT, Err.RATE_LIMIT, Err.ELIGIBILITY],
       initialDelayMs: 2_000,
       maxDelayMs: 10_000,
       jitterRatio: 0.1,
@@ -1058,11 +1058,15 @@ export class AgyAdapter extends LlmAdapter {
         }
       } else if (looksLikeEligibilityFailure(rawErrText) || looksLikeEligibilityFailure(parser.stats.lastResultError ?? '')) {
         // Region/account eligibility refusal (issue #32): a clear cause, not a
-        // generic PROCESS_EXIT. Not retryable from this bridge.
+        // generic PROCESS_EXIT. It is ACCOUNT-level (each account can have its
+        // own proxy/egress region), so the failing pointer is rotated before
+        // the error surfaces and the code is retryable — an account that IS
+        // eligible can then serve the retry instead of the same refused one
+        // failing again and again.
         const detail = parser.stats.lastResultError ?? (outcome.stderrTail !== '' ? brief(outcome.stderrTail) : '')
         failure = {
           kind: 'error',
-          code: Err.AGY_ERROR,
+          code: Err.ELIGIBILITY,
           message: ELIGIBILITY_ERROR_HINT + (detail !== '' ? ' (' + detail + ')' : ''),
         }
       } else if (!consumable) {
@@ -1110,6 +1114,12 @@ export class AgyAdapter extends LlmAdapter {
         // accurate "cannot reach Google" hint into a misleading "all accounts
         // in cooldown".
         if (account && silentTimeout) {
+          this.deps.pool?.advanceAccount(account.id, family)
+        }
+        // Region refusal is scoped to the account's own egress (skip the
+        // primary's direct connection, take a proxied account). Rotate so the
+        // automatic retry cannot land back on the refused account.
+        if (account && failure.code === Err.ELIGIBILITY) {
           this.deps.pool?.advanceAccount(account.id, family)
         }
         // Only authoritative auth states may flag an account: the old

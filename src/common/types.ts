@@ -169,6 +169,13 @@ export const Err = {
    * deterministic AGY_ERRORs (bad region, empty request, dead pool).
    */
   RATE_LIMIT: 'RATE_LIMIT',
+  /**
+   * Google-side region / account eligibility refusal ("User location is not
+   * supported for the API use"). Account-level, so it is retryable: the
+   * adapter rotates the sticky pointer first, which lets an account whose
+   * proxy/egress region IS supported serve the retry.
+   */
+  ELIGIBILITY: 'ELIGIBILITY',
   TIMEOUT: 'TIMEOUT',
   PROCESS_EXIT: 'PROCESS_EXIT',
   INVALID_OUTPUT: 'INVALID_OUTPUT',
@@ -248,7 +255,7 @@ export function looksLikeAuthFailure(text: string): boolean {
  * location" — not an auth bug and not something the bridge can retry past.
  */
 export function looksLikeEligibilityFailure(text: string): boolean {
-  return /eligibility check failed|not eligible for antigravity|not currently available in your (?:location|country|region)|not available in your (?:location|country|region)/i.test(
+  return /eligibility check failed|not eligible for antigravity|not currently available in your (?:location|country|region)|not available in your (?:location|country|region)|user location is not supported|location is not supported for the api|not supported in your (?:location|country|region)/i.test(
     text,
   )
 }
