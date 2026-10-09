@@ -918,6 +918,20 @@ test('listModels never returns duplicate ids even with duplicate fallback defs (
   )
 })
 
+test('listModels hides hiddenModels from the picker while resolveModel still resolves them', async () => {
+  const { adapter } = makeAdapter({ hiddenModels: ['gemini-3.7-flash', ' gpt-oss-120b-medium '] })
+  const models = await adapter.listModels('antigravity')
+  const ids = models.map((m) => m.id)
+  assert.ok(!ids.includes('gemini-3.7-flash'), 'a hidden id must leave the picker list')
+  assert.ok(!ids.includes('gpt-oss-120b-medium'), 'hidden ids are matched after trimming')
+  assert.ok(ids.includes('claude-sonnet-4-6'), 'unlisted models stay visible (deny-list semantics)')
+  // resolveModel deliberately does not filter: in-flight sessions and direct
+  // references keep resolving a model after it has been hidden.
+  const resolved = await adapter.resolveModel('antigravity', 'gemini-3.7-flash')
+  assert.equal(resolved.id, 'gemini-3.7-flash')
+  assert.equal(resolved.name, 'Gemini 3.7 Flash')
+})
+
 test('resolveModel uniformly advertises 1M context window across all Antigravity models (ADR-013)', async () => {
   const { adapter } = makeAdapter()
   const gemini = await adapter.resolveModel('antigravity', 'gemini-3.7-flash')

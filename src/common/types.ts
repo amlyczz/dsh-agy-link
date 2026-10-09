@@ -47,6 +47,12 @@ export interface PluginConfig {
   /** Lock the working directory for agy spawns; empty string = process.cwd(). */
   workspaceRoot: string
   fallbackModels: readonly FallbackModelDef[]
+  /**
+   * Model ids hidden from the DSH model picker (deny-list: anything not
+   * listed stays visible, so newly discovered models appear by default).
+   * resolveModel still accepts hidden ids so in-flight sessions keep working.
+   */
+  hiddenModels: readonly string[]
   askTool: boolean
   /** Directory where inbound images are staged for agy (path-based multimodal). */
   mediaDir: string
@@ -113,6 +119,7 @@ export function defaultConfig(): PluginConfig {
     compactionMaxChars: 800_000,
     workspaceRoot: '',
     fallbackModels: DEFAULT_FALLBACK_MODELS,
+    hiddenModels: [],
     askTool: false,
     mediaDir: '',
     mediaTtlMs: 86_400_000,

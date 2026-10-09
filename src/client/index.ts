@@ -84,6 +84,8 @@ interface StatusPayload {
 		code?: string;
 	};
 	catalog?: { source: string; count: number; lastError: string | null };
+	catalogModels?: ReadonlyArray<{ id: string; name: string }>;
+	hiddenModels?: readonly string[];
 	bindings?: number;
 	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
 }
@@ -931,6 +933,12 @@ export function apply(ctx: ClientContext): void {
 			setLoadingAction(null);
 		};
 
+		const toggleModelHidden = async (id: string, hide: boolean): Promise<void> => {
+			const next = new Set(status?.hiddenModels ?? []);
+			if (hide) next.add(id); else next.delete(id);
+			await setCfg('hiddenModels', Array.from(next));
+		};
+
 		const setPrimary = async (id: string): Promise<void> => {
 			setLoadingAction(`primary:${id}`);
 			await postJson('/plugins/agy-link/pool/primary', { id });
@@ -986,6 +994,8 @@ export function apply(ctx: ClientContext): void {
 
 		const authPhase = status?.auth?.phase ?? 'unknown';
 		const pool = status?.pool;
+		const catalogModels = status?.catalogModels ?? [];
+		const hiddenModelSet = new Set(status?.hiddenModels ?? []);
 		const accounts = pool?.accounts ?? [];
 		const isAuthed = authPhase === 'ok' || accounts.length > 0;
 		const isBusy = loadingAction !== null;
@@ -1487,6 +1497,25 @@ export function apply(ctx: ClientContext): void {
 								onClick: () => void setMode('round-robin'),
 							}, t('pool.roundRobin')),
 						),
+					),
+					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('models.label')),
+						catalogModels.length === 0
+							? h('span', { style: S.muted }, t('models.empty'))
+							: h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } },
+								catalogModels.map((m) => {
+									const isHidden = hiddenModelSet.has(m.id);
+									return h('button', {
+										type: 'button',
+										key: m.id,
+										title: m.id,
+										disabled: loadingAction === 'config:hiddenModels',
+										style: isHidden ? { ...S.segBtn, opacity: 0.45, textDecoration: 'line-through' } : S.segBtnActive,
+										onClick: () => void toggleModelHidden(m.id, !isHidden),
+									}, m.name);
+								}),
+							),
+						h('span', { style: S.muted }, t('models.hint')),
 					),
 				),
 			),

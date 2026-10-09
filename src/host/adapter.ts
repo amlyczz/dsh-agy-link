@@ -13,7 +13,7 @@ import type { AccountPoolManager } from './pool.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
 import { EventMapper } from './mapper.ts'
 import { parseMirrorCallId, type RunRecording, type RunRegistry } from './recording.ts'
-import { defaultEffortFor, findEntry, ModelCatalog, resolveModelSlug } from './models.ts'
+import { defaultEffortFor, findEntry, ModelCatalog, resolveModelSlug, sanitizeCatalogEntries } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
 import { ensureIsolatedKeychain, isolatedHomeEnv, proxyEnvFor, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
@@ -373,31 +373,13 @@ export class AgyAdapter extends LlmAdapter {
 
   override async listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
     void this.deps.catalog.refreshIfNeeded()
+    const cfg = this.deps.getConfig()
     const cat = this.deps.catalog.get()
     // DSH's llm.listModels rejects a provider catalog containing any
     // duplicate model id or invalid id (INVALID_CATALOG) and the model picker then drops
     // the whole Antigravity group — dedupe and sanitize as a final guard over every
     // catalog source (discovered, fallback, user-configured fallbackModels).
-    const seen = new Set<string>()
-    const models: LlmModelInfo[] = []
-    const dropped: string[] = []
-    for (const m of cat.models) {
-      if (!m || typeof m.id !== 'string') continue
-      const id = m.id.trim()
-      if (id === '') continue
-      if (seen.has(id)) {
-        dropped.push(id)
-        continue
-      }
-      seen.add(id)
-      const name = (typeof m.name === 'string' && m.name.trim() !== '') ? m.name.trim() : id
-      models.push({
-        provider: PROVIDER_ID,
-        id,
-        name,
-        inputModalities: ['text', 'image'] as const,
-      })
-    }
+    const { entries, dropped } = sanitizeCatalogEntries(cat.models)
     if (dropped.length > 0) {
       // Observable on purpose: without this the guard silently masks the
       // catalog duplication that would otherwise remove every Antigravity
@@ -407,7 +389,18 @@ export class AgyAdapter extends LlmAdapter {
         'model catalog contained duplicate ids [' + dropped.join(', ') + '] — kept first occurrence so DSH does not drop the whole provider group (INVALID_CATALOG)',
       )
     }
-    return models
+    // Picker visibility (hiddenModels deny-list): hidden ids leave the picker
+    // but resolveModel deliberately still accepts them, so in-flight sessions
+    // and direct model references keep working after a model is hidden.
+    const hidden = new Set(cfg.hiddenModels.map((s) => s.trim()))
+    return entries
+      .filter((m) => !hidden.has(m.id))
+      .map((m) => ({
+        provider: PROVIDER_ID,
+        id: m.id,
+        name: m.name,
+        inputModalities: ['text', 'image'] as const,
+      }))
   }
 
   override async resolveModel(_provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {

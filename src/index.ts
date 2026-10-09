@@ -17,7 +17,7 @@ import { agyCommandDefinition } from './host/commands.ts'
 import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
-import { ModelCatalog } from './host/models.ts'
+import { ModelCatalog, sanitizeCatalogEntries } from './host/models.ts'
 import { RunRegistry } from './host/recording.ts'
 import { MIN_AGY_VERSION, compareVersions, ensureIsolatedKeychain, isolatedHomeEnv, parseVersion, probeProcess, proxyEnvFor, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
@@ -84,6 +84,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   let lastParser = new StreamJsonParser()
 
   const getConfig = (): PluginConfig => resolveConfig(entryConfig)
+  // The webview model picker caches its catalog snapshot and only re-reads
+  // after the payload-free `llm/adapters-updated` event (consumers re-read
+  // the registries instead of receiving state). Emit it whenever picker
+  // output can change: hiddenModels writes and async catalog refreshes.
+  const notifyPicker = (): void => {
+    try {
+      ctx.emit('llm/adapters-updated')
+    } catch {
+      // Host without the event — the picker simply stays on its snapshot.
+    }
+  }
   const bin = (): string | null => {
     if (binCache === undefined || binCache === null) binCache = resolveAgyBin(getConfig())
     return binCache
@@ -253,6 +264,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         log('version probe failed — continuing with fallback catalog')
       }
       await catalog.refreshIfNeeded().catch(() => undefined)
+      notifyPicker()
     })();
   }, 4_000)
   bootProbeTimer.unref?.()
@@ -424,6 +436,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           poolAuth: poolAuth.status(),
           pool: pool.getPoolData(),
           catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
+          // Full sanitized catalog + the current deny-list so the settings UI's
+          // model-visibility toggles show every known model, hidden ones included.
+          catalogModels: sanitizeCatalogEntries(cat.models).entries,
+          hiddenModels: cfg.hiddenModels,
           bindings: Object.keys(store.all()).length,
           lastRun,
         })
@@ -466,7 +482,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             void quota.refreshAllQuotas().catch(() => undefined)
           }
           store.clear()
-          void catalog.forceRefresh().catch(() => undefined)
+          void catalog.forceRefresh().then(() => notifyPicker()).catch(() => undefined)
         }
         sendJson(res as RawRes, 200, st)
       })()
@@ -671,7 +687,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         // re-login the subscription tier (and thus model list) may differ.
         // One `agy models` spawn per explicit user click only — the
         // background poller never touches the catalog.
-        void catalog.forceRefresh().catch(() => undefined)
+        void catalog.forceRefresh().then(() => notifyPicker()).catch(() => undefined)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
@@ -696,14 +712,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
-        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot']
+        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels']
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
+          return
+        }
+        if (key === 'hiddenModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
+          sendJson(res as RawRes, 400, { error: 'hiddenModels must be an array of model ids' })
           return
         }
         setOverride(key, body.value)
         syncAskTool()
         syncMirrorTool()
+        // Picker visibility changed — the webview re-reads the catalog only
+        // after this event, so the toggle must announce itself.
+        if (key === 'hiddenModels') notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
       })()
     }})
