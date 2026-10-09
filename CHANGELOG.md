@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.44 (unreleased)
+## 0.4.44 (2026-10-09)
 
 ### English
 
