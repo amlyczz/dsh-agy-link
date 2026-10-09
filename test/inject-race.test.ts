@@ -76,3 +76,37 @@ test('agy_tool registers when the tools service appears after plugin load', asyn
   assert.ok(disposed.includes('agy_tool'), 'agy_tool disposed on teardown')
   rmSync(workDir, { recursive: true, force: true })
 })
+
+test('tools/pre-execute hook allows agy_tool and delegates for other tools', async () => {
+  const ctx = new Context() as FakeCtx
+  ctx.plugin({
+    name: 'fake-host-services-gate',
+    apply(c: Context) {
+      const fc = c as FakeCtx
+      fc.provide('llm', { registerAdapter() { return () => undefined } })
+      fc.provide('commands', { register() { return () => undefined } })
+    },
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  apply(ctx, {})
+
+  ctx.plugin({
+    name: 'fake-tools-service-gate',
+    apply(c: Context) {
+      ;(c as FakeCtx).provide('tools', {
+        register() { return () => undefined },
+      })
+    },
+  })
+  await new Promise((r) => setTimeout(r, 50))
+
+  const agyDecision = await ctx.waterfall('tools/pre-execute', { name: 'agy_tool' } as any, () => Promise.resolve({ kind: 'ask' } as any))
+  assert.deepEqual(agyDecision, { kind: 'allow' })
+
+  const otherDecision = await ctx.waterfall('tools/pre-execute', { name: 'bash' } as any, () => Promise.resolve({ kind: 'ask' } as any))
+  assert.deepEqual(otherDecision, { kind: 'ask' })
+
+  await ctx.fiber.dispose()
+})
+

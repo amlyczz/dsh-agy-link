@@ -432,6 +432,7 @@ function killTree(child: ChildProcess): void {
 export function startAgyProcess(opts: RunOptions): RunningProcess {
   const started = Date.now();
   const viaCmd = IS_WIN && isCmdShim(opts.bin)
+  const isNode = IS_WIN && /\.(mjs|js|cjs)$/i.test(opts.bin)
   const env = withAgyQuietEnv(opts.env ?? process.env)
   const child = viaCmd
     ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', [opts.bin, ...opts.args].map(windowsQuote).join(' ')], {
@@ -441,13 +442,20 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
         windowsVerbatimArguments: true,
         windowsHide: true,
       })
-    : spawn(opts.bin, opts.args, {
-        cwd: opts.cwd,
-        env,
-        detached: !IS_WIN,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true,
-      });
+    : isNode
+      ? spawn(process.execPath, [opts.bin, ...opts.args], {
+          cwd: opts.cwd,
+          env,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
+        })
+      : spawn(opts.bin, opts.args, {
+          cwd: opts.cwd,
+          env,
+          detached: !IS_WIN,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
+        });
   let stdout = '';
   let stderr = '';
   let timedOut = false;
