@@ -482,6 +482,27 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         sendJson(res as RawRes, 200, st)
       })()
     }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/mermaid.min.js', handler: (_req, res) => {
+      const p = join(import.meta.dirname, 'mermaid.min.js')
+      const fallback = join(import.meta.dirname, '..', 'assets', 'mermaid.min.js')
+      const file = existsSync(p) ? p : existsSync(fallback) ? fallback : null
+      if (!file) {
+        ;(res as RawRes).writeHead(404, { 'content-type': 'text/plain' })
+        ;(res as RawRes).end('mermaid.min.js not found')
+        return
+      }
+      try {
+        const content = readFileSync(file)
+        ;(res as RawRes).writeHead(200, {
+          'content-type': 'application/javascript; charset=utf-8',
+          'cache-control': 'public, max-age=86400',
+        })
+        ;(res as RawRes).end(content)
+      } catch (err) {
+        ;(res as RawRes).writeHead(500, { 'content-type': 'text/plain' })
+        ;(res as RawRes).end('read error: ' + String(err))
+      }
+    }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool', handler: (_req, res) => {
       sendJson(res as RawRes, 200, pool.getPoolData())
     }})

@@ -148,6 +148,15 @@ export interface AccountPoolData {
   primaryAccountId?: string
   /** Currently active account id per model family for sticky sequential drain */
   activeAccountIds?: Partial<Record<ModelFamily, string>>
+  /**
+   * Account of the most recent agy spawn — the single source of truth for the
+   * console's "in use" badge. Per-family pointers above are an internal
+   * scheduling detail: families can legitimately sit stale on accounts that
+   * are not running anything (that badge showed two accounts at once).
+   */
+  lastActiveAccountId?: string
+  /** Authoritative currently active account ID computed by the pool scheduler */
+  activeAccountId?: string
   accounts: ManagedAccount[]
 }
 

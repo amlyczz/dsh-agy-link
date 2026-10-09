@@ -31,6 +31,14 @@ export interface PluginConfig {
   maxTokensDefault: number
   forwardSystemPrompt: boolean
   digestMaxChars: number
+  /**
+   * Character budget for the history digest used to seed a brand-new agy
+   * conversation (first contact, account switch, model switch, compaction
+   * re-seed). Generous on purpose: modern models are 1M-token class, and a
+   * small budget silently dropped most of a long session on every account
+   * switch. Default 660K, sized for 1M-token-class models.
+   */
+  contextTransferMaxChars: number
   modelsCacheTtlMs: number
   /** Allow compaction / session-title auxiliary calls to spawn agy. */
   allowAuxiliary: boolean
@@ -99,6 +107,7 @@ export function defaultConfig(): PluginConfig {
     maxTokensDefault: 65_536,
     forwardSystemPrompt: false,
     digestMaxChars: 8_000,
+    contextTransferMaxChars: 660_000,
     modelsCacheTtlMs: 300_000,
     allowAuxiliary: true,
     compactionMaxChars: 800_000,
@@ -153,6 +162,20 @@ export const Err = {
   AGY_NOT_INSTALLED: 'AGY_NOT_INSTALLED',
   AGY_VERSION_UNSUPPORTED: 'AGY_VERSION_UNSUPPORTED',
   AGY_ERROR: 'AGY_ERROR',
+  /**
+   * Hard server-issued quota / rate-limit refusal. Distinct from AGY_ERROR so
+   * the provider retry policy can retry it (the failed account is already in
+   * cooldown, so the retry lands on the next account) without also retrying
+   * deterministic AGY_ERRORs (bad region, empty request, dead pool).
+   */
+  RATE_LIMIT: 'RATE_LIMIT',
+  /**
+   * Google-side region / account eligibility refusal ("User location is not
+   * supported for the API use"). Account-level, so it is retryable: the
+   * adapter rotates the sticky pointer first, which lets an account whose
+   * proxy/egress region IS supported serve the retry.
+   */
+  ELIGIBILITY: 'ELIGIBILITY',
   TIMEOUT: 'TIMEOUT',
   PROCESS_EXIT: 'PROCESS_EXIT',
   INVALID_OUTPUT: 'INVALID_OUTPUT',
@@ -232,7 +255,7 @@ export function looksLikeAuthFailure(text: string): boolean {
  * location" — not an auth bug and not something the bridge can retry past.
  */
 export function looksLikeEligibilityFailure(text: string): boolean {
-  return /eligibility check failed|not eligible for antigravity|not currently available in your (?:location|country|region)|not available in your (?:location|country|region)/i.test(
+  return /eligibility check failed|not eligible for antigravity|not currently available in your (?:location|country|region)|not available in your (?:location|country|region)|user location is not supported|location is not supported for the api|not supported in your (?:location|country|region)/i.test(
     text,
   )
 }

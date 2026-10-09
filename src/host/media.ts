@@ -27,12 +27,15 @@ export interface StagedImage {
   width: number
   height: number
   bytes: number
+  attachmentId: string
 }
 
 export interface StageResult {
   /** Lines appended to the prompt (empty string when nothing staged). */
   promptSuffix: string
   staged: StagedImage[]
+  /** Attachment ids that were actually written (not skipped/unreadable). */
+  stagedIds: string[]
   /** Number of images skipped (over cap, over size, unreadable). */
   skipped: number
 }
@@ -44,10 +47,28 @@ const EXT: Record<ImageRefLike['mediaType'], string> = {
   'image/gif': 'gif',
 }
 
-/** Deterministic staged path: same session+turn+index reuses the file. */
-export function stagedPath(dir: string, key: string, index: number, mediaType: ImageRefLike['mediaType']): string {
+/**
+ * Sanitize an attachment id into a stable filename fragment. Ids whose
+ * sanitized form collides (e.g. "a/b" vs "a_b") get a short raw-id hash
+ * suffix so distinct attachments never overwrite each other's files.
+ */
+function idFragment(attachmentId: string): string {
+  const cleaned = attachmentId.replace(/[^a-zA-Z0-9_-]+/g, '_')
+  if (cleaned === '') return 'img'
+  if (cleaned === attachmentId) return cleaned.slice(0, 80)
+  let h = 0
+  for (let i = 0; i < attachmentId.length; i++) h = ((h * 31) + attachmentId.charCodeAt(i)) | 0
+  return (cleaned.slice(0, 40) + '-' + (h >>> 0).toString(36)).slice(0, 80)
+}
+
+/**
+ * Deterministic staged path keyed by the attachment id (not the call index):
+ * the same picture always lands on the same file, so a continuation that
+ * legitimately re-references it overwrites instead of accumulating copies.
+ */
+export function stagedPath(dir: string, key: string, attachmentId: string, mediaType: ImageRefLike['mediaType']): string {
   const ext = EXT[mediaType] ?? 'png'
-  return join(dir, key + '-' + String(index) + '.' + ext)
+  return join(dir, key + '-' + idFragment(attachmentId) + '.' + ext)
 }
 
 /**
@@ -64,6 +85,7 @@ export async function stageImages(opts: {
   maxBytes: number
 }): Promise<StageResult> {
   const staged: StagedImage[] = []
+  const stagedIds: string[] = []
   const lines: string[] = []
   let skipped = 0
   const budget = Math.max(0, opts.maxImages)
@@ -94,14 +116,15 @@ export async function stageImages(opts: {
         i++;
         continue;
       }
-      const path = stagedPath(opts.dir, opts.key, i, ref.mediaType)
+      const path = stagedPath(opts.dir, opts.key, ref.attachmentId, ref.mediaType)
       await writeFile(path, data);
-      staged.push({ path, name: label, width: ref.width, height: ref.height, bytes: ref.bytes });
+      staged.push({ path, name: label, width: ref.width, height: ref.height, bytes: ref.bytes, attachmentId: ref.attachmentId });
+      stagedIds.push(ref.attachmentId);
       lines.push('[image attached: "' + label + '" — staged at ' + path + ' (' + ref.width + 'x' + ref.height + ', ' + ref.bytes + ' bytes). Inspect it using the view_file tool with AbsolutePath: "' + path + '"]');
       i++;
     }
   }
-  return { promptSuffix: lines.join('\n'), staged, skipped }
+  return { promptSuffix: lines.join('\n'), staged, stagedIds, skipped }
 }
 
 /**

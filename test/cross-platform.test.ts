@@ -1,8 +1,23 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT, withAgyQuietEnv } from '../src/host/runner.ts'
+import { binCandidates, consoleOutputEncoding, decodeConsoleLine, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT, withAgyQuietEnv } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
+
+test('decodeConsoleLine recovers GBK tool output instead of mangling it (issue #37)', () => {
+  // The exact CP936 byte shape agy captures from a zh-CN PowerShell and that
+  // used to arrive mangled because it was decoded as UTF-8.
+  const gbk = Buffer.from([0xb1, 0xbb, 0xca, 0xb6])
+  assert.equal(decodeConsoleLine(gbk, 'gbk'), '\u88ab\u8bc6')
+  // Decoding the same bytes as UTF-8 is precisely the reported bug.
+  assert.ok(decodeConsoleLine(gbk, 'utf-8').includes('\uFFFD'))
+  // Genuine UTF-8 and pure ASCII stay untouched even on a GBK console page.
+  assert.equal(decodeConsoleLine(Buffer.from('\u672f\u8bed', 'utf8'), 'gbk'), '\u672f\u8bed')
+  assert.equal(decodeConsoleLine(Buffer.from('plain ascii\n', 'utf8'), 'gbk'), 'plain ascii\n')
+  // Off Windows the probe never leaves UTF-8, so POSIX behaviour is unchanged.
+  assert.equal(consoleOutputEncoding('darwin'), 'utf-8')
+  assert.equal(consoleOutputEncoding('linux'), 'utf-8')
+})
 
 test('windowsQuote leaves plain args untouched', () => {
   assert.equal(windowsQuote('plain-arg'), 'plain-arg')
