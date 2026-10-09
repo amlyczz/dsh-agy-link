@@ -391,6 +391,24 @@ test('streamed answer with eager resolvedThoughts emits leading reasoning block 
   assert.equal(text, 'Hello world!')
 })
 
+test('DB thought arriving on DONE tail is not dropped due to premature thinkingAnnounced (issue #43)', () => {
+  const thoughtsMap = new Map<number, string>()
+  const m = new EventMapper({
+    runId: 'r-async-thoughts',
+    cutOnTool: false,
+    resolvedThoughts: thoughtsMap,
+  })
+  // Event 1: ACTIVE fragment arrives when DB thoughts have NOT resolved yet (thoughtsMap is empty)
+  const c1 = [...m.map({ kind: 'step', stepKey: '1', stepKind: 'text', text: 'Hello', fragment: true, usage: { thinking_tokens: 438 }, raw: {} }, 0)]
+  // Event 2: DB thoughts resolve asynchronously before DONE tail
+  thoughtsMap.set(1, 'Critical analysis of constraints.')
+  // Event 3: DONE tail arrives
+  const c2 = [...m.map({ kind: 'step', stepKey: '1', stepKind: 'text', text: '', fragment: false, usage: { thinking_tokens: 438 }, raw: {} }, 1)]
+  const allChunks = [...c1, ...c2]
+  const reasoning = allChunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning, '[agy thinking turn · 438 thinking tokens] Critical analysis of constraints.\n')
+})
+
 test('stepKind === thinking uses resolvedThoughts when available', () => {
   const thoughtsMap = new Map<number, string>([
     [0, 'In-depth multi-turn planning logic here.'],

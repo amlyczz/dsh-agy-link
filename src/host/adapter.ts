@@ -1216,8 +1216,12 @@ export class AgyAdapter extends LlmAdapter {
               try {
                 let th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
                 if (th === null && (ev.state === 'DONE' || (ev.usage?.thinking_tokens ?? 0) > 0 || ev.stepKind === 'thinking')) {
-                  await new Promise((r) => setTimeout(r, 50))
+                  await new Promise((r) => setTimeout(r, 60))
                   th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
+                  if (th === null) {
+                    await new Promise((r) => setTimeout(r, 100))
+                    th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
+                  }
                 }
                 if (th !== null && th.trim() !== '') {
                   resolvedThoughts.set(i, th)

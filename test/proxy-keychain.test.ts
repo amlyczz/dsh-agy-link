@@ -52,17 +52,17 @@ test('ensureIsolatedKeychain provisions once per home and survives errors', () =
     const calls: string[] = []
     const run = (_file: string, args: readonly string[]) => { calls.push(args.join(' ')) }
     assert.equal(ensureIsolatedKeychain(dir, 'darwin', run), true)
-    assert.equal(calls.length, 3)
-    assert.match(calls[0] ?? '', /create-keychain -p \S+ /)
+    assert.equal(calls.length, 4)
+    assert.match(calls[0] ?? '', /create-keychain -p  /)
     assert.match(calls[1] ?? '', /default-keychain -s/)
     assert.match(calls[2] ?? '', /set-keychain-settings/)
+    assert.match(calls[3] ?? '', /unlock-keychain -p/)
     // Second call: keychain file now exists (simulate by touching it) —
-    // settings are still enforced, but nothing is provisioned again.
+    // returns false immediately WITHOUT poking security CLI (issue #42 SecurityAgent prompt).
     mkdirSync(join(dir, 'Library', 'Keychains'), { recursive: true })
     writeFileSync(join(dir, 'Library', 'Keychains', 'login.keychain-db'), 'x')
     assert.equal(ensureIsolatedKeychain(dir, 'darwin', run), false)
-    assert.equal(calls.length, 4)
-    assert.match(calls[3] ?? '', /set-keychain-settings/)
+    assert.equal(calls.length, 4, 'must NOT execute security CLI on existing keychains')
     // Failing security invocations never throw out.
     assert.equal(ensureIsolatedKeychain(dir, 'darwin', () => { throw new Error('boom') }), false)
   } finally {

@@ -182,19 +182,14 @@ export function ensureIsolatedKeychain(
   if (platform !== 'darwin') return false
   if (dir === '') return false
   const kc = join(dir, 'Library', 'Keychains', 'login.keychain-db')
+  if (existsSync(kc)) return false
   try {
     const env = { ...process.env, HOME: dir }
-    if (existsSync(kc)) {
-      // Still enforce never-auto-lock: a locked keychain turns every keyring
-      // save into an unanswerable password dialog (the password is random and
-      // only the plugin knows it).
-      run('security', ['set-keychain-settings', kc], env)
-      return false
-    }
     mkdirSync(join(dir, 'Library', 'Keychains'), { recursive: true })
-    run('security', ['create-keychain', '-p', randomBytes(18).toString('base64url'), kc], env)
+    run('security', ['create-keychain', '-p', '', kc], env)
     run('security', ['default-keychain', '-s', kc], env)
     run('security', ['set-keychain-settings', kc], env)
+    run('security', ['unlock-keychain', '-p', '', kc], env)
     return true
   } catch {
     return false

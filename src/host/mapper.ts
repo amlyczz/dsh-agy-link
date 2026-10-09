@@ -179,15 +179,15 @@ export class EventMapper {
         const stepTextEmitted = (this.emittedByKey.get(ev.stepKey) ?? '') !== ''
         const dbThought = this.opts.resolvedThoughts?.get(absIndex)
         const hasRealThought = dbThought !== undefined && dbThought.trim() !== ''
-        const shouldAnnounce = hasRealThought || thoughtTokens > 0
 
-        // If real thoughts (or token count fallback) are available and no text has
-        // been emitted yet, stream the reasoning block FIRST before answer text.
-        if (shouldAnnounce && !stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)) {
+        // If real thoughts are available and no text has been emitted yet,
+        // stream the reasoning block FIRST before answer text. Do not prematurely
+        // mark thinkingAnnounced when DB thoughts have not arrived yet (issue #43).
+        if (hasRealThought && !stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)) {
           this.thinkingAnnounced.add(ev.stepKey)
           yield* this.emitThinking(absIndex, thoughtTokens)
         }
-        const deferred = shouldAnnounce && stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)
+        const deferred = hasRealThought && stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)
         if (ev.text === '' && !ev.fragment) {
           // DONE tail carrying usage with no text: the step is already
           // complete — flush the deferred annotation now.
