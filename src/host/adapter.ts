@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Err, looksLikeAuthFailure, looksLikeEligibilityFailure, looksLikeHardRateLimit, looksLikeRateLimit, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
-import { modelFamilyOf } from '../common/pool-types.ts'
+import { modelFamilyOf, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { diffConversations, snapshotConversations } from './discovery.ts'
 import { EventMapper } from './mapper.ts'
@@ -18,7 +18,7 @@ import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, type ImageRefLike } from './media.ts'
 import { ensureIsolatedKeychain, isolatedHomeEnv, proxyEnvFor, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin } from './runner.ts'
 import { stateDir } from '../common/config.ts'
-import type { SessionStore } from './sessions.ts'
+import { SENT_IMAGE_IDS_MAX, type SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
 import { getGitHeadContent } from './mirror-tool.ts'
 
@@ -137,6 +137,58 @@ function digestLabel(m: Message): string {
 }
 
 /**
+ * Images this hop should forward, minus what the current agy conversation
+ * has already received. Trailing-span attachments come first (this hop's
+ * screenshots), then any user-turn attachments since `fromIdx` that carry
+ * unseen ids (tool-hop continuations and foreign-model turns used to fall
+ * into a "re-send every historical screenshot" path).
+ */
+export function collectUnsentImageRefs(
+  messages: readonly Message[],
+  trailingUser: readonly Message[],
+  fromIdx: number,
+  sentIds: readonly string[],
+): ImageRefLike[] {
+  const sent = new Set(sentIds)
+  const seen = new Set<string>()
+  const out: ImageRefLike[] = []
+  const push = (m: Message): void => {
+    const refs: ImageRefLike[] = []
+    collectImageRefs(m, refs)
+    for (const r of refs) {
+      const id = r.attachmentId
+      if (typeof id !== 'string' || id === '' || sent.has(id) || seen.has(id)) continue
+      seen.add(id)
+      out.push(r)
+    }
+  }
+  for (const m of trailingUser) push(m)
+  const start = Math.max(0, Math.min(fromIdx, messages.length))
+  for (let i = start; i < messages.length; i++) {
+    const m = messages[i]
+    if (m === undefined || m.role !== 'user' || isToolResultMessage(m)) continue
+    push(m)
+  }
+  return out
+}
+
+/** Merge newly forwarded attachment ids into a bounded, oldest-first list. */
+export function mergeSentImageIds(
+  existing: readonly string[] | undefined,
+  added: readonly string[],
+  max = SENT_IMAGE_IDS_MAX,
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of [...(existing ?? []), ...added]) {
+    if (typeof id !== 'string' || id === '' || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out.length > max ? out.slice(out.length - max) : out
+}
+
+/**
  * Rolling digest of turns this agy conversation has not seen (ADR-7).
  *
  * Budget policy (issue #35): the latest real user task is reserved first so
@@ -250,6 +302,17 @@ function sawAuthFailure(parser: StreamJsonParser, outcome: { stderrTail: string;
   return looksLikeAuthFailure(outcome.stderrTail) || looksLikeAuthFailure(outcome.stdout.slice(0, 4000))
 }
 
+/**
+ * Bounded wait for an aborted run to settle, so a steer replacement never
+ * overlaps the process it just killed on the same agy conversation.
+ */
+async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!run.isSettled && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
+}
+
 export class AgyAdapter extends LlmAdapter {
   private readonly warnedKeys = new Set<string>()
   /** sessionKey -> in-flight run, for steer-time preemption. */
@@ -287,12 +350,17 @@ export class AgyAdapter extends LlmAdapter {
   /**
    * Fail fast on auth and abort; allow one retry for transient process
    * failures (timeout, crash, malformed stream) per ADR-11.
+   *
+   * RATE_LIMIT is retryable on purpose: the failed account was put into
+   * cooldown and the sticky pointer advanced before the error surfaced, so the
+   * retry is served by the NEXT account in the pool — quota exhaustion used to
+   * dead-end in a user-visible error even though a healthy account was idle.
    */
   override providerRetryPolicy(_provider: string) {
     return {
       mode: 'normal' as const,
       maxRetries: 1,
-      retryableCodes: [Err.TIMEOUT, Err.PROCESS_EXIT, Err.INVALID_OUTPUT],
+      retryableCodes: [Err.TIMEOUT, Err.PROCESS_EXIT, Err.INVALID_OUTPUT, Err.RATE_LIMIT, Err.ELIGIBILITY],
       initialDelayMs: 2_000,
       maxDelayMs: 10_000,
       jitterRatio: 0.1,
@@ -427,8 +495,9 @@ export class AgyAdapter extends LlmAdapter {
     const cfg = this.deps.getConfig()
     const bin = this.deps.bin()
     if (!bin) throw new LlmError('agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install', Err.AGY_NOT_INSTALLED)
-    const isAux = options.purpose === 'compaction' || options.purpose === 'session-title'
-    if (isAux && !cfg.allowAuxiliary) {
+    const isReview = typeof options.system === 'string' && options.system.includes('REVIEW_POLICY')
+    const isAux = options.purpose === 'compaction' || options.purpose === 'session-title' || isReview
+    if (isAux && !isReview && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
     // Prefer direct native agy_tool cards when the host registered the mirror
@@ -438,6 +507,7 @@ export class AgyAdapter extends LlmAdapter {
     // tool step N · run_command" code rows.
     const toolNames = new Set((options.tools ?? []).map((t) => t.name))
     const isCodeMode = toolNames.has('run_code') && !toolNames.has('agy_tool')
+    const hasToolSupport = options.tools === undefined || toolNames.has('agy_tool') || toolNames.has('run_code')
     const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
     // cwd precedence: explicit config > the DSH session's own workspace >
     // the host process cwd. The last fallback can land agy in an UNRELATED
@@ -467,22 +537,14 @@ export class AgyAdapter extends LlmAdapter {
     const continuation = detectContinuation(options.messages)
     if (continuation !== null) {
       const rec = this.deps.runs.get(continuation.runId)
-      if (rec === undefined) {
-        yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
-        yield {
-          type: 'finish',
-          reason: {
-            kind: 'error',
-            failure: {
-              message: 'agy run ' + continuation.runId + ' is no longer available (server restarted?) — please resend your message',
-              code: Err.AGY_ERROR,
-            },
-          },
-        }
+      if (rec !== undefined) {
+        yield* this.driveSpan(rec, continuation.eventIndex + 1, hasToolSupport, isCodeMode)
         return
       }
-      yield* this.driveSpan(rec, continuation.eventIndex + 1, true, isCodeMode)
-      return
+      this.warnOnce(
+        'stale-continuation:' + continuation.runId,
+        'agy run ' + continuation.runId + ' is no longer available in memory (server restarted?) — falling back to fresh turn prompt assembly',
+      )
     }
     // Session ownership (steer preemption + duplicate debounce) is decided
     // AFTER prompt assembly below, so an identical retry can never abort a
@@ -551,14 +613,23 @@ export class AgyAdapter extends LlmAdapter {
     let account = this.deps.pool ? this.deps.pool.selectAccount(family) : undefined
     if (this.deps.pool && this.deps.pool.getAccounts().length > 0 && !account) {
       if (cfg.autoFallbackModel) {
-        const fallbackSlugs = ['gemini-3.5-flash', 'gemini-3.6-flash']
-        for (const fb of fallbackSlugs) {
-          const fbFam = modelFamilyOf(fb)
+        // Quota pools are per FAMILY (Gemini / Claude / GPT-OSS). Downgrading
+        // within the requested family shares the exhausted pool, so the old
+        // hardcoded gemini-3.5/3.6 list could never rescue a drained Google
+        // family. Fail over across families instead, then pin a model id of the
+        // family the scheduler just picked.
+        const familyModel: Partial<Record<ModelFamily, string>> = {
+          google: 'gemini-3.8-flash',
+          anthropic: 'claude-sonnet-4-6',
+          openai: 'gpt-oss-120b-medium',
+        }
+        for (const fbFam of ['google', 'anthropic', 'openai'] as ModelFamily[]) {
+          if (fbFam === family) continue
           const fbAcc = this.deps.pool.selectAccount(fbFam)
           if (fbAcc) {
             account = fbAcc
             family = fbFam
-            activeModel = fb
+            activeModel = familyModel[fbFam] ?? activeModel
             break
           }
         }
@@ -569,6 +640,11 @@ export class AgyAdapter extends LlmAdapter {
         throw new LlmError(`All Antigravity accounts in pool are in cooldown for ${family}${waitStr}. Add an account or wait for reset.`, Err.AGY_ERROR)
       }
     }
+
+    // The account is final here: record it as *the* in-use account so the
+    // console shows exactly one badge (per-family pointers may point at
+    // families the user is not currently running).
+    if (account && !isAux) this.deps.pool?.markAccountActive(account.id)
 
     const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
     let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
@@ -635,8 +711,12 @@ export class AgyAdapter extends LlmAdapter {
         prompt = trailingJoined
       }
       if (binding === undefined && lastAssistantIdx >= 0) {
-        // First contact: bring agy up to speed with a bounded digest.
-        prompt = buildDigest(messages, 0, cfg.digestMaxChars) + prompt
+        // First contact / account switch / model switch / compaction re-seed:
+        // the new agy conversation has seen NOTHING, so seed it with the
+        // full-transfer budget (1M-token class models can absorb it). The
+        // follow-up `digestMaxChars` is only for foreign turns on a live
+        // conversation that already carries the rest natively.
+        prompt = buildDigest(messages, 0, cfg.contextTransferMaxChars) + prompt
       } else if (binding !== undefined) {
         // Returning session: digest only the foreign turns since our
         // watermark (the user may have talked to another model in between).
@@ -657,24 +737,20 @@ export class AgyAdapter extends LlmAdapter {
     }
     // ---- multimodal staging (v0.2): images ride as staged files ----
     let stagedDirs: string[] = []
+    const newlySentImageIds: string[] = []
     if (!isAux) {
-      const imageRefs: ImageRefLike[] = []
-      for (const m of trailingUser) {
-        // Walk nested tool-result payloads too — attachments after a tool
-        // hop used to be silently dropped on exactly those calls (issue #34).
-        collectImageRefs(m, imageRefs)
-      }
-      // Also pick up images attached to earlier user turns in this request
-      // when the trailing span itself carries none (tool-hop case).
-      if (imageRefs.length === 0) {
-        for (const m of messages) {
-          if (m.role !== 'user' || isToolResultMessage(m)) continue
-          collectImageRefs(m, imageRefs)
-        }
-      }
+      // Only forward attachments this agy conversation has not seen.
+      // First contact (new account / model / post-compaction) has no
+      // watermark, so the whole history is new; returning hops only carry
+      // the trailing span plus unseen user-turn attachments. The old
+      // "trailing empty → re-collect every historical screenshot" fallback
+      // re-attached the same 4-5 images on every tool-hop continuation.
+      const sentIds = binding?.sentImageIds ?? []
+      const fromIdx = binding !== undefined ? binding.lastMessageCount : 0
+      const imageRefs = collectUnsentImageRefs(messages, trailingUser, fromIdx, sentIds)
       if (imageRefs.length > 0 && this.deps.readImage) {
         const dir = cfg.mediaDir !== '' ? cfg.mediaDir : defaultMediaDir(stateDir())
-        const key = (sessionKey !== '' ? sessionKey.replace(/[^a-zA-Z0-9_-]+/g, '_') : 'anon') + '-' + messages.length
+        const key = sessionKey !== '' ? sessionKey.replace(/[^a-zA-Z0-9_-]+/g, '_') : 'anon'
         const res = await stageImages({
           dir,
           key,
@@ -689,6 +765,9 @@ export class AgyAdapter extends LlmAdapter {
             : (prompt + '\n\n' + res.promptSuffix)
         }
         if (res.staged.length > 0) stagedDirs = [dir]
+        // Mark ids we actually staged (not skipped/unreadable) so the next
+        // hop does not re-attach them. Persisted with the binding below.
+        newlySentImageIds.push(...res.stagedIds)
       }
       if (prompt.trim() === '') {
         throw new LlmError('request carries no user text or images to forward to agy', Err.AGY_ERROR)
@@ -765,6 +844,10 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
         liveRun.requestAbort?.()
+        // Two agy processes must never append to one conversation at the same
+        // time. Give the aborted process a bounded moment to actually exit
+        // (SIGTERM, then the SIGKILL escalation) before the replacement spawns.
+        await waitForRunSettle(liveRun, 3_500)
       }
       this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
     }
@@ -932,27 +1015,45 @@ export class AgyAdapter extends LlmAdapter {
       // error and slapping a ghost cooldown on a healthy account.
       const rawErrText = [outcome.stderrTail, parser.stats.lastResultError].filter(Boolean).join(' ')
       const isRateLimit = looksLikeRateLimit(rawErrText)
+      // A timeout that never produced a single stdout event is an account-level
+      // black hole (unreachable Google / wedged credential), not a long tool:
+      // the retry must try a different account rather than the same dead one.
+      const silentTimeout = outcome.timedOut === true && outcome.stdout.trim() === ''
       let failure: { kind: 'error' | 'aborted'; code: string; message: string } | null = null
       if (outcome.aborted) {
         failure = { kind: 'aborted', code: 'ABORTED', message: 'agy run aborted by caller' }
       } else if (outcome.timedOut) {
-        const neverSpoke = outcome.stdout.trim() === ''
         failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run was idle for ' + cfg.timeoutMs + 'ms without output'
-          + (neverSpoke
+          + (silentTimeout
             ? ' — agy never emitted a single event; it is likely unable to reach Google (check proxy/network). 无法连接 Google，请检查代理或网络配置'
             : '') }
       } else if (sawAuthFailure(parser, outcome)) {
         failure = { kind: 'error', code: Err.AUTH, message: 'agy is not signed in — run /agy auth (or run agy once in a terminal) to login' }
       } else if (isRateLimit) {
         const bestMsg = parser.stats.lastResultError || (outcome.stderrTail ? brief(outcome.stderrTail) : 'Rate limit or quota reached')
-        failure = { kind: 'error', code: Err.AGY_ERROR, message: 'Google Antigravity quota / rate limit reached: ' + bestMsg }
+        // Only HARD server-issued refusals are retryable: that path cools the
+        // account down and advances the sticky pointer, so DSH's automatic
+        // retry is served by the NEXT account instead of dead-ending the turn.
+        // Soft capacity signals ("model overloaded") keep the deterministic
+        // AGY_ERROR code — nothing was cooled, so a retry would only re-hit the
+        // same overloaded model.
+        const hard = looksLikeHardRateLimit(rawErrText)
+        failure = {
+          kind: 'error',
+          code: hard ? Err.RATE_LIMIT : Err.AGY_ERROR,
+          message: 'Google Antigravity quota / rate limit reached: ' + bestMsg,
+        }
       } else if (looksLikeEligibilityFailure(rawErrText) || looksLikeEligibilityFailure(parser.stats.lastResultError ?? '')) {
         // Region/account eligibility refusal (issue #32): a clear cause, not a
-        // generic PROCESS_EXIT. Not retryable from this bridge.
+        // generic PROCESS_EXIT. It is ACCOUNT-level (each account can have its
+        // own proxy/egress region), so the failing pointer is rotated before
+        // the error surfaces and the code is retryable — an account that IS
+        // eligible can then serve the retry instead of the same refused one
+        // failing again and again.
         const detail = parser.stats.lastResultError ?? (outcome.stderrTail !== '' ? brief(outcome.stderrTail) : '')
         failure = {
           kind: 'error',
-          code: Err.AGY_ERROR,
+          code: Err.ELIGIBILITY,
           message: ELIGIBILITY_ERROR_HINT + (detail !== '' ? ' (' + detail + ')' : ''),
         }
       } else if (!consumable) {
@@ -980,6 +1081,7 @@ export class AgyAdapter extends LlmAdapter {
               lastMessageCount: messages.length,
               updatedAt: Date.now(),
               model: activeModel,
+              sentImageIds: mergeSentImageIds(binding?.sentImageIds, newlySentImageIds),
             })
           }
         }
@@ -988,8 +1090,24 @@ export class AgyAdapter extends LlmAdapter {
         // Cooldown is a costly local penalty (account leaves rotation): only
         // HARD server-issued signatures may trigger it. Soft signals (model
         // overloaded) shape the message above but never cool the account.
-        if (account && looksLikeHardRateLimit(rawErrText)) {
+        // Caller-aborted runs (stop button / steer preemption) are NOT server
+        // rate limits and must never slap a cooldown on the account.
+        if (account && !outcome.aborted && looksLikeHardRateLimit(rawErrText)) {
           this.deps.pool?.recordFailure(account.id, family, failure.message)
+        }
+        // Silent timeout: rotate to the next account for the automatic retry
+        // WITHOUT a cooldown. A 15-minute penalty for what may be a transient
+        // network blip would pull every account out of rotation and turn the
+        // accurate "cannot reach Google" hint into a misleading "all accounts
+        // in cooldown".
+        if (account && silentTimeout) {
+          this.deps.pool?.advanceAccount(account.id, family)
+        }
+        // Region refusal is scoped to the account's own egress (skip the
+        // primary's direct connection, take a proxied account). Rotate so the
+        // automatic retry cannot land back on the refused account.
+        if (account && failure.code === Err.ELIGIBILITY) {
+          this.deps.pool?.advanceAccount(account.id, family)
         }
         // Only authoritative auth states may flag an account: the old
         // /auth/i substring matched "oauth2.googleapis.com … i/o timeout"
@@ -1018,6 +1136,7 @@ export class AgyAdapter extends LlmAdapter {
               lastMessageCount: messages.length,
               updatedAt: Date.now(),
               model: activeModel,
+              sentImageIds: mergeSentImageIds(binding?.sentImageIds, newlySentImageIds),
             })
           }
         }
@@ -1045,7 +1164,7 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* this.driveSpan(rec, 0, !isAux, isCodeMode)
+    yield* this.driveSpan(rec, 0, !isAux && hasToolSupport, isCodeMode)
   }
 
   /**

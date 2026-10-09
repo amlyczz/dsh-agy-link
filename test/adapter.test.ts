@@ -8,8 +8,9 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest, detectContinuation, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, mergeSentImageIds, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
+import { AccountPoolManager } from '../src/host/pool.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
 import { classifyToolError } from '../src/host/recording.ts'
@@ -533,6 +534,112 @@ test('buildDigest never lets tool-result bulk eat the live task (issue #35)', ()
   assert.ok(d.includes('Tool result:'), 'tool results are labeled distinctly')
 })
 
+function imgMsg(id: string, text = 'shot'): Message {
+  return {
+    role: 'user',
+    content: [
+      { type: 'text', text },
+      { type: 'image', attachmentId: id, mediaType: 'image/png', bytes: 10, width: 1, height: 1 },
+    ],
+  } as unknown as Message
+}
+
+test('collectUnsentImageRefs skips already-sent ids and dedupes', () => {
+  const history = [imgMsg('a1'), imgMsg('a2')]
+  const trailing = [imgMsg('a2', 'again'), imgMsg('a3', 'new')]
+  const got = collectUnsentImageRefs(history, trailing, 0, ['a1'])
+  assert.deepEqual(got.map((r) => r.attachmentId), ['a2', 'a3'], 'trailing first, a1 already sent')
+})
+
+test('collectUnsentImageRefs on a tool hop only takes unseen ids since the watermark', () => {
+  // history: user image a1 (already inside the watermark), then a tool hop
+  // with no new attachments. The old fallback re-sent a1 on every hop.
+  const history = [
+    imgMsg('a1'),
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'agy_tool', arguments: '{}' }] } as unknown as Message,
+    {
+      role: 'tool',
+      toolCallId: 'c1',
+      content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] }],
+    } as unknown as Message,
+  ]
+  const trailing = [history[2]!]
+  const got = collectUnsentImageRefs(history, trailing, 3, [])
+  assert.deepEqual(got.map((r) => r.attachmentId), [], 'no unseen images after a tool hop')
+  // …but a first-contact / account-switch call (fromIdx 0, nothing sent) still carries it
+  const fresh = collectUnsentImageRefs(history, trailing, 0, [])
+  assert.deepEqual(fresh.map((r) => r.attachmentId), ['a1'])
+})
+
+test('mergeSentImageIds dedupes and keeps the newest under the cap', () => {
+  assert.deepEqual(mergeSentImageIds(['a', 'b'], ['b', 'c']), ['a', 'b', 'c'])
+  const many = mergeSentImageIds(['x0'], Array.from({ length: 70 }, (_, i) => 'i' + i), 64)
+  assert.equal(many.length, 64)
+  assert.equal(many[many.length - 1], 'i69', 'newest kept')
+  assert.ok(!many.includes('x0'), 'oldest evicted')
+})
+
+test('first contact seeds a new conversation with contextTransferMaxChars, not digestMaxChars', async () => {
+  const { adapter } = makeAdapter({
+    digestMaxChars: 40,
+    contextTransferMaxChars: 4_000,
+    mediaMaxImages: 0,
+  })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-transfer.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const old = 'OLD-CONTEXT-' + 'x'.repeat(200)
+  await runTurn(adapter, [msg('assistant', old), msg('user', 'carry on')])
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt.includes('OLD-CONTEXT'), 'transfer digest keeps the old turn')
+  assert.ok(prompt.includes('carry on'))
+})
+
+test('returning hop does not re-attach historical screenshots (image watermark)', async () => {
+  const reads: string[] = []
+  const { adapter, store } = makeAdapter(
+    { mediaMaxImages: 8, mediaDir: join(workDir, 'media-wm') },
+    {
+      readImage: async (ref) => {
+        reads.push(ref.attachmentId)
+        return new Uint8Array([1, 2, 3])
+      },
+    },
+  )
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-wm.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  // Hop 1: user attaches a1. It must be staged and recorded.
+  const first = [imgMsg('a1', 'look at this UI')]
+  await runTurn(adapter, first, { sessionId: 'sess-wm' as never })
+  await waitFor(() => store.get('sess-wm'))
+  assert.deepEqual(reads, ['a1'])
+  assert.deepEqual(store.get('sess-wm')?.sentImageIds, ['a1'])
+
+  // Hop 2: tool-hop continuation with no new attachment — a1 must NOT be re-read.
+  reads.length = 0
+  const second = [
+    ...first,
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'agy_tool', arguments: '{}' }] } as unknown as Message,
+    {
+      role: 'tool',
+      toolCallId: 'c1',
+      content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] }],
+    } as unknown as Message,
+  ]
+  await runTurn(adapter, second, { sessionId: 'sess-wm' as never })
+  assert.deepEqual(reads, [], 'historical image must not be re-staged on a tool hop')
+
+  // Hop 3: a NEW attachment is still forwarded.
+  reads.length = 0
+  const third = [...second, imgMsg('a2', 'another look')]
+  await runTurn(adapter, third, { sessionId: 'sess-wm' as never })
+  assert.deepEqual(reads, ['a2'], 'only the unseen attachment is staged')
+  assert.deepEqual(store.get('sess-wm')?.sentImageIds, ['a1', 'a2'])
+})
+
 function toolResultMsg(opts: {
   role?: string
   callId?: string
@@ -622,19 +729,43 @@ test('role:tool continuation (dsh-llm 0.1.7) resumes one process across spans (i
   assert.equal(report.processOk, true)
 })
 
-test('region eligibility refusal maps to a clear AGY_ERROR (issue #32)', async () => {
+test('region eligibility refusal maps to a clear ELIGIBILITY error (issue #32)', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'exit-eligible'
   const chunks = await collect(adapter.stream(opts([msg('user', '测试')], { sessionId: 'sess-elig' as never })))
+  process.env.FAKE_AGY_MODE = prevMode
   const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string; failure?: { message: string; code: string } } }
   assert.equal(finish.type, 'finish')
   assert.equal(finish.reason.kind, 'error')
-  assert.equal(finish.reason.failure?.code, 'AGY_ERROR')
+  assert.equal(finish.reason.failure?.code, 'ELIGIBILITY')
   assert.ok(
     finish.reason.failure?.message.includes('not eligible') || finish.reason.failure?.message.includes('Antigravity'),
     'message should explain the eligibility/region refusal: ' + finish.reason.failure?.message,
   )
   assert.ok(finish.reason.failure?.message.includes('location'), finish.reason.failure?.message)
+})
+
+test('live location refusal rotates the refused account away (retry can serve another)', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
+  process.env.FAKE_AGY_MODE = 'location-denied'
+  const pool = new AccountPoolManager(join(workDir, 'pool-location'))
+  const second = pool.createAccountSlot('Proxied')
+  try {
+    const { adapter } = makeAdapter({}, { pool })
+    const res = await runTurn(adapter, [msg('user', 'hi')], { sessionId: 'sess-location' as never })
+    const finish = res.chunks[res.chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
+    assert.equal(finish.reason.failure?.code, Err.ELIGIBILITY)
+    assert.ok(finish.reason.failure?.message.includes('location'), finish.reason.failure?.message)
+    // ELIGIBILITY is retryable AND the sticky pointer already moved off the
+    // refused account, so the retry is served by a different account instead of
+    // hitting the same unsupported location again and again.
+    assert.equal(pool.getPoolData().lastActiveAccountId, second.id)
+    // Rotating away is not a cooldown penalty on a healthy account.
+    assert.equal(pool.getAccounts()[0]!.cooldowns.google, undefined)
+  } finally {
+    process.env.FAKE_AGY_MODE = prevMode
+  }
 })
 
 function msgSrc(role: 'user' | 'assistant', text: string, provider?: string): Message {
@@ -1062,7 +1193,7 @@ test('a NEW (steered) prompt preempts a live run instead of debouncing', async (
   }
 })
 
-test('rate limit error from agy maps to AGY_ERROR without retryable PROCESS_EXIT', async () => {
+test('soft rate limit signal (model overloaded) stays a deterministic AGY_ERROR', async () => {
   const prevMode = process.env.FAKE_AGY_MODE
   process.env.FAKE_AGY_MODE = 'real-fail'
   try {
@@ -1074,6 +1205,37 @@ test('rate limit error from agy maps to AGY_ERROR without retryable PROCESS_EXIT
     assert.equal(finish.reason.kind, 'error')
     assert.equal(finish.reason.failure?.code, Err.AGY_ERROR)
     assert.ok(finish.reason.failure?.message.includes('rate limit'))
+  } finally {
+    process.env.FAKE_AGY_MODE = prevMode
+  }
+})
+
+test('quota exhaustion and timeouts are retried so the next account can serve them', () => {
+  const { adapter } = makeAdapter()
+  const policy = adapter.providerRetryPolicy('agy')
+  // Quota exhaustion was a dead end before: the account cooled down and the
+  // sticky pointer advanced, but no retry was ever attempted.
+  assert.ok(policy.retryableCodes.includes(Err.RATE_LIMIT), 'rate limit must retry onto the next account')
+  assert.ok(policy.retryableCodes.includes(Err.TIMEOUT), 'silent timeouts must retry onto the next account')
+  assert.ok(!(policy.retryableCodes as readonly string[]).includes(Err.AGY_ERROR), 'deterministic AGY_ERRORs stay single-shot')
+})
+
+test('hard quota refusal cools the spent account and hands the retry to the next one', async () => {
+  const prevMode = process.env.FAKE_AGY_MODE
+  process.env.FAKE_AGY_MODE = 'real-quota'
+  const pool = new AccountPoolManager(join(workDir, 'pool-hard-quota'))
+  const second = pool.createAccountSlot('Second')
+  try {
+    const { adapter } = makeAdapter({}, { pool })
+    const res = await runTurn(adapter, [msg('user', 'hi')], { sessionId: 'sess-hard-quota' as never })
+    const finish = res.chunks[res.chunks.length - 1] as { type: string; reason: { kind: string; failure?: { code: string; message: string } } }
+    assert.equal(finish.reason.kind, 'error')
+    assert.equal(finish.reason.failure?.code, Err.RATE_LIMIT, 'hard quota must use the retryable code')
+    const primary = pool.getAccounts()[0]!
+    // Spent account left rotation...
+    assert.ok((primary.cooldowns.google?.cooldownUntil ?? 0) > Date.now(), 'hard quota must cool the account down')
+    // ...and the pointer already moved on, so the retry lands on the next one.
+    assert.equal(pool.getPoolData().lastActiveAccountId, second.id)
   } finally {
     process.env.FAKE_AGY_MODE = prevMode
   }
@@ -1094,6 +1256,79 @@ test('sliding-window rate limit enforces request throttling per minute', async (
 
   const elapsed = Date.now() - t0
   assert.ok(elapsed < 15_000, `elapsed ${elapsed}ms exceeded 15000ms`)
+})
+
+test('auto-review calls with REVIEW_POLICY do not cut on tools and finish with stop', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const chunks = await collect(
+    adapter.stream(
+      opts([msg('user', 'review')], {
+        system: 'REVIEW_POLICY\nYou are the final authorization reviewer for exactly one pending tool call.',
+      }),
+    ),
+  )
+  const toolCallChunks = chunks.filter(
+    (c) =>
+      (c.type === 'block-start' && (c as { blockType?: string }).blockType === 'tool-call') ||
+      (c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call'),
+  )
+  assert.equal(toolCallChunks.length, 0)
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  assert.equal(finish.reason.kind, 'stop')
+})
+
+test('calls with explicit empty tools: [] do not cut on tools and finish with stop', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const chunks = await collect(
+    adapter.stream(
+      opts([msg('user', 'no tools')], {
+        tools: [],
+      }),
+    ),
+  )
+  const toolCallChunks = chunks.filter(
+    (c) =>
+      (c.type === 'block-start' && (c as { blockType?: string }).blockType === 'tool-call') ||
+      (c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call'),
+  )
+  assert.equal(toolCallChunks.length, 0)
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  assert.equal(finish.reason.kind, 'stop')
+})
+
+test('stale continuation with missing run in memory falls back to fresh turn prompt assembly instead of failing', async () => {
+  const { adapter, argsFile } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const toolResult = (callId: string): Message =>
+    ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [{ type: 'text', text: 'stale result' }] }], source: { kind: 'tool', callId } }) as never
+
+  // Simulate a turn that begins on a trailing tool result from an evicted/restarted runId:
+  const chunks = await collect(
+    adapter.stream(
+      opts([msg('user', 'original task before restart'), toolResult('agytc-missing-run-3')]),
+    ),
+  )
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  // First span cuts on agy's tool-call as designed, rather than hard-failing with AGY_ERROR:
+  assert.equal(finish.reason.kind, 'tool-calls')
+
+  // Verify that fresh process was spawned and prompt was assembled with the original task:
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const promptArg = argv[argv.length - 1]!
+  assert.ok(promptArg.includes('original task before restart'), 'assembled prompt includes the user task')
+
+  // Also verify that a full runTurn loop drives the healed conversation to completion:
+  const turnResult = await runTurn(adapter, [msg('user', 'original task'), toolResult('agytc-missing-run-4')])
+  const turnFinish = turnResult.chunks[turnResult.chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(turnFinish.reason.kind, 'stop')
 })
 
 test.after(() => {

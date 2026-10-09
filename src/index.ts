@@ -16,6 +16,7 @@ import { AuthHelper } from './host/auth.ts'
 import { agyCommandDefinition } from './host/commands.ts'
 import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
+import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { ModelCatalog, sanitizeCatalogEntries } from './host/models.ts'
 import { RunRegistry } from './host/recording.ts'
 import { MIN_AGY_VERSION, compareVersions, ensureIsolatedKeychain, isolatedHomeEnv, parseVersion, probeProcess, proxyEnvFor, resolveAgyBin } from './host/runner.ts'
@@ -320,6 +321,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   const toolsSvcRef: { current: { register: (t: unknown) => unknown } | null } = { current: null }
   const askToolDispose = { current: null as null | (() => void) }
   const mirrorToolDispose = { current: null as null | (() => void) }
+  const preExecuteDispose = { current: null as null | (() => void) }
   const syncAskTool = (): void => {
     const want = getConfig().askTool && bin() !== null
     if (want && askToolDispose.current === null && toolsSvcRef.current) {
@@ -351,7 +353,25 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     toolsSvcRef.current = sub.get('tools') as { register: (t: unknown) => unknown }
     syncAskTool()
     syncMirrorTool()
+    // Bypass auto-review and permission prompt gates for the synthetic agy_tool mirror:
+    // agy_tool only replays in-memory stdout already executed by agy in the previous step.
+    // Intercepting it in auto-review causes redundant review LLM calls, review timeouts,
+    // and crashes on tool-call reviewer endings.
+    const unlisten = sub.on(
+      'tools/pre-execute',
+      async (exec: ToolExecution, next: () => Promise<PreToolDecision>): Promise<PreToolDecision> => {
+        if (exec.name === 'agy_tool') {
+          return { kind: 'allow' }
+        }
+        return next()
+      },
+      { prepend: true, global: true },
+    )
+    preExecuteDispose.current = typeof unlisten === 'function' ? unlisten : null
+
     return () => {
+      if (preExecuteDispose.current !== null) preExecuteDispose.current()
+      preExecuteDispose.current = null
       if (askToolDispose.current !== null) askToolDispose.current()
       askToolDispose.current = null
       if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
@@ -477,6 +497,27 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const st = auth.cancelAuth()
         sendJson(res as RawRes, 200, st)
       })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/mermaid.min.js', handler: (_req, res) => {
+      const p = join(import.meta.dirname, 'mermaid.min.js')
+      const fallback = join(import.meta.dirname, '..', 'assets', 'mermaid.min.js')
+      const file = existsSync(p) ? p : existsSync(fallback) ? fallback : null
+      if (!file) {
+        ;(res as RawRes).writeHead(404, { 'content-type': 'text/plain' })
+        ;(res as RawRes).end('mermaid.min.js not found')
+        return
+      }
+      try {
+        const content = readFileSync(file)
+        ;(res as RawRes).writeHead(200, {
+          'content-type': 'application/javascript; charset=utf-8',
+          'cache-control': 'public, max-age=86400',
+        })
+        ;(res as RawRes).end(content)
+      } catch (err) {
+        ;(res as RawRes).writeHead(500, { 'content-type': 'text/plain' })
+        ;(res as RawRes).end('read error: ' + String(err))
+      }
     }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool', handler: (_req, res) => {
       sendJson(res as RawRes, 200, pool.getPoolData())

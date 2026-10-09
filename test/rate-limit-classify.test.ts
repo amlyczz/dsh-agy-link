@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { looksLikeRateLimit, looksLikeHardRateLimit } from '../src/common/types.ts'
+import { looksLikeRateLimit, looksLikeHardRateLimit, looksLikeEligibilityFailure } from '../src/common/types.ts'
 
 // Captured verbatim from a real incident: a cortex tool / permission error
 // that the old loose classifier (bare `429` / bare `rate limit`) sometimes saw
@@ -14,6 +14,26 @@ test('looksLikeHardRateLimit matches real server-issued quota signatures', () =>
   assert.equal(looksLikeHardRateLimit('Rate limit or quota reached'), true)
   assert.equal(looksLikeHardRateLimit('retry: attempt 2 failed (429: Too Many Requests)'), true)
   assert.equal(looksLikeHardRateLimit('You exceeded your quota. Try again after 2026-08-25T09:00:00Z.'), true)
+})
+
+test('looksLikeEligibilityFailure matches the live location refusal and the issue-32 wording', () => {
+  // Captured verbatim from a live run: agy exits 3 with this envelope.
+  assert.equal(
+    looksLikeEligibilityFailure('FAILED_PRECONDITION (code 400): User location is not supported for the API use.'),
+    true,
+  )
+  assert.equal(
+    looksLikeEligibilityFailure('Eligibility check failed: Your current account is not eligible for Antigravity, because it is not currently available in your location.'),
+    true,
+  )
+  assert.equal(looksLikeEligibilityFailure('This service is not supported in your country'), true)
+  // Unrelated transport / tool noise must NOT look like a region refusal.
+  assert.equal(looksLikeEligibilityFailure('oauth2.googleapis.com: i/o timeout'), false)
+  assert.equal(looksLikeEligibilityFailure('FAILED_PRECONDITION: workspace file locked'), false)
+  assert.equal(
+    looksLikeEligibilityFailure('declaring permissions: cortex tool write_to_file: invalid_args'),
+    false,
+  )
 })
 
 test('looksLikeHardRateLimit rejects incidental substrings and unrelated errors', () => {

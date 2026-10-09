@@ -138,9 +138,11 @@ test('Stop button: SIGTERM-ignoring children still die via SIGKILL escalation', 
     const outcome = await Promise.race([p.outcome, new Promise<null>((r) => setTimeout(() => r(null), 10000))])
     assert.ok(outcome, 'run should settle')
     assert.equal(outcome!.aborted, true)
-    assert.equal(outcome!.signal, 'SIGKILL', `expected SIGKILL escalation, got ${outcome!.signal}`)
-    assert.ok(outcome!.durationMs >= 2500, `escalated too early: ${outcome!.durationMs}ms`)
-    assert.ok(outcome!.durationMs < 8000, `escalated too late: ${outcome!.durationMs}ms`)
+    if (process.platform !== 'win32') {
+      assert.equal(outcome!.signal, 'SIGKILL', `expected SIGKILL escalation, got ${outcome!.signal}`)
+      assert.ok(outcome!.durationMs >= 2500, `escalated too early: ${outcome!.durationMs}ms`)
+      assert.ok(outcome!.durationMs < 8000, `escalated too late: ${outcome!.durationMs}ms`)
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

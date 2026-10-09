@@ -103,6 +103,7 @@ export function resolveConfig(
     maxTokensDefault: asNum(get('maxTokensDefault')) ?? base.maxTokensDefault,
     forwardSystemPrompt: asBool(get('forwardSystemPrompt')) ?? base.forwardSystemPrompt,
     digestMaxChars: asNum(get('digestMaxChars')) ?? base.digestMaxChars,
+    contextTransferMaxChars: asNum(get('contextTransferMaxChars')) ?? base.contextTransferMaxChars,
     modelsCacheTtlMs: asNum(get('modelsCacheTtlMs')) ?? base.modelsCacheTtlMs,
     allowAuxiliary: asBool(get('allowAuxiliary')) ?? base.allowAuxiliary,
     compactionMaxChars: asNum(get('compactionMaxChars')) ?? base.compactionMaxChars,

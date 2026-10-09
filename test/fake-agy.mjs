@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Fake agy CLI for offline tests. Modes via FAKE_AGY_MODE env:
-//   ok | auth | noise | exit12 | exit-error | real | real-error
+//   ok | auth | noise | exit12 | exit-error | real | real-error | real-quota
+//   location-denied — result envelope with the real "User location is not supported" refusal, exit 3
 //   ok            — legacy flat event shapes (kept for compat coverage)
 //   real          — real agy 1.1.15 stream-json shapes (nested step_update
 //                   envelopes, agent_response text_delta fragments,
@@ -62,6 +63,24 @@ if (mode === 'exit12') {
   process.exit(12)
 }
 
+// Real location refusal observed live: agy exits 3 after a result envelope
+// carrying FAILED_PRECONDITION (code 400).
+if (mode === 'location-denied') {
+  emit({
+    event: 'result',
+    result: {
+      conversation_id: '',
+      status: 'ERROR',
+      response: '',
+      error: 'FAILED_PRECONDITION (code 400): User location is not supported for the API use.',
+      duration_seconds: 0.4,
+      num_turns: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  })
+  process.exit(3)
+}
+
 // Google-side account/region eligibility refusal (issue #32).
 if (mode === 'exit-eligible') {
   emit({
@@ -100,7 +119,7 @@ if (mode === 'noise') {
   process.stdout.write('\u26a0 fetching model catalog\n')
   emit({ event: 'init', conversation_id: conv, model: 'gemini-3-6-flash' })
   process.stdout.write('some progress noise\n')
-} else if (mode === 'real' || mode === 'real-error' || mode === 'real-denied' || mode === 'real-fail') {
+} else if (mode === 'real' || mode === 'real-error' || mode === 'real-denied' || mode === 'real-fail' || mode === 'real-quota') {
   // Shapes captured from a live agy 1.1.15 binary
   // (`--output-format stream-json --mode plan --model ... --effort ...`).
   emit({ event: 'init', conversation_id: conv, init: { model: 'gemini-3-7-flash', cwd: '/tmp', tools: ['run_command', 'read_file'] } })
@@ -127,7 +146,11 @@ if (mode === 'noise') {
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'There are ' } })
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'ACTIVE', step_type: 'agent_response', text_delta: '2 files, ' } })
   emit({ event: 'step_update', step_update: { conversation_id: conv, step_index: 5, state: 'DONE', step_type: 'agent_response', text_delta: '6 words total.', duration_seconds: 2, usage: { input_tokens: 900, output_tokens: 60, thinking_tokens: 15, cache_read_tokens: 200, total_tokens: 960 } } })
-  if (mode === 'real-fail') {
+  if (mode === 'real-quota') {
+    // Real server hard-quota refusal (observed live): the account is spent, so
+    // the adapter must cool it down and let the retry use another account.
+    emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: '', error: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h54m14s.', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 100, output_tokens: 0 } } })
+  } else if (mode === 'real-fail') {
     emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: '', error: 'model overloaded', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 100, output_tokens: 0 } } })
   } else if (mode === 'real') {
     emit({ event: 'result', result: { conversation_id: conv, status: 'DONE', response: 'There are 2 files, 6 words total.', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 900, output_tokens: 100, thinking_tokens: 95, cache_read_tokens: 200, total_tokens: 1000 } } })
