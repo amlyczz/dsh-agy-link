@@ -429,6 +429,18 @@ function killTree(child: ChildProcess): void {
   });
 }
 
+/**
+ * Environment for spawning a script through `process.execPath`.
+ *
+ * In the packaged desktop host `process.execPath` is the **Electron binary**,
+ * not node: without this flag the child would boot a second GUI instance
+ * instead of executing the script. Plain node ignores the variable, so the
+ * POSIX/test paths are unaffected.
+ */
+export function nodeScriptEnv<T extends object>(env: T): T & { ELECTRON_RUN_AS_NODE: string } {
+  return { ...env, ELECTRON_RUN_AS_NODE: '1' }
+}
+
 export function startAgyProcess(opts: RunOptions): RunningProcess {
   const started = Date.now();
   const viaCmd = IS_WIN && isCmdShim(opts.bin)
@@ -445,7 +457,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     : isNode
       ? spawn(process.execPath, [opts.bin, ...opts.args], {
           cwd: opts.cwd,
-          env,
+          env: nodeScriptEnv(env),
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
         })

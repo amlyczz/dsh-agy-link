@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, consoleOutputEncoding, decodeConsoleLine, isolatedHomeEnv, isCmdShim, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT, withAgyQuietEnv } from '../src/host/runner.ts'
+import { binCandidates, consoleOutputEncoding, decodeConsoleLine, isolatedHomeEnv, isCmdShim, nodeScriptEnv, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT, withAgyQuietEnv } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -17,6 +17,18 @@ test('decodeConsoleLine recovers GBK tool output instead of mangling it (issue #
   // Off Windows the probe never leaves UTF-8, so POSIX behaviour is unchanged.
   assert.equal(consoleOutputEncoding('darwin'), 'utf-8')
   assert.equal(consoleOutputEncoding('linux'), 'utf-8')
+})
+
+test('spawning a script through process.execPath runs node, not a second app instance (PR #40 follow-up)', () => {
+  // In the packaged Electron desktop host process.execPath is the App binary;
+  // ELECTRON_RUN_AS_NODE makes it behave as plain node. Plain node ignores it.
+  const base = { PATH: '/usr/bin', FOO: 'bar' }
+  const env = nodeScriptEnv(base)
+  assert.equal(env.ELECTRON_RUN_AS_NODE, '1')
+  assert.equal(env.FOO, 'bar')
+  assert.equal(env.PATH, '/usr/bin')
+  assert.equal('ELECTRON_RUN_AS_NODE' in base, false, 'input env is not mutated')
+  assert.equal(nodeScriptEnv({ ELECTRON_RUN_AS_NODE: '0' }).ELECTRON_RUN_AS_NODE, '1')
 })
 
 test('windowsQuote leaves plain args untouched', () => {
