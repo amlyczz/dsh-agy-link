@@ -1,16 +1,18 @@
 # Changelog
 
-## 0.4.45 (2026-10-09)
+## 0.4.45 (2026-10-10)
 
 ### English
 
 - **Fix (macOS): `ensureIsolatedKeychain` no longer causes modal SecurityAgent password popups on startup (issue #42).** On macOS, `ensureIsolatedKeychain` applied `security set-keychain-settings` on existing isolated keychains on every boot and spawn. When the keychain was locked across app restarts, macOS's SecurityAgent raised blocking GUI dialogs demanding the password for each account — an unanswerable prompt because the isolated keychain was created with an ephemeral random passphrase. The settings (never auto-lock, no timeout) are already persisted on creation, so `ensureIsolatedKeychain` now returns `false` immediately when the keychain file exists on disk, never poking the security CLI again. New keychains are also provisioned with an empty passphrase (`-p ""`) and unlocked upon creation.
 - **Fix: reasoning thinking thoughts arriving asynchronously are no longer dropped (issue #43).** In `EventMapper`, the thinking announcement gate prematurely consumed `thinkingAnnounced` when `thoughtTokens > 0` even before thought prose had finished resolving from the SQLite database. Later fragments or DONE tails carrying the resolved thought prose were subsequently dropped as "already announced". The announcement gate now only marks thoughts as announced when thought text is actually present. In addition, `readStepThoughts` in the adapter now adds a retry interval to accommodate SQLite WAL flush latencies during active model generation.
+- **Fix (Mermaid): prevent "Syntax error in text" bomb SVG from leaking into the document body.** When a code block containing invalid diagram syntax was processed, Mermaid's fallback error-renderer appended a 2412px-wide SVG with a bomb icon directly into `document.body`. Due to an internal throw before cleanup in Mermaid v11, the leaked elements remained permanently attached to the window footer. `mermaid.initialize` now sets `suppressErrorRendering: true`, pre-validates syntax using `api.parse()`, passes a scoped mount container to `api.render()`, unconditionally sweeps temporary and stray elements (`#dagy-mmd*`, `#iagy-mmd*`) in a `finally` block, and injects protective CSS preventing body-level leaked nodes from rendering.
 
 ### 中文 (Chinese)
 
 - **修复 (macOS)：`ensureIsolatedKeychain` 不再在每次启动时触发 SecurityAgent 钥匙串密码弹窗（issue #42）。** 在 macOS 上，`ensureIsolatedKeychain` 原先在每次 DSH 启动和进程拉起时都会对已存在的隔离钥匙串执行 `security set-keychain-settings`。当钥匙串在应用重启后处于锁定状态时，macOS 的 SecurityAgent 会对每个隔离账号弹出阻塞式系统密码框——由于此前钥匙串是使用未持久化的随机密码创建的，用户输入任何密码都无法通过。钥匙串的“永不自动锁”设置在首次创建时已持久化落盘，因此当钥匙串文件已存在时，`ensureIsolatedKeychain` 现在直接返回 `false`，绝不再调用 security CLI；新建钥匙串时也改用空密码（`-p ""`）创建并立即静默解锁。
 - **修复：异步从数据库解析的思考过程正文不再被静默丢弃（issue #43）。** 在 `EventMapper` 中，思考公布逻辑原先只要检测到 `thoughtTokens > 0`，即使 SQLite 中的思考正文尚未完成异步提取，也会过早消耗 `thinkingAnnounced` 标记，导致后续分片或 DONE 尾包即使成功提取到了思考正文也被判定为“已公布”而直接丢弃。现在公布标记仅在实际存在思考正文时才消耗；同时适配器中的 `readStepThoughts` 增加了重试等待，以包容模型生成期间 SQLite WAL 写入的延迟。
+- **修复 (Mermaid)：彻底解决 Mermaid 语法错误导致巨大的“Syntax error in text”炸弹图标残留在窗口底部的问题。** 当代码块包含不合法的图表语法时，Mermaid 内部的兜底错误渲染逻辑会向 `document.body` 追加一个 2412px 宽的巨大炸弹图标（💣）SVG；由于 Mermaid v11 在内部抛错前未执行清理，该临时元素会永久留在窗口底部污染界面。现在初始化时开启了 `suppressErrorRendering: true`，在渲染前通过 `api.parse()` 预校验语法，向 `api.render()` 传入局部挂载容器，在 `finally` 块中无条件清理临时节点（`#dagy-mmd*`、`#iagy-mmd*`），并通过安全 CSS 全面隐藏逃逸到 body 层级的任何错误元素。
 
 ## 0.4.44 (2026-10-09)
 

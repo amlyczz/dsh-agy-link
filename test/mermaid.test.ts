@@ -38,3 +38,55 @@ test('isMermaidBlock recognizes mermaid fence or sniffs unrecognized code blocks
   assert.equal(isMermaidBlock('代码块', 'const foo = "bar"'), false)
 })
 
+test('MERMAID_CSS suppresses leaked mermaid error elements and bomb SVGs at body level', async () => {
+  const { MERMAID_CSS } = await import('../src/client/mermaid.ts')
+  assert.match(MERMAID_CSS, /body > \[id\^="dagy-mmd"\]/)
+  assert.match(MERMAID_CSS, /body > \[id\^="iagy-mmd"\]/)
+  assert.match(MERMAID_CSS, /\.error-icon/)
+  assert.match(MERMAID_CSS, /\.error-text/)
+  assert.match(MERMAID_CSS, /display:\s*none\s*!important/)
+})
+
+test('cleanupTempElements sweeps leaked temp containers from DOM', async () => {
+  const { cleanupTempElements } = await import('../src/client/mermaid.ts')
+  const removed: string[] = []
+  const elements = new Map<string, { remove: () => void }>()
+
+  const makeEl = (id: string) => {
+    const el = {
+      id,
+      remove: () => {
+        removed.push(id)
+        elements.delete(id)
+      },
+    }
+    elements.set(id, el)
+    return el
+  }
+
+  makeEl('dagy-mmd-1')
+  makeEl('iagy-mmd-1')
+  makeEl('agy-mmd-1')
+  makeEl('dagy-mmd-stray')
+
+  const origDoc = (globalThis as unknown as { document?: unknown }).document
+  try {
+    ;(globalThis as unknown as { document: unknown }).document = {
+      getElementById: (id: string) => elements.get(id) ?? null,
+      querySelectorAll: (sel: string) => {
+        if (sel.includes('body >')) {
+          return Array.from(elements.values())
+        }
+        return []
+      },
+    }
+    cleanupTempElements('agy-mmd-1')
+    assert.ok(removed.includes('dagy-mmd-1'))
+    assert.ok(removed.includes('iagy-mmd-1'))
+    assert.ok(removed.includes('agy-mmd-1'))
+    assert.ok(removed.includes('dagy-mmd-stray'))
+  } finally {
+    ;(globalThis as unknown as { document?: unknown }).document = origDoc
+  }
+})
+

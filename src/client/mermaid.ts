@@ -15,7 +15,7 @@
 // the first diagram; when that fails (offline / blocked CDN) the source
 // block is left visible. Failed loads are retried after a cooldown.
 
-const MERMAID_CSS = `
+export const MERMAID_CSS = `
 div.md-code-block[data-agy-mermaid="done"] [data-code-block-content] {
 	display: none !important;
 }
@@ -39,11 +39,24 @@ div[data-agy-mermaid-svg][data-agy-mermaid-error] {
 	white-space: pre-wrap;
 	padding: 10px 12px;
 }
+/* Prevent Mermaid's internal error DOM or leaked temporary nodes from escaping into document.body */
+body > [id^="dagy-mmd"],
+body > [id^="iagy-mmd"],
+body > [id^="d_agy-mmd"],
+body > [id^="i_agy-mmd"],
+body > [id^="agy-mmd-"],
+body > div[id^="d"][class*="mermaid"],
+svg.error-icon,
+.error-icon,
+.error-text {
+	display: none !important;
+}
 `
 
 type MermaidApi = {
 	initialize: (config: Record<string, unknown>) => void
-	render: (id: string, text: string) => Promise<{ svg: string }>
+	parse?: (text: string) => Promise<unknown>
+	render: (id: string, text: string, container?: Element) => Promise<{ svg: string }>
 }
 
 declare global {
@@ -108,6 +121,7 @@ async function loadMermaid(): Promise<MermaidApi | null> {
 						securityLevel: 'strict',
 						theme: 'neutral',
 						fontFamily: 'inherit',
+						suppressErrorRendering: true,
 					})
 				} catch {
 					// initialize is idempotent enough; keep going
@@ -178,6 +192,21 @@ function readSource(block: HTMLElement): string {
 	return (code?.textContent ?? '').trim()
 }
 
+export function cleanupTempElements(id?: string): void {
+	if (typeof document === 'undefined') return
+	if (id) {
+		document.getElementById('d' + id)?.remove()
+		document.getElementById('i' + id)?.remove()
+		document.getElementById(id)?.remove()
+	}
+	const stray = document.querySelectorAll<HTMLElement>(
+		'body > [id^="dagy-mmd"], body > [id^="iagy-mmd"], body > [id^="d_agy-mmd"], body > [id^="i_agy-mmd"], body > [id^="agy-mmd-"]'
+	)
+	for (let i = 0; i < stray.length; i++) {
+		stray[i]?.remove()
+	}
+}
+
 async function renderInto(block: HTMLElement, source: string): Promise<void> {
 	// Drop a previous overlay so a React rebuild can re-render cleanly.
 	block.querySelector('[data-agy-mermaid-svg]')?.remove()
@@ -193,16 +222,22 @@ async function renderInto(block: HTMLElement, source: string): Promise<void> {
 		mount.textContent = 'Mermaid renderer unavailable (offline). Diagram source stays below.'
 		return
 	}
+	renderSeq += 1
+	const id = 'agy-mmd-' + renderSeq
 	try {
-		renderSeq += 1
-		const id = 'agy-mmd-' + renderSeq
-		const { svg } = await api.render(id, source)
+		// Pre-validate diagram syntax: parse throws without mutating DOM or rendering error fallback
+		if (typeof api.parse === 'function') {
+			await api.parse(source)
+		}
+		const { svg } = await api.render(id, source, mount)
 		mount.innerHTML = svg
 		block.setAttribute('data-agy-mermaid', 'done')
 	} catch (e) {
 		block.setAttribute('data-agy-mermaid', 'error')
 		mount.setAttribute('data-agy-mermaid-error', '1')
 		mount.textContent = 'Mermaid render failed: ' + (e instanceof Error ? e.message : String(e))
+	} finally {
+		cleanupTempElements(id)
 	}
 }
 
@@ -219,6 +254,7 @@ function scheduleScan(): void {
 
 function scan(): void {
 	if (typeof document === 'undefined') return
+	cleanupTempElements()
 	const blocks = document.querySelectorAll<HTMLElement>('.md-code-block')
 	for (let i = 0; i < blocks.length; i++) {
 		const block = blocks[i]
@@ -239,11 +275,13 @@ function scan(): void {
 export function installMermaidRendering(): void {
 	if (typeof window === 'undefined' || typeof document === 'undefined') return
 	injectStyles()
+	cleanupTempElements()
 	const observer = new MutationObserver(() => {
 		scheduleScan()
 	})
 	const setup = (): void => {
 		if (document.body) {
+			cleanupTempElements()
 			observer.observe(document.body, { childList: true, subtree: true })
 			scan()
 		}
