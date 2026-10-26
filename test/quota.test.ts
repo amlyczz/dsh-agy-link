@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
-import { QuotaService, agyUserAgent, detectEmailFromAgyLogs, isStale5hBucket, mergeFallbackFamilyQuota, normalizeStoredToken, pickFamilyQuota, sameQuotaWindow, shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../src/host/quota.ts'
+import { QuotaService, agyUserAgent, detectEmailFromAgyLogs, isStale5hBucket, mergeFallbackFamilyQuota, normalizeStoredToken, pickFamilyQuota, sameCredentialGrant, sameQuotaWindow, shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../src/host/quota.ts'
 import { shouldPollAccount } from '../src/common/pool-types.ts'
 import { writeAgyTokenFile, parsePastedCode, generatePkce } from '../src/host/oauth.ts'
 import { parseCredentialDoc, writePrimaryCredential } from '../src/host/credential-slot.ts'
@@ -1256,4 +1256,62 @@ test('shouldReleaseOrphanedCooldown never fires for an account that never had an
   assert.equal(shouldReleaseOrphanedCooldown({
     summaryAuthoritative: false, groupPresent: false, groupSeenBefore: true, hasCooldown: true,
   }), false)
+})
+
+
+test('sameCredentialGrant proves a shared grant through the refresh token, never a rotating access token', () => {
+  const a = { accessToken: 'ya29.A1', refreshToken: '1//GRANT_A' }
+  const b = { accessToken: 'ya29.A2', refreshToken: '1//GRANT_A' }
+  assert.equal(sameCredentialGrant(a, b), true, 'a rotated access token must still name the same grant')
+
+  const other = { accessToken: 'ya29.B1', refreshToken: '1//GRANT_B' }
+  assert.equal(sameCredentialGrant(a, other), false, 'different refresh tokens are different accounts')
+
+  // Mixed shapes cannot be proven equal: one side identifying by refresh token
+  // and the other only by access token must NOT be treated as a match.
+  const accessOnly = { accessToken: 'ya29.A1' }
+  assert.equal(sameCredentialGrant(a, accessOnly), false, 'unprovable pairs must fail closed')
+  assert.equal(sameCredentialGrant(accessOnly, { accessToken: 'ya29.A1' }), true, 'access tokens are usable when neither side has a refresh token')
+
+  assert.equal(sameCredentialGrant(null, a), false, 'an absent slot credential never matches')
+  assert.equal(sameCredentialGrant(undefined, undefined), false)
+})
+
+test('REGRESSION: the CLI quota read is skipped when the slot holds another account', async () => {
+  // 2026-10-26: every pool row displayed the slot owner's numbers with identical
+  // reset instants. gy reads the OS keystore before the per-HOME token file,
+  // so an isolated HOME does not isolate the CLI identity. The guard must refuse
+  // to run the CLI for an account the slot does not hold.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-cliguard-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('guarded')
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.mine', refresh_token: '1//MINE' }),
+    'utf8',
+  )
+
+  class SlotHoldsSomeoneElse extends QuotaService {
+    override async readSystemKeychainToken() {
+      return { accessToken: 'ya29.slot_owner', refreshToken: '1//SOMEONE_ELSE' }
+    }
+  }
+  const svc = new SlotHoldsSomeoneElse(pool, () => '', () => null, { bin: () => 'agy' })
+  const read = (
+    svc as unknown as { readCliUsageFamilies(a: unknown): Promise<unknown> }
+  ).readCliUsageFamilies.bind(svc)
+  assert.equal(await read(acc), null, 'must not attribute the slot owner quota to this account')
+
+  class SlotHoldsThisAccount extends QuotaService {
+    override async readSystemKeychainToken() {
+      return { accessToken: 'ya29.mine', refreshToken: '1//MINE' }
+    }
+  }
+  const matching = new SlotHoldsThisAccount(pool, () => '', () => null, { bin: () => '' })
+  const readMatching = (
+    matching as unknown as { readCliUsageFamilies(a: unknown): Promise<unknown> }
+  ).readCliUsageFamilies.bind(matching)
+  assert.equal(await readMatching(acc), null, 'an empty bin still short-circuits before any spawn')
 })

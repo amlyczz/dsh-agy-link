@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.71 (2026-10-26)
+
+### English
+
+- **Fix: every pool row displayed the same account's quota (2026-10-26 report).**
+  - gy resolves its credential from the OS keystore FIRST and only falls back to the per-HOME token file when the keystore has no entry. Handing an isolated HOME to gy -p /usage therefore does not isolate the identity: the CLI always answers for whichever account owns the machine-global slot, so CLI-first polling filed the slot owner's numbers under every secondary row (all four rows showed 97% / 55% / 56% with identical reset instants).
+  - The CLI read is now gated on sameCredentialGrant: it runs only when the slot provably holds the account being polled. Otherwise the account falls back to the REST path, which signs with that account's own token file.
+  - A stored Argon row that the slot cannot attribute is dropped instead of displayed, because REST never reports Argon but a CLI read always describes the slot owner. Argon now appears only for the account that actually owns the credential slot — honest, where before every row inherited it.
+  - Regression tests cover the grant predicate (a rotating access token must not break a match, mixed shapes must fail closed) and the refusal to read the CLI for a non-owner.
+
+### 中文
+
+- **修复：号池每一行都显示了同一个账号的额度（2026-10-26 反馈）。**
+  - gy 解析凭据时**优先读系统钥匙串**，只有在钥匙串没有条目时才回落到 per-HOME 的 token 文件。因此给 gy -p /usage 一个隔离 HOME 并不能隔离身份：CLI 永远回答「当前机器全局槽位持有者」的额度，CLI 优先轮询就把槽位主人的数字写进了每个子账号行（四行全部显示 97% / 55% / 56%，重置时刻完全相同）。
+  - 现在 CLI 读取前先过 sameCredentialGrant 校验：只有能证明槽位里装的确实是该账号时才走 CLI；否则回落到 REST 路径，用该账号自己的 token 文件签名。
+  - 无法归属的 Argon 行会被丢弃而不是显示：REST 从不返回 Argon，而 CLI 读数一定属于槽位主人。Argon 现在只在真正持有凭据槽的账号上出现——诚实，而此前是每一行都继承了它。
+  - 新增回归测试：覆盖授权凭证判定（轮换的 access token 不能让同一账号失配、形状不一致必须判定为「无法证明」），以及非持有者必须拒绝走 CLI。
+
 ## 0.4.70 (2026-10-25)
 
 ### English

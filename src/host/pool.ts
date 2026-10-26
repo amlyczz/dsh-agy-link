@@ -817,6 +817,20 @@ export class AccountPoolManager {
   }
 
   /**
+   * Drop one family's quota row.
+   *
+   * Used when stored numbers provably cannot be attributed to this account —
+   * `updateAccountQuotas` only merges, so an untrustworthy row would otherwise
+   * survive every refresh.
+   */
+  clearQuotaFamily(id: string, family: ModelFamily): void {
+    const acc = this.getAccount(id)
+    if (!acc?.quotas || acc.quotas[family] === undefined) return
+    delete acc.quotas[family]
+    this.persist()
+  }
+
+  /**
    * Records a rate-limit / 429 error and sets cooldown for the requested model family.
    */
   recordFailure(id: string, family: ModelFamily, reason: string, serverResetTime?: string): void {

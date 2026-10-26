@@ -303,6 +303,28 @@ export function isStale5hBucket(remainingFraction?: number, resetTime?: string, 
   return resetMs > 4.5 * 3600_000 && resetMs < 5.2 * 3600_000
 }
 
+/**
+ * True only when two token snapshots belong to the SAME OAuth grant.
+ *
+ * Used to decide whether the machine credential slot really holds the account
+ * we are about to poll through the `agy` CLI. A refresh token identifies a
+ * grant; an access token rotates, so it is only consulted when neither side
+ * carries a refresh token. Mismatched shapes count as "not proven" — the
+ * caller then takes the safe path instead of misattributing a quota row.
+ */
+export function sameCredentialGrant(
+  a: StoredToken | null | undefined,
+  b: StoredToken | null | undefined,
+): boolean {
+  const fingerprint = (token: StoredToken | null | undefined): string | null => {
+    if (token?.refreshToken) return 'r:' + token.refreshToken
+    if (token?.accessToken) return 'a:' + token.accessToken
+    return null
+  }
+  const fa = fingerprint(a)
+  return fa !== null && fa === fingerprint(b)
+}
+
 /** How close two ISO reset stamps must be to name the SAME quota window. */
 export const QUOTA_WINDOW_MATCH_TOLERANCE_MS = 5 * 60_000
 
@@ -527,6 +549,24 @@ export class QuotaService {
   ): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
     const bin = this.cliDeps.bin?.()
     if (!bin) return null
+    // `agy` resolves its credential from the OS keystore FIRST and only falls
+    // back to the per-HOME token file when the keystore has no entry
+    // (docs/KNOWN-GAPS.md, measured 2026-10-23). An isolated HOME therefore
+    // does NOT isolate the CLI's identity: `agy -p /usage` always answers for
+    // whoever owns the machine-global slot. Polling a secondary that way filed
+    // the SLOT OWNER's numbers under the secondary's row — on 2026-10-26 all
+    // four pool rows displayed one account's quota with identical reset
+    // instants. Run the CLI only when the slot provably holds THIS account;
+    // otherwise leave it to the REST path, which signs with the account's own
+    // token file.
+    if (!(await this.cliSlotHoldsAccount(account))) {
+      // Stored Argon numbers can only have come from a CLI read, which reports
+      // the SLOT OWNER. They are not this account's, so drop the row instead of
+      // displaying it; the REST fallback below re-derives whatever it can from
+      // this account's own token.
+      this.pool.clearQuotaFamily(account.id, 'argon')
+      return null
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...(account.dir ? isolatedHomeEnv(account.dir) : {}),
@@ -539,6 +579,20 @@ export class QuotaService {
       preemptAutoUpdate: this.cliDeps.preemptAutoUpdate?.(),
     })
     return groups === null ? null : usageGroupsToFamilies(groups)
+  }
+
+  /**
+   * True when the machine credential slot provably holds this account's grant.
+   *
+   * This gates the CLI quota read, which can only ever see the slot owner.
+   * Conservative by design: when the two snapshots cannot be shown to be the
+   * same grant, the caller falls back to REST rather than risk attributing one
+   * account's quota to another.
+   */
+  private async cliSlotHoldsAccount(account: ManagedAccount): Promise<boolean> {
+    const slot = await this.readSystemKeychainToken()
+    if (slot === null) return false
+    return sameCredentialGrant(slot, await this.getStoredToken(account))
   }
 
   /** Dedicated account proxy wins, then the global config proxy, then detected system proxy. */
