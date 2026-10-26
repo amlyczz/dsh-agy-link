@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
-import { QuotaService, agyUserAgent, detectEmailFromAgyLogs, isStale5hBucket, mergeFallbackFamilyQuota, normalizeStoredToken, pickFamilyQuota, sameCredentialGrant, sameQuotaWindow, shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../src/host/quota.ts'
+import { QuotaService, agyUserAgent, detectEmailFromAgyLogs, staggerJitterMs, isStale5hBucket, mergeFallbackFamilyQuota, normalizeStoredToken, pickFamilyQuota, sameCredentialGrant, sameQuotaWindow, shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../src/host/quota.ts'
 import { shouldPollAccount } from '../src/common/pool-types.ts'
 import { writeAgyTokenFile, parsePastedCode, generatePkce } from '../src/host/oauth.ts'
 import { parseCredentialDoc, writePrimaryCredential } from '../src/host/credential-slot.ts'
@@ -1332,4 +1332,15 @@ test('the CLI is refused for the primary while the slot carries another grant', 
     true,
     'the owner is allowed to read Argon through the CLI',
   )
+})
+
+test('staggerJitterMs generates organic values within requested bounds', () => {
+  for (let i = 0; i < 50; i++) {
+    const val = staggerJitterMs(2000, 1500)
+    assert.ok(val >= 2000, "delay must be >= 2000")
+    assert.ok(val < 3500, "delay must be < 3500")
+  }
+  // Custom base and jitter
+  const exact = staggerJitterMs(1000, 1)
+  assert.equal(exact, 1000)
 })

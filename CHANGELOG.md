@@ -4,6 +4,8 @@
 
 ### English
 
+- **Feat(quota): organic randomized jitter on sequential multi-account polling.**
+  - Replaced the fixed 2000ms sleep between account checks with an organic 2000ms~3500ms randomized jitter delay (staggerJitterMs), avoiding rigid clock-tick request signatures against upstream endpoints.
 - **Fix: every pool row displayed the same account's quota (2026-10-26 report).**
   - Root cause: gy resolves its credential from the platform keystore (Windows Credential Manager, macOS Keychain, Linux Secret Service) BEFORE the per-HOME token file, and that store is a single per-user entry. Handing an isolated HOME to gy -p /usage therefore does not isolate the identity — the CLI always answers for the store's owner, so CLI-first polling filed the owner's numbers under every secondary row (all four rows showed 97% / 55% / 56% with identical reset instants).
   - The CLI is now scoped to the account that can actually own that store, and everything else takes the REST path, which signs with each account's own token file and runs concurrently on every platform.
@@ -13,6 +15,8 @@
 
 ### 中文
 
+- **功能（quota）：多账号顺序轮询增加有机随机抖动。**
+  - 账号间的固定 2000ms 错峰间隔升级为 2000ms~3500ms 随机抖动（staggerJitterMs），避免向 Google Cloud Code 发送过于机械刻板的定频网络请求。
 - **修复：号池每一行都显示了同一个账号的额度（2026-10-26 反馈）。**
   - 根因：gy 解析凭据时**优先读系统钥匙串**（Windows 凭据管理器 / macOS Keychain / Linux Secret Service），且该存储是「每个 OS 用户只有一条」。因此给 gy -p /usage 一个隔离 HOME 并不能隔离身份——CLI 永远回答存储主人的额度，CLI 优先轮询就把主人的数字写进了每个子账号行（四行全部 97% / 55% / 56%，重置时刻完全相同）。
   - 现在 CLI 只用于「真正能拥有该存储」的那个账号，其余账号全部走 REST —— 用各自的 token 文件签名，全平台并发执行。

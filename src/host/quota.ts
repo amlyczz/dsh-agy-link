@@ -329,6 +329,14 @@ export function sameCredentialGrant(
 export const QUOTA_WINDOW_MATCH_TOLERANCE_MS = 5 * 60_000
 
 /**
+ * Organic stagger delay with randomized jitter for multi-account sequential polling.
+ * Prevents rigid periodic cadence against Google Cloud Code endpoints (default: 2000~3500ms).
+ */
+export function staggerJitterMs(baseMs = 2000, maxJitterMs = 1500): number {
+  return baseMs + Math.floor(Math.random() * maxJitterMs)
+}
+
+/**
  * True when two reset stamps point at the same quota window.
  *
  * `fetchAvailableModels` returns a per-model `quotaInfo` with NO window label:
@@ -1396,7 +1404,7 @@ export class QuotaService {
         const acc = accounts[i]!
         await this.refreshAccountQuota(acc, false).catch(() => null)
         if (i < accounts.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 2000))
+          await new Promise((resolve) => setTimeout(resolve, staggerJitterMs()))
         }
       }
       return
