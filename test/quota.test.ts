@@ -1277,41 +1277,59 @@ test('sameCredentialGrant proves a shared grant through the refresh token, never
   assert.equal(sameCredentialGrant(undefined, undefined), false)
 })
 
-test('REGRESSION: the CLI quota read is skipped when the slot holds another account', async () => {
+test('REGRESSION: isolated pool accounts never consult the CLI nor pay a keystore read', async () => {
   // 2026-10-26: every pool row displayed the slot owner's numbers with identical
   // reset instants. gy reads the OS keystore before the per-HOME token file,
-  // so an isolated HOME does not isolate the CLI identity. The guard must refuse
-  // to run the CLI for an account the slot does not hold.
-  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-cliguard-'))
+  // so the CLI can only ever answer for the account that owns that store — the
+  // system login. Isolated accounts must therefore never spawn it, and the
+  // rejection must not even read the keystore (four PowerShell cold starts per
+  // poll would make the pool needlessly slow).
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-cliiso-'))
   const pool = new AccountPoolManager(dir)
-  const acc = pool.createAccountSlot('guarded')
-  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
-  mkdirSync(tokenDir, { recursive: true })
-  writeFileSync(
-    join(tokenDir, 'antigravity-oauth-token'),
-    JSON.stringify({ access_token: 'ya29.mine', refresh_token: '1//MINE' }),
-    'utf8',
-  )
-
-  class SlotHoldsSomeoneElse extends QuotaService {
+  const acc = pool.createAccountSlot('isolated')
+  let keystoreReads = 0
+  class CountingService extends QuotaService {
     override async readSystemKeychainToken() {
-      return { accessToken: 'ya29.slot_owner', refreshToken: '1//SOMEONE_ELSE' }
+      keystoreReads++
+      return { accessToken: 'ya29.owner', refreshToken: '1//OWNER' }
     }
   }
-  const svc = new SlotHoldsSomeoneElse(pool, () => '', () => null, { bin: () => 'agy' })
+  const svc = new CountingService(pool, () => '', () => null, { bin: () => 'agy' })
   const read = (
     svc as unknown as { readCliUsageFamilies(a: unknown): Promise<unknown> }
   ).readCliUsageFamilies.bind(svc)
-  assert.equal(await read(acc), null, 'must not attribute the slot owner quota to this account')
+  assert.equal(await read(acc), null, 'an isolated account must fall back to the REST path')
+  assert.equal(keystoreReads, 0, 'the fast reject must not touch the keystore')
+})
 
-  class SlotHoldsThisAccount extends QuotaService {
-    override async readSystemKeychainToken() {
-      return { accessToken: 'ya29.mine', refreshToken: '1//MINE' }
+test('the CLI is refused for the primary while the slot carries another grant', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-cliguard-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts().find((a) => a.systemHome)
+  assert.ok(primary, 'bootstrap default primary exists')
+
+  const build = (slot: { refreshToken: string }, own: { refreshToken: string }) => {
+    class Guarded extends QuotaService {
+      override async readSystemKeychainToken() {
+        return { accessToken: 'ya29.' + slot.refreshToken, ...slot }
+      }
+      override async getStoredToken() {
+        return { accessToken: 'ya29.' + own.refreshToken, ...own }
+      }
+    }
+    return new Guarded(pool, () => '', () => null, { bin: () => 'agy' }) as unknown as {
+      cliSlotHoldsAccount(a: unknown): Promise<boolean>
     }
   }
-  const matching = new SlotHoldsThisAccount(pool, () => '', () => null, { bin: () => '' })
-  const readMatching = (
-    matching as unknown as { readCliUsageFamilies(a: unknown): Promise<unknown> }
-  ).readCliUsageFamilies.bind(matching)
-  assert.equal(await readMatching(acc), null, 'an empty bin still short-circuits before any spawn')
+
+  assert.equal(
+    await build({ refreshToken: '1//OTHER' }, { refreshToken: '1//PRIMARY' }).cliSlotHoldsAccount(primary),
+    false,
+    'a handed-over slot belongs to a secondary; its numbers must not land on the primary',
+  )
+  assert.equal(
+    await build({ refreshToken: '1//PRIMARY' }, { refreshToken: '1//PRIMARY' }).cliSlotHoldsAccount(primary),
+    true,
+    'the owner is allowed to read Argon through the CLI',
+  )
 })

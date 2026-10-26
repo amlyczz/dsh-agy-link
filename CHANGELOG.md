@@ -1,22 +1,24 @@
 # Changelog
 
-## 0.4.71 (2026-10-26)
+## 0.4.71 (2026-10-27)
 
 ### English
 
 - **Fix: every pool row displayed the same account's quota (2026-10-26 report).**
-  - gy resolves its credential from the OS keystore FIRST and only falls back to the per-HOME token file when the keystore has no entry. Handing an isolated HOME to gy -p /usage therefore does not isolate the identity: the CLI always answers for whichever account owns the machine-global slot, so CLI-first polling filed the slot owner's numbers under every secondary row (all four rows showed 97% / 55% / 56% with identical reset instants).
-  - The CLI read is now gated on sameCredentialGrant: it runs only when the slot provably holds the account being polled. Otherwise the account falls back to the REST path, which signs with that account's own token file.
-  - A stored Argon row that the slot cannot attribute is dropped instead of displayed, because REST never reports Argon but a CLI read always describes the slot owner. Argon now appears only for the account that actually owns the credential slot — honest, where before every row inherited it.
-  - Regression tests cover the grant predicate (a rotating access token must not break a match, mixed shapes must fail closed) and the refusal to read the CLI for a non-owner.
+  - Root cause: gy resolves its credential from the platform keystore (Windows Credential Manager, macOS Keychain, Linux Secret Service) BEFORE the per-HOME token file, and that store is a single per-user entry. Handing an isolated HOME to gy -p /usage therefore does not isolate the identity — the CLI always answers for the store's owner, so CLI-first polling filed the owner's numbers under every secondary row (all four rows showed 97% / 55% / 56% with identical reset instants).
+  - The CLI is now scoped to the account that can actually own that store, and everything else takes the REST path, which signs with each account's own token file and runs concurrently on every platform.
+  - Isolated accounts are rejected BEFORE any keystore read, so a poll no longer pays a PowerShell cold start per account; the owner itself is still proven by sameCredentialGrant, because a running secondary temporarily holds the slot and a CLI read would then return that secondary's numbers.
+  - A stored Argon row that this account cannot source is dropped rather than displayed: REST never reports Argon, so any stored Argon came from a CLI read and belongs to the owner.
+  - Cost of the design: REST is authoritative for Gemini/Claude/GPT on every account (fast, concurrent, cross-platform); Argon is shown only for the credential-store owner, since it exists solely behind the CLI.
 
 ### 中文
 
 - **修复：号池每一行都显示了同一个账号的额度（2026-10-26 反馈）。**
-  - gy 解析凭据时**优先读系统钥匙串**，只有在钥匙串没有条目时才回落到 per-HOME 的 token 文件。因此给 gy -p /usage 一个隔离 HOME 并不能隔离身份：CLI 永远回答「当前机器全局槽位持有者」的额度，CLI 优先轮询就把槽位主人的数字写进了每个子账号行（四行全部显示 97% / 55% / 56%，重置时刻完全相同）。
-  - 现在 CLI 读取前先过 sameCredentialGrant 校验：只有能证明槽位里装的确实是该账号时才走 CLI；否则回落到 REST 路径，用该账号自己的 token 文件签名。
-  - 无法归属的 Argon 行会被丢弃而不是显示：REST 从不返回 Argon，而 CLI 读数一定属于槽位主人。Argon 现在只在真正持有凭据槽的账号上出现——诚实，而此前是每一行都继承了它。
-  - 新增回归测试：覆盖授权凭证判定（轮换的 access token 不能让同一账号失配、形状不一致必须判定为「无法证明」），以及非持有者必须拒绝走 CLI。
+  - 根因：gy 解析凭据时**优先读系统钥匙串**（Windows 凭据管理器 / macOS Keychain / Linux Secret Service），且该存储是「每个 OS 用户只有一条」。因此给 gy -p /usage 一个隔离 HOME 并不能隔离身份——CLI 永远回答存储主人的额度，CLI 优先轮询就把主人的数字写进了每个子账号行（四行全部 97% / 55% / 56%，重置时刻完全相同）。
+  - 现在 CLI 只用于「真正能拥有该存储」的那个账号，其余账号全部走 REST —— 用各自的 token 文件签名，全平台并发执行。
+  - 隔离账号在**读取钥匙串之前**就被快速拒绝，轮询不再为每个账号付一次 PowerShell 冷启动；持有者本身仍要过 sameCredentialGrant 校验，因为子账号运行期间会临时占用该槽，此时 CLI 会返回子账号的数字。
+  - 无法溯源到本账号的 Argon 行会被丢弃而不是显示：REST 从不返回 Argon，所以存下来的 Argon 一定来自 CLI，属于存储主人。
+  - 该设计的代价：Gemini/Claude/GPT 在所有账号上以 REST 为准（快、并发、跨平台）；Argon 仅在凭据存储所属账号上显示，因为它只存在于 CLI 之后。
 
 ## 0.4.70 (2026-10-25)
 

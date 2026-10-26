@@ -540,30 +540,40 @@ export class QuotaService {
   ) {}
 
   /**
-   * One `agy -p /usage` spawn under this account's own home/proxy, mapped onto
-   * pool families. Returns null when the CLI is missing, fails or reports
-   * nothing — the caller then falls back to REST-derived quotas.
+   * One `agy -p /usage` spawn, mapped onto pool families.
+   *
+   * SCOPE: only the account that owns the OS credential store. `agy` resolves
+   * its credential from the platform keystore (Windows Credential Manager,
+   * macOS Keychain, Linux Secret Service) BEFORE the per-HOME token file, and
+   * that store is a single per-user entry — so the CLI can only ever answer for
+   * one identity no matter which HOME we hand it. Isolated pool accounts never
+   * own it, so polling them through the CLI filed the owner's numbers under
+   * their rows (2026-10-26: four pool rows showing one account's quota with
+   * identical reset instants).
+   *
+   * That single-owner rule also makes this cheap and platform-neutral: the
+   * default REST path handles every account concurrently with its own token,
+   * and the CLI is consulted once, for the system-login account, purely to
+   * add the Argon family that REST never reports.
    */
   private async readCliUsageFamilies(
     account: ManagedAccount,
   ): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
     const bin = this.cliDeps.bin?.()
     if (!bin) return null
-    // `agy` resolves its credential from the OS keystore FIRST and only falls
-    // back to the per-HOME token file when the keystore has no entry
-    // (docs/KNOWN-GAPS.md, measured 2026-10-23). An isolated HOME therefore
-    // does NOT isolate the CLI's identity: `agy -p /usage` always answers for
-    // whoever owns the machine-global slot. Polling a secondary that way filed
-    // the SLOT OWNER's numbers under the secondary's row — on 2026-10-26 all
-    // four pool rows displayed one account's quota with identical reset
-    // instants. Run the CLI only when the slot provably holds THIS account;
-    // otherwise leave it to the REST path, which signs with the account's own
-    // token file.
+    // Fast reject, no keystore read and no spawn: an isolated account's own
+    // directory cannot be the store's owner. This keeps the poll cheap on a
+    // multi-account pool and behaves identically on every platform.
+    if (account.dir && !account.systemHome) {
+      // Any stored Argon row for this account came from a CLI read, i.e. from
+      // the owner. It is not this account's data, so drop it.
+      this.pool.clearQuotaFamily(account.id, 'argon')
+      return null
+    }
+    // The owner itself still needs proof: while a secondary runs, the slot is
+    // temporarily handed that account's credential, and a CLI read then would
+    // return the secondary's numbers under the primary's row.
     if (!(await this.cliSlotHoldsAccount(account))) {
-      // Stored Argon numbers can only have come from a CLI read, which reports
-      // the SLOT OWNER. They are not this account's, so drop the row instead of
-      // displaying it; the REST fallback below re-derives whatever it can from
-      // this account's own token.
       this.pool.clearQuotaFamily(account.id, 'argon')
       return null
     }
@@ -1376,8 +1386,12 @@ export class QuotaService {
       // common transient false positive) or re-stamps it. This is what makes
       // "needs re-login" self-heal without a manual quota refresh.
       accounts = accounts.filter((acc) => shouldPollAccount(acc) || needsAuthReverify(acc))
-      // Stagger background polling: run accounts sequentially with a 2-second sleep
-      // to avoid spawning multiple CLI instances concurrently or hammering the system.
+      // Background sweeps stay sequential with a 2-second gap. Only the
+      // credential-store owner can spawn a CLI now (see readCliUsageFamilies),
+      // so this is no longer about CLI contention — it keeps the unattended,
+      // hourly REST burst gentle instead. An hourly sweep has no latency budget
+      // worth trading that safety margin for; explicit user refreshes below run
+      // fully concurrently.
       for (let i = 0; i < accounts.length; i++) {
         const acc = accounts[i]!
         await this.refreshAccountQuota(acc, false).catch(() => null)
