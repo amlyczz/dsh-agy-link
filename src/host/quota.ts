@@ -559,10 +559,10 @@ export class QuotaService {
    * their rows (2026-10-26: four pool rows showing one account's quota with
    * identical reset instants).
    *
-   * That single-owner rule also makes this cheap and platform-neutral: the
-   * default REST path handles every account concurrently with its own token,
-   * and the CLI is consulted once, for the system-login account, purely to
-   * add the Argon family that REST never reports.
+   * That single-owner rule keeps the CLI usage check strictly attributed to the
+   * slot owner: isolated accounts fall back to the REST path, which signs with
+   * each account's own token and reports authentic quotas (including the dedicated
+   * Gemini 4 Argon group for Pro/Ultra plans via the agy User-Agent).
    */
   private async readCliUsageFamilies(
     account: ManagedAccount,
@@ -573,16 +573,12 @@ export class QuotaService {
     // directory cannot be the store's owner. This keeps the poll cheap on a
     // multi-account pool and behaves identically on every platform.
     if (account.dir && !account.systemHome) {
-      // Any stored Argon row for this account came from a CLI read, i.e. from
-      // the owner. It is not this account's data, so drop it.
-      this.pool.clearQuotaFamily(account.id, 'argon')
       return null
     }
     // The owner itself still needs proof: while a secondary runs, the slot is
     // temporarily handed that account's credential, and a CLI read then would
     // return the secondary's numbers under the primary's row.
     if (!(await this.cliSlotHoldsAccount(account))) {
-      this.pool.clearQuotaFamily(account.id, 'argon')
       return null
     }
     const env: NodeJS.ProcessEnv = {
@@ -1060,6 +1056,10 @@ export class QuotaService {
         }
         if (cliFamilies.argon) {
           this.pool.noteDedicatedGroup(account.id, 'argon')
+        } else {
+          this.pool.clearQuotaFamily(account.id, 'argon')
+          this.pool.forgetDedicatedGroup(account.id, 'argon')
+          this.pool.clearCooldown(account.id, 'argon')
         }
         this.pool.updateAccountQuotas(account.id, cliFamilies, email)
         return cliFamilies
@@ -1330,16 +1330,19 @@ export class QuotaService {
     // Track whether this account reports a dedicated Argon bucket, so a retired one
     // can be told apart from one that never existed (see shouldReleaseOrphanedCooldown).
     if (summaryGroups.length > 0) {
-      if (summaryHasArgonGroup(summaryGroups)) {
+      if (summaryHasArgonGroup(summaryGroups) || familyQuotas.argon) {
         this.pool.noteDedicatedGroup(account.id, 'argon')
-      } else if (shouldReleaseOrphanedCooldown({
-        summaryAuthoritative: true,
-        groupPresent: false,
-        groupSeenBefore: this.pool.hasDedicatedGroup(account.id, 'argon'),
-        hasCooldown: account.cooldowns?.argon !== undefined,
-      })) {
-        this.pool.forgetDedicatedGroup(account.id, 'argon')
-        this.pool.clearCooldown(account.id, 'argon')
+      } else {
+        this.pool.clearQuotaFamily(account.id, 'argon')
+        if (shouldReleaseOrphanedCooldown({
+          summaryAuthoritative: true,
+          groupPresent: false,
+          groupSeenBefore: this.pool.hasDedicatedGroup(account.id, 'argon'),
+          hasCooldown: account.cooldowns?.argon !== undefined,
+        })) {
+          this.pool.forgetDedicatedGroup(account.id, 'argon')
+          this.pool.clearCooldown(account.id, 'argon')
+        }
       }
     }
 

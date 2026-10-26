@@ -1344,3 +1344,96 @@ test('staggerJitterMs generates organic values within requested bounds', () => {
   const exact = staggerJitterMs(1000, 1)
   assert.equal(exact, 1000)
 })
+
+test('REGRESSION: readCliUsageFamilies fast-reject must NOT wipe Argon quota from isolated accounts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-cli-iso-argon-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('isolated-pro')
+  pool.updateAccountQuotas(acc.id, {
+    argon: { weeklyFraction: 0.55, weeklyResetTime: '2026-10-30T00:00:00Z' },
+  })
+
+  const svc = new QuotaService(pool, () => '', () => null, { bin: () => 'agy' })
+  const read = (
+    svc as unknown as { readCliUsageFamilies(a: unknown): Promise<unknown> }
+  ).readCliUsageFamilies.bind(svc)
+
+  assert.equal(await read(pool.getAccount(acc.id)!), null, 'isolated account fast-rejects CLI')
+  assert.equal(
+    pool.getAccount(acc.id)!.quotas.argon?.weeklyFraction,
+    0.55,
+    'Argon quota must NOT be cleared by the CLI fast-reject',
+  )
+})
+
+test('authoritative REST summary cleans up stale Argon on free accounts but preserves Pro accounts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-authoritative-argon-'))
+  const pool = new AccountPoolManager(dir)
+
+  // 1. Free account with stale Argon leaked from previous slot bug
+  const freeAcc = pool.createAccountSlot('free-user')
+  const freeTokenDir = join(freeAcc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(freeTokenDir, { recursive: true })
+  writeFileSync(
+    join(freeTokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.free', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+  pool.updateAccountQuotas(freeAcc.id, {
+    argon: { weeklyFraction: 0.8 },
+    google: { remainingFraction: 1 },
+  })
+
+  // 2. Pro account with legitimate Argon
+  const proAcc = pool.createAccountSlot('pro-user')
+  const proTokenDir = join(proAcc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(proTokenDir, { recursive: true })
+  writeFileSync(
+    join(proTokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.pro', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+
+  class MockRestService extends QuotaService {
+    override async fetchUserInfo(token: string) {
+      return token.includes('pro') ? { email: 'pro@test.com' } : { email: 'free@test.com' }
+    }
+    override async fetchAvailableModels() {
+      return { models: {} } as never
+    }
+    override async fetchQuotaSummary(token: string) {
+      if (token.includes('pro')) {
+        return {
+          groups: [
+            {
+              displayName: 'Gemini Models',
+              buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 1, resetTime: '2026-10-28T00:00:00Z' }],
+            },
+            {
+              displayName: 'Gemini 4 Argon',
+              buckets: [{ bucketId: 'argon-weekly', window: 'weekly', remainingFraction: 0.55, resetTime: '2026-10-30T00:00:00Z' }],
+            },
+          ],
+        } as never
+      }
+      return {
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 1, resetTime: '2026-10-28T00:00:00Z' }],
+          },
+        ],
+      } as never
+    }
+  }
+
+  const svc = new MockRestService(pool, () => '', () => '1.4.5', { bin: () => 'agy' })
+
+  // Refresh free account: authoritative summary has NO Argon, stale row must be wiped
+  await svc.refreshAccountQuota(pool.getAccount(freeAcc.id)!, true)
+  assert.equal(pool.getAccount(freeAcc.id)!.quotas.argon, undefined, 'free account stale Argon cleared')
+
+  // Refresh pro account: authoritative summary has Argon, row must be populated
+  await svc.refreshAccountQuota(pool.getAccount(proAcc.id)!, true)
+  assert.equal(pool.getAccount(proAcc.id)!.quotas.argon?.weeklyFraction, 0.55, 'pro account Argon retained')
+})
