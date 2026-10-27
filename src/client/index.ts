@@ -96,6 +96,8 @@ interface StatusPayload {
 	catalog?: { source: string; count: number; lastError: string | null };
 	catalogModels?: ReadonlyArray<{ id: string; name: string }>;
 	hiddenModels?: readonly string[];
+	autoWarmup?: boolean;
+	warmupModels?: readonly string[];
 	bindings?: number;
 	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
 }
@@ -1562,6 +1564,29 @@ export function apply(ctx: ClientContext): void {
 			}
 		};
 
+		const warmupAccount = async (id?: string): Promise<void> => {
+			setLoadingAction(id ? `warmup:${id}` : 'warmup:all');
+			try {
+				const res = await postJson('/plugins/agy-link/pool/warmup', { id, force: true });
+				if (res === null || res?.ok === false) {
+					actionFailed();
+					return;
+				}
+				await refresh();
+				const skippedCount = Array.isArray(res.results) ? res.results.filter((r: any) => r.skipped).length : 0;
+				const successCount = Array.isArray(res.results) ? res.results.filter((r: any) => r.success).length : 0;
+				if (successCount > 0) {
+					showToast(id ? t('warmup.success') : t('warmup.allSuccess'), 'success');
+				} else if (skippedCount > 0) {
+					showToast(t('warmup.skipped'), 'info');
+				} else {
+					showToast(id ? t('warmup.success') : t('warmup.allSuccess'), 'success');
+				}
+			} finally {
+				setLoadingAction(null);
+			}
+		};
+
 		const saveProxy = async (id: string): Promise<void> => {
 			setLoadingAction(`proxy:${id}`);
 			const proxyUrl = proxyInputs[id];
@@ -1875,6 +1900,14 @@ export function apply(ctx: ClientContext): void {
 							disabled: accountActionBusy(acc, 'refresh'),
 							onClick: () => void refreshQuota(acc.id),
 						}, loadingAction === `refresh:${acc.id}` ? [renderSpinner(), t('account.syncing')] : [uiIcon('refresh', 10), ` ${t('account.sync')}`]),
+						acc.enabled && !acc.authRequired ? h('button', {
+							type: 'button',
+							className: 'agy-btn',
+							style: { ...S.btnSm, gap: '3px', fontSize: '11px', padding: '2px 6px', minWidth: '58px', justifyContent: 'center' },
+							title: t('account.warmupTitle'),
+							disabled: accountActionBusy(acc, 'warmup'),
+							onClick: () => void warmupAccount(acc.id),
+						}, loadingAction === `warmup:${acc.id}` ? [renderSpinner(), t('account.warmingUp')] : [uiIcon('flame', 10, '#f97316'), ` ${t('account.warmup')}`]) : null,
 						acc.enabled && !isInUse ? h('button', {
 							type: 'button',
 							className: 'agy-btn',
@@ -2142,6 +2175,13 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 						className: 'agy-btn',
 						style: { ...S.btn, gap: '4px' },
 						disabled: isBusy,
+						onClick: () => void warmupAccount(),
+					}, loadingAction === 'warmup:all' ? [renderSpinner(), t('header.warmingUp')] : [uiIcon('flame', 12, '#f97316'), ` ${t('header.warmup')}`]),
+					h('button', {
+						type: 'button',
+						className: 'agy-btn',
+						style: { ...S.btn, gap: '4px' },
+						disabled: isBusy,
 						onClick: () => void refreshQuota(),
 					}, loadingAction === 'refresh:all' ? [renderSpinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`]),
 				),
@@ -2215,6 +2255,18 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 								onClick: () => void setMode('round-robin'),
 							}, t('pool.roundRobin')),
 						),
+					),
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+						h('div', { style: { display: 'flex', flexDirection: 'column' } },
+							h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.autoWarmup')),
+							h('span', { style: S.muted }, t('config.autoWarmupDesc')),
+						),
+						h('button', {
+							type: 'button',
+							style: status?.autoWarmup !== false ? S.segBtnActive : S.segBtn,
+							disabled: loadingAction === 'config:autoWarmup',
+							onClick: () => void setCfg('autoWarmup', status?.autoWarmup === false),
+						}, status?.autoWarmup !== false ? t('account.enable') : t('account.disable')),
 					),
 					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
 						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('models.label')),

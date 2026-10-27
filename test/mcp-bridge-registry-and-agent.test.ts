@@ -13,12 +13,12 @@ const BRIDGE_SCRIPT = '/nonexistent/bridge.mjs'
 test('agyMcpConfigPath targets the global registry agy 1.4+ reads', () => {
   assert.equal(
     agyMcpConfigPath('', { GEMINI_CLI_HOME: '/tmp/agy-home' }),
-    '/tmp/agy-home/.gemini/config/mcp_config.json',
+    join('/tmp/agy-home', '.gemini', 'config', 'mcp_config.json'),
     'GEMINI_CLI_HOME drives the isolated agy home',
   )
   assert.equal(
     agyMcpConfigPath('', { HOME: '/home/dev' }),
-    '/home/dev/.gemini/config/mcp_config.json',
+    join('/home/dev', '.gemini', 'config', 'mcp_config.json'),
     'HOME is the fallback',
   )
   assert.equal(

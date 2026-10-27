@@ -130,6 +130,14 @@ export interface PluginConfig {
    * (`agy update` still works); set false to restore agy's own behaviour.
    */
   suppressAgyAutoUpdate: boolean
+  /**
+   * 7-day weekly quota auto-warmup (smart reset activation): automatically
+   * sends a minimal probe when an account reaches its weekly reset window or
+   * cold start, activating the 7-day upstream timer.
+   */
+  autoWarmup: boolean
+  /** Models monitored/used for auto-warmup. Defaults to ['gemini-3.8-flash', 'claude-sonnet-4-6']. */
+  warmupModels: readonly string[]
 }
 
 // Full fallback line-up, mined from the agy 1.1.13 binary. Serves the
@@ -212,6 +220,8 @@ export function defaultConfig(): PluginConfig {
     // Windows is where agy's `--bg-updater` grandchild flashes a console
     // window; other platforms keep agy's own update behaviour by default.
     suppressAgyAutoUpdate: process.platform === 'win32',
+    autoWarmup: true,
+    warmupModels: ['gemini-3.8-flash', 'claude-sonnet-4-6'],
   }
 }
 

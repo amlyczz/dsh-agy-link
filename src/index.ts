@@ -24,6 +24,7 @@ import { SessionStore } from './host/sessions.ts'
 import { AccountPoolManager } from './host/pool.ts'
 import { PoolAuthFlow } from './host/pool-auth.ts'
 import { QuotaService } from './host/quota.ts'
+import { WarmupService, type WarmupResult } from './host/warmup.ts'
 import { detectSystemProxy } from './host/wincred.ts'
 import { resolvePrimaryCredential, findDuplicateCredentialIdentities } from './host/credential-slot.ts'
 import { homedir } from 'node:os'
@@ -152,6 +153,14 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       viaCli: () => getConfig().quotaViaCli,
       preemptAutoUpdate: () => getConfig().suppressAgyAutoUpdate,
     },
+  )
+  const warmup = new WarmupService(
+    pool,
+    quota,
+    () => getConfig().proxyUrl || detectSystemProxy() || '',
+    version,
+    getConfig,
+    log,
   )
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
 
@@ -618,6 +627,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           // model-visibility toggles show every known model, hidden ones included.
           catalogModels: sanitizeCatalogEntries(cat.models).entries,
           hiddenModels: cfg.hiddenModels,
+          autoWarmup: cfg.autoWarmup,
+          warmupModels: cfg.warmupModels,
           bindings: Object.keys(store.all()).length,
               lastRun,
         })
@@ -876,6 +887,32 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/pool/warmup', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id : ''
+        const force = body.force === true
+        const model = typeof body.model === 'string' ? body.model : undefined
+        let results: WarmupResult[] = []
+        if (id) {
+          const acc = pool.getAccount(id)
+          if (!acc) {
+            sendJson(res as RawRes, 404, { error: 'Account not found' })
+            return
+          }
+          results = await warmup.warmupAccount(acc, { force, model })
+          await quota.refreshAccountQuota(acc, true).catch(() => undefined)
+        } else {
+          results = await warmup.warmupAllAccounts({ force })
+          await quota.refreshAllQuotas(true).catch(() => undefined)
+        }
+        sendJson(res as RawRes, 200, { ok: true, results, pool: pool.getPoolData() })
+      })()
+    }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool/clear-cooldown', handler: (req, res) => {
       void (async () => {
         if (methodOf(req) !== 'POST') {
@@ -924,13 +961,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
-        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels']
+        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels']
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
           return
         }
         if (key === 'hiddenModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
           sendJson(res as RawRes, 400, { error: 'hiddenModels must be an array of model ids' })
+          return
+        }
+        if (key === 'warmupModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
+          sendJson(res as RawRes, 400, { error: 'warmupModels must be an array of model names' })
           return
         }
         setOverride(key, body.value)
@@ -1022,6 +1063,27 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     const boot = setTimeout(refresh, 5_000)
     boot.unref?.()
     const timer = setInterval(refresh, Math.max(60_000, getConfig().quotaPollIntervalMs))
+    timer.unref?.()
+    return () => {
+      clearTimeout(boot)
+      clearInterval(timer)
+    }
+  })
+
+  // Scheduled weekly quota auto-warmup (smart reset activation): monitors 7-day
+  // quota windows and cold starts, triggering minimal 1-token probes to advance
+  // the upstream timer with zero excess token consumption.
+  ctx.effect(() => {
+    if (!getConfig().enabled) return () => undefined
+    const checkWarmup = (): void => {
+      const cfg = getConfig()
+      if (!cfg.enabled || !cfg.autoWarmup) return
+      void warmup.runScheduledWarmup().catch(() => undefined)
+    }
+    const boot = setTimeout(checkWarmup, 10_000)
+    boot.unref?.()
+    // Scan every 5 minutes (300s, matching Antigravity-Manager scheduler)
+    const timer = setInterval(checkWarmup, 300_000)
     timer.unref?.()
     return () => {
       clearTimeout(boot)
