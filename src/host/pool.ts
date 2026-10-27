@@ -15,6 +15,7 @@ import {
 } from '../common/pool-types.ts'
 import { parseResetDurationMs } from '../common/types.ts'
 import { detectSystemProxy } from './wincred.ts'
+import { ensureIsolatedKeychain } from './runner.ts'
 
 /**
  * Proactive rotation thresholds: an account at or below these remaining
@@ -305,6 +306,10 @@ export class AccountPoolManager {
       quotas: {},
     }
 
+    if (process.platform === 'darwin' && newAccount.dir) {
+      ensureIsolatedKeychain(newAccount.dir)
+    }
+
     this.data.accounts.push(newAccount)
     this.knownIds.add(newAccount.id)
     this.persist()
@@ -391,6 +396,9 @@ export class AccountPoolManager {
     const id = `acc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     const dir = join(this.baseDir, id)
     mkdirSync(join(dir, '.gemini', 'antigravity-cli'), { recursive: true })
+    if (process.platform === 'darwin') {
+      ensureIsolatedKeychain(dir)
+    }
 
     const count = this.data.accounts.length + 1
     const newAccount: ManagedAccount = {

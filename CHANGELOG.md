@@ -1,26 +1,42 @@
 # Changelog
 
-## Unreleased
+## 0.4.72 (2026-10-27)
 
 ### English
 
-- **Fix(mcpBridge): publish the MCP entry where `agy` 1.4+ actually reads it (issue #55).**
-  - `writeMcpConfig()` only wrote `<workspace>/.mcp.json`, but `agy` 1.4+ loads MCP servers exclusively from `~/.gemini/config/mcp_config.json` (or a plugin's own `mcp_config.json`), so a bridge-enabled session reported `No MCP servers configured.` and every bridged tool call failed as unavailable.
-  - The entry now goes to the global registry by default (`mcpConfigScope: global | workspace | both`, plus `mcpConfigPath` / `DSH_AGY_MCP_CONFIG_PATH` to pin an exact file), computed from the same agy home the runner uses (`GEMINI_CLI_HOME`, else `HOME`), with the existing merge/restore discipline.
-  - Each bridge publishes under its own key (`dsh-tools-<port>`) so two DSH hosts sharing the global file no longer overwrite each other, and disposal only removes the key it owns when another writer changed the file in between.
-- **Fix(mcpBridge): a bridged call now carries the calling agent (issue #55).**
-  - `svc.execute()` was called without `agent`, so every tool that enforces caller identity failed with `agent_teams tools require a calling agent (exec.agent was undefined)` — an agy-backed AgentTeams member could work but never claim/complete a task or message the captain.
-  - The session that spawns agy now passes its id through the child env (`DSH_MCP_SESSION`), `dist/bridge.mjs` forwards it as `X-DSH-Session`, and the host resolves it back to an agent via the `agents` service before executing the tool.
+- **Fix(mcpBridge): publish MCP config to the agy 1.4+ registry and carry caller identity (Issue #55, PR #56).**
+  - `writeMcpConfig()` previously wrote `<workspace>/.mcp.json`, but `agy` 1.4+ loads MCP servers exclusively from `~/.gemini/config/mcp_config.json` (and per-account `.gemini` sandboxes), causing bridged tool calls to fail with `No MCP servers configured`.
+  - Added multi-target publishing supporting the global registry, isolated account homes, and workspace scopes (`mcpConfigScope: 'global' | 'workspace' | 'both'`, plus `mcpConfigPath` override).
+  - Port-keyed entries (`dsh-tools-<port>`) prevent collisions between multiple DSH hosts sharing the registry, with clean atomic LIFO restoration on disposal.
+  - Exported `DSH_MCP_SESSION` to the agy child process and forwarded it as `X-DSH-Session` to resolve the calling agent, fixing `agent_teams tools require a calling agent (exec.agent was undefined)`.
+- **Fix(credential-slot): eliminate line-barging and concurrent holder race condition in `AsyncMutex`.**
+  - Identified and resolved a critical race condition where releasing the mutex dropped `holders` to 0 before the scheduled microtask ran, allowing synchronous callers to barge ahead and grant multiple concurrent holders simultaneously.
+  - Implemented direct ownership handoff without dropping holder count when waiters are queued, guaranteeing strict mutual exclusion and FIFO queueing under high concurrency.
+- **Fix(client): eliminate session console first-open flicker.**
+  - Session status badge now claims primary modal host synchronously on mount, preventing asynchronous portal remount flicker.
+  - Status polling now gracefully relaxes to a 15s interval when idle to keep the cache warm, with complete timer cleanup upon client context disposal.
+- **Fix(mermaid): prevent Dagre 0x0 / 16x16 collapsed SVG artifacts.**
+  - Render Mermaid diagrams without an unattached mount container so viewport metrics measure accurately, and detect/heal empty or collapsed SVGs.
+- **Fix(keychain): provision isolated macOS Keychain on account creation.**
+  - Automatically provisions isolated login keychains when adding account slots or committing staging accounts on macOS, avoiding SecurityAgent system prompts.
 
 ### 中文
 
-- **修复(mcpBridge)：MCP 配置改写到 `agy` 1.4+ 真正读取的位置（issue #55）。**
-  - 原实现只写 `<workspace>/.mcp.json`，而 `agy` 1.4+ 只从 `~/.gemini/config/mcp_config.json`（或插件自身的 `mcp_config.json`）加载 MCP server，导致开启桥接后 `agy mcp list` 仍为空、所有桥接工具调用都报工具不可用。
-  - 现在默认写入全局 registry（新增 `mcpConfigScope: global | workspace | both`，以及 `mcpConfigPath` / `DSH_AGY_MCP_CONFIG_PATH` 指定确切路径），路径与 runner 使用的 agy home 一致（优先 `GEMINI_CLI_HOME`，其次 `HOME`），保留原有的合并/还原语义。
-  - 每个桥用独立 key（`dsh-tools-<port>`）注册，多个 DSH 宿主共用全局文件时不再互相覆盖；退出时若文件已被他人改写，只摘除自己的 key。
-- **修复(mcpBridge)：桥接调用现在携带调用者身份（issue #55）。**
-  - 原实现调用 `svc.execute()` 时不传 `agent`，导致所有需要调用者身份的工具报 `agent_teams tools require a calling agent (exec.agent was undefined)`，agy 作为 AgentTeams 成员时能干活却无法 claim/complete/发消息。
-  - 现在启动 agy 的会话把 session id 通过子进程环境变量 `DSH_MCP_SESSION` 传入，`dist/bridge.mjs` 以 `X-DSH-Session` 头转发，宿主通过 `agents` 服务解析出 agent 后再执行工具。
+- **修复（mcpBridge）：发布 MCP 配置至 agy 1.4+ 实际读取的注册表并携带调用者身份（Issue #55，PR #56）。**
+  - 此前 `writeMcpConfig()` 仅写入工作区 `.mcp.json`，而 `agy` 1.4+ 仅从 `~/.gemini/config/mcp_config.json`（及子账号 `.gemini` 沙箱）加载 MCP 服务，导致会话提示 `No MCP servers configured`。
+  - 支持多目标发布（全局注册表、多账号隔离主目录及工作区范围，提供 `mcpConfigScope: 'global' | 'workspace' | 'both'` 及 `mcpConfigPath` 覆盖配置）。
+  - 每个桥接实例按端口隔离服务键名（`dsh-tools-<port>`），防止多实例覆盖，并在退出时原子化恢复原有内容。
+  - 会话生成时将 `DSH_MCP_SESSION` 注入子进程环境，经由桥接脚本转发为 `X-DSH-Session` 请求头，在宿主端通过 `agents` 服务解析调用者身份，彻底解决 `agent_teams tools require a calling agent (exec.agent was undefined)`。
+- **修复（credential-slot）：消除 `AsyncMutex` 的插队竞争与并发持有者缺陷。**
+  - 对抗性审计发现：旧实现中 `releaseOne()` 先将 `holders` 归零后通过 `queueMicrotask` 唤醒等待者，在此微任务微小窗口内同步调用的 `acquire()` 会发生插队并导致两个调用者同时进入临界区。
+  - 改造为排队时直接所有权移交机制（Direct Handoff），保证严格互斥与 FIFO 先入先出顺序，消除测试套件偶发的 flake。
+- **修复（client）：消除控制台首次打开时的宿主交接闪烁。**
+  - 会话状态角标在挂载时同步声明主宿主身份，消除异步交接导致的状态闪烁与 Portal 重新渲染。
+  - 状态轮询在无激活视窗时平滑降频至 15 秒保活缓存，并在客户端插件卸载时完整清理定时器。
+- **修复（mermaid）：修复离屏/虚拟容器中 Dagre 测绘产生的 16x16 / 0x0 折叠 SVG。**
+  - 避免将尚未有几何尺寸的容器传递给 Mermaid 渲染，结合 `isInvalidOrCollapsedSvg` 智能识别并修复空图或折叠伪影。
+- **修复（keychain）：在 macOS 账号槽位创建与提交时即时初始化独立 Keychain。**
+  - 避免 macOS SecurityAgent 在后续刷新凭据或打开终端时弹出系统钥匙串确认弹窗。
 
 ## 0.4.71 (2026-10-27)
 

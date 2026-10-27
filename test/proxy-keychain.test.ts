@@ -134,16 +134,15 @@ test('ensureIsolatedKeychain provisions once per home and survives errors', () =
     const calls: string[] = []
     const run = (_file: string, args: readonly string[]) => { calls.push(args.join(' ')) }
     assert.equal(ensureIsolatedKeychain(dir, 'darwin', run), true)
-    assert.equal(calls.length, 3)
+    assert.equal(calls.length, 2)
     assert.match(calls[0] ?? '', /create-keychain -p  /)
     assert.match(calls[1] ?? '', /set-keychain-settings/)
-    assert.match(calls[2] ?? '', /unlock-keychain -p/)
     // Second call: keychain file now exists (simulate by touching it) —
     // returns false immediately WITHOUT poking security CLI (issue #42 SecurityAgent prompt).
     mkdirSync(join(dir, 'Library', 'Keychains'), { recursive: true })
     writeFileSync(join(dir, 'Library', 'Keychains', 'login.keychain-db'), 'x')
     assert.equal(ensureIsolatedKeychain(dir, 'darwin', run), false)
-    assert.equal(calls.length, 3, 'must NOT execute security CLI on existing keychains')
+    assert.equal(calls.length, 2, 'must NOT execute security CLI on existing keychains')
     // Failing security invocations never throw out.
     assert.equal(ensureIsolatedKeychain(dir, 'darwin', () => { throw new Error('boom') }), false)
   } finally {
@@ -164,23 +163,23 @@ test('purgeStaleIsolatedKeychain unregisters and deletes un-unlockable keychains
     const kc = join(kcDir, 'login.keychain-db')
     writeFileSync(kc, 'corrupt-or-locked-content')
 
-    // Scenario 1: unlock-keychain succeeds -> not stale, preserved
+    // Scenario 1: set-keychain-settings succeeds -> not stale, preserved
     const calls1: string[] = []
     const runOk = (_file: string, args: readonly string[]) => { calls1.push(args.join(' ')) }
     assert.equal(purgeStaleIsolatedKeychain(dir, 'darwin', runOk), false)
     assert.equal(calls1.length, 1)
-    assert.match(calls1[0] ?? '', /unlock-keychain -p/)
+    assert.match(calls1[0] ?? '', /set-keychain-settings/)
     assert.equal(existsSync(kc), true)
 
-    // Scenario 2: unlock-keychain throws (stale random password from pre-0.4.45) -> purged!
+    // Scenario 2: set-keychain-settings throws (locked with secret or corrupted) -> purged!
     const calls2: string[] = []
     const runThrow = (_file: string, args: readonly string[]) => {
       calls2.push(args.join(' '))
-      if (args[0] === 'unlock-keychain') throw new Error('unlock failed (status 51)')
+      if (args[0] === 'set-keychain-settings') throw new Error('settings failed')
     }
     assert.equal(purgeStaleIsolatedKeychain(dir, 'darwin', runThrow), true)
     assert.equal(calls2.length, 2)
-    assert.match(calls2[0] ?? '', /unlock-keychain -p/)
+    assert.match(calls2[0] ?? '', /set-keychain-settings/)
     assert.match(calls2[1] ?? '', /delete-keychain/)
     assert.equal(existsSync(kc), false, 'corrupted keychain file must be deleted from disk')
   } finally {

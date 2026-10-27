@@ -195,6 +195,37 @@ test('MERMAID_CSS includes source-view toggle support and responsive toolbar', a
   assert.match(MERMAID_CSS, /\.agy-mermaid-toolbar/)
   assert.match(MERMAID_CSS, /\.agy-mermaid-toggle/)
   assert.match(MERMAID_CSS, /\.agy-mermaid-warn/)
+  assert.match(MERMAID_CSS, /\.agy-mermaid-body/)
+})
+
+test('isInvalidOrCollapsedSvg detects empty, error, and 0x0 collapsed SVG artifacts', async () => {
+  const { isInvalidOrCollapsedSvg } = await import('../src/client/mermaid.ts')
+
+  // Empty / nil
+  assert.equal(isInvalidOrCollapsedSvg(''), true)
+  assert.equal(isInvalidOrCollapsedSvg('   '), true)
+  assert.equal(isInvalidOrCollapsedSvg(null), true)
+  assert.equal(isInvalidOrCollapsedSvg(undefined), true)
+
+  // Internal error shapes
+  assert.equal(isInvalidOrCollapsedSvg('<svg><g class="error-icon"></g></svg>'), true)
+  assert.equal(isInvalidOrCollapsedSvg('<svg><text class="error-text">Syntax error</text></svg>'), true)
+  assert.equal(isInvalidOrCollapsedSvg('<svg aria-roledescription="error"></svg>'), true)
+
+  // 0x0 / off-screen collapsed artifacts (16x16 dagre collapse)
+  assert.equal(isInvalidOrCollapsedSvg('<svg id="agy-mmd-1" viewBox="0 0 0 0"></svg>'), true)
+  assert.equal(isInvalidOrCollapsedSvg('<svg id="agy-mmd-1" width="100%" style="max-width: 16px;" viewBox="-8 -8 16 16"></svg>'), true)
+  assert.equal(isInvalidOrCollapsedSvg('<svg id="agy-mmd-1" style="max-width: 0px;" viewBox="0 0 100 100"></svg>'), true)
+
+  // Valid diagram SVGs
+  assert.equal(
+    isInvalidOrCollapsedSvg('<svg id="agy-mmd-1" width="100%" style="max-width: 1272.45px;" viewBox="-35 0 1272.45 913"><g class="root"></g></svg>'),
+    false,
+  )
+  assert.equal(
+    isInvalidOrCollapsedSvg('<svg id="agy-mmd-2" width="100%" style="max-width: 480px;" viewBox="0 0 480 320"><g></g></svg>'),
+    false,
+  )
 })
 
 test('repairMermaidSource heals latest 4-subgraph decomposition pipeline diagram', async () => {

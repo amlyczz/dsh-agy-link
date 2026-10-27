@@ -296,7 +296,6 @@ export class ModelCatalog {
 
   async forceRefresh(accountId?: string): Promise<Catalog> {
     await this.refresh(accountId);
-    this.onUpdate?.();
     return this.get(accountId);
   }
 

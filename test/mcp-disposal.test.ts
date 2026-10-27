@@ -24,9 +24,6 @@ test('disposing during MCP startup closes the listener without publishing worksp
       c.provide('commands', { register() { return () => undefined } })
     } })
     await new Promise(resolve => setTimeout(resolve, 20))
-    // Point the registry into the temp dir: the production default is the agy
-    // global registry (~/.gemini/config/mcp_config.json) and a unit test must
-    // never touch the developer's real one.
     const registry = join(dir, 'gemini', 'mcp_config.json')
     apply(ctx, { enabled: true, mcpBridge: true, workspaceRoot: dir, agyBin: '/nonexistent/agy-test', mcpConfigPath: registry })
     await ctx.fiber.dispose()

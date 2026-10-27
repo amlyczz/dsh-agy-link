@@ -660,7 +660,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             void quota.refreshAllQuotas().catch(() => undefined)
           }
           store.clear()
-          void catalog.forceRefresh().then(() => notifyPicker()).catch(() => undefined)
+          void catalog.forceRefresh().catch(() => undefined)
         }
         sendJson(res as RawRes, 200, st)
       })()
@@ -756,6 +756,13 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const body = await readBody(req)
         const alias = typeof body.alias === 'string' ? body.alias : undefined
         const acc = pool.createAccountSlot(alias)
+        if (bridgeState.bridge !== null) {
+          const cfg = getConfig()
+          if (cfg.mcpConfigScope === 'global' || cfg.mcpConfigScope === 'both') {
+            const accTarget = agyMcpConfigPath('', isolatedHomeEnv(acc.dir))
+            bridgeState.restores.push(writeMcpConfig(accTarget, bridgeState.bridge))
+          }
+        }
         // Quarantine until the terminal login completes (same contract as
         // /agy add-account): the scheduler must not route real runs to a
         // slot nobody has signed into yet.
@@ -864,7 +871,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         // re-login the subscription tier (and thus model list) may differ.
         // One `agy models` spawn per explicit user click only — the
         // background poller never touches the catalog.
-        void catalog.forceRefresh().then(() => notifyPicker()).catch(() => undefined)
+        // ModelCatalog emits notifyPicker internally ONLY when entries change.
+        void catalog.forceRefresh().catch(() => undefined)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
@@ -891,7 +899,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const id = typeof body.id === 'string' ? body.id : ''
         const ok = id !== '' && pool.setActiveAccount(id)
         if (ok) {
-          void catalog.forceRefresh(id).then(() => notifyPicker()).catch(() => notifyPicker())
+          void catalog.forceRefresh(id).catch(() => undefined)
         }
         sendJson(res as RawRes, ok ? 200 : 400, { ok, pool: pool.getPoolData() })
       })()
@@ -1005,7 +1013,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   ctx.effect(() => {
     if (!getConfig().enabled) return () => undefined
     const refresh = (): void => {
-      void quota.refreshAllQuotas().then(() => notifyPicker()).catch(() => undefined)
+      const prevArgon = pool.getAccounts().map((a) => Boolean(a.quotas?.argon)).join(',')
+      void quota.refreshAllQuotas().then(() => {
+        const nextArgon = pool.getAccounts().map((a) => Boolean(a.quotas?.argon)).join(',')
+        if (prevArgon !== nextArgon) notifyPicker()
+      }).catch(() => undefined)
     }
     const boot = setTimeout(refresh, 5_000)
     boot.unref?.()
@@ -1017,7 +1029,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     }
   })
 
-  // One bridge can publish to several registries (global and/or workspace),
+  // One bridge can publish to several registries (global, pool accounts, and/or workspace),
   // so keep every restore hook it produced.
   const bridgeState: { bridge: Awaited<ReturnType<typeof startMcpBridge>> | null; restores: Array<() => void> } = { bridge: null, restores: [] }
   let bridgeDisposed = false
@@ -1045,7 +1057,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             log,
           })
           // A scope can be disposed before asynchronous listener startup ends.
-          // Do not publish a capability or workspace config after disposal.
+          // Do not publish a capability or registry configs after disposal.
           if (bridgeDisposed) {
             await bridge.close()
             return
@@ -1057,12 +1069,19 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           const targets: string[] = []
           if (cfg.mcpConfigScope === 'global' || cfg.mcpConfigScope === 'both') {
             targets.push(agyMcpConfigPath(cfg.mcpConfigPath))
+            // Also register in every pool account's isolated home
+            for (const acc of pool.getAccounts()) {
+              if (acc.dir) {
+                targets.push(agyMcpConfigPath('', isolatedHomeEnv(acc.dir)))
+              }
+            }
           }
           if (cfg.mcpConfigScope === 'workspace' || cfg.mcpConfigScope === 'both') {
             targets.push(join(root, '.mcp.json'))
           }
-          bridgeState.restores = targets.map((file) => writeMcpConfig(file, bridge))
-          log('mcp bridge ready at ' + bridge.url + ' (registry: ' + targets.join(', ') + ')' + (toolsSvc ? '' : ' (tools service not yet available)'))
+          const uniqueTargets = Array.from(new Set(targets))
+          bridgeState.restores = uniqueTargets.map((file) => writeMcpConfig(file, bridge))
+          log('mcp bridge ready at ' + bridge.url + ' (registries: ' + uniqueTargets.join(', ') + ')' + (toolsSvc ? '' : ' (tools service not yet available)'))
         } catch (e) {
           for (const undo of bridgeState.restores) undo()
           await bridgeState.bridge?.close()

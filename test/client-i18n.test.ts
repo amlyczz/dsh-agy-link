@@ -196,3 +196,126 @@ test('modal host manager reactively promotes secondary header on unmount and sup
   assert.equal(rendered.children[1], null)
 })
 
+test('REGRESSION: session status badge claims primary host on mount to eliminate first-open flicker', () => {
+  let sessionStatusComponent: (() => any) | undefined
+
+  const stateMap = new Map<number, any>()
+  let stateIndex = 0
+
+  const plugin = loadClient({
+    createElement(type: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
+      return { type, props, children }
+    },
+    useState(initial: unknown) {
+      const idx = stateIndex++
+      const resolved = typeof initial === 'function' ? (initial as () => unknown)() : initial
+      if (!stateMap.has(idx)) stateMap.set(idx, resolved)
+      return [stateMap.get(idx), (val: unknown) => { stateMap.set(idx, typeof val === 'function' ? (val as any)(stateMap.get(idx)) : val) }]
+    },
+    useEffect(effect: () => void | (() => void)) {
+      effect()
+    },
+    useRef(initial: unknown) {
+      return { current: initial }
+    },
+  })
+
+  const locale = {
+    addLanguage() { return () => {} },
+    register() { return () => {} },
+    bind() { return (key: string) => key },
+    subscribe() { return () => {} },
+    setLocale() {},
+  }
+
+  plugin.apply({
+    locale,
+    effect(cb: () => void) { cb() },
+    slots: {
+      inject(_name: string, cb: () => void) { cb() },
+      register(opts: { id?: string }, comp: any) {
+        if (opts?.id === 'agy-link-status') sessionStatusComponent = comp
+        return () => {}
+      },
+    },
+  })
+
+  assert.ok(sessionStatusComponent)
+  stateIndex = 0
+  const header1 = sessionStatusComponent()
+  assert.ok(header1)
+  // Initial primary host state is true immediately on mount (no 2nd-render handoff delay)
+  assert.equal(stateMap.get(0), true, 'session status must initialize isPrimaryHost to true synchronously')
+})
+
+test('REGRESSION: re-rendering session headers during status sync does not thrash active modal host', () => {
+  let sessionStatusComponent: (() => any) | undefined
+
+  const stateMap = new Map<string, any>()
+  let currentCompId = ''
+
+  const plugin = loadClient({
+    createElement(type: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
+      return { type, props, children }
+    },
+    useState(initial: unknown) {
+      const key = `${currentCompId}_state`
+      const resolved = typeof initial === 'function' ? (initial as () => unknown)() : initial
+      if (!stateMap.has(key)) stateMap.set(key, resolved)
+      return [stateMap.get(key), (val: unknown) => {
+        stateMap.set(key, typeof val === 'function' ? (val as any)(stateMap.get(key)) : val)
+      }]
+    },
+    useEffect(effect: () => void | (() => void)) {
+      effect()
+    },
+    useRef(initial: unknown) {
+      const key = `${currentCompId}_ref`
+      if (!stateMap.has(key)) stateMap.set(key, { current: initial })
+      return stateMap.get(key)
+    },
+  })
+
+  plugin.apply({
+    locale: {
+      addLanguage() { return () => {} },
+      register() { return () => {} },
+      bind() { return (key: string) => key },
+      subscribe() { return () => {} },
+      setLocale() {},
+    },
+    effect(cb: () => void) { cb() },
+    slots: {
+      inject(_name: string, cb: () => void) { cb() },
+      register(opts: { id?: string }, comp: any) {
+        if (opts?.id === 'agy-link-status') sessionStatusComponent = comp
+        return () => {}
+      },
+    },
+  })
+
+  assert.ok(sessionStatusComponent)
+
+  // 1. Mount Header 1
+  currentCompId = 'header_1'
+  sessionStatusComponent()
+  assert.equal(stateMap.get('header_1_state'), true, 'first header becomes primary host')
+
+  // 2. Mount Header 2
+  currentCompId = 'header_2'
+  sessionStatusComponent()
+  assert.equal(stateMap.get('header_2_state'), false, 'second header does NOT hijack primary host')
+  assert.equal(stateMap.get('header_1_state'), true, 'first header remains primary host')
+
+  // 3. Re-render both headers (simulating quota sync status push)
+  currentCompId = 'header_2'
+  sessionStatusComponent()
+  currentCompId = 'header_1'
+  sessionStatusComponent()
+
+  // Primary host must NOT flip or thrash
+  assert.equal(stateMap.get('header_1_state'), true, 'header 1 remains primary host after sync tick')
+  assert.equal(stateMap.get('header_2_state'), false, 'header 2 stays secondary without hijacking')
+})
+
+

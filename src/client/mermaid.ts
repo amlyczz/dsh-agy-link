@@ -39,6 +39,12 @@ div[data-agy-mermaid-svg] svg {
 	min-width: 280px;
 	height: auto;
 }
+.agy-mermaid-body {
+	display: flex;
+	justify-content: center;
+	width: 100%;
+	overflow-x: auto;
+}
 .agy-mermaid-toolbar {
 	display: flex;
 	justify-content: flex-end;
@@ -346,6 +352,27 @@ export function repairMermaidSource(source: string): string {
 	return repairedLines.join('\n')
 }
 
+export function isInvalidOrCollapsedSvg(svg: string | null | undefined): boolean {
+	if (!svg || svg.trim() === '') return true
+	if (
+		svg.includes('class="error-icon"') ||
+		svg.includes('class="error-text"') ||
+		svg.includes('aria-roledescription="error"')
+	) {
+		return true
+	}
+	// Detect collapsed 0x0 diagram artifacts generated when rendered inside zero-geometry containers
+	if (
+		svg.includes('viewBox="0 0 0 0"') ||
+		svg.includes('viewBox="-8 -8 16 16"') ||
+		svg.includes('max-width: 16px') ||
+		svg.includes('max-width: 0px')
+	) {
+		return true
+	}
+	return false
+}
+
 async function renderInto(block: HTMLElement, source: string, lang = ''): Promise<void> {
 	// Drop a previous overlay so a React rebuild can re-render cleanly.
 	block.querySelector('[data-agy-mermaid-svg]')?.remove()
@@ -389,10 +416,14 @@ async function renderInto(block: HTMLElement, source: string, lang = ''): Promis
 		if (!parseValidated && typeof api.parse !== 'function') {
 			targetSource = repairMermaidSource(targetSource)
 		}
-		const { svg } = await api.render(id, targetSource, mount)
-		const isErrorSvg = !svg || svg.trim() === '' || svg.includes('class="error-icon"') || svg.includes('class="error-text"') || svg.includes('aria-roledescription="error"')
-		if (isErrorSvg) {
-			throw new Error('Mermaid returned an empty or error diagram')
+		// Note: Do not pass mount as the container argument to api.render.
+		// When mount is off-screen or inside virtualized/hidden lists, passing mount
+		// causes Mermaid/Dagre to measure text bounding boxes as 0x0, resulting in
+		// collapsed 16x16 SVG artifacts. Rendering without mount lets Mermaid use its
+		// sandbox in document.body with proper viewport metrics.
+		const { svg } = await api.render(id, targetSource)
+		if (isInvalidOrCollapsedSvg(svg)) {
+			throw new Error('Mermaid returned an empty or invalid diagram')
 		}
 
 		mount.innerHTML = ''

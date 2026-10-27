@@ -18,7 +18,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 
@@ -91,7 +91,7 @@ export function startMcpBridge(opts: {
   tools: () => ToolsServiceLike | undefined
   allowlist: () => string
   /** Map the spawning DSH session id to the agent the call runs on behalf of. */
-  resolveAgent?: (sessionId: string) => unknown
+  resolveAgent?: (sessionId: string) => unknown | Promise<unknown>
   log?: (msg: string) => void
 }): Promise<McpBridge> {
   const token = randomBytes(24).toString('hex')
@@ -157,7 +157,7 @@ export function startMcpBridge(opts: {
           // whose behalf this call runs (issue #55). Without it, tools that
           // enforce `exec.agent` reject the call.
           const sessionId = String(req.headers['x-dsh-session'] ?? '')
-          const agent = sessionId === '' ? undefined : opts.resolveAgent?.(sessionId)
+          const agent = sessionId === '' ? undefined : await Promise.resolve(opts.resolveAgent?.(sessionId))
           const result = await svc.execute({
             callId: 'agy-mcp-' + callSeq,
             name: dshName,
@@ -204,11 +204,20 @@ export function agyConfigHome(env: NodeJS.ProcessEnv = process.env): string {
 
 /**
  * Absolute path of the MCP server registry `agy` 1.4+ actually loads.
- * `override` wins so callers can target a specific account home.
+ * `override` wins so callers can target a specific file.
+ * Correctly distinguishes between a home dir (`/path/to/home`) and a
+ * direct .gemini dir (`/path/to/home/.gemini`).
  */
 export function agyMcpConfigPath(override = '', env: NodeJS.ProcessEnv = process.env): string {
   if (override !== '') return override
-  return join(agyConfigHome(env), '.gemini', 'config', 'mcp_config.json')
+  const gch = env.GEMINI_CLI_HOME
+  if (typeof gch === 'string' && gch !== '') {
+    return basename(gch) === '.gemini'
+      ? join(gch, 'config', 'mcp_config.json')
+      : join(gch, '.gemini', 'config', 'mcp_config.json')
+  }
+  const home = typeof env.HOME === 'string' && env.HOME !== '' ? env.HOME : homedir()
+  return join(home, '.gemini', 'config', 'mcp_config.json')
 }
 
 /** Registry key for one bridge instance: unique per port so two DSH hosts sharing a global file never clobber each other. */
@@ -240,6 +249,9 @@ export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
     }
   }
   const servers = (root.mcpServers && typeof root.mcpServers === 'object' ? root.mcpServers : {}) as Record<string, unknown>
+  if (MCP_SERVER_KEY in servers) {
+    delete servers[MCP_SERVER_KEY]
+  }
   servers[key] = {
     type: 'stdio',
     command: process.execPath,

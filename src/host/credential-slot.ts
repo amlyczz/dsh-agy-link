@@ -213,8 +213,8 @@ export class AsyncMutex {
   } = {}): Promise<() => void> {
     const signal = opts.signal
     if (signal?.aborted) throw new AbortedWaitError('aborted before mutex acquisition')
-    if (this.holders < 1) {
-      this.holders += 1
+    if (this.holders < 1 && this.queue.length === 0) {
+      this.holders = 1
       return () => this.releaseOne()
     }
 
@@ -244,16 +244,12 @@ export class AsyncMutex {
         }
       }
 
-      const take = (): (() => void) => {
-        this.holders += 1
-        return () => this.releaseOne()
-      }
-
       const grant = (): void => {
         if (settled) return
         settled = true
         cleanup()
-        resolve(take())
+        entry = null
+        resolve(() => this.releaseOne())
       }
 
       const fail = (err: unknown): void => {
@@ -261,17 +257,18 @@ export class AsyncMutex {
         settled = true
         cleanup()
         if (entry !== null) {
-          // Remove this waiter from the queue. Deliberately NO wake here: the
-          // mutex is still HELD by someone, so granting the next waiter now
-          // would break mutual exclusion. When the holder releases, wakeNext
-          // hands the slot to the (now) head of the queue.
+          // Remove this waiter from the queue. If it was already shifted out
+          // by releaseOne(), ownership was handed off to it: pass ownership on.
           const idx = this.queue.indexOf(entry)
-          if (idx >= 0) this.queue.splice(idx, 1)
+          if (idx >= 0) {
+            this.queue.splice(idx, 1)
+          } else {
+            this.releaseOne()
+          }
           entry = null
         } else if (takenDirectly) {
           // The poll granted the mutex between a cancel arriving and this
           // failure landing. Honor the grant: the caller released nothing yet.
-          // (Release through the normal path so the holder count stays right.)
           this.releaseOne()
         }
         reject(err)
@@ -302,6 +299,7 @@ export class AsyncMutex {
             if (idx >= 0) this.queue.splice(idx, 1)
             entry = null
             takenDirectly = true
+            this.holders = 1
             grant()
           }
         }, pollMs)
@@ -313,15 +311,13 @@ export class AsyncMutex {
   }
 
   private releaseOne(): void {
-    this.holders -= 1
-    this.wakeNext()
-  }
-
-  private wakeNext(): void {
     const next = this.queue.shift()
-    // A grant must not run user code inline: the releaser's synchronous
-    // context stays short and reentrancy-safe.
-    if (next) queueMicrotask(next)
+    if (next) {
+      // Direct handoff: holders remains 1 so concurrent callers cannot barge.
+      queueMicrotask(next)
+    } else {
+      this.holders = Math.max(0, this.holders - 1)
+    }
   }
 }
 

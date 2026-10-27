@@ -14,7 +14,7 @@ import { ensureScrollListener, disposeScrollListener } from './scroll-guard.ts';
 
 type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
-	useState: <S>(initial: S) => [S, (next: S | ((prev: S) => S)) => void];
+	useState: <S>(initial: S | (() => S)) => [S, (next: S | ((prev: S) => S)) => void];
 	useEffect: (setup: () => (() => void) | void, deps?: unknown[]) => void;
 	useRef: <S>(initial: S) => { current: S };
 };
@@ -183,6 +183,7 @@ async function getJson<T = any>(path: string): Promise<T | null> {
 // and let a slow stale response overwrite a newer one.
 const statusListeners = new Set<(s: StatusPayload) => void>();
 let statusPollTimer: ReturnType<typeof setInterval> | null = null;
+let statusPollInterval = 3000;
 let statusFetchSeq = 0;
 
 function isStatusEqual(a: StatusPayload | null, b: StatusPayload | null): boolean {
@@ -220,15 +221,26 @@ async function statusPollTick(): Promise<void> {
 }
 
 function ensureStatusPolling(): void {
-	if (statusPollTimer !== null) return;
+	if (statusPollTimer !== null) {
+		if (statusPollInterval !== 3000) {
+			clearInterval(statusPollTimer);
+			statusPollTimer = null;
+		} else {
+			return;
+		}
+	}
+	statusPollInterval = 3000;
 	void statusPollTick();
 	statusPollTimer = setInterval(() => { void statusPollTick(); }, 3000);
 }
 
 function stopStatusPollingIfIdle(): void {
-	if (statusListeners.size === 0 && statusPollTimer !== null) {
+	// Keep statusCache warm so opening a session never faces an empty or stale snapshot.
+	// When idle (no active mounted viewers), relax the polling interval to 15s.
+	if (statusListeners.size === 0 && statusPollTimer !== null && statusPollInterval === 3000) {
 		clearInterval(statusPollTimer);
-		statusPollTimer = null;
+		statusPollInterval = 15000;
+		statusPollTimer = setInterval(() => { void statusPollTick(); }, 15000);
 	}
 }
 
@@ -250,7 +262,7 @@ function useAgyStatus(): { status: StatusPayload | null; refresh: () => Promise<
 	}, []);
 	const refresh = async (): Promise<void> => {
 		const st = await getStatus();
-		if (st !== null) notifyStatus(st);
+		if (st !== null && !isStatusEqual(statusCache, st)) notifyStatus(st);
 	};
 	return { status, refresh };
 }
@@ -273,8 +285,9 @@ const agyModalStore = {
 
 /**
  * Global modal host manager: ensures exactly one mounted session header
- * hosts the modal dialog portal reactively. If the primary header unmounts,
- * the next available header is immediately notified and seamlessly takes over.
+ * hosts the modal dialog portal reactively. The most recently focused or mounted
+ * header is prioritized immediately to prevent host handoff flicker when opened.
+ * If the primary header unmounts, the next available header is seamlessly notified.
  */
 const modalHostManager = {
 	listeners: new Map<string, (isPrimary: boolean) => void>(),
@@ -282,6 +295,9 @@ const modalHostManager = {
 
 	register(id: string, onChange: (isPrimary: boolean) => void) {
 		modalHostManager.listeners.set(id, onChange);
+		// The first mounted session header takes priority as the active host.
+		// Never steal activeId if a host is already assigned (prevents unmount/remount
+		// thrashing during multi-header updates or quota sync).
 		if (modalHostManager.activeId === null) {
 			modalHostManager.activeId = id;
 		}
@@ -293,7 +309,7 @@ const modalHostManager = {
 				const next = modalHostManager.listeners.keys().next().value ?? null;
 				modalHostManager.activeId = next;
 				if (next) {
-					modalHostManager.listeners.get(next)?.(true);
+					try { modalHostManager.listeners.get(next)?.(true); } catch {}
 				}
 			}
 		};
@@ -303,8 +319,10 @@ const modalHostManager = {
 		if (modalHostManager.activeId !== id) {
 			const prev = modalHostManager.activeId;
 			modalHostManager.activeId = id;
-			if (prev) modalHostManager.listeners.get(prev)?.(false);
-			modalHostManager.listeners.get(id)?.(true);
+			if (prev && prev !== id) {
+				try { modalHostManager.listeners.get(prev)?.(false); } catch {}
+			}
+			try { modalHostManager.listeners.get(id)?.(true); } catch {}
 		}
 	},
 };
@@ -964,7 +982,7 @@ body.dark,
 }
 
 .agy-btn {
-	transition: all 0.15s ease;
+	transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, filter 0.15s ease, transform 0.15s ease;
 	user-select: none;
 }
 .agy-btn:hover:not(:disabled) {
@@ -984,12 +1002,17 @@ body.dark,
 .agy-shimmer-track {
 	position: relative;
 	overflow: hidden;
+	contain: paint;
+	transform: translateZ(0);
+	isolation: isolate;
 }
 .agy-shimmer-track::after {
 	content: '';
 	position: absolute;
 	top: 0; left: 0; right: 0; bottom: 0;
 	background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.22) 50%, transparent 100%);
+	transform: translateX(-100%) translateZ(0);
+	will-change: transform;
 	animation: agy-shimmer 1.8s infinite ease-in-out;
 	pointer-events: none;
 }
@@ -998,6 +1021,7 @@ body.dark,
 	inset: 0;
 	z-index: 9999;
 	background: var(--agy-modal-backdrop);
+	-webkit-backdrop-filter: blur(6px);
 	backdrop-filter: blur(6px);
 	display: flex;
 	align-items: center;
@@ -1019,6 +1043,8 @@ body.dark,
 	overflow: hidden;
 	color: var(--agy-text-primary);
 	font-family: var(--agy-font-family);
+	transform: translateZ(0);
+	contain: content;
 }
 .agy-submodel-row {
 	display: flex;
@@ -1276,6 +1302,15 @@ const S: Record<string, Record<string, unknown>> = {
 
 export function apply(ctx: ClientContext): void {
 	injectGlobalStyles();
+	ctx.effect(() => {
+		ensureStatusPolling();
+		return () => {
+			if (statusPollTimer !== null) {
+				clearInterval(statusPollTimer);
+				statusPollTimer = null;
+			}
+		};
+	}, 'agy-link: status polling');
 	// locale is declared in inject — cordis guarantees ctx.locale (issue #24).
 	const locale = ctx.locale;
 	ctx.effect(() => {
@@ -1514,15 +1549,17 @@ export function apply(ctx: ClientContext): void {
 
 		const refreshQuota = async (id?: string): Promise<void> => {
 			setLoadingAction(id ? `refresh:${id}` : 'refresh:all');
-			const res = await postJson('/plugins/agy-link/pool/refresh-quota', { id });
-			if (res === null || res?.ok === false) {
+			try {
+				const res = await postJson('/plugins/agy-link/pool/refresh-quota', { id });
+				if (res === null || res?.ok === false) {
+					actionFailed();
+					return;
+				}
+				await refresh();
+				showToast(t('quota.refreshed'), 'success');
+			} finally {
 				setLoadingAction(null);
-				actionFailed();
-				return;
 			}
-			await refresh();
-			setLoadingAction(null);
-			showToast(t('quota.refreshed'), 'success');
 		};
 
 		const saveProxy = async (id: string): Promise<void> => {
@@ -1623,7 +1660,7 @@ export function apply(ctx: ClientContext): void {
 				label,
 				familyKey,
 				acc,
-				loadingAction === 'refresh-quota' || loadingAction === `refresh:${acc.id}`,
+				loadingAction === 'refresh:all' || loadingAction === `refresh:${acc.id}`,
 			);
 
 		// Authoritative active account: trust pool.activeAccountId computed by
@@ -1833,7 +1870,7 @@ export function apply(ctx: ClientContext): void {
 						h('button', {
 							type: 'button',
 							className: 'agy-btn',
-							style: { ...S.btnSm, gap: '3px', fontSize: '11px', padding: '2px 6px' },
+							style: { ...S.btnSm, gap: '3px', fontSize: '11px', padding: '2px 6px', minWidth: '58px', justifyContent: 'center' },
 							title: t('account.syncTitle'),
 							disabled: accountActionBusy(acc, 'refresh'),
 							onClick: () => void refreshQuota(acc.id),
@@ -2272,7 +2309,13 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 		}
 		const hostId = hostIdRef.current;
 
-		const [isPrimaryHost, setIsPrimaryHost] = useState(false);
+		const [isPrimaryHost, setIsPrimaryHost] = useState<boolean>(() => {
+			if (modalHostManager.activeId === null) {
+				modalHostManager.activeId = hostId;
+				return true;
+			}
+			return modalHostManager.activeId === hostId;
+		});
 		useEffect(() => {
 			return modalHostManager.register(hostId, setIsPrimaryHost);
 		}, [hostId]);
@@ -2348,6 +2391,8 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 					alignItems: 'center',
 					gap: '6px',
 					boxShadow: 'var(--agy-shadow-card)',
+					flexShrink: 0,
+					whiteSpace: 'nowrap',
 				},
 			},
 			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color } }),

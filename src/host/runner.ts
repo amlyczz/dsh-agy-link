@@ -192,7 +192,6 @@ export function ensureIsolatedKeychain(
     mkdirSync(join(dir, 'Library', 'Keychains'), { recursive: true })
     run('security', ['create-keychain', '-p', '', kc], env)
     run('security', ['set-keychain-settings', kc], env)
-    run('security', ['unlock-keychain', '-p', '', kc], env)
     return true
   } catch {
     return false
@@ -204,8 +203,9 @@ export function ensureIsolatedKeychain(
  * Keychains from older versions (v0.4.41-v0.4.44) were provisioned with
  * ephemeral random passwords that cannot be unlocked with an empty password,
  * causing repeated modal password dialogs from macOS SecurityAgent.
- * If unlocking with `-p ""` fails, the file and its registration in securityd
- * are purged so that ensureIsolatedKeychain can cleanly re-provision it.
+ * We test whether the keychain settings can be updated silently without prompt.
+ * If setting settings fails, the file is un-unlockable or corrupted, so it is
+ * unregistered and purged so ensureIsolatedKeychain can cleanly re-provision it.
  */
 export function purgeStaleIsolatedKeychain(
   dir: string,
@@ -219,11 +219,11 @@ export function purgeStaleIsolatedKeychain(
   if (!existsSync(kc)) return false
   const env = { ...process.env, HOME: dir }
   try {
-    // Attempt silent unlock with empty passphrase
-    run('security', ['unlock-keychain', '-p', '', kc], env)
-    return false // unlocked successfully, not stale
+    // Attempt silent settings update without prompt
+    run('security', ['set-keychain-settings', kc], env)
+    return false // healthy and accessible, not stale
   } catch {
-    // Failed to unlock with empty passphrase — unregister and delete
+    // Failed to update settings — locked with unknown passphrase or corrupted
     try {
       run('security', ['delete-keychain', kc], env)
     } catch {
@@ -330,6 +330,7 @@ export function openAccountTerminal(
   if (!accDir) return false
 
   if (platform === 'darwin') {
+    ensureIsolatedKeychain(accDir, platform)
     const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "export HOME='${accDir}'; agy"`
     try {
       run('osascript', ['-e', script])

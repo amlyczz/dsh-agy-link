@@ -139,6 +139,43 @@ test('AsyncMutex serializes holders and returns to zero', async () => {
   assert.equal(mutex.pending, 0)
 })
 
+test('AsyncMutex prevents line-barging and ensures single holder when release races with acquire', async () => {
+  const mutex = new AsyncMutex()
+  const rel1 = await mutex.acquire()
+
+  let waiterAcquired = false
+  const p2 = mutex.acquire().then((rel) => {
+    waiterAcquired = true
+    return rel
+  })
+
+  // rel1 releases. Synchronously before microtask runs, caller 3 calls acquire().
+  rel1()
+  let caller3Acquired = false
+  const p3 = mutex.acquire().then((rel) => {
+    caller3Acquired = true
+    return rel
+  })
+
+  // Synchronously caller3 must NOT barge ahead of the queued waiter!
+  assert.equal(caller3Acquired, false, 'caller 3 must not barge ahead of queued waiter')
+  assert.equal(waiterAcquired, false, 'waiter is queued for next microtask')
+
+  // Run microtask
+  await new Promise((r) => setImmediate(r))
+  assert.equal(waiterAcquired, true, 'waiter must be granted next in FIFO order')
+  assert.equal(caller3Acquired, false, 'caller 3 still waits behind waiter')
+
+  const rel2 = await p2
+  rel2()
+
+  await new Promise((r) => setImmediate(r))
+  assert.equal(caller3Acquired, true, 'caller 3 is granted only after waiter releases')
+  const rel3 = await p3
+  rel3()
+  assert.equal(mutex.pending, 0)
+})
+
 // ---- cancellation & lost-wakeup defenses (2026-10-16 zombie-turn incident) --
 //
 // A turn queued on the credential slot while another session's run held it.
