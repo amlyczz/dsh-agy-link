@@ -1,6 +1,13 @@
 // Issue #55: the reverse bridge is only usable when (a) the MCP entry lands in
 // the registry agy 1.4+ actually reads and (b) a bridged call carries the
 // identity of the session that spawned agy.
+//
+// The third blocker found on a real host (0.4.72 still unusable): `svc.execute`
+// was called without `exec.signal`, which DSH declares required, so every tool
+// that reads it threw `Cannot read properties of undefined (reading 'aborted')`.
+// The session key also arrives in two shapes - `session-<uuid>` for top-level
+// web sessions and a bare `<uuid>` for sub-agent/fork sessions - and both must
+// resolve without rewriting the bare form.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -83,7 +90,10 @@ test('a bridged call carries the agent of the spawning session', async () => {
     schemas: () => [
       { name: 'agent_teams_status', description: 'status', parameters: { type: 'object', properties: {} } },
     ],
-    execute: async (input: { name: string; agent?: unknown }) => {
+    execute: async (input: { name: string; agent?: unknown; signal: AbortSignal }) => {
+      // DSH tools read `exec.signal`; a call without one throws inside the tool.
+      assert.ok(input.signal instanceof AbortSignal, 'bridged calls must carry an abort signal')
+      assert.equal(input.signal.aborted, false)
       received.push({ name: input.name, agent: input.agent })
       if (input.agent === undefined) throw new Error('agent_teams tools require a calling agent (exec.agent was undefined)')
       return { content: [{ type: 'text', text: 'ok:' + String((input.agent as { id?: string }).id) }] }
@@ -117,6 +127,85 @@ test('a bridged call carries the agent of the spawning session', async () => {
     assert.equal(anonymous.ok, false)
     assert.match(String(anonymous.error), /require a calling agent/)
     assert.equal(received.at(-1)?.agent, undefined)
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('both DSH session key forms resolve without rewriting a bare id', async () => {
+  const lookups: string[] = []
+  const seen: Array<unknown> = []
+  // DSH registers `session-<uuid>` for top-level web sessions and the bare
+  // `<uuid>` for sub-agent/fork sessions. Switch which form is registered to
+  // exercise both directions against one bridge.
+  let registered = new Set<string>()
+  const tools = {
+    schemas: () => [
+      { name: 'agent_teams_status', description: 'status', parameters: { type: 'object', properties: {} } },
+    ],
+    execute: async (input: { name: string; agent?: unknown; signal: AbortSignal }) => {
+      assert.ok(input.signal instanceof AbortSignal, 'bridged calls must carry an abort signal')
+      // Mirror the real tools: no caller -> the tool itself rejects the call.
+      if (input.agent === undefined) throw new Error('agent_teams tools require a calling agent (exec.agent was undefined)')
+      seen.push(input.agent)
+      return { content: [{ type: 'text', text: 'ok:' + String((input.agent as { id?: string }).id) }] }
+    },
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    tools: () => tools,
+    allowlist: () => 'agent_teams_status',
+    resolveAgent: (sessionId) => {
+      lookups.push(sessionId)
+      return registered.has(sessionId) ? { id: 'agent:' + sessionId, session: sessionId } : undefined
+    },
+  })
+  try {
+    const call = async (headers: Record<string, string>) => {
+      const res = await fetch(bridge.url + '/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token, ...headers },
+        body: JSON.stringify({ dshName: 'agent_teams_status', arguments: {} }),
+      })
+      return (await res.json()) as { ok: boolean; text?: string; error?: string }
+    }
+
+    // 1. A bare uuid a sub-agent/fork session is registered under: the value
+    //    resolves as given, so the prefix retry must NOT run (rewriting it
+    //    would break that session's identity).
+    registered = new Set(['313ce201'])
+    lookups.length = 0
+    const direct = await call({ 'X-DSH-Session': '313ce201' })
+    assert.equal(direct.ok, true)
+    assert.equal(direct.text, 'ok:agent:313ce201')
+    assert.deepEqual(lookups, ['313ce201'], 'a resolvable bare id must not be retried with the prefix')
+    assert.deepEqual(seen.at(-1), { id: 'agent:313ce201', session: '313ce201' })
+
+    // 2. Only the prefixed form registered (top-level web session reaching us
+    //    with the bare uuid): raw misses, then `session-` + raw resolves.
+    registered = new Set(['session-313ce201'])
+    lookups.length = 0
+    const fallback = await call({ 'X-DSH-Session': '313ce201' })
+    assert.equal(fallback.ok, true)
+    assert.equal(fallback.text, 'ok:agent:session-313ce201')
+    assert.deepEqual(lookups, ['313ce201', 'session-313ce201'], 'raw id first, then the session- prefix')
+    assert.deepEqual(seen.at(-1), { id: 'agent:session-313ce201', session: 'session-313ce201' })
+
+    // 3. An already-prefixed id resolves on the first try and is never
+    //    prefixed twice (`session-session-...`).
+    lookups.length = 0
+    const canonical = await call({ 'X-DSH-Session': 'session-313ce201' })
+    assert.equal(canonical.ok, true)
+    assert.deepEqual(lookups, ['session-313ce201'])
+
+    // 4. An unknown id is retried exactly once and then still surfaces the
+    //    tool's own guard.
+    registered = new Set()
+    lookups.length = 0
+    const unknown = await call({ 'X-DSH-Session': 'deadbeef' })
+    assert.equal(unknown.ok, false)
+    assert.match(String(unknown.error), /require a calling agent/)
+    assert.deepEqual(lookups, ['deadbeef', 'session-deadbeef'])
   } finally {
     await bridge.close()
   }
