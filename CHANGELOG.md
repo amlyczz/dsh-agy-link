@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.73 (2026-10-27)
+
+### English
+
+- **Fix(digest): preserve chronological order in conversation digest and prevent latest task misplacement.**
+  - `buildDigest()` previously placed the latest user task at the top of the digest array before appending older history (`kept.push(taskLine)` followed by `kept.push(...keptOther)`), completely inverting the digest timeline. Agy received the newest request at the beginning of the context and the previous turn's request/response at the bottom, leading the model to treat the previous turn as the freshest instruction and ignore the new request.
+  - Corrected assembly order so historical messages precede the latest task (`[...keptOther, taskPart]`) while preserving priority budget reservation for the latest task.
+- **Fix(sessions): prevent false-positive compaction detection from dropping healthy conversation bindings.**
+  - `adapter.ts` previously invalidated the session binding whenever `messages.length < binding.lastMessageCount`. Minor fluctuations in message counts (e.g. 1-2 messages dropped by telemetry filtering or message store pruning after reconnection) falsely triggered compaction detection, deleting the valid agy session binding and forcing an unnecessary full-context digest re-seed.
+  - Introduced threshold-based compaction detection: true compaction requires substantial history reduction (e.g. drop by >20% or down to <=4 messages), while minor fluctuations only adjust the message watermark without invalidating the agy conversation.
+
+### 中文
+
+- **修复（digest）：修复会话摘要时间线逆序导致的“最新任务被历史覆盖/失忆”缺陷。**
+  - 此前 `buildDigest()` 为给最新用户任务预留空间，先将任务推入数组首位，再追加其余历史记录（`kept.push(taskLine)` 后跟 `kept.push(...keptOther)`），导致摘要内部时间线颠倒：最新任务被排在最开头，而上一轮的指令与回复出现在历史摘要最末尾。agy 接收后将末尾上一轮历史误判为最新要求，进而忽略了用户的最新输入。
+  - 修正组装顺序，保证早期历史在前、最新任务在后（`[...keptOther, taskPart]`），同时保留优先为最新任务分配字符配额的设计。
+- **修复（sessions）：消除 Compaction 压缩检测假阳性，防止健康会话绑定被误删。**
+  - 此前一旦 `messages.length < binding.lastMessageCount` 即判定为历史压缩并清空绑定。当会话闲置重新激活时，遥测过滤或消息存储微调导致的消息数微小减少（如减少 1~2 条）会误触发该逻辑，彻底删除原有的 agy 会话绑定并退化为全量摘要重放。
+  - 引入梯度阈值判定：仅在历史大幅度缩减（如减少超 20% 或缩减至 4 条以下）时才判定为 Context Compaction，微小消息变动仅校准水位标尺，避免误断开底层长会话。
+
 ## 0.4.72 (2026-10-27)
 
 ### English
