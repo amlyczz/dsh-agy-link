@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { startMcpBridge, writeMcpConfig, toMcpName, type ToolsServiceLike } from '../src/host/mcp-bridge.ts'
+import { mcpServerKey, startMcpBridge, writeMcpConfig, toMcpName, type ToolsServiceLike } from '../src/host/mcp-bridge.ts'
 import { stageImages, sweepDir, stagedPath, defaultMediaDir } from '../src/host/media.ts'
 import { inlineFiles, schemaArgs } from '../src/host/oneshot.ts'
 
@@ -116,33 +116,36 @@ test('mcp bridge script speaks JSON-RPC over stdio end to end', async () => {
   }
 })
 
-test('writeMcpConfig merges and restores .mcp.json', async () => {
+test('writeMcpConfig merges and restores the MCP registry', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'mcp-cfg-'))
+  // The registry is a plain file path: production points it at the agy global
+  // registry (~/.gemini/config/mcp_config.json), tests at a temp file.
+  const file = join(dir, 'mcp_config.json')
   // pre-existing foreign server must survive
-  await writeFile(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { other: { command: 'x' } } }), 'utf8')
+  await writeFile(file, JSON.stringify({ mcpServers: { other: { command: 'x' } } }), 'utf8')
   const bridge = await startMcpBridge({
     bridgeScript: '/opt/bridge.mjs',
     tools: () => undefined,
     allowlist: () => '',
   })
   try {
-    const restore = writeMcpConfig(dir, bridge)
-    const merged = JSON.parse(await readFile(join(dir, '.mcp.json'), 'utf8')) as {
+    const restore = writeMcpConfig(file, bridge)
+    const merged = JSON.parse(await readFile(file, 'utf8')) as {
       mcpServers: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>
     }
     assert.ok(merged.mcpServers.other, 'foreign server preserved')
-    const ours = merged.mcpServers['dsh-tools']
+    const ours = merged.mcpServers[mcpServerKey(bridge.port)]
     assert.ok(ours && ours.command === process.execPath)
     assert.equal(ours.env?.DSH_MCP_URL, bridge.url)
     restore()
-    const after = JSON.parse(await readFile(join(dir, '.mcp.json'), 'utf8')) as { mcpServers: string[] }
+    const after = JSON.parse(await readFile(file, 'utf8')) as { mcpServers: string[] }
     assert.deepEqual(Object.keys(after.mcpServers), ['other'])
     // restore deletes a file we created (start from no file)
-    await rm(join(dir, '.mcp.json'))
-    const restore2 = writeMcpConfig(dir, bridge)
+    await rm(file)
+    const restore2 = writeMcpConfig(file, bridge)
     restore2()
     let existed = true
-    try { await readFile(join(dir, '.mcp.json')) } catch { existed = false }
+    try { await readFile(file) } catch { existed = false }
     assert.equal(existed, false)
   } finally {
     await bridge.close()
