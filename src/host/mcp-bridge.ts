@@ -1,22 +1,33 @@
-// MCP reverse bridge (v0.2): lets the spawned agy process call DSH-side
+// MCP reverse bridge (v0.3): lets the spawned agy process call DSH-side
 // tools. Design: the plugin runs a loopback-only HTTP endpoint
 // (127.0.0.1, ephemeral port, bearer token) exposing tool schemas and
 // execution; a tiny standalone stdio MCP server (dist/bridge.mjs, plain
-// node, zero deps) is registered in the workspace .mcp.json and forwards
-// MCP tool calls to that endpoint. Loopback + token keeps the surface
-// private to this machine and this plugin.
+// node, zero deps) is registered in the agy MCP registry and forwards MCP
+// tool calls to that endpoint. Loopback + token keeps the surface private
+// to this machine and this plugin.
+//
+// Two things matter for the bridge to be usable at all (issue #55):
+//  1. `agy` 1.4+ reads MCP servers only from `~/.gemini/config/mcp_config.json`
+//     (or a plugin's own `mcp_config.json`) — a workspace `.mcp.json` is
+//     silently ignored, so that is where the entry has to go.
+//  2. A bridged call must carry the identity of the session that spawned agy,
+//     otherwise every tool that needs a caller (e.g. AgentTeams' coordination
+//     tools) throws `exec.agent was undefined`. The session id travels from the
+//     agy child env (DSH_MCP_SESSION) through bridge.mjs as a header, and the
+//     host resolves it back to an agent.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { homedir } from 'node:os'
 
 const MCP_SERVER_KEY = 'dsh-tools'
 
 /** Minimal structural view of the DSH tool registry we need. */
 export interface ToolsServiceLike {
   schemas(): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
-  execute(input: { callId: string; name: string; arguments: unknown }): Promise<unknown>
+  execute(input: { callId: string; name: string; arguments: unknown; agent?: unknown }): Promise<unknown>
 }
 
 /** MCP tool names are [a-zA-Z0-9_-]; DSH names may contain dots. */
@@ -79,6 +90,8 @@ export function startMcpBridge(opts: {
   bridgeScript: string
   tools: () => ToolsServiceLike | undefined
   allowlist: () => string
+  /** Map the spawning DSH session id to the agent the call runs on behalf of. */
+  resolveAgent?: (sessionId: string) => unknown
   log?: (msg: string) => void
 }): Promise<McpBridge> {
   const token = randomBytes(24).toString('hex')
@@ -140,7 +153,17 @@ export function startMcpBridge(opts: {
         }
         callSeq++
         try {
-          const result = await svc.execute({ callId: 'agy-mcp-' + callSeq, name: dshName, arguments: parsed.arguments ?? {} })
+          // Carry the caller: the session that spawned agy is the agent on
+          // whose behalf this call runs (issue #55). Without it, tools that
+          // enforce `exec.agent` reject the call.
+          const sessionId = String(req.headers['x-dsh-session'] ?? '')
+          const agent = sessionId === '' ? undefined : opts.resolveAgent?.(sessionId)
+          const result = await svc.execute({
+            callId: 'agy-mcp-' + callSeq,
+            name: dshName,
+            arguments: parsed.arguments ?? {},
+            ...(agent === undefined ? {} : { agent }),
+          })
           sendJson(res, 200, { ok: true, text: resultText(result) })
         } catch (e) {
           sendJson(res, 200, { ok: false, error: String(e) })
@@ -170,13 +193,37 @@ export function startMcpBridge(opts: {
   })
 }
 
+/** `agy` home the CLI reads its configs from (mirrors the runner's isolated-home rule). */
+export function agyConfigHome(env: NodeJS.ProcessEnv = process.env): string {
+  const home = env.GEMINI_CLI_HOME
+  if (typeof home === 'string' && home !== '') return home
+  const plain = env.HOME
+  if (typeof plain === 'string' && plain !== '') return plain
+  return homedir()
+}
+
 /**
- * Merge our server entry into the workspace .mcp.json. Returns a restore
- * function that puts the previous content back (or deletes the file we
- * created). Never throws.
+ * Absolute path of the MCP server registry `agy` 1.4+ actually loads.
+ * `override` wins so callers can target a specific account home.
  */
-export function writeMcpConfig(workspaceRoot: string, bridge: McpBridge): () => void {
-  const file = join(workspaceRoot, '.mcp.json')
+export function agyMcpConfigPath(override = '', env: NodeJS.ProcessEnv = process.env): string {
+  if (override !== '') return override
+  return join(agyConfigHome(env), '.gemini', 'config', 'mcp_config.json')
+}
+
+/** Registry key for one bridge instance: unique per port so two DSH hosts sharing a global file never clobber each other. */
+export function mcpServerKey(port: number): string {
+  return MCP_SERVER_KEY + '-' + String(port)
+}
+
+/**
+ * Merge our server entry into the MCP registry file at `file` (`agy` 1.4+
+ * reads the global one; a workspace `.mcp.json` is ignored, see issue #55).
+ * Returns a restore function that puts the previous content back (or deletes
+ * the file we created). Never throws.
+ */
+export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
+  const key = mcpServerKey(bridge.port)
   let previous: string | null = null
   try {
     if (existsSync(file)) previous = readFileSync(file, 'utf8')
@@ -193,7 +240,7 @@ export function writeMcpConfig(workspaceRoot: string, bridge: McpBridge): () => 
     }
   }
   const servers = (root.mcpServers && typeof root.mcpServers === 'object' ? root.mcpServers : {}) as Record<string, unknown>
-  servers[MCP_SERVER_KEY] = {
+  servers[key] = {
     type: 'stdio',
     command: process.execPath,
     args: [bridge.bridgeScript],
@@ -204,8 +251,11 @@ export function writeMcpConfig(workspaceRoot: string, bridge: McpBridge): () => 
   }
   root.mcpServers = servers
   let written = false
+  let writtenBytes = ''
   try {
-    writeFileSync(file, JSON.stringify(root, null, 2) + '\n', 'utf8')
+    mkdirSync(dirname(file), { recursive: true })
+    writtenBytes = JSON.stringify(root, null, 2) + '\n'
+    writeFileSync(file, writtenBytes, 'utf8')
     written = true
   } catch {
     return () => {}
@@ -224,6 +274,34 @@ export function writeMcpConfig(workspaceRoot: string, bridge: McpBridge): () => 
         current = null
       }
       if (current === null) return // file vanished: nothing of ours remains
+      // Another host (or the user) rewrote the shared registry since we
+      // published. Restoring our old bytes would delete their entry, so only
+      // drop the key we own and leave everything else untouched.
+      if (current !== writtenBytes) {
+        let live: Record<string, unknown> = {}
+        try {
+          const v = JSON.parse(current)
+          if (v && typeof v === 'object') live = v as Record<string, unknown>
+        } catch {
+          return // unparseable: don't touch the file
+        }
+        const liveServers = (live.mcpServers && typeof live.mcpServers === 'object' ? live.mcpServers : {}) as Record<string, unknown>
+        if (!(key in liveServers)) return
+        delete liveServers[key]
+        const emptyRegistry = Object.keys(liveServers).length === 0
+        const nothingElse = Object.keys(live).every((k) => k === 'mcpServers')
+        if (emptyRegistry && nothingElse) {
+          // Nothing but empty bookkeeping is left: don't keep a file behind.
+          try {
+            unlinkSync(file)
+          } catch {
+            /* best effort */
+          }
+          return
+        }
+        writeFileSync(file, JSON.stringify({ ...live, mcpServers: liveServers }, null, 2) + '\n', 'utf8')
+        return
+      }
       let parsed: Record<string, unknown> = {}
       try {
         const v = JSON.parse(current)
@@ -232,9 +310,9 @@ export function writeMcpConfig(workspaceRoot: string, bridge: McpBridge): () => 
         return // unparseable: assume our entry is gone, don't touch the file
       }
       const curServers = (parsed.mcpServers && typeof parsed.mcpServers === 'object' ? parsed.mcpServers : {}) as Record<string, unknown>
-      if (!(MCP_SERVER_KEY in curServers)) return
+      if (!(key in curServers)) return
       if (previous === null) {
-        delete curServers[MCP_SERVER_KEY]
+        delete curServers[key]
         if (Object.keys(curServers).length === 0) {
           // We created the file and no other servers remain: remove it.
           unlinkSync(file)

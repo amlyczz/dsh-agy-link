@@ -39,6 +39,11 @@ function asString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined
 }
 
+/** `mcpConfigScope` is a closed enum: unknown values fall back to the default. */
+function asMcpConfigScope(v: unknown): PluginConfig['mcpConfigScope'] | undefined {
+  return v === 'global' || v === 'workspace' || v === 'both' ? v : undefined
+}
+
 function asBool(v: unknown): boolean | undefined {
   if (typeof v === 'boolean') return v
   if (typeof v === 'string') return v === 'true' || v === '1'
@@ -125,6 +130,8 @@ export function resolveConfig(
     mediaMaxBytes: asNum(get('mediaMaxBytes')) ?? base.mediaMaxBytes,
     mediaMaxImages: asNum(get('mediaMaxImages')) ?? base.mediaMaxImages,
     mcpBridge: asBool(get('mcpBridge')) ?? base.mcpBridge,
+    mcpConfigScope: asMcpConfigScope(get('mcpConfigScope')) ?? base.mcpConfigScope,
+    mcpConfigPath: asString(get('mcpConfigPath')) ?? base.mcpConfigPath,
     mcpToolAllowlist: asString(get('mcpToolAllowlist')) ?? base.mcpToolAllowlist,
     rateLimitPerMinute: asNum(get('rateLimitPerMinute')) ?? base.rateLimitPerMinute,
     autoFallbackModel: asBool(get('autoFallbackModel')) ?? base.autoFallbackModel,
@@ -174,6 +181,11 @@ export function resolveConfig(
     if (b !== undefined) cfg.mcpBridge = b
   }
   if (env.DSH_AGY_MCP_TOOL_ALLOWLIST) cfg.mcpToolAllowlist = env.DSH_AGY_MCP_TOOL_ALLOWLIST
+  if (env.DSH_AGY_MCP_CONFIG_PATH) cfg.mcpConfigPath = env.DSH_AGY_MCP_CONFIG_PATH
+  if (env.DSH_AGY_MCP_CONFIG_SCOPE !== undefined) {
+    const scope = asMcpConfigScope(env.DSH_AGY_MCP_CONFIG_SCOPE)
+    if (scope !== undefined) cfg.mcpConfigScope = scope
+  }
   if (env.DSH_AGY_RATE_LIMIT_PER_MINUTE) {
     const r = asNum(env.DSH_AGY_RATE_LIMIT_PER_MINUTE)
     if (r !== undefined && r >= 0) cfg.rateLimitPerMinute = r

@@ -29,7 +29,7 @@ import { resolvePrimaryCredential, findDuplicateCredentialIdentities } from './h
 import { homedir } from 'node:os'
 import { StreamJsonParser } from './host/parser.ts'
 import { defaultMediaDir, sweepDir, type ImageRefLike } from './host/media.ts'
-import { startMcpBridge, writeMcpConfig, type McpBridge, type ToolsServiceLike } from './host/mcp-bridge.ts'
+import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type McpBridge, type ToolsServiceLike } from './host/mcp-bridge.ts'
 import { fileURLToPath } from 'node:url'
 import { handleMediaRequest, handleAssetRequest, type HttpRequestLike, type HttpResponseLike } from './host/media-route.ts'
 
@@ -1017,7 +1017,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     }
   })
 
-  const bridgeState: { bridge: Awaited<ReturnType<typeof startMcpBridge>> | null; restore: (() => void) | null } = { bridge: null, restore: null }
+  // One bridge can publish to several registries (global and/or workspace),
+  // so keep every restore hook it produced.
+  const bridgeState: { bridge: Awaited<ReturnType<typeof startMcpBridge>> | null; restores: Array<() => void> } = { bridge: null, restores: [] }
   let bridgeDisposed = false
   const syncMcpBridge = (): void => {
     const cfg = getConfig()
@@ -1029,10 +1031,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           // (URL.pathname would yield /C:/... there and break the spawn).
           const script = fileURLToPath(new URL('./bridge.mjs', import.meta.url))
           const toolsSvc = ctx.get('tools') as ToolsServiceLike | undefined
+          const agents = (): { get(id: unknown): unknown } | undefined => {
+            const svc = ctx.get('agents') as { get(id: unknown): unknown } | undefined
+            return svc ?? (ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents
+          }
           const bridge = await startMcpBridge({
             bridgeScript: script,
             tools: () => (ctx.get('tools') as ToolsServiceLike | undefined),
             allowlist: () => getConfig().mcpToolAllowlist,
+            // Bridged calls run on behalf of the session that spawned agy
+            // (issue #55): resolve its agent so tools that require a caller work.
+            resolveAgent: (sessionId) => agents()?.get(sessionId),
             log,
           })
           // A scope can be disposed before asynchronous listener startup ends.
@@ -1043,21 +1052,30 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           }
           bridgeState.bridge = bridge
           const root = cfg.workspaceRoot !== '' ? cfg.workspaceRoot : process.cwd()
-          bridgeState.restore = writeMcpConfig(root, bridge)
-          log('mcp bridge ready at ' + bridge.url + (toolsSvc ? '' : ' (tools service not yet available)'))
+          // `agy` 1.4+ ignores a workspace `.mcp.json` and only loads the global
+          // registry, so that is the default target (issue #55).
+          const targets: string[] = []
+          if (cfg.mcpConfigScope === 'global' || cfg.mcpConfigScope === 'both') {
+            targets.push(agyMcpConfigPath(cfg.mcpConfigPath))
+          }
+          if (cfg.mcpConfigScope === 'workspace' || cfg.mcpConfigScope === 'both') {
+            targets.push(join(root, '.mcp.json'))
+          }
+          bridgeState.restores = targets.map((file) => writeMcpConfig(file, bridge))
+          log('mcp bridge ready at ' + bridge.url + ' (registry: ' + targets.join(', ') + ')' + (toolsSvc ? '' : ' (tools service not yet available)'))
         } catch (e) {
-          bridgeState.restore?.()
+          for (const undo of bridgeState.restores) undo()
           await bridgeState.bridge?.close()
           bridgeState.bridge = null
-          bridgeState.restore = null
+          bridgeState.restores = []
           log('mcp bridge failed to start: ' + String(e))
         }
       })()
     } else if (!want && bridgeState.bridge !== null) {
-      bridgeState.restore?.()
+      for (const undo of bridgeState.restores) undo()
       void bridgeState.bridge.close()
       bridgeState.bridge = null
-      bridgeState.restore = null
+      bridgeState.restores = []
     }
   }
   syncMcpBridge()
@@ -1069,7 +1087,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       void poolAuth.cancel()
       if (askToolDispose.current !== null) askToolDispose.current()
       if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
-      bridgeState.restore?.()
+      for (const undo of bridgeState.restores) undo()
       void bridgeState.bridge?.close()
     }
   })

@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // dsh-agy-link MCP bridge script: a minimal stdio MCP server with zero
-// dependencies. agy launches it per the workspace .mcp.json; it forwards
+// dependencies. agy launches it from its MCP registry; it forwards
 // tools/list and tools/call to the plugin loopback endpoint whose URL and
-// token arrive via env. Protocol: newline-delimited JSON-RPC 2.0.
+// token arrive via env. DSH_MCP_SESSION carries the spawning DSH session so
+// the host can resolve the calling agent (issue #55).
+// Protocol: newline-delimited JSON-RPC 2.0.
 import { request as httpRequest } from 'node:http'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 
 const URL_BASE = process.env.DSH_MCP_URL || ''
 const TOKEN = process.env.DSH_MCP_TOKEN || ''
+const SESSION = process.env.DSH_MCP_SESSION || ''
 const PROTOCOL = '2024-11-05'
 
 function post(path, body) {
@@ -28,6 +31,7 @@ function post(path, body) {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(data),
         Authorization: 'Bearer ' + TOKEN,
+        ...(SESSION === '' ? {} : { 'X-DSH-Session': SESSION }),
       },
       timeout: 600000,
     });
