@@ -112,6 +112,19 @@ reference-counted slot is the strongest isolation the plugin can provide.
   Bridged calls carry caller identity via `DSH_MCP_SESSION` so identity-enforcing
   tools (such as `agent_teams`) function correctly. `run_code` and `agy_ask`
   are never bridged; `mcpToolAllowlist` restricts the set further.
+  Every bridged call is audit-logged as `mcp call <tool> [<outcome>] <ms>` with
+  the caller class and the failure text (never the arguments), so a failed run
+  is visible in journald instead of only in transcripts.
+- **DSH `send_message` from an agy child** - DSH's sub-agent runtime appends a
+  footer telling the child to report with `send_message({ agent_id: <parent> })`.
+  In an agy run that name resolves to agy's **own** `send_message`, which does
+  not know DSH agent ids and fails with `recipient "..." not found`. The DSH
+  tool itself is bridgeable - add `send_message` to `mcpToolAllowlist` and call
+  it explicitly on the `dsh-tools-<port>` MCP server (agy dispatches MCP calls
+  by server + tool name, so there is no collision with the native tool). The
+  footer still names the native one, so an agy member should report through
+  `agent_teams_send_message` (or an explicit instruction) instead. Root cause is
+  upstream in `@deepseek-ai/dsh-subagent`, which assumes a DSH-native child.
 - **Full tool args / diff cards (v0.4.28+)** - the bridge reads agy's
   conversation SQLite DB via the `sqlite3` CLI to recover arguments that
   `filterToolParameters` strips from stream-json. When `sqlite3` is missing

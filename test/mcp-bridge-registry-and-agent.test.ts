@@ -210,3 +210,65 @@ test('both DSH session key forms resolve without rewriting a bare id', async () 
     await bridge.close()
   }
 })
+
+test('audit-logs each bridged call without leaking arguments', async () => {
+  const logs: string[] = []
+  const tools = {
+    schemas: () => [{ name: 'echo', description: 'echo', parameters: { type: 'object', properties: {} } }],
+    execute: async () => ({ content: [{ type: 'text', text: 'done' }] }),
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    tools: () => tools,
+    allowlist: () => 'echo',
+    resolveAgent: () => ({ id: 'agent-1' }),
+    log: (msg) => logs.push(msg),
+  })
+  try {
+    const res = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + bridge.token,
+        'X-DSH-Session': 'session-abc',
+      },
+      body: JSON.stringify({ dshName: 'echo', arguments: { text: 'super-secret-value' } }),
+    })
+    assert.equal(res.status, 200)
+    const line = logs.find((l) => l.includes('mcp call echo'))
+    assert.ok(line, 'every bridged call must be audited')
+    assert.match(line!, /\[ok caller=agent\]/, 'the audit line records the outcome and caller class')
+    assert.match(line!, /\d+ms/, 'the audit line records the duration')
+    assert.equal(
+      logs.some((l) => l.includes('super-secret-value')),
+      false,
+      'arguments must never reach the log',
+    )
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('DSH send_message can be bridged when it is allowlisted', async () => {
+  // The DSH sub-agent footer tells a child to report with send_message(); when
+  // agy runs as that child, only a bridged send_message can satisfy it. The
+  // tool is not restricted, so the allowlist alone decides.
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    tools: () => ({
+      schemas: () => [
+        { name: 'send_message', description: 'send', parameters: { type: 'object', properties: {} } },
+        { name: 'run_code', description: 'internal', parameters: { type: 'object', properties: {} } },
+      ],
+      execute: async () => ({ content: [{ type: 'text', text: 'sent' }] }),
+    }),
+    allowlist: () => 'send_message',
+  })
+  try {
+    const res = await fetch(bridge.url + '/tools', { headers: { Authorization: 'Bearer ' + bridge.token } })
+    const body = (await res.json()) as { tools: Array<{ name: string; dshName: string }> }
+    assert.deepEqual(body.tools.map((t) => t.dshName), ['send_message'], 'send_message is bridgeable, run_code never is')
+  } finally {
+    await bridge.close()
+  }
+})

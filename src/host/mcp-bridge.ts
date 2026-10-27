@@ -163,6 +163,19 @@ export function startMcpBridge(opts: {
           return;
         }
         callSeq++
+        // Audit trail: the bridge is the only path from an external agent
+        // runtime into DSH tools, and it used to log nothing per call, so a
+        // failed run could only be reconstructed from transcripts. Log the
+        // tool, the caller and the outcome - never the arguments, which may
+        // carry file contents or secrets.
+        const startedAt = Date.now()
+        const audit = (outcome: string): void => {
+          try {
+            opts.log?.('mcp call ' + dshName + ' [' + outcome + '] ' + (Date.now() - startedAt) + 'ms')
+          } catch {
+            /* logging must never break the call */
+          }
+        }
         try {
           // Carry the caller: the session that spawned agy is the agent on
           // whose behalf this call runs (issue #55). Without it, tools that
@@ -200,8 +213,10 @@ export function startMcpBridge(opts: {
             signal: controller.signal,
             ...(agent === undefined ? {} : { agent }),
           })
+          audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
           sendJson(res, 200, { ok: true, text: resultText(result) })
         } catch (e) {
+          audit('failed: ' + String(e).slice(0, 200))
           sendJson(res, 200, { ok: false, error: String(e) })
         }
         return;

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Feat(mcpBridge): audit-log every bridged call.** Each `/call` now logs `mcp call <tool> [<outcome>] <ms>` through the plugin logger (journald), with the caller class (agent/none) and the failure message. Arguments are never logged. Previously the bridge logged only listener start/close, so a failed bridged run could only be reconstructed from transcripts.
+- **Docs(mcpBridge): DSH `send_message` can be bridged.** Documented that the tool is not restricted (only `run_code` / `agy_ask` are), so adding it to `mcpToolAllowlist` exposes it on the `dsh-tools-<port>` MCP server; also documented why the DSH sub-agent footer's `send_message` call hits agy's native tool instead and fails with `recipient "..." not found`.
+
+### 中文
+
+- **新增(mcpBridge)：每次桥接调用记审计日志。** 每次 `/call` 通过插件日志（journald）输出 `mcp call <工具> [<结果>] <毫秒>`，含调用方类别（agent/none）与失败信息，**不记录参数**。此前只在监听启动/关闭时打日志，失败的桥接调用只能靠会话 transcript 反推。
+- **文档(mcpBridge)：DSH 的 `send_message` 可被桥接。** 说明该工具不受限制（仅 `run_code` / `agy_ask` 被排除），把它加进 `mcpToolAllowlist` 即可在 `dsh-tools-<port>` 这个 MCP server 上暴露；同时记录了为什么 DSH sub-agent footer 里的 `send_message` 会命中 agy 原生工具并报 `recipient "..." not found`。
+
 ## 0.4.72 (2026-10-27)
 
 ### English
