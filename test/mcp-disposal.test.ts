@@ -24,10 +24,15 @@ test('disposing during MCP startup closes the listener without publishing worksp
       c.provide('commands', { register() { return () => undefined } })
     } })
     await new Promise(resolve => setTimeout(resolve, 20))
-    apply(ctx, { enabled: true, mcpBridge: true, workspaceRoot: dir, agyBin: '/nonexistent/agy-test' })
+    // Point the registry into the temp dir: the production default is the agy
+    // global registry (~/.gemini/config/mcp_config.json) and a unit test must
+    // never touch the developer's real one.
+    const registry = join(dir, 'gemini', 'mcp_config.json')
+    apply(ctx, { enabled: true, mcpBridge: true, workspaceRoot: dir, agyBin: '/nonexistent/agy-test', mcpConfigPath: registry })
     await ctx.fiber.dispose()
     await new Promise(resolve => setTimeout(resolve, 100))
-    assert.equal(existsSync(join(dir, '.mcp.json')), false, 'disposed scope must not publish a bearer capability')
+    assert.equal(existsSync(registry), false, 'disposed scope must not publish a bearer capability')
+    assert.equal(existsSync(join(dir, '.mcp.json')), false, 'workspace .mcp.json is not the registry agy reads')
     assert.equal(activeHandles().some(handle => !before.has(handle) && handle instanceof Server && handle.listening), false)
   } finally {
     await ctx.fiber.dispose()

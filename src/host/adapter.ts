@@ -1886,6 +1886,10 @@ export class AgyAdapter extends LlmAdapter {
     const effectiveProxy = account?.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined
     const env = {
       ...process.env,
+      // Identity for the MCP reverse bridge (issue #55): agy passes its env to
+      // the MCP server it spawns, so the bridge script learns which DSH session
+      // this run belongs to and the host can resolve the calling agent.
+      ...(sessionKey === '' ? {} : { DSH_MCP_SESSION: sessionKey }),
       ...(cfg.disableTelemetry
         ? {
             DO_NOT_TRACK: '1',

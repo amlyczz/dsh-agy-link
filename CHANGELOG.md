@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(mcpBridge): publish the MCP entry where `agy` 1.4+ actually reads it (issue #55).**
+  - `writeMcpConfig()` only wrote `<workspace>/.mcp.json`, but `agy` 1.4+ loads MCP servers exclusively from `~/.gemini/config/mcp_config.json` (or a plugin's own `mcp_config.json`), so a bridge-enabled session reported `No MCP servers configured.` and every bridged tool call failed as unavailable.
+  - The entry now goes to the global registry by default (`mcpConfigScope: global | workspace | both`, plus `mcpConfigPath` / `DSH_AGY_MCP_CONFIG_PATH` to pin an exact file), computed from the same agy home the runner uses (`GEMINI_CLI_HOME`, else `HOME`), with the existing merge/restore discipline.
+  - Each bridge publishes under its own key (`dsh-tools-<port>`) so two DSH hosts sharing the global file no longer overwrite each other, and disposal only removes the key it owns when another writer changed the file in between.
+- **Fix(mcpBridge): a bridged call now carries the calling agent (issue #55).**
+  - `svc.execute()` was called without `agent`, so every tool that enforces caller identity failed with `agent_teams tools require a calling agent (exec.agent was undefined)` — an agy-backed AgentTeams member could work but never claim/complete a task or message the captain.
+  - The session that spawns agy now passes its id through the child env (`DSH_MCP_SESSION`), `dist/bridge.mjs` forwards it as `X-DSH-Session`, and the host resolves it back to an agent via the `agents` service before executing the tool.
+
+### 中文
+
+- **修复(mcpBridge)：MCP 配置改写到 `agy` 1.4+ 真正读取的位置（issue #55）。**
+  - 原实现只写 `<workspace>/.mcp.json`，而 `agy` 1.4+ 只从 `~/.gemini/config/mcp_config.json`（或插件自身的 `mcp_config.json`）加载 MCP server，导致开启桥接后 `agy mcp list` 仍为空、所有桥接工具调用都报工具不可用。
+  - 现在默认写入全局 registry（新增 `mcpConfigScope: global | workspace | both`，以及 `mcpConfigPath` / `DSH_AGY_MCP_CONFIG_PATH` 指定确切路径），路径与 runner 使用的 agy home 一致（优先 `GEMINI_CLI_HOME`，其次 `HOME`），保留原有的合并/还原语义。
+  - 每个桥用独立 key（`dsh-tools-<port>`）注册，多个 DSH 宿主共用全局文件时不再互相覆盖；退出时若文件已被他人改写，只摘除自己的 key。
+- **修复(mcpBridge)：桥接调用现在携带调用者身份（issue #55）。**
+  - 原实现调用 `svc.execute()` 时不传 `agent`，导致所有需要调用者身份的工具报 `agent_teams tools require a calling agent (exec.agent was undefined)`，agy 作为 AgentTeams 成员时能干活却无法 claim/complete/发消息。
+  - 现在启动 agy 的会话把 session id 通过子进程环境变量 `DSH_MCP_SESSION` 传入，`dist/bridge.mjs` 以 `X-DSH-Session` 头转发，宿主通过 `agents` 服务解析出 agent 后再执行工具。
+
 ## 0.4.71 (2026-10-27)
 
 ### English

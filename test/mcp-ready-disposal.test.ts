@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,8 +12,11 @@ test('disposing a ready plugin clears background timers, closes MCP and restores
   const dir = mkdtempSync(join(tmpdir(), 'agy-ready-disposal-'))
   const previous = process.env.DSH_HOME
   process.env.DSH_HOME = dir
-  const file = join(dir, '.mcp.json')
+  // The production default is the agy global registry; redirect it into the
+  // temp dir so the test never mutates the developer's ~/.gemini.
+  const file = join(dir, 'gemini', 'mcp_config.json')
   const original = '{"mcpServers":{},"sentinel":"preserve exact bytes"}\n'
+  mkdirSync(join(dir, 'gemini'), { recursive: true })
   writeFileSync(file, original)
   const ctx = new Context()
   const listeners = t.mock.method(Server.prototype, 'listen')
@@ -31,7 +34,7 @@ test('disposing a ready plugin clears background timers, closes MCP and restores
       assert.ok(Date.now() < servicesDeadline, 'host services did not register')
       await new Promise(resolve => setTimeout(resolve, 5))
     }
-    apply(ctx, { enabled: true, mcpBridge: true, workspaceRoot: dir, agyBin: '/nonexistent/agy-test' })
+    apply(ctx, { enabled: true, mcpBridge: true, workspaceRoot: dir, agyBin: '/nonexistent/agy-test', mcpConfigPath: file })
     const deadline = Date.now() + 2000
     while (readFileSync(file, 'utf8') === original) {
       assert.ok(Date.now() < deadline, 'bridge did not publish configuration')

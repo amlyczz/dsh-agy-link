@@ -107,9 +107,21 @@ reference-counted slot is the strongest isolation the plugin can provide.
 - **DSH tools to agy (reverse MCP bridge)** - available since v0.2 behind the
   `mcpBridge` config flag (experimental): the plugin runs a loopback-only,
   token-guarded HTTP endpoint and registers a zero-dependency stdio MCP
-  server (`dsh-tools`) in the workspace `.mcp.json` (merged in, restored on
-  disable). `run_code` and `agy_ask` are never bridged; `mcpToolAllowlist`
-  restricts the set further.
+  server (`dsh-tools-<port>`) in the registry agy actually loads (merged in,
+  restored on disable). Since the issue #55 fix that registry is the global
+  `~/.gemini/config/mcp_config.json` - `agy` 1.4+ ignores a workspace
+  `.mcp.json` entirely, which made the bridge a no-op. `mcpConfigScope`
+  (`global` default, `workspace`, `both`) and `mcpConfigPath` /
+  `DSH_AGY_MCP_CONFIG_PATH` select the target. `run_code` and `agy_ask` are
+  never bridged; `mcpToolAllowlist` restricts the set further.
+- **Caller identity for bridged tools** - a bridged call runs on behalf of the
+  session that spawned agy: the runner exports `DSH_MCP_SESSION`, the MCP
+  server forwards it as `X-DSH-Session`, and the host resolves it to an agent
+  before `tools.execute`. Tools that enforce `exec.agent` (e.g. all AgentTeams
+  coordination tools) therefore work instead of throwing
+  `agent_teams tools require a calling agent`. A call from a process that
+  carries no session id is still dispatch-less and reports the tool's own
+  guard error.
 - **Full tool args / diff cards (v0.4.28+)** - the bridge reads agy's
   conversation SQLite DB via the `sqlite3` CLI to recover arguments that
   `filterToolParameters` strips from stream-json. When `sqlite3` is missing
