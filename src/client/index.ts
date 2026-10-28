@@ -9,7 +9,7 @@ import { en, es, NS, ptBR, zh, type AgyLocaleKey } from './locales.ts';
 import { installAutoExpandReasoning } from './reasoning.ts';
 import { installImageEnhancer } from './images.ts';
 import { installDecisionChips } from './decisions.ts';
-import { ensureScrollListener, disposeScrollListener } from './scroll-guard.ts';
+import { ensureScrollListener, disposeScrollListener, setOverlaySuspended } from './scroll-guard.ts';
 
 
 type ReactApi = {
@@ -272,7 +272,20 @@ const agyModalStore = {
 	open: false,
 	listeners: new Set<() => void>(),
 	setOpen(v: boolean) {
+		if (agyModalStore.open === v) return;
 		agyModalStore.open = v;
+		// OVERLAY ISOLATION CONTRACT (2026-10-28 — "打开控制台后滚动闪屏"):
+		// an open console must FREEZE the page behind it, not merely draw on top.
+		//   * suspend the plugin's global DOM scanners so nothing is injected into
+		//     the conversation while it composites under the overlay;
+		//   * toggle `agy-modal-open` on <html> so CSS locks the conversation
+		//     scroller (scrollbar-gutter:stable keeps the width from jumping).
+		// Without this, wheel/inertia and the modal's 3s polling keep reflowing
+		// and repainting the page behind the fixed overlay -> visible flashing.
+		setOverlaySuspended(v);
+		if (typeof document !== 'undefined' && document.documentElement) {
+			document.documentElement.classList.toggle('agy-modal-open', v);
+		}
 		agyModalStore.listeners.forEach((fn) => fn());
 	},
 	subscribe(fn: () => void) {
@@ -1021,13 +1034,23 @@ body.dark,
 	inset: 0;
 	z-index: 9999;
 	background: var(--agy-modal-backdrop);
-	-webkit-backdrop-filter: blur(6px);
-	backdrop-filter: blur(6px);
+	/* NO full-screen backdrop blur here. Filtering the whole viewport forces
+	   Chromium/Electron to re-sample the page every frame while anything behind
+	   it moves (scroll, streaming, animations) — the recurring "打开控制台后滚动
+	   闪屏" root cause. The rgba dim below is stable and flicker-free. */
+	overscroll-behavior: contain;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	padding: 16px;
 	box-sizing: border-box;
+}
+/* While the console is open, freeze the conversation scroller behind it so
+   nothing moves/reflows under the fixed overlay. scrollbar-gutter:stable on the
+   host scroller keeps the width from jumping when overflow flips to hidden. */
+html.agy-modal-open [data-conversation-scroll] {
+	overflow: hidden !important;
+	overscroll-behavior: contain;
 }
 .agy-modal-panel {
 	position: relative;
@@ -2294,7 +2317,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 						onClick: () => agyModalStore.setOpen(false),
 					}, uiIcon('x', 14, 'var(--agy-text-btn)')),
 				),
-				h('div', { style: { overflowY: 'auto', padding: '18px', flex: '1', background: 'var(--agy-bg-panel)' } },
+				h('div', { style: { overflowY: 'auto', overscrollBehavior: 'contain', padding: '18px', flex: '1', background: 'var(--agy-bg-panel)' } },
 					h(AgySettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
 				),
 			),
@@ -2464,10 +2487,20 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 		return dispose;
 	});
 
-	// Global scroll activity coordinator: suppresses layout-shifting DOM mutations during scrolling
+	// Global scroll activity coordinator: suppresses layout-shifting DOM mutations during scrolling,
+	// and (via the same guard) while the console overlay owns the screen.
 	ctx.effect(() => {
 		ensureScrollListener();
-		return disposeScrollListener;
+		return () => {
+			disposeScrollListener();
+			// A plugin reload while the console was open must not leave the page
+			// permanently scroll-locked (setOpen(false) never runs on teardown).
+			agyModalStore.open = false;
+			setOverlaySuspended(false);
+			if (typeof document !== 'undefined' && document.documentElement) {
+				document.documentElement.classList.remove('agy-modal-open');
+			}
+		};
 	});
 
 	// Native tool-card rendering for the agy_tool mirror (DSH >= 0.1.5):

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(client): eliminate the recurring "open Antigravity console → scrolling flashes" by isolating the modal overlay (root cause, not another single-scanner patch).**
+  - Root cause (a class, not a point): the console is a full-viewport overlay that neither froze the page behind it nor suspended the plugin's own global DOM scanners, and the backdrop carried a full-viewport `backdrop-filter: blur()`. Any motion/repaint behind the fixed overlay (wheel/inertia scrolling of the conversation, the modal's 3s status polling, scanner injection) was therefore re-sampled through the GPU filter and re-laid-out every frame → visible flashing. Every prior fix patched one publisher (scroll-guard, decision-chip idempotence, busy scoping, host claim) while leaving the overlay non-isolating.
+  - Removed the full-viewport backdrop blur (stable `rgba` dim instead) — the single biggest flash source.
+  - Added an explicit overlay-isolation contract: `agyModalStore.setOpen()` now toggles `agy-modal-open` on `<html>`, which locks `[data-conversation-scroll]` (`overflow:hidden`, `scrollbar-gutter:stable` keeps the width stable) so nothing moves behind the fixed overlay; `overscroll-behavior:contain` stops wheel/momentum chaining.
+  - Added `setOverlaySuspended()/isInteractionLocked()` to the scroll guard and routed decisions/images/reasoning/mermaid scanners through it, so no DOM is injected into the conversation while the console is open (a resume pass catches up afterwards). Cleanup removes the lock class on plugin teardown.
+  - Guarded against recurrence: new regression tests assert the backdrop never regains a full-viewport `backdrop-filter`, that the scroller is locked while the overlay is open, and that all four scanners gate on `isInteractionLocked()`.
+
+### 中文
+
+- **修复（client）：彻底消除「打开 Antigravity 控制台后滚动闪屏」——解决根因，而非再一次单点补丁。**
+  - 根因（是一类问题，不是单点）：控制台是全屏浮层，但它既没有冻结背后的页面，也没有暂停插件自身的全局 DOM 扫描器，且遮罩带了全屏 `backdrop-filter: blur()`。于是浮层背后的一切移动/重绘（会话的滚轮/惯性滚动、控制台每 3s 的状态轮询、扫描器注入）都会每帧被 GPU 滤镜重新采样并重新布局 → 表现为闪屏。历次修复都只堵住一个"发布者"（scroll-guard、decision-chip 幂等、busy 作用域、宿主同步 claim），浮层始终没有被隔离。
+  - 移除全屏遮罩模糊（改用稳定的 `rgba` 半透明遮罩），这是最大的闪屏来源。
+  - 建立显式的"浮层隔离契约"：`agyModalStore.setOpen()` 现在会在 `<html>` 上切换 `agy-modal-open`，从而锁定 `[data-conversation-scroll]`（`overflow:hidden`，宿主自带 `scrollbar-gutter:stable` 避免宽度跳动），让浮层背后完全静止；`overscroll-behavior:contain` 阻止滚轮/惯性链式滚动。
+  - scroll guard 新增 `setOverlaySuspended()/isInteractionLocked()`，decisions/images/reasoning/mermaid 四个扫描器统一改用它：控制台打开时不向会话注入任何 DOM（关闭后补扫一次）。插件卸载时清理锁类。
+  - 防复发护栏：新增回归测试锁定契约（全屏遮罩不得再出现 `backdrop-filter`、浮层打开时滚动容器必须被锁定、四个扫描器必须走 `isInteractionLocked()`）。
+
 ## 0.4.73 (2026-10-27)
 
 ### English

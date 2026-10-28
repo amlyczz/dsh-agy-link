@@ -1,4 +1,4 @@
-import { isScrollActive, onScrollSettle } from './scroll-guard.ts';
+import { isInteractionLocked, onScrollSettle } from './scroll-guard.ts';
 
 // Client-side local image display & lightbox enhancer for dsh-agy-link.
 //
@@ -102,8 +102,10 @@ const IMAGE_CSS = `
   position: fixed;
   inset: 0;
   z-index: 999999;
-  background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.9);
+  /* No full-viewport backdrop blur: same flicker class as the console overlay.
+     The image viewer is already near-opaque; a solid alpha is stable. */
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   user-select: none;
@@ -420,7 +422,7 @@ function getReactProps(el: HTMLElement): Record<string, unknown> | null {
  */
 export function scanAndEnhanceImages(): void {
   if (typeof document === 'undefined') return;
-  if (isScrollActive()) return;
+  if (isInteractionLocked()) return;
   const origin = getOrigin();
 
   // 1. Rewrite any existing <img> src pointing to 127.0.0.1 to current origin if remote
@@ -544,11 +546,11 @@ let imageScanTimer: ReturnType<typeof setTimeout> | null = null;
 let unbindImageSettle: (() => void) | null = null;
 
 function scheduleImageScan(): void {
-  if (isScrollActive()) return;
+  if (isInteractionLocked()) return;
   if (imageScanTimer !== null) return;
   imageScanTimer = setTimeout(() => {
     imageScanTimer = null;
-    if (isScrollActive()) return;
+    if (isInteractionLocked()) return;
     scanAndEnhanceImages();
   }, 100);
 }
