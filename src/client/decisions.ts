@@ -1,4 +1,4 @@
-import { isScrollActive, onScrollSettle } from './scroll-guard.ts';
+import { isInteractionLocked, onScrollSettle } from './scroll-guard.ts';
 
 // Interactive User Decision & Choice Quick-Actions for dsh-agy-link.
 //
@@ -186,7 +186,7 @@ function extractOptionsFromList(container: HTMLElement): ExtractedOption[] {
  */
 export function scanAndEnhanceDecisions(): void {
   if (typeof document === 'undefined') return;
-  if (isScrollActive()) return;
+  if (isInteractionLocked()) return;
 
   const markdownContainers = document.querySelectorAll<HTMLElement>('div[class*="_markdown_"], [data-markdown-variant]');
   for (let i = 0; i < markdownContainers.length; i++) {
@@ -285,11 +285,11 @@ let decisionScanTimer: ReturnType<typeof setTimeout> | null = null;
 let unbindDecisionSettle: (() => void) | null = null;
 
 function scheduleDecisionScan(): void {
-  if (isScrollActive()) return;
+  if (isInteractionLocked()) return;
   if (decisionScanTimer !== null) return;
   decisionScanTimer = setTimeout(() => {
     decisionScanTimer = null;
-    if (isScrollActive()) return;
+    if (isInteractionLocked()) return;
     scanAndEnhanceDecisions();
   }, 100);
 }

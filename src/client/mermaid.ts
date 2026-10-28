@@ -1,4 +1,4 @@
-import { isScrollActive, onScrollSettle } from './scroll-guard.ts';
+import { isInteractionLocked, onScrollSettle } from './scroll-guard.ts';
 
 // Client-side mermaid rendering (dsh-agy-link).
 //
@@ -477,18 +477,18 @@ async function renderInto(block: HTMLElement, source: string, lang = ''): Promis
 // walks every code block, so coalesce mutation bursts into one pass.
 let scanTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleScan(): void {
-	if (isScrollActive()) return
+	if (isInteractionLocked()) return
 	if (scanTimer !== null) return
 	scanTimer = setTimeout(() => {
 		scanTimer = null
-		if (isScrollActive()) return
+		if (isInteractionLocked()) return
 		scan()
 	}, 150)
 }
 
 function scan(): void {
 	if (typeof document === 'undefined') return
-	if (isScrollActive()) return
+	if (isInteractionLocked()) return
 	cleanupTempElements()
 	const blocks = document.querySelectorAll<HTMLElement>('.md-code-block')
 	for (let i = 0; i < blocks.length; i++) {

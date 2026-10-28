@@ -16,6 +16,13 @@ let scrollTimer: ReturnType<typeof setTimeout> | null = null;
 let listenerAttached = false;
 const settleListeners = new Set<() => void>();
 
+// An overlay (the Antigravity console) can own the screen without the page
+// scrolling. While it is open we must ALSO stop the overlay scanners from
+// mutating the conversation behind it: every injected node changes layout, and
+// with a full-screen compositing layer on top that turns into visible flashing.
+// This flag is the single source of truth for "an overlay owns the screen".
+let overlaySuspended = false;
+
 function onScrollActivity(): void {
 	isScrolling = true;
 	if (scrollTimer !== null) clearTimeout(scrollTimer);
@@ -30,6 +37,38 @@ function onScrollActivity(): void {
 
 export function isScrollActive(): boolean {
 	return isScrolling;
+}
+
+/**
+ * Suspend every overlay scanner while a modal/overlay owns the screen.
+ *
+ * Opening the Antigravity console must freeze the conversation behind it: any
+ * DOM the scanners inject while the panel composites on top becomes visible
+ * flashing, and the modal's own periodic re-renders keep waking the global
+ * observers. On resume we fire the settle listeners once so scanners catch up
+ * on anything that changed while they were held back.
+ */
+export function setOverlaySuspended(active: boolean): void {
+	if (overlaySuspended === active) return;
+	overlaySuspended = active;
+	if (!active) {
+		for (const fn of settleListeners) {
+			try { fn(); } catch { /* ignore listener errors */ }
+		}
+	}
+}
+
+export function isOverlaySuspended(): boolean {
+	return overlaySuspended;
+}
+
+/**
+ * The one predicate every overlay scanner should gate on: may I mutate the DOM
+ * right now? False during an active scroll gesture AND while an overlay owns
+ * the screen. Scanners must not act while this is true.
+ */
+export function isInteractionLocked(): boolean {
+	return isScrolling || overlaySuspended;
 }
 
 /** Set scroll active state explicitly (useful for testing or programmatic scrolls). */
@@ -64,4 +103,5 @@ export function disposeScrollListener(): void {
 	}
 	settleListeners.clear();
 	isScrolling = false;
+	overlaySuspended = false;
 }

@@ -1,4 +1,4 @@
-import { isScrollActive, onScrollSettle } from './scroll-guard.ts';
+import { isInteractionLocked, onScrollSettle } from './scroll-guard.ts';
 
 // Client-side reasoning presentation (dsh-agy-link).
 //
@@ -20,7 +20,7 @@ import { isScrollActive, onScrollSettle } from './scroll-guard.ts';
 //
 // Solutions:
 // 1. Stable turn-fingerprint cache (`handledTurns` Set) persists across DOM remounts.
-// 2. Active scroll guard (`isScrollActive`) suppresses all scans and click synthesis while scrolling.
+// 2. Interaction lock (`isInteractionLocked` = active scroll OR an overlay owns the screen) suppresses all scans and click synthesis.
 // 3. User manual interaction permanently claims the turn so the scanner never interferes.
 
 const REASONING_CSS = `
@@ -130,7 +130,7 @@ export function tryExpandThinkRow(root: HTMLElement): void {
 	}
 
 	// Never synthesize clicks during active scrolling — virtualizer measurement must stay stable
-	if (isScrollActive()) return;
+	if (isInteractionLocked()) return;
 
 	// Already expanded if body is visible with height.
 	if (body.clientHeight > 8) {
@@ -151,7 +151,7 @@ export function tryExpandThinkRow(root: HTMLElement): void {
 
 export function scanThinkingRows(): void {
 	if (typeof document === 'undefined') return;
-	if (isScrollActive()) return;
+	if (isInteractionLocked()) return;
 	const rows = document.querySelectorAll<HTMLElement>('div[data-variant="think"]');
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
@@ -163,11 +163,11 @@ export function scanThinkingRows(): void {
 // mutation bursts into one scan pass (mirrors the mermaid scanner's debounce).
 let scanTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleScan(): void {
-	if (isScrollActive()) return;
+	if (isInteractionLocked()) return;
 	if (scanTimer !== null) return;
 	scanTimer = setTimeout(() => {
 		scanTimer = null;
-		if (isScrollActive()) return;
+		if (isInteractionLocked()) return;
 		scanThinkingRows();
 	}, 150);
 }
