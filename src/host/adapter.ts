@@ -320,13 +320,13 @@ export function buildDigest(messages: readonly Message[], fromIdx: number, maxCh
   }
 
   let budget = maxChars
-  const kept: string[] = []
+  let taskPart = ''
   if (taskLine !== '') {
     if (taskLine.length > budget) {
-      kept.push(taskLine.slice(0, Math.max(0, budget)))
+      taskPart = taskLine.slice(0, Math.max(0, budget))
       budget = 0
     } else {
-      kept.push(taskLine)
+      taskPart = taskLine
       budget -= taskLine.length
     }
   }
@@ -340,7 +340,10 @@ export function buildDigest(messages: readonly Message[], fromIdx: number, maxCh
     keptOther.unshift(line)
     budget -= line.length
   }
-  kept.push(...keptOther)
+  const kept: string[] = [...keptOther]
+  if (taskPart !== '') {
+    kept.push(taskPart)
+  }
   if (kept.length === 0) return ''
   return '[conversation so far]\n' + kept.join('\n\n') + '\n[end of conversation so far]\n\n'
 }
@@ -1240,11 +1243,21 @@ export class AgyAdapter extends LlmAdapter {
     }
 
     // Compaction detection (ADR-013): If DSH compacted history or cleared earlier turns,
-    // messages.length drops below the recorded watermark. Invalidate the stale agy
+    // messages.length drops significantly below the recorded watermark. Invalidate the stale agy
     // conversation binding so a clean agy session is started and seeded with the compacted summary.
-    if (!isAux && binding !== undefined && messages.length < binding.lastMessageCount) {
+    // Minor fluctuations (e.g. 1-2 messages removed by telemetry filtering / DSH message store pruning)
+    // should NOT invalidate the binding, but simply update the watermark.
+    const isCompacted = binding !== undefined && (
+      (messages.length <= 4 && binding.lastMessageCount >= 5) ||
+      (binding.lastMessageCount > 10 && messages.length < Math.floor(binding.lastMessageCount * 0.8)) ||
+      (binding.lastMessageCount <= 10 && messages.length < binding.lastMessageCount - 2)
+    )
+    if (!isAux && binding !== undefined && isCompacted) {
       if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
       binding = undefined
+    } else if (binding !== undefined && messages.length < binding.lastMessageCount) {
+      binding.lastMessageCount = messages.length
+      if (sessionAccountKey !== '') this.deps.store.set(sessionAccountKey, binding)
     }
 
     let prompt = ''

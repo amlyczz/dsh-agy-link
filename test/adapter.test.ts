@@ -721,6 +721,8 @@ test('buildDigest bounds output and keeps newest turns', () => {
   const full = buildDigest(msgs, 0, 10_000)
   assert.ok(full.includes('turn-one'))
   assert.ok(full.includes('turn-three'))
+  assert.ok(full.indexOf('turn-one') < full.indexOf('turn-two'))
+  assert.ok(full.indexOf('turn-two') < full.indexOf('turn-three'), 'historical turns must precede the latest task')
 })
 
 test('buildDigest never lets tool-result bulk eat the live task (issue #35)', () => {
@@ -1348,6 +1350,38 @@ test('compaction detection clears stale binding and re-seeds with digest (ADR-01
   assert.ok(prompt.includes('[compacted summary of m1-m3]'))
   assert.ok(prompt.includes('new question after compaction'))
   assert.ok(!argv.includes('--conversation') || argv[argv.indexOf('--conversation') + 1] !== 'conv-fresh-1')
+})
+
+test('compaction detection does not invalidate binding on minor message drop (e.g. telemetry pruning)', async () => {
+  const { adapter, store } = makeAdapter()
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-compact-minor.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  // Turn 1: 15 messages, creates binding with watermark 15
+  const msgs1 = []
+  for (let i = 0; i < 7; i++) {
+    msgs1.push(msg('user', `u${i}`))
+    msgs1.push(msg('assistant', `a${i}`))
+  }
+  msgs1.push(msg('user', 'u7'))
+  await runTurn(adapter, msgs1, { sessionId: 'sess-minor-drop' as never })
+
+  await waitFor(() => store.get('sess-minor-drop'))
+  const initialBinding = store.get('sess-minor-drop')
+  assert.equal(initialBinding?.lastMessageCount, 15)
+  const initialConvId = initialBinding?.conversationId
+  assert.ok(initialConvId)
+
+  // Turn 2: history drops 1 message (e.g. 14 messages due to telemetry filtering)
+  const msgs2 = msgs1.slice(0, 14)
+  await runTurn(adapter, msgs2, { sessionId: 'sess-minor-drop' as never })
+
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  // Binding should NOT be deleted, conversation id should be preserved
+  assert.ok(argv.includes('--conversation'))
+  assert.equal(argv[argv.indexOf('--conversation') + 1], initialConvId)
+  assert.equal(store.get('sess-minor-drop')?.lastMessageCount, 14)
 })
 
 test('model switch invalidates stale agy conversation binding', async () => {
