@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.75 (2026-10-29)
+
+### English
+
+- **Fix(context-transfer): stop agy's 192,000-byte single-message cap from swallowing the live request.**
+  - Measured on agy 1.4.9 (latest; no newer build fixes it): a SINGLE user message is silently truncated to **192,000 UTF-8 bytes** and the cut lands on the **TAIL** — ASCII 300,047 B → 192,000 B kept, CJK 490,864 B → 191,998 B kept, identical for `--input-format stream-json` and `text`. There is no flag, env var, or config key to raise it; the model's 1M window only applies across MANY messages.
+  - The old first-contact prompt was `buildDigest(...) + livePrompt`, so an oversized history truncated away the `[end of conversation so far]` marker AND the user's newest question; the model then saw history only, treated the previous turn's instruction as current, and re-ran it (the "ignored my latest message" failure, twice).
+  - The live request now leads the prompt (`wrapLiveRequest()` wraps it as `[CURRENT REQUEST …][/CURRENT REQUEST]`), so a tail cut can only discard background.
+  - **Byte-aware budget**: `buildDigest(messages, fromIdx, maxChars, { maxBytes, maxLineBytes, includeTaskLine })` now trims by UTF-8 bytes (oldest turns dropped first, 40 KB per-line cap), never splitting a code point.
+- **Feat(context-transfer): deliver oversized history as a file reference instead of inlining it.**
+  - Above `contextTransferFileAboveBytes` the digest is written to `<stateDir>/context-transfer/<session>-<ts>.md`, the prompt keeps only the path, and the directory is exposed with `--add-dir` so agy pages through it with `read_file` — the first path that actually uses the model's 1M-token window. Verified live: a 368 KB .md was read and answered correctly from a 300 B prompt.
+  - Sending guard: prompts over 180,000 B are tail-trimmed with a log line, so agy's silent truncation can never fire.
+  - New config: `contextTransferMaxBytes` (150000), `contextTransferFileAboveBytes` (55000), `contextTransferFileMaxBytes` (2000000).
+- **Test**: byte-ceiling digest, live-request-first assembly, file-referenced context transfer (3 new cases); `resolveConfig` proxy test now isolates `DSH_HOME` so its assertion no longer depends on the operator's real `runtime-overrides.json`.
+
+### 中文
+
+- **修复（上下文注入）：不再让 agy 的 192,000 字节单条消息上限吞掉当前提问。**
+  - agy 1.4.9（已是最新，升级无解）会把**单条用户消息**静默截断到 **192,000 UTF-8 字节**，且**从尾部切**：ASCII 300,047 B → 保留 192,000 B；中文 490,864 B → 保留 191,998 B；`--input-format stream-json` 与 `text` 结果一致。没有 flag / 环境变量 / 配置键可调；1M 上下文只对**多条消息**生效。
+  - 旧的首包拼法是 `buildDigest(...) + 当前提问`，历史一大就把 `[end of conversation so far]` 和用户最新提问一起切掉，模型只看到历史、把上一轮指令当新任务重做（“忽略我最新消息”两次事故的同一死法）。
+  - 现在**当前请求前置**（`wrapLiveRequest()` 包成 `[CURRENT REQUEST …][/CURRENT REQUEST]`），尾截断最多只丢背景。
+  - **字节预算**：`buildDigest` 新增 `{ maxBytes, maxLineBytes, includeTaskLine }`，按 UTF-8 字节裁剪（先丢最老轮次，单条 40KB 上限），且不切断多字节字符。
+- **新增（上下文注入）：超长历史改为文件引用，不再内联。**
+  - 超过 `contextTransferFileAboveBytes` 时把 digest 写入 `<stateDir>/context-transfer/<session>-<ts>.md`，prompt 只保留路径，并通过 `--add-dir` 暴露目录，让 agy 用 `read_file` 分页读取 —— 这是真正吃满 1M 上下文的路径。实测：368 KB 的 .md 由 agy 读取后正确回答，prompt 仅 300 B。
+  - 发送前兜底：超过 180,000 B 的 prompt 裁尾并记日志，永不触发 agy 的静默截断。
+  - 新增配置：`contextTransferMaxBytes`(150000)、`contextTransferFileAboveBytes`(55000)、`contextTransferFileMaxBytes`(2000000)。
+- **测试**：字节上限 digest、当前请求前置装配、文件引用上下文（新增 3 例）；`resolveConfig` 代理测试改为隔离 `DSH_HOME`，不再依赖运维机器上真实的 `runtime-overrides.json`。
+
 ## 0.4.74 (2026-10-28)
 
 ### English

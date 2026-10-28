@@ -4,7 +4,7 @@
 // argv assembly.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -745,6 +745,78 @@ test('buildDigest never lets tool-result bulk eat the live task (issue #35)', ()
   const d = buildDigest(msgs, 0, 8_000)
   assert.ok(d.includes('please read block LOg2xNRy3'), 'task line must survive a digest saturated by tool results')
   assert.ok(d.includes('Tool result:'), 'tool results are labeled distinctly')
+})
+
+// --- agy single-message ceiling (192,000 UTF-8 bytes, tail-truncated) -------
+// Measured on agy 1.4.9: a 300 KB ASCII prompt kept exactly 192,000 B and a
+// 490 KB CJK prompt kept 191,998 B; the model then answered the OLD task because
+// the live request (appended after the digest) had been cut off. These tests pin
+// the two guards: a byte budget for the digest and live-request-first assembly.
+
+test('buildDigest enforces a UTF-8 byte ceiling without splitting code points', () => {
+  const big = '这是用于测试字节预算的中文内容。'.repeat(2_000)
+  const msgs = [msg('user', 'first question'), msg('assistant', big), msg('user', 'latest')]
+  const d = buildDigest(msgs, 0, 1_000_000, { maxBytes: 20_000, maxLineBytes: 5_000 })
+  const bytes = Buffer.byteLength(d, 'utf8')
+  assert.ok(bytes <= 20_100, 'digest must respect the byte ceiling, got ' + bytes + ' B')
+  assert.ok(d.includes('[conversation so far]'))
+  assert.ok(!d.includes('\uFFFD'), 'a split code point must not leak a replacement char')
+})
+
+test('first-contact prompt leads with the live request (agy cuts the tail)', async () => {
+  const { adapter } = makeAdapter({ contextTransferFileAboveBytes: 5_000_000 })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-live-head.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const history: Message[] = []
+  for (let i = 0; i < 40; i++) {
+    history.push(msg('user', 'earlier question ' + i))
+    history.push(msg('assistant', 'earlier answer ' + i + ' ' + 'x'.repeat(500)))
+  }
+  history.push(msg('user', 'THE-LIVE-QUESTION'))
+  await runTurn(adapter, history)
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt.startsWith('[CURRENT REQUEST'), 'live request block must lead the prompt')
+  assert.ok(
+    prompt.indexOf('THE-LIVE-QUESTION') < prompt.indexOf('[conversation so far]'),
+    'the live question must come before the digest',
+  )
+  assert.ok(Buffer.byteLength(prompt, 'utf8') <= 180_000, 'prompt must stay under agy single-message ceiling')
+})
+
+test('oversized context transfer travels as a file reference, not inlined', async () => {
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = workDir
+  try {
+    const { adapter } = makeAdapter({ contextTransferFileAboveBytes: 5_000 })
+    process.env.FAKE_AGY_MODE = 'ok'
+    const argsFile = join(workDir, 'args-ctx-file.json')
+    process.env.FAKE_AGY_ARGS_FILE = argsFile
+    const history: Message[] = []
+    for (let i = 0; i < 30; i++) {
+      history.push(msg('user', 'p' + i))
+      history.push(msg('assistant', 'answer ' + i + ' ' + 'y'.repeat(800)))
+    }
+    history.push(msg('user', 'LIVE-QUESTION-FILE-MODE'))
+    await runTurn(adapter, history)
+    const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+    assert.ok(prompt.includes('BACKGROUND CONTEXT'), 'must reference the background file')
+    assert.ok(prompt.includes('read_file'))
+    assert.ok(!prompt.includes('[conversation so far]'), 'the digest must NOT be inlined')
+    const m = prompt.match(/([A-Za-z]:\\[^\n]*?\.md)/) ?? prompt.match(/(\/[^\n]*?\.md)/)
+    assert.ok(m !== null, 'prompt must name the context file path')
+    const ctxPath = m![1]!
+    assert.ok(existsSync(ctxPath), 'context file must exist: ' + ctxPath)
+    assert.ok(readFileSync(ctxPath, 'utf8').includes('[conversation so far]'))
+    const dirs: string[] = []
+    for (let i = 0; i < argv.length; i++) if (argv[i] === '--add-dir') dirs.push(argv[i + 1] ?? '')
+    assert.ok(dirs.some((d) => ctxPath.startsWith(d)), 'the context dir must be passed via --add-dir')
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
 })
 
 function imgMsg(id: string, text = 'shot'): Message {

@@ -65,6 +65,21 @@ export interface PluginConfig {
    * switch. Default 660K, sized for 1M-token-class models.
    */
   contextTransferMaxChars: number
+  /**
+   * Byte budget for INLINING the context-transfer digest into one prompt.
+   * agy 1.4.x truncates a single user message at 192,000 UTF-8 bytes and the
+   * cut lands on the TAIL, so a huge inline digest used to swallow the live
+   * request that followed it. Keep this well below that ceiling.
+   */
+  contextTransferMaxBytes: number
+  /**
+   * Above this many UTF-8 bytes the digest is written to a temp .md file and
+   * referenced by path instead of inlined: agy then reads it in pages, which is
+   * the only way a long history can use the model's real (1M-token) window.
+   */
+  contextTransferFileAboveBytes: number
+  /** Byte cap for the file-backed digest (not bounded by agy's message cap). */
+  contextTransferFileMaxBytes: number
   modelsCacheTtlMs: number
   /** Allow compaction / session-title auxiliary calls to spawn agy. */
   allowAuxiliary: boolean
@@ -195,6 +210,9 @@ export function defaultConfig(): PluginConfig {
     forwardSystemPrompt: false,
     digestMaxChars: 8_000,
     contextTransferMaxChars: 660_000,
+    contextTransferMaxBytes: 150_000,
+    contextTransferFileAboveBytes: 55_000,
+    contextTransferFileMaxBytes: 2_000_000,
     modelsCacheTtlMs: 300_000,
     allowAuxiliary: true,
     compactionMaxChars: 800_000,

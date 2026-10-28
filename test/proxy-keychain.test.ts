@@ -23,6 +23,14 @@ test('proxyEnvFor maps one URL onto all six proxy vars', () => {
 
 test('resolveConfig reads proxyUrl from entry, overrides and env', () => {
   assert.equal(defaultConfig().proxyUrl, '')
+  // Isolate the real user state dir: resolveConfig() defaults its overrides
+  // argument to readOverrides() (stateDir()/runtime-overrides.json), so an
+  // operator-configured proxy on this machine would otherwise win over the
+  // entry layer and make this assertion environment-dependent.
+  const prevHome = process.env.DSH_HOME
+  const isolatedHome = mkdtempSync(join(tmpdir(), 'agy-cfg-home-'))
+  process.env.DSH_HOME = isolatedHome
+  try {
   assert.equal(resolveConfig({ proxyUrl: 'http://p:1' }).proxyUrl, 'http://p:1')
   const overrides = join(tmpdir(), `agy-ovr-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
   writeFileSync(overrides, JSON.stringify({ proxyUrl: 'socks5://o:2' }))
@@ -37,6 +45,11 @@ test('resolveConfig reads proxyUrl from entry, overrides and env', () => {
     )
   } finally {
     rmSync(overrides, { force: true })
+  }
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(isolatedHome, { recursive: true, force: true })
   }
 })
 
