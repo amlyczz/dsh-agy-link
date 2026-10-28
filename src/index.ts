@@ -584,7 +584,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify(body))
     }
-    const readBody = (req: unknown): Promise<Record<string, unknown>> => {
+    const readBody = (req: unknown, strict = false): Promise<Record<string, unknown>> => {
     const r = req as { on?: (e: string, cb: (c: Buffer) => void) => void }
     return new Promise((resolve) => {
       const chunks: Buffer[] = []
@@ -594,7 +594,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           const v = JSON.parse(Buffer.concat(chunks).toString('utf8'))
           resolve(v && typeof v === 'object' ? (v as Record<string, unknown>) : {})
         } catch {
-          resolve({})
+          // Strict callers must be able to tell malformed JSON from `{}`:
+          // an empty body must not silently become "do it for all accounts".
+          resolve(strict ? { __invalidJson: true } : {})
         }
       })
     })
@@ -889,28 +891,49 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool/warmup', handler: (req, res) => {
       void (async () => {
-        if (methodOf(req) !== 'POST') {
-          sendJson(res as RawRes, 405, { error: 'POST only' })
-          return
-        }
-        const body = await readBody(req)
-        const id = typeof body.id === 'string' ? body.id : ''
-        const force = body.force === true
-        const model = typeof body.model === 'string' ? body.model : undefined
-        let results: WarmupResult[] = []
-        if (id) {
-          const acc = pool.getAccount(id)
-          if (!acc) {
-            sendJson(res as RawRes, 404, { error: 'Account not found' })
+        try {
+          if (methodOf(req) !== 'POST') {
+            sendJson(res as RawRes, 405, { error: 'POST only' })
             return
           }
-          results = await warmup.warmupAccount(acc, { force, model })
-          await quota.refreshAccountQuota(acc, true).catch(() => undefined)
-        } else {
-          results = await warmup.warmupAllAccounts({ force })
-          await quota.refreshAllQuotas(true).catch(() => undefined)
+          const body = await readBody(req, true)
+          if (body.__invalidJson === true) {
+            sendJson(res as RawRes, 400, { error: 'invalid JSON body' })
+            return
+          }
+          const id = typeof body.id === 'string' ? body.id : ''
+          const force = body.force === true
+          const rawModel = body.model
+          if (rawModel !== undefined && (typeof rawModel !== 'string' || !/^[A-Za-z0-9._/-]{1,80}$/.test(rawModel))) {
+            sendJson(res as RawRes, 400, { error: 'invalid model' })
+            return
+          }
+          const model = typeof rawModel === 'string' ? rawModel : undefined
+          // Never let an empty/malformed body fan out to every account: the
+          // caller must say either `{ id }` or `{ all: true }` explicitly.
+          if (id === '' && body.all !== true) {
+            sendJson(res as RawRes, 400, { error: 'id or { all: true } required' })
+            return
+          }
+          let results: WarmupResult[] = []
+          if (id) {
+            const acc = pool.getAccount(id)
+            if (!acc) {
+              sendJson(res as RawRes, 404, { error: 'Account not found' })
+              return
+            }
+            results = await warmup.warmupAccount(acc, { force, model })
+            await quota.refreshAccountQuota(acc, true).catch(() => undefined)
+          } else {
+            results = await warmup.warmupAllAccounts({ force })
+            // Non-forced refresh respects account cooldowns and the 10s cache,
+            // avoiding a second network burst right after a warmup pass.
+            await quota.refreshAllQuotas(false).catch(() => undefined)
+          }
+          sendJson(res as RawRes, 200, { ok: true, results, pool: pool.getPoolData() })
+        } catch (e) {
+          sendJson(res as RawRes, 500, { error: String(e) })
         }
-        sendJson(res as RawRes, 200, { ok: true, results, pool: pool.getPoolData() })
       })()
     }})
     reg({ kind: 'exact', path: '/plugins/agy-link/pool/clear-cooldown', handler: (req, res) => {
@@ -1070,25 +1093,27 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     }
   })
 
-  // Scheduled weekly quota auto-warmup (smart reset activation): monitors 7-day
-  // quota windows and cold starts, triggering minimal 1-token probes to advance
-  // the upstream timer with zero excess token consumption.
+  // Scheduled weekly quota auto-warmup (opt-in): monitors 7-day quota windows
+  // and cold starts, triggering minimal 1-token probes to advance the upstream
+  // timer. No boot pass: the 5s quota refresh needs time to produce trustworthy
+  // weekly data first, and an upgrade must never probe on stale pool.json rows.
   ctx.effect(() => {
     if (!getConfig().enabled) return () => undefined
+    let running = false
     const checkWarmup = (): void => {
+      if (running) return
       const cfg = getConfig()
       if (!cfg.enabled || !cfg.autoWarmup) return
-      void warmup.runScheduledWarmup().catch(() => undefined)
+      running = true
+      void warmup.runScheduledWarmup()
+        .catch(() => undefined)
+        .finally(() => { running = false })
     }
-    const boot = setTimeout(checkWarmup, 10_000)
-    boot.unref?.()
-    // Scan every 5 minutes (300s, matching Antigravity-Manager scheduler)
+    // Scan every 5 minutes (300s, matching Antigravity-Manager scheduler).
+    // The in-flight guard prevents a slow cycle from overlapping the next tick.
     const timer = setInterval(checkWarmup, 300_000)
     timer.unref?.()
-    return () => {
-      clearTimeout(boot)
-      clearInterval(timer)
-    }
+    return () => clearInterval(timer)
   })
 
   // One bridge can publish to several registries (global, pool accounts, and/or workspace),

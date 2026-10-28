@@ -1590,20 +1590,28 @@ export function apply(ctx: ClientContext): void {
 		const warmupAccount = async (id?: string): Promise<void> => {
 			setLoadingAction(id ? `warmup:${id}` : 'warmup:all');
 			try {
-				const res = await postJson('/plugins/agy-link/pool/warmup', { id, force: true });
+				const res = await postJson('/plugins/agy-link/pool/warmup', {
+					id,
+					force: true,
+					...(id ? {} : { all: true }),
+				});
 				if (res === null || res?.ok === false) {
 					actionFailed();
 					return;
 				}
 				await refresh();
-				const skippedCount = Array.isArray(res.results) ? res.results.filter((r: any) => r.skipped).length : 0;
-				const successCount = Array.isArray(res.results) ? res.results.filter((r: any) => r.success).length : 0;
+				const results: any[] = Array.isArray(res.results) ? res.results : [];
+				const skippedCount = results.filter((r) => r.skipped).length;
+				// `success: true, skipped: true` means "nothing was due"; it must
+				// not count as a successful probe (all-failed used to toast success).
+				const successCount = results.filter((r) => r.success && !r.skipped).length;
+				const failedCount = results.length - skippedCount - successCount;
 				if (successCount > 0) {
 					showToast(id ? t('warmup.success') : t('warmup.allSuccess'), 'success');
-				} else if (skippedCount > 0) {
+				} else if (skippedCount > 0 && failedCount === 0) {
 					showToast(t('warmup.skipped'), 'info');
 				} else {
-					showToast(id ? t('warmup.success') : t('warmup.allSuccess'), 'success');
+					actionFailed();
 				}
 			} finally {
 				setLoadingAction(null);
@@ -2289,7 +2297,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 							style: status?.autoWarmup !== false ? S.segBtnActive : S.segBtn,
 							disabled: loadingAction === 'config:autoWarmup',
 							onClick: () => void setCfg('autoWarmup', status?.autoWarmup === false),
-						}, status?.autoWarmup !== false ? t('account.enable') : t('account.disable')),
+						}, status?.autoWarmup !== false ? t('account.disable') : t('account.enable')),
 					),
 					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
 						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('models.label')),

@@ -43,11 +43,12 @@ test('disposing a ready plugin clears background timers, closes MCP and restores
     const servers = listeners.mock.calls.map(call => call.result).filter(server => server?.listening) as Server[]
     assert.equal(servers.length, 1)
     const sweeps = intervals.mock.calls.filter(c => Number(c.arguments[1]) >= 60000)
-    // Boot timers: the 4s agy version probe, the 5s quota refresh, and the
-    // 10s weekly auto-warmup first pass introduced with WarmupService.
-    const boots = timeouts.mock.calls.filter(c => [4000, 5000, 10000].includes(Number(c.arguments[1])))
+    // Boot timers: the 4s agy version probe and the 5s quota refresh. The
+    // warmup scheduler is interval-only (no boot pass, so an upgrade never
+    // probes on stale pool.json rows).
+    const boots = timeouts.mock.calls.filter(c => [4000, 5000].includes(Number(c.arguments[1])))
     assert.equal(sweeps.length, 3, 'media TTL, quota refresh and warmup schedulers are all >= 60s')
-    assert.equal(boots.length, 3)
+    assert.equal(boots.length, 2)
     for (const call of [...sweeps, ...boots]) assert.equal((call.result as NodeJS.Timeout).hasRef(), false)
     await ctx.fiber.dispose()
     assert.equal(readFileSync(file, 'utf8'), original)

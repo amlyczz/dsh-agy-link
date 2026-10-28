@@ -21,10 +21,10 @@
 //   * Safe interval: 1500ms sequential throttle between probes to prevent WAF / 403 rate limits.
 
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stateDir } from '../common/config.ts'
-import type { FamilyQuotaInfo, ManagedAccount, ModelFamily } from '../common/pool-types.ts'
+import { shouldPollAccount, type FamilyQuotaInfo, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { PluginConfig } from '../common/types.ts'
 import { agyFetch } from './net.ts'
 import { AGY_ENDPOINTS } from './oauth.ts'
@@ -34,11 +34,11 @@ import { QuotaService, agyUserAgent } from './quota.ts'
 /** Canonical model route resolution for upstream Google Cloud Code PA endpoints. */
 export function toCanonicalWarmupModel(model: string): string {
   const clean = model.trim().toLowerCase()
-  // Bare gemini-3.8-flash / gemini-3-flash must be mapped to physical upstream entity
-  // gemini-3.8-flash-tiered to avoid 404 "Requested entity was not found" (Antigravity-Manager #3715)
-  if (clean === 'gemini-3.8-flash' || clean === 'gemini-3-flash') {
-    return 'gemini-3.8-flash-tiered'
-  }
+  // Bare Gemini flash slugs must be mapped to the physical upstream entity
+  // (`*-tiered`) to avoid 404 "Requested entity was not found"
+  // (Antigravity-Manager #3715). `gemini-3-flash` is the legacy alias of 3.8.
+  if (clean === 'gemini-3-flash') return 'gemini-3.8-flash-tiered'
+  if (/^gemini-3\.\d+-flash$/.test(clean)) return clean + '-tiered'
   if (clean.includes('argon')) {
     return 'gemini-4-argon'
   }
@@ -66,6 +66,21 @@ export function pickWarmupModelForFamily(
   return found ?? 'gemini-3.8-flash'
 }
 
+/**
+ * `loadCodeAssist` returns `cloudaicompanionProject` either as a bare string or
+ * as an object `{ id }` (the official clients and this repo's own OAuth fixture
+ * both show the object form). Normalize both; an unresolved project must stay
+ * empty instead of falling back to a shared project id — the backend rejects
+ * foreign project ids with 403 "Caller does not have required permission".
+ */
+export function extractWarmupProjectId(data: unknown): string {
+  const project = (data as { cloudaicompanionProject?: unknown } | null | undefined)?.cloudaicompanionProject
+  if (typeof project === 'string' && project.trim() !== '') return project.trim()
+  const id = (project as { id?: unknown } | null | undefined)?.id
+  if (typeof id === 'string' && id.trim() !== '') return id.trim()
+  return ''
+}
+
 export interface WarmupResult {
   accountId: string
   alias: string
@@ -82,6 +97,17 @@ export interface WarmupResult {
 const SIX_DAYS_MS = 6 * 24 * 3600 * 1000
 const FOUR_HOURS_MS = 4 * 3600 * 1000
 const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000
+/**
+ * A failed probe (429/403/network) must not be retried by the 5-minute
+ * scheduler; otherwise one restricted account turns into an endless WAF
+ * hammer. Back off for 30 minutes before the next scheduled attempt.
+ */
+const FAILURE_BACKOFF_MS = 30 * 60 * 1000
+
+/** 1.5–3s randomized gap: a metronomic interval is itself a WAF signal. */
+function warmupDelayMs(): number {
+  return 1500 + Math.floor(Math.random() * 1500)
+}
 
 /** Project ID resolver endpoints */
 const LOAD_PROJECT_ENDPOINTS = [
@@ -103,9 +129,15 @@ export class WarmupHistoryStore {
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, 'utf8')
-        const data = JSON.parse(raw) as Record<string, number>
+        const data = JSON.parse(raw) as Record<string, unknown>
         if (data && typeof data === 'object') {
-          this.history = new Map(Object.entries(data))
+          // Reject non-numeric / NaN timestamps: `now - NaN < cooldown` is
+          // false, which would silently bypass every cooldown.
+          const next = new Map<string, number>()
+          for (const [key, value] of Object.entries(data)) {
+            if (typeof value === 'number' && Number.isFinite(value)) next.set(key, value)
+          }
+          this.history = next
         }
       }
     } catch {
@@ -117,13 +149,20 @@ export class WarmupHistoryStore {
     try {
       this.pruneOldEntries()
       const obj = Object.fromEntries(this.history.entries())
-      writeFileSync(this.filePath, JSON.stringify(obj, null, 2), 'utf8')
+      // Write-then-rename: a crash mid-write must not leave a truncated JSON
+      // file that resets every cooldown on the next boot.
+      const tmp = `${this.filePath}.${process.pid}.tmp`
+      writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8')
+      renameSync(tmp, this.filePath)
     } catch {
       // best-effort save
     }
   }
 
   checkCooldown(key: string, cooldownMs: number, now = Date.now()): boolean {
+    // Re-read before deciding so a web host and a headless host sharing
+    // pool.json do not each fire the same warmup probe.
+    this.load()
     const last = this.history.get(key)
     if (last === undefined) return false
     return now - last < cooldownMs
@@ -183,21 +222,24 @@ export class WarmupService {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
             'User-Agent': userAgent,
+            // The bootstrap endpoint validates this enum strictly; `ideType`
+            // alone is what the official clients send.
+            'Client-Metadata': '{"ideType":"ANTIGRAVITY"}',
           },
           body: reqBody,
         }, proxyUrl)
 
         if (res.ok) {
-          const data = (await res.json()) as { cloudaicompanionProject?: string }
-          if (data?.cloudaicompanionProject) {
-            return data.cloudaicompanionProject
-          }
+          const projectId = extractWarmupProjectId(await res.json())
+          if (projectId !== '') return projectId
         }
       } catch {
         // try next endpoint
       }
     }
-    return 'bamboo-precept-lgxtn'
+    // No project resolved: the caller must skip the probe. Never borrow
+    // another account's project id (that yields a 403 from the backend).
+    return ''
   }
 
   /**
@@ -215,12 +257,19 @@ export class WarmupService {
 
     const proxy = this.proxyFor(account)
     const projectId = await this.fetchProjectId(accessToken, proxy)
+    if (projectId === '') {
+      return {
+        ok: false,
+        error: 'Could not resolve cloudaicompanionProject (loadCodeAssist failed); refusing to probe a foreign project',
+        durationMs: Date.now() - start,
+      }
+    }
     const mappedModel = toCanonicalWarmupModel(modelName)
     const isClaude = mappedModel.toLowerCase().includes('claude')
     const sessionId = `warmup_${Date.now()}_${randomBytes(4).toString('hex')}`
 
     const reqBody = JSON.stringify({
-      project: projectId,
+      ...(projectId !== '' ? { project: projectId } : {}),
       model: mappedModel,
       requestId: `agent/${randomUUID()}`,
       request: {
@@ -232,7 +281,7 @@ export class WarmupService {
         ],
         generationConfig: {
           temperature: 0,
-          maxOutputTokens: isClaude ? 1 : 10,
+          maxOutputTokens: 1,
           ...(isClaude ? {} : { responseModalities: ['TEXT'] }),
         },
         sessionId,
@@ -243,6 +292,7 @@ export class WarmupService {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
       'User-Agent': agyUserAgent(this.agyVersion()),
+      'Client-Metadata': '{"ideType":"ANTIGRAVITY"}',
     }
     if (isClaude) {
       headers['anthropic-beta'] = 'claude-code-20250219'
@@ -348,10 +398,26 @@ export class WarmupService {
       }]
     }
 
+    // Scheduled runs must never probe an account that is already rate-limited
+    // or auth-quarantined; a manual/forced click may still override.
+    if (!options.force && !shouldPollAccount(account)) {
+      return [{
+        accountId: account.id,
+        alias: account.alias,
+        email: account.email,
+        model: options.model ?? 'default',
+        success: false,
+        durationMs: 0,
+        skipped: true,
+        skipReason: 'Account is in cooldown or auth quarantine',
+      }]
+    }
+
     // 1. Explicit single model requested
     if (options.model) {
       const model = options.model
       const manualKey = `${identity}:${model}:100`
+      const manualFailureKey = `${manualKey}:failed`
       if (!options.force && this.history.checkCooldown(manualKey, FOUR_HOURS_MS, now)) {
         return [{
           accountId: account.id,
@@ -364,11 +430,26 @@ export class WarmupService {
           skipReason: 'Model in 4-hour warmup cooldown',
         }]
       }
+      if (!options.force && this.history.checkCooldown(manualFailureKey, FAILURE_BACKOFF_MS, now)) {
+        return [{
+          accountId: account.id,
+          alias: account.alias,
+          email: account.email,
+          model,
+          success: false,
+          durationMs: 0,
+          skipped: true,
+          skipReason: 'Recent warmup attempt failed; retrying after backoff',
+        }]
+      }
 
-      this.log(`[Warmup] pinging ${model} for account ${identity}...`)
+      this.log(`[Warmup] pinging ${model} for account ${account.id}...`)
       const res = await this.warmupModelDirectly(account, model)
       if (res.ok) {
         this.history.record(manualKey, now)
+      } else {
+        this.history.record(manualFailureKey, now)
+        if (res.status === 401) this.pool.markAuthRequired(account.id, 'Warmup probe rejected with HTTP 401')
       }
       return [{
         accountId: account.id,
@@ -383,18 +464,36 @@ export class WarmupService {
     }
 
     // 2. Scan weekly quota groups for reset triggers
-    const monitored = this.config().warmupModels ?? ['gemini-3.8-flash', 'claude-sonnet-4-6']
+    const configuredModels = this.config().warmupModels
+    if (configuredModels !== undefined && configuredModels.length === 0) {
+      return [{
+        accountId: account.id,
+        alias: account.alias,
+        email: account.email,
+        model: 'none',
+        success: true,
+        durationMs: 0,
+        skipped: true,
+        skipReason: 'No warmup models configured',
+      }]
+    }
+    const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-4-6']
     const quotas = account.quotas ?? {}
     const families = Object.keys(quotas) as ModelFamily[]
-    const modelsToPing: Array<{ family: ModelFamily; model: string; historyKey: string }> = []
+    const modelsToPing: Array<{ family: ModelFamily; model: string; historyKey: string; failureKey: string }> = []
 
     for (const fam of families) {
       const q: FamilyQuotaInfo | undefined = quotas[fam]
       if (!q) continue
+      const familyCooldown = account.cooldowns?.[fam]
+      if (!options.force && familyCooldown && familyCooldown.cooldownUntil > now) continue
 
-      const weeklyFrac = q.weeklyFraction ?? 1.0
-      // Only warm up when weekly quota is full (>= 99.9%)
-      if (weeklyFrac < 0.999) continue
+      // Never guess: a partially hydrated quota row (REST fallback rows carry
+      // only remainingFraction/resetTime) has weeklyFraction === undefined and
+      // is NOT evidence that the weekly bucket is full. Treating it as 1.0
+      // made every such refresh look like a cold start and fired probes.
+      const weeklyFrac = q.weeklyFraction
+      if (weeklyFrac === undefined || weeklyFrac < 0.999) continue
 
       let shouldWarm = false
       let historyKey = ''
@@ -414,9 +513,13 @@ export class WarmupService {
         shouldWarm = options.force || !this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
       }
 
+      const failureKey = `${historyKey}:failed`
+      if (shouldWarm && !options.force && this.history.checkCooldown(failureKey, FAILURE_BACKOFF_MS, now)) {
+        shouldWarm = false
+      }
       if (shouldWarm) {
         const model = pickWarmupModelForFamily(fam, monitored)
-        modelsToPing.push({ family: fam, model, historyKey })
+        modelsToPing.push({ family: fam, model, historyKey, failureKey })
       }
     }
 
@@ -427,6 +530,7 @@ export class WarmupService {
         family: 'google',
         model: fallbackModel,
         historyKey: `${identity}:google:forced:${Math.floor(now / SIX_DAYS_MS)}`,
+        failureKey: `${identity}:google:forced:${Math.floor(now / SIX_DAYS_MS)}:failed`,
       })
     }
 
@@ -445,11 +549,14 @@ export class WarmupService {
 
     for (let i = 0; i < modelsToPing.length; i++) {
       const target = modelsToPing[i]!
-      this.log(`[Warmup] weekly warmup for ${target.model} @ ${identity} (${target.family})...`)
+      this.log(`[Warmup] weekly warmup for ${target.model} @ ${account.id} (${target.family})...`)
       const res = await this.warmupModelDirectly(account, target.model)
       if (res.ok) {
         this.history.record(target.historyKey, now)
         this.history.record(`${identity}:${target.model}:100`, now)
+      } else {
+        this.history.record(target.failureKey, now)
+        if (res.status === 401) this.pool.markAuthRequired(account.id, 'Warmup probe rejected with HTTP 401')
       }
       results.push({
         accountId: account.id,
@@ -463,7 +570,7 @@ export class WarmupService {
       })
 
       if (i < modelsToPing.length - 1) {
-        await new Promise((r) => setTimeout(r, 1500))
+        await new Promise((r) => setTimeout(r, warmupDelayMs()))
       }
     }
 
@@ -474,7 +581,9 @@ export class WarmupService {
    * Warm up all accounts sequentially.
    */
   async warmupAllAccounts(options: { force?: boolean } = {}): Promise<WarmupResult[]> {
-    const accounts = this.pool.getAccounts().filter((a) => a.enabled && !a.authRequired)
+    const accounts = this.pool.getAccounts().filter((a) =>
+      options.force ? a.enabled && !a.authRequired : shouldPollAccount(a),
+    )
     const allResults: WarmupResult[] = []
 
     for (let i = 0; i < accounts.length; i++) {
@@ -483,7 +592,7 @@ export class WarmupService {
       allResults.push(...res)
 
       if (i < accounts.length - 1) {
-        await new Promise((r) => setTimeout(r, 1500))
+        await new Promise((r) => setTimeout(r, warmupDelayMs()))
       }
     }
 

@@ -152,6 +152,8 @@ dsh plugin --profile web add dsh-agy-link
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | 存在未完成工具步骤（ACTIVE）时的空闲预算（分钟）；`0` = 不抬高预算，卡死的工具按 `timeoutMs` 快速失败 |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | 会话 cwd | agy 工作区根目录（默认跟随当前会话工作区） |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | Windows `true`，其他平台 `false` | 每次 spawn 前刷新 agy 的更新检查时间戳，阻断 `--bg-updater` 子进程链（Windows 闪窗根因）。关闭后 agy 恢复自动更新检查 |
+| `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | 7 天周配额自动预热（opt-in）：周额度到达重置时间或冷启动时发送极小探活请求，提前激活 7 天计时器。开启后每 5 分钟巡检一次；该路径直连 Google 内部端点，请自行评估风控风险 |
+| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-4-6` | 自动预热使用的模型列表（逗号分隔）；空数组表示不自动预热 |
 
 ---
 
@@ -330,6 +332,8 @@ dsh plugin --profile web add dsh-agy-link
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget while a tool step is ACTIVE (minutes); `0` keeps the normal `timeoutMs` budget so wedged tools fail fast |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | session cwd | Working directory root |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refreshes agy's update-check timestamp before every spawn so its `--bg-updater` child chain (the Windows console-flash root cause) never starts. `false` restores agy's own auto-update checks |
+| `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in 7-day weekly quota warmup: sends a minimal probe when the weekly window has reset or is cold, activating the 7-day timer. Scans every 5 minutes; this path talks directly to Google's internal endpoints, so assess the risk-control tradeoff yourself |
+| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-4-6` | Model list used for warmup probes (comma-separated); an empty list disables automatic warmup |
 
 ---
 

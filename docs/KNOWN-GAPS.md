@@ -125,6 +125,14 @@ reference-counted slot is the strongest isolation the plugin can provide.
   footer still names the native one, so an agy member should report through
   `agent_teams_send_message` (or an explicit instruction) instead. Root cause is
   upstream in `@deepseek-ai/dsh-subagent`, which assumes a DSH-native child.
+- **Weekly quota auto-warmup is opt-in (v0.4.74+)** - `autoWarmup` defaults to
+  `false` because the feature deliberately bypasses the CLI-first quota path and
+  sends minimal `loadCodeAssist` + `generateContent` probes straight to Google's
+  internal endpoints. When enabled it scans every 5 minutes, only targets rows
+  whose `weeklyFraction` is explicitly >= 99.9%, records a 30-minute failure
+  backoff, skips accounts in cooldown / auth quarantine, and never guesses a
+  missing `cloudaicompanionProject` (no shared fallback project id). The manual
+  "Warmup" buttons still work while auto mode is off.
 - **Full tool args / diff cards (v0.4.28+)** - the bridge reads agy's
   conversation SQLite DB via the `sqlite3` CLI to recover arguments that
   `filterToolParameters` strips from stream-json. When `sqlite3` is missing

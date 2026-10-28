@@ -220,7 +220,10 @@ export function defaultConfig(): PluginConfig {
     // Windows is where agy's `--bg-updater` grandchild flashes a console
     // window; other platforms keep agy's own update behaviour by default.
     suppressAgyAutoUpdate: process.platform === 'win32',
-    autoWarmup: true,
+    // Opt-in: this path sends direct REST probes to Google's internal
+    // endpoints, so it must never start probing on upgrade. Users enable it
+    // explicitly with `autoWarmup: true` / DSH_AGY_AUTO_WARMUP=1.
+    autoWarmup: false,
     warmupModels: ['gemini-3.8-flash', 'claude-sonnet-4-6'],
   }
 }
