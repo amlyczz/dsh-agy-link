@@ -27,7 +27,18 @@ const MCP_SERVER_KEY = 'dsh-tools'
 /** Minimal structural view of the DSH tool registry we need. */
 export interface ToolsServiceLike {
   schemas(): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
-  execute(input: { callId: string; name: string; arguments: unknown; agent?: unknown }): Promise<unknown>
+  execute(input: {
+    callId: string
+    name: string
+    arguments: unknown
+    agent?: unknown
+    /**
+     * Caller-owned cancellation, required by DSH's `ToolExecutionInput`. Tools
+     * read `exec.signal` before/while they settle, so a call without one throws
+     * `Cannot read properties of undefined (reading 'aborted')`.
+     */
+    signal: AbortSignal
+  }): Promise<unknown>
 }
 
 /** MCP tool names are [a-zA-Z0-9_-]; DSH names may contain dots. */
@@ -156,12 +167,37 @@ export function startMcpBridge(opts: {
           // Carry the caller: the session that spawned agy is the agent on
           // whose behalf this call runs (issue #55). Without it, tools that
           // enforce `exec.agent` reject the call.
-          const sessionId = String(req.headers['x-dsh-session'] ?? '')
-          const agent = sessionId === '' ? undefined : await Promise.resolve(opts.resolveAgent?.(sessionId))
+          const sessionHeader = String(req.headers['x-dsh-session'] ?? '')
+          const resolveSession = async (id: string): Promise<unknown> =>
+            id === '' ? undefined : await Promise.resolve(opts.resolveAgent?.(id))
+          // DSH session keys come in two forms: a top-level web session is
+          // `session-<uuid>`, a sub-agent/fork session is a bare `<uuid>`. The
+          // spawning key is injected automatically, so resolve the value as
+          // given first (a bare sub-agent key must not be rewritten); only when
+          // that finds no agent and the value is not prefixed yet, retry once
+          // with `session-` - otherwise such a call runs without a caller and
+          // fails with `agent_teams tools require a calling agent`.
+          let agent = await resolveSession(sessionHeader)
+          if (agent === undefined && sessionHeader !== '' && !sessionHeader.startsWith('session-')) {
+            agent = await resolveSession('session-' + sessionHeader)
+          }
+          // Every DSH tool receives `exec.signal`; tools that await inside their
+          // body read it, so a call without one throws
+          // `Cannot read properties of undefined (reading 'aborted')`.
+          // Abort when the MCP client goes away so the tool can stop early.
+          const controller = new AbortController()
+          const abortIfOpen = (): void => {
+            if (!res.writableEnded) controller.abort()
+          }
+          req.once('aborted', abortIfOpen)
+          res.once('close', () => {
+            if (!res.writableEnded) controller.abort()
+          })
           const result = await svc.execute({
             callId: 'agy-mcp-' + callSeq,
             name: dshName,
             arguments: parsed.arguments ?? {},
+            signal: controller.signal,
             ...(agent === undefined ? {} : { agent }),
           })
           sendJson(res, 200, { ok: true, text: resultText(result) })
