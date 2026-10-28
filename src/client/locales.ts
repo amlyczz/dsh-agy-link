@@ -68,6 +68,16 @@ export const zh = {
   'account.enabledToast': '已启用账号：{alias}',
   'account.disabledToast': '已停用账号：{alias}',
   'status.disabled': '已停用',
+  'header.warmup': '一键预热',
+  'header.warmingUp': '预热中',
+  'account.warmup': '预热',
+  'account.warmingUp': '预热中',
+  'account.warmupTitle': '预热该账号（向 Google 发送极小探活请求，提前激活 7 天周配额计时器）',
+  'warmup.success': '账号预热成功',
+  'warmup.allSuccess': '一键预热任务已完成',
+  'warmup.skipped': '当前账号或模型处于冷却中，无需预热',
+  'config.autoWarmup': '7天周配额自动预热',
+  'config.autoWarmupDesc': '周配额到达重置时间或冷启动时自动唤醒 1 次启动新周期',
 } as const
 
 export type AgyLocaleKey = keyof typeof zh
@@ -138,6 +148,16 @@ export const en: AgyDictionary = {
   'account.enabledToast': 'Account enabled: {alias}',
   'account.disabledToast': 'Account disabled: {alias}',
   'status.disabled': 'Disabled',
+  'header.warmup': 'Auto Warmup',
+  'header.warmingUp': 'Warming up...',
+  'account.warmup': 'Warmup',
+  'account.warmingUp': 'Warming up...',
+  'account.warmupTitle': 'Warm up this account (trigger 7-day weekly reset timer)',
+  'warmup.success': 'Account warmed up successfully',
+  'warmup.allSuccess': 'Warmup completed for all accounts',
+  'warmup.skipped': 'Account or model is in cooldown, no warmup needed',
+  'config.autoWarmup': '7-Day Quota Auto-Warmup',
+  'config.autoWarmupDesc': 'Automatically trigger a 1-token probe when weekly reset time is reached',
 }
 
 export const ptBR: AgyDictionary = {
@@ -205,6 +225,16 @@ export const ptBR: AgyDictionary = {
   'account.enabledToast': 'Conta ativada: {alias}',
   'account.disabledToast': 'Conta desativada: {alias}',
   'status.disabled': 'Desativado',
+  'header.warmup': 'Pré-aquecimento',
+  'header.warmingUp': 'Aquecendo...',
+  'account.warmup': 'Aquecer',
+  'account.warmingUp': 'Aquecendo...',
+  'account.warmupTitle': 'Aquecer esta conta (ativar cronômetro semanal de 7 dias)',
+  'warmup.success': 'Conta aquecida com sucesso',
+  'warmup.allSuccess': 'Pré-aquecimento concluído',
+  'warmup.skipped': 'Conta em espera, sem necessidade de aquecimento',
+  'config.autoWarmup': 'Pré-aquecimento automático de 7 dias',
+  'config.autoWarmupDesc': 'Ativa automaticamente um ciclo quando o tempo de redefinição semanal é atingido',
 }
 
 export const es: AgyDictionary = {
@@ -272,4 +302,14 @@ export const es: AgyDictionary = {
   'account.enabledToast': 'Cuenta habilitada: {alias}',
   'account.disabledToast': 'Cuenta deshabilitada: {alias}',
   'status.disabled': 'Deshabilitado',
+  'header.warmup': 'Precalentamiento',
+  'header.warmingUp': 'Calentando...',
+  'account.warmup': 'Calentar',
+  'account.warmingUp': 'Calentando...',
+  'account.warmupTitle': 'Calentar esta cuenta (activar temporizador semanal de 7 días)',
+  'warmup.success': 'Cuenta calentada con éxito',
+  'warmup.allSuccess': 'Precalentamiento completado',
+  'warmup.skipped': 'Cuenta en espera, sin necesidad de calentar',
+  'config.autoWarmup': 'Precalentamiento automático de 7 días',
+  'config.autoWarmupDesc': 'Activa automáticamente un ciclo cuando se alcanza el tiempo de reinicio semanal',
 }

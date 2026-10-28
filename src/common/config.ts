@@ -141,6 +141,8 @@ export function resolveConfig(
     quotaViaCli: asBool(get('quotaViaCli')) ?? base.quotaViaCli,
     proxyUrl: asString(get('proxyUrl')) ?? base.proxyUrl,
     suppressAgyAutoUpdate: asBool(get('suppressAgyAutoUpdate')) ?? base.suppressAgyAutoUpdate,
+    autoWarmup: asBool(get('autoWarmup')) ?? base.autoWarmup,
+    warmupModels: asStringArray(get('warmupModels')) ?? base.warmupModels,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -214,6 +216,14 @@ export function resolveConfig(
   if (env.DSH_AGY_SUPPRESS_AUTOUPDATE !== undefined) {
     const sa = asBool(env.DSH_AGY_SUPPRESS_AUTOUPDATE)
     if (sa !== undefined) cfg.suppressAgyAutoUpdate = sa
+  }
+  if (env.DSH_AGY_AUTO_WARMUP !== undefined) {
+    const aw = asBool(env.DSH_AGY_AUTO_WARMUP)
+    if (aw !== undefined) cfg.autoWarmup = aw
+  }
+  if (env.DSH_AGY_WARMUP_MODELS) {
+    const wm = asStringArray(env.DSH_AGY_WARMUP_MODELS.split(','))
+    if (wm) cfg.warmupModels = wm
   }
   return cfg
 }
