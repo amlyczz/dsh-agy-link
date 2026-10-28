@@ -1,31 +1,42 @@
 # Changelog
 
-## Unreleased
+## 0.4.74 (2026-10-28)
 
 ### English
 
-- **Feat(mcpBridge): audit-log every bridged call.** Each `/call` now logs `mcp call <tool> [<outcome>] <ms>` through the plugin logger (journald), with the caller class (agent/none) and the failure message. Arguments are never logged. Previously the bridge logged only listener start/close, so a failed bridged run could only be reconstructed from transcripts.
-- **Docs(mcpBridge): DSH `send_message` can be bridged.** Documented that the tool is not restricted (only `run_code` / `agy_ask` are), so adding it to `mcpToolAllowlist` exposes it on the `dsh-tools-<port>` MCP server; also documented why the DSH sub-agent footer's `send_message` call hits agy's native tool instead and fails with `recipient "..." not found`.
+- **Feat(warmup): opt-in 7-day weekly quota auto-warmup and manual pre-warming (PR #60).**
+  - `WarmupService` activates an idle account's weekly reset timer with a minimal `loadCodeAssist` + one-token `generateContent` probe, only when the weekly bucket is explicitly full and its reset instant has passed (or the bucket is genuinely cold).
+  - Adds "Warmup" buttons to the account card and console header. `autoWarmup` (env `DSH_AGY_AUTO_WARMUP`) defaults to **false**: enabling it scans every 5 minutes with 1.5–3s jitter, a 30-minute failure backoff, and skips accounts in cooldown / auth quarantine.
+  - Hardened before release: a missing `weeklyFraction` is treated as unknown (never 100%), `cloudaicompanionProject` accepts both string and `{id}` shapes and never falls back to a foreign project id (the old `bamboo-precept-lgxtn` fallback produced 403s), malformed request bodies can no longer fan out to all accounts, and the scheduler cannot overlap itself.
+- **Fix(mcpBridge): pass the required abort signal to bridged tool calls (PR #57).**
+  - Every bridged `/call` creates an `AbortController`, passes `signal` to `tools.execute()` (DSH declares it required; tools reading `exec.signal` previously died with `Cannot read properties of undefined (reading 'aborted')`), and aborts when the MCP client goes away.
+  - Session keys resolve in both shapes: `session-<uuid>` for top-level web sessions and bare `<uuid>` for sub-agent/fork sessions. A resolvable bare id is never rewritten; only a miss retries with the `session-` prefix.
+- **Feat(mcpBridge): audit-log every bridged call (PR #58).**
+  - Each `/call` logs `mcp call <tool> [<outcome>] <ms>` through the plugin logger (journald), with the caller class and failure text. Arguments are never logged.
+- **Docs(mcpBridge): DSH `send_message` can be bridged (PR #58, issue #59).**
+  - `send_message` is not restricted: add it to `mcpToolAllowlist` and call it explicitly on the `dsh-tools-<port>` MCP server. The DSH sub-agent footer names agy's native tool, which cannot resolve DSH agent ids — root cause is upstream in `@deepseek-ai/dsh-subagent`; `agent_teams_send_message` remains the reliable path for agy members.
+- **Fix(client): isolate the console overlay to eliminate scroll flicker at the root.**
+  - The Antigravity console is a full-viewport overlay that neither froze the page behind it nor suspended the plugin's global DOM scanners, and its backdrop carried a full-viewport `backdrop-filter: blur()`. Every frame of motion behind it (wheel/inertia scrolling, the modal's 3s status polling, scanner DOM injection) was re-sampled through the GPU filter and re-laid-out → the recurring "打开控制台后滚动闪屏" root cause.
+  - Removed the full-viewport backdrop blur (stable `rgba` dim instead), added an explicit overlay-isolation contract (`agyModalStore.setOpen()` toggles `html.agy-modal-open`, which locks `[data-conversation-scroll]` with `overflow:hidden` and contains overscroll), and routed decisions/images/reasoning/mermaid scanners through `isInteractionLocked()` (scroll OR overlay) with a catch-up scan on resume and cleanup on teardown.
+  - Regression tests pin the contract: no full-viewport `backdrop-filter`, the scroller is locked while the overlay is open, and all four scanners gate on `isInteractionLocked()`.
 
 ### 中文
 
-- **新增(mcpBridge)：每次桥接调用记审计日志。** 每次 `/call` 通过插件日志（journald）输出 `mcp call <工具> [<结果>] <毫秒>`，含调用方类别（agent/none）与失败信息，**不记录参数**。此前只在监听启动/关闭时打日志，失败的桥接调用只能靠会话 transcript 反推。
-- **文档(mcpBridge)：DSH 的 `send_message` 可被桥接。** 说明该工具不受限制（仅 `run_code` / `agy_ask` 被排除），把它加进 `mcpToolAllowlist` 即可在 `dsh-tools-<port>` 这个 MCP server 上暴露；同时记录了为什么 DSH sub-agent footer 里的 `send_message` 会命中 agy 原生工具并报 `recipient "..." not found`。
-- **Fix(client): eliminate the recurring "open Antigravity console → scrolling flashes" by isolating the modal overlay (root cause, not another single-scanner patch).**
-  - Root cause (a class, not a point): the console is a full-viewport overlay that neither froze the page behind it nor suspended the plugin's own global DOM scanners, and the backdrop carried a full-viewport `backdrop-filter: blur()`. Any motion/repaint behind the fixed overlay (wheel/inertia scrolling of the conversation, the modal's 3s status polling, scanner injection) was therefore re-sampled through the GPU filter and re-laid-out every frame → visible flashing. Every prior fix patched one publisher (scroll-guard, decision-chip idempotence, busy scoping, host claim) while leaving the overlay non-isolating.
-  - Removed the full-viewport backdrop blur (stable `rgba` dim instead) — the single biggest flash source.
-  - Added an explicit overlay-isolation contract: `agyModalStore.setOpen()` now toggles `agy-modal-open` on `<html>`, which locks `[data-conversation-scroll]` (`overflow:hidden`, `scrollbar-gutter:stable` keeps the width stable) so nothing moves behind the fixed overlay; `overscroll-behavior:contain` stops wheel/momentum chaining.
-  - Added `setOverlaySuspended()/isInteractionLocked()` to the scroll guard and routed decisions/images/reasoning/mermaid scanners through it, so no DOM is injected into the conversation while the console is open (a resume pass catches up afterwards). Cleanup removes the lock class on plugin teardown.
-  - Guarded against recurrence: new regression tests assert the backdrop never regains a full-viewport `backdrop-filter`, that the scroller is locked while the overlay is open, and that all four scanners gate on `isInteractionLocked()`.
-
-### 中文
-
-- **修复（client）：彻底消除「打开 Antigravity 控制台后滚动闪屏」——解决根因，而非再一次单点补丁。**
-  - 根因（是一类问题，不是单点）：控制台是全屏浮层，但它既没有冻结背后的页面，也没有暂停插件自身的全局 DOM 扫描器，且遮罩带了全屏 `backdrop-filter: blur()`。于是浮层背后的一切移动/重绘（会话的滚轮/惯性滚动、控制台每 3s 的状态轮询、扫描器注入）都会每帧被 GPU 滤镜重新采样并重新布局 → 表现为闪屏。历次修复都只堵住一个"发布者"（scroll-guard、decision-chip 幂等、busy 作用域、宿主同步 claim），浮层始终没有被隔离。
-  - 移除全屏遮罩模糊（改用稳定的 `rgba` 半透明遮罩），这是最大的闪屏来源。
-  - 建立显式的"浮层隔离契约"：`agyModalStore.setOpen()` 现在会在 `<html>` 上切换 `agy-modal-open`，从而锁定 `[data-conversation-scroll]`（`overflow:hidden`，宿主自带 `scrollbar-gutter:stable` 避免宽度跳动），让浮层背后完全静止；`overscroll-behavior:contain` 阻止滚轮/惯性链式滚动。
-  - scroll guard 新增 `setOverlaySuspended()/isInteractionLocked()`，decisions/images/reasoning/mermaid 四个扫描器统一改用它：控制台打开时不向会话注入任何 DOM（关闭后补扫一次）。插件卸载时清理锁类。
-  - 防复发护栏：新增回归测试锁定契约（全屏遮罩不得再出现 `backdrop-filter`、浮层打开时滚动容器必须被锁定、四个扫描器必须走 `isInteractionLocked()`）。
+- **新增（warmup）：7 天周配额自动预热与手动预热（opt-in，PR #60）。**
+  - `WarmupService` 只在周额度明确满额且已到重置时间（或确实处于冷启动）时，发送一次极小的 `loadCodeAssist` + 单 token `generateContent` 探活，提前激活 7 天计时器。
+  - 账号卡片与顶栏新增「预热」按钮。`autoWarmup`（环境变量 `DSH_AGY_AUTO_WARMUP`）默认 **false**；开启后每 5 分钟巡检一次，带 1.5–3s 随机抖动、30 分钟失败退避，并跳过冷却中/需重新认证的账号。
+  - 发版前加固：缺失 `weeklyFraction` 一律视为未知（不再当成 100%）；`cloudaicompanionProject` 同时兼容字符串与 `{id}` 结构，且不再回退到外部共享 project id（旧的 `bamboo-precept-lgxtn` 回退会 403）；畸形请求体不会触发全账号预热；调度器不会自我重叠。
+- **修复（mcpBridge）：为桥接工具调用补上必需的 abort signal（PR #57）。**
+  - 每次桥接 `/call` 创建 `AbortController`，把 `signal` 传给 `tools.execute()`（DSH 声明为必填；此前读取 `exec.signal` 的工具会抛 `Cannot read properties of undefined (reading 'aborted')`），并在 MCP 客户端断开时中止。
+  - 会话 key 两种形态都能解析：顶层 Web 会话为 `session-<uuid>`，子代理/fork 会话为裸 `<uuid>`；能直接解析的裸 id 绝不会被改写，只有未命中时才重试 `session-` 前缀。
+- **新增（mcpBridge）：每次桥接调用记审计日志（PR #58）。**
+  - 每次 `/call` 通过插件日志（journald）输出 `mcp call <工具> [<结果>] <毫秒>`，含调用方类别与失败信息，**不记录参数**。
+- **文档（mcpBridge）：DSH 的 `send_message` 可被桥接（PR #58，issue #59）。**
+  - `send_message` 不受限制：把它加进 `mcpToolAllowlist`，在 `dsh-tools-<port>` 这个 MCP server 上显式调用即可。DSH sub-agent footer 指向的是 agy 原生工具，无法识别 DSH agent id——根因在 `@deepseek-ai/dsh-subagent` 上游；agy 成员仍应使用 `agent_teams_send_message` 上报。
+- **修复（client）：从根因消除「打开 Antigravity 控制台后滚动闪屏」。**
+  - 控制台是全屏浮层，却既没有冻结背后页面，也没有暂停插件自身的全局 DOM 扫描器，且遮罩带全屏 `backdrop-filter: blur()`。浮层背后的一切移动/重绘（滚轮/惯性滚动、控制台每 3s 状态轮询、扫描器注入）都会每帧被 GPU 滤镜重新采样并重新布局 → 即闪屏根因。
+  - 移除全屏遮罩模糊（改用稳定的 `rgba` 半透明遮罩）；建立显式「浮层隔离契约」：`agyModalStore.setOpen()` 切换 `html.agy-modal-open`，锁定 `[data-conversation-scroll]`（`overflow:hidden`）并阻断滚动链；decisions/images/reasoning/mermaid 四个扫描器统一走 `isInteractionLocked()`（滚动中或浮层打开），关闭后补扫一次，卸载时清理锁类。
+  - 回归测试锁定契约：全屏遮罩不得再出现 `backdrop-filter`、浮层打开时滚动容器必须锁定、四个扫描器必须走 `isInteractionLocked()`。
 
 ## 0.4.73 (2026-10-27)
 
