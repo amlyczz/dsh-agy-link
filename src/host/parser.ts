@@ -228,6 +228,14 @@ export interface ParserStats {
   lastResultError: string | undefined
 }
 
+/**
+ * Hard cap on a single un-newline-terminated stdout buffer. Stream-json is
+ * newline-delimited, so a line should never approach this; the cap only stops a
+ * runaway / malformed stream (no newline for megabytes) from growing the
+ * buffered partial line without bound.
+ */
+export const MAX_STREAM_LINE_BYTES = 8 * 1024 * 1024
+
 export class StreamJsonParser {
   private buffer = ''
   private seq = 0
@@ -246,6 +254,15 @@ export class StreamJsonParser {
       this.buffer = this.buffer.slice(nl + 1)
       const ev = this.takeLine(line)
       if (ev) out.push(ev)
+    }
+    if (this.buffer.length > MAX_STREAM_LINE_BYTES) {
+      // No newline for multiple MB: drop the runaway partial line so the buffer
+      // cannot grow without bound (the missing event is surfaced as garbage).
+      const dropped = this.buffer.length
+      this.buffer = ''
+      this.stats.garbage++
+      this.stats.consecutiveGarbage++
+      out.push({ kind: 'garbage', line: '<dropped over-long line: ' + dropped + ' bytes>' })
     }
     return out
   }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.81 (2026-10-29)
+
+### English
+
+- **Fix(parser): bound a runaway un-newline-terminated stdout buffer.**
+  - `StreamJsonParser.feed()` only split on `\n`, so a malformed/runaway stream that produced megabytes with no newline (or one giant partial line) grew the internal buffer without bound. A partial line over `MAX_STREAM_LINE_BYTES` (8 MiB) is now dropped and surfaced as a `garbage` event, keeping memory bounded; well-formed newline-delimited events are unaffected. Adds a regression test.
+
+### 中文
+
+- **修复(parser)：限制无换行结尾的超大 stdout 缓冲。**
+  - `StreamJsonParser.feed()` 只按 `\n` 切分，若输出异常/失控产生数 MB 且不含换行（或一整条超长未完成的行），内部缓冲会无界增长。现在超过 `MAX_STREAM_LINE_BYTES`（8 MiB）的未完成行会被丢弃并以 `garbage` 事件上报，内存保持有界；正常的按行 NDJSON 事件不受影响。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.80...v0.4.81
+
 ## 0.4.80 (2026-10-29)
 
 ### English

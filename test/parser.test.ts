@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { StreamJsonParser } from '../src/host/parser.ts'
+import { StreamJsonParser, MAX_STREAM_LINE_BYTES } from '../src/host/parser.ts'
 import type { AgyEvent } from '../src/common/types.ts'
 
 const OK_NDJSON = [
@@ -30,6 +30,16 @@ test('parses a full ok run', () => {
   assert.equal(res.ok, true)
   assert.equal(res.usage.input_tokens, 3)
   assert.equal(p.stats.garbage, 0)
+})
+
+test('bounds an over-long line without a newline (no unbounded buffer growth)', () => {
+  const p = new StreamJsonParser()
+  const huge = 'x'.repeat(MAX_STREAM_LINE_BYTES + 4096)
+  const evs = p.feed(huge)
+  assert.ok(evs.length >= 1 && evs[0]?.kind === 'garbage', 'oversized partial line reported as garbage')
+  // The oversized buffer must have been dropped, so a later valid line parses.
+  const ok = p.feed('{"event":"init","conversation_id":"c-ok"}\n')
+  assert.equal(ok[0]?.kind, 'init')
 })
 
 test('buffers torn chunks across feeds', () => {
