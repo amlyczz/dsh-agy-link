@@ -44,3 +44,15 @@ choice, not a fallback applied by this plugin.
 `/agy doctor` writes its report with redaction: Google auth URLs,
 `4/...` authorization codes, `ya29.*` tokens, and `Bearer` headers are
 stripped before the file hits disk. Still read it before attaching.
+
+## HTTP surfaces and request-body caps
+
+- The plugin's web routes (`/plugins/agy-link/*`) and the experimental loopback
+  MCP bridge (`/call`) share one bounded JSON body reader
+  (`src/host/read-json-body.ts`): bodies are capped (1 MiB for plugin routes,
+  8 MiB for `/call`) and oversized bodies are discarded rather than buffered, so
+  a local client — including a prompt-injected agy child holding the bridge token
+  — cannot exhaust host memory by streaming a huge POST body.
+- The MCP bridge binds to `127.0.0.1` only, requires a per-process random bearer
+  token compared in constant time, enforces `mcpToolAllowlist` at execution time,
+  and never exposes the internal `run_code`/`agy_ask`/`agy_tool` tools.

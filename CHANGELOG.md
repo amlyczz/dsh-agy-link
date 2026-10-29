@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.78 (2026-10-29)
+
+### English
+
+- **Refactor(mcp/http): one bounded JSON body reader for every HTTP surface.**
+  - Extracted `src/host/read-json-body.ts` and routed both the MCP bridge `/call` and all `/plugins/agy-link/*` web routes through it. Plugin payloads are tiny config JSON; the old unbounded buffer let any local client (including a prompt-injected agy child holding the bridge token) exhaust host memory by streaming a huge POST body. Bodies are now capped (1 MiB for plugin routes, 8 MiB for `/call`) and oversized ones are discarded. Adds focused unit tests for the reader (valid/malformed/array/oversized/stream-error).
+
+### 中文
+
+- **重构(mcp/http)：所有 HTTP 面共用同一个有界 JSON body 读取器。**
+  - 抽出 `src/host/read-json-body.ts`，MCP 桥接 `/call` 与全部 `/plugins/agy-link/*` Web 路由统一走它。插件请求体都是很小的配置 JSON，此前的无界缓冲会让任意本地客户端（包括持有桥接 token、被提示词注入的 agy 子进程）用超大 POST body 打爆宿主内存。现在缓冲有上限（插件路由 1 MiB、`/call` 8 MiB），超限直接丢弃。为该读取器补充了针对性单测（正常/非法/数组/超限/流错误）。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.77...v0.4.78
+
 ## 0.4.77 (2026-10-29)
 
 ### English

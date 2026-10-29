@@ -16,10 +16,11 @@
 //     agy child env (DSH_MCP_SESSION) through bridge.mjs as a header, and the
 //     host resolves it back to an agent.
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { readJsonBody } from './read-json-body.ts'
 import { homedir } from 'node:os'
 
 const MCP_SERVER_KEY = 'dsh-tools'
@@ -68,34 +69,11 @@ export interface McpBridge {
   close(): Promise<void>
 }
 
-/** Loopback request-body cap. Tool arguments are tiny; this only exists so a
- * token-holding (possibly prompt-injected) agy child cannot OOM the host by
- * streaming an unbounded body at /call. */
-const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
-
-function readBody(
-  req: IncomingMessage,
-  maxBytes: number,
-): Promise<{ tooLarge: boolean; text: string }> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = []
-    let size = 0
-    let tooLarge = false
-    req.on('data', (c: Buffer) => {
-      size += c.length
-      if (size > maxBytes) {
-        // Stop buffering but keep draining so the client still receives the
-        // 413 (destroying mid-body would surface as ECONNRESET instead).
-        tooLarge = true
-        chunks.length = 0
-        return
-      }
-      chunks.push(c)
-    })
-    req.on('end', () => resolve({ tooLarge, text: tooLarge ? '' : Buffer.concat(chunks).toString('utf8') }))
-    req.on('error', () => resolve({ tooLarge, text: '' }))
-  })
-}
+/** Loopback request-body cap for /call. Tool arguments are tiny; this only
+ * exists so a token-holding (possibly prompt-injected) agy child cannot OOM the
+ * host by streaming an unbounded body. The bounded reader itself is shared with
+ * the plugin's web routes (see ./read-json-body.ts). */
+const MCP_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 /** Constant-time bearer comparison (the token is a shared secret). */
 function bearerMatches(provided: string, expected: string): boolean {
@@ -185,18 +163,16 @@ export function startMcpBridge(opts: {
         return;
       }
       if (req.method === 'POST' && (url === '/call' || url === '/mcp/call')) {
-        const body = await readBody(req, opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
+        const body = await readJsonBody(req, { maxBytes: opts.maxBodyBytes ?? MCP_MAX_BODY_BYTES })
         if (body.tooLarge) {
           sendJson(res, 413, { error: 'request body too large' })
           return
         }
-        let parsed: { dshName?: unknown; arguments?: unknown } = {}
-        try {
-          parsed = JSON.parse(body.text) as typeof parsed
-        } catch {
+        if (body.invalid) {
           sendJson(res, 400, { error: 'invalid JSON' })
           return
         }
+        const parsed = body.value as { dshName?: unknown; arguments?: unknown }
         const svc = opts.tools()
         if (!svc) {
           sendJson(res, 503, { error: 'tools service unavailable' })

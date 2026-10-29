@@ -31,6 +31,7 @@ import { homedir } from 'node:os'
 import { StreamJsonParser } from './host/parser.ts'
 import { defaultMediaDir, sweepDir, type ImageRefLike } from './host/media.ts'
 import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type McpBridge, type ToolsServiceLike } from './host/mcp-bridge.ts'
+import { readJsonBody } from './host/read-json-body.ts'
 import { fileURLToPath } from 'node:url'
 import { handleMediaRequest, handleAssetRequest, type HttpRequestLike, type HttpResponseLike } from './host/media-route.ts'
 
@@ -584,23 +585,16 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify(body))
     }
-    const readBody = (req: unknown, strict = false): Promise<Record<string, unknown>> => {
-    const r = req as { on?: (e: string, cb: (c: Buffer) => void) => void }
-    return new Promise((resolve) => {
-      const chunks: Buffer[] = []
-      r.on?.('data', (c) => chunks.push(c))
-      r.on?.('end', () => {
-        try {
-          const v = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-          resolve(v && typeof v === 'object' ? (v as Record<string, unknown>) : {})
-        } catch {
-          // Strict callers must be able to tell malformed JSON from `{}`:
-          // an empty body must not silently become "do it for all accounts".
-          resolve(strict ? { __invalidJson: true } : {})
-        }
-      })
-    })
-  };
+    // Bounded, shared JSON reader (see ./host/read-json-body.ts): plugin
+    // payloads are small config JSON, and an unbounded buffer let a local
+    // client exhaust host memory by streaming a huge POST body.
+    const readBody = async (req: unknown, strict = false): Promise<Record<string, unknown>> => {
+      const result = await readJsonBody(req)
+      // Strict callers must be able to tell malformed/oversized bodies from
+      // `{}`: an empty body must not silently become "do it for all accounts".
+      if (result.invalid || result.tooLarge) return strict ? { __invalidJson: true } : {}
+      return result.value
+    };
   const methodOf = (req: unknown): string => {
     const m = (req as { method?: unknown }).method
     return typeof m === 'string' ? m.toUpperCase() : 'GET'
