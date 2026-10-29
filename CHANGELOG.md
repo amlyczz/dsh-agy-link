@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.79 (2026-10-29)
+
+### English
+
+- **Fix(mcp): never silently drop tools whose names collide after MCP normalization.**
+  - `toMcpName()` maps any non-`[A-Za-z0-9_-]` character to `_`, so distinct DSH tools like `a.b` and `a_b` normalized to the same MCP name and the second was silently removed from `/tools` — hiding a real, possibly allowlisted, tool from the agent. Colliding names are now disambiguated with a stable `__<n>` suffix; `bridge.mjs` still calls back by the exact `_dshName`, so execution is unaffected. Adds a regression test.
+
+### 中文
+
+- **修复(mcp)：名称经 MCP 归一化后撞名的工具不再被静默丢弃。**
+  - `toMcpName()` 会把非 `[A-Za-z0-9_-]` 字符替换成 `_`，于是 `a.b` 与 `a_b` 这类不同工具会归一化成同一个 MCP 名，第二个被从 `/tools` 静默删除，导致一个真实（且可能已加入 allowlist 的）工具对 agent 不可见。现在撞名会加稳定的 `__<n>` 后缀消歧；`bridge.mjs` 仍按精确 `_dshName` 回调，执行不受影响。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.78...v0.4.79
+
 ## 0.4.78 (2026-10-29)
 
 ### English

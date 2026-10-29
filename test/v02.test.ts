@@ -189,6 +189,33 @@ test('mcp bridge: /call requires the bearer token', async () => {
   }
 })
 
+test('mcp bridge: disambiguates tool names that collide after MCP name mapping', async () => {
+  // DSH tool names may contain dots; toMcpName() normalizes them to '_'. Two
+  // distinct tools ('a.b' and 'a_b') used to collide and the second was
+  // silently dropped from /tools — hiding a real tool from the agent. Both must
+  // stay reachable with unique MCP names (bridge.mjs maps back via _dshName).
+  const tools: ToolsServiceLike = {
+    schemas: () => [
+      { name: 'a.b', description: 'dotted', parameters: {} },
+      { name: 'a_b', description: 'flat', parameters: {} },
+    ],
+    execute: async (input) => ({ content: [{ type: 'text', text: 'ran ' + input.name }] }),
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: resolve(here, '../dist/bridge.mjs'),
+    tools: () => tools,
+    allowlist: () => '',
+  })
+  try {
+    const res = await fetch(bridge.url + '/tools', { headers: { authorization: 'Bearer ' + bridge.token } })
+    const body = (await res.json()) as { tools: Array<{ name: string; dshName: string }> }
+    assert.deepEqual(body.tools.map((t) => t.dshName).sort(), ['a.b', 'a_b'])
+    assert.equal(new Set(body.tools.map((t) => t.name)).size, 2, 'mapped MCP names stay unique')
+  } finally {
+    await bridge.close()
+  }
+})
+
 test('mcp bridge script speaks JSON-RPC over stdio end to end', async () => {
   const bridge = await startMcpBridge({
     bridgeScript: resolve(here, '../dist/bridge.mjs'),

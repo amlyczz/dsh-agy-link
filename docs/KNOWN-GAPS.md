@@ -120,6 +120,9 @@ reference-counted slot is the strongest isolation the plugin can provide.
   loopback endpoint also caps request bodies (8 MiB → HTTP 413) and compares the
   bearer token in constant time, so a token-holding but prompt-injected child
   cannot OOM the host with an unbounded body or probe the token via timing.
+  Distinct DSH tool names that normalize to the same MCP name (e.g. `a.b`
+  and `a_b`) are disambiguated with a stable suffix instead of being silently
+  dropped, so every real tool stays reachable.
   Every bridged call is audit-logged as `mcp call <tool> [<outcome>] <ms>` with
   the caller class and the failure text (never the arguments), so a failed run
   is visible in journald instead of only in transcripts.

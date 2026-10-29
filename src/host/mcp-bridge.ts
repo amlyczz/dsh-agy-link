@@ -142,23 +142,28 @@ export function startMcpBridge(opts: {
         }
         const allow = opts.allowlist().split(',').map((s) => s.trim()).filter(Boolean)
         const allowSet = new Set(allow)
-        const seen = new Set<string>()
+        const used = new Set<string>()
         const tools = svc.schemas()
           .filter((t) => allow.length === 0 || allowSet.has(t.name))
-          .filter((t) => {
-            // internal transports / loopback-only helpers are not bridgeable
-            if (INTERNAL_TOOL_NAMES.has(t.name)) return false
-            const mapped = toMcpName(t.name)
-            if (seen.has(mapped)) return false // collision after mapping
-            seen.add(mapped)
-            return true
+          // internal transports / loopback-only helpers are not bridgeable
+          .filter((t) => !INTERNAL_TOOL_NAMES.has(t.name))
+          .map((t) => {
+            // Map the DSH name to an MCP-safe name. Distinct DSH names can
+            // normalize to the same MCP name (e.g. 'a.b' and 'a_b'); rather than
+            // silently dropping one, disambiguate with a stable suffix so every
+            // real tool stays reachable. bridge.mjs calls back by the exact
+            // dshName, so the MCP-side suffix never affects execution.
+            const base = toMcpName(t.name)
+            let name = base
+            for (let i = 2; used.has(name); i++) name = base + '__' + i
+            used.add(name)
+            return {
+              name,
+              dshName: t.name,
+              description: t.description,
+              inputSchema: { type: 'object', ...t.parameters },
+            }
           })
-          .map((t) => ({
-            name: toMcpName(t.name),
-            dshName: t.name,
-            description: t.description,
-            inputSchema: { type: 'object', ...t.parameters },
-          }))
         sendJson(res, 200, { tools })
         return;
       }
