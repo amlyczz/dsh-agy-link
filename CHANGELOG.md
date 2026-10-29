@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.92 (2026-10-29)
+
+### English
+
+- **Fix(models): don't parse lowercase `error:`/`failed:` diagnostic lines into bogus model slugs.**
+  - The two-column text fallback skipped rows starting with capital `Fetching`/`Error` only, so a lowercase `error:  …` / `failed:  …` line (two-space aligned) was parsed as a model with slug `error:`. The banner filter is now case-insensitive and also covers `failed`. Adds a regression test.
+
+### 中文
+
+- **修复(models)：不再把小写的 `error:`/`failed:` 诊断行解析成假模型条目。**
+  - 两列文本回退只跳过首字母大写的 `Fetching`/`Error`，因此小写且以两空格对齐的 `error:  …`/`failed:  …` 会被解析成 slug 为 `error:` 的假模型。现 banner 过滤改为大小写不敏感并覆盖 `failed`。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.91...v0.4.92
+
 ## 0.4.91 (2026-10-29)
 
 ### English

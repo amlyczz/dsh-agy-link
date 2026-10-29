@@ -80,7 +80,9 @@ export function parseModelsOutput(stdout: string): RawModel[] {
   const out: RawModel[] = []
   for (const line of text.split(/\n/)) {
     const t = line.trim();
-    if (t === '' || t.startsWith('Fetching') || t.startsWith('Error') || /^(please sign in|warning|tip:)/i.test(t)) continue
+    // Skip agy banners / diagnostics case-insensitively; a lowercase
+    // "error:  …" line otherwise parsed into a bogus model slug.
+    if (t === '' || /^(fetching|error|failed|warning|please sign in|tip:)/i.test(t)) continue
     // agy 1.1.15 prints a TAB-separated two-column table; older builds and
     // some locales use two-or-more spaces.
     const m = t.match(/^(\S+)(?:\t+|\s{2,})(.+)$/)

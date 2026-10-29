@@ -33,6 +33,13 @@ test('parseModelsOutput reads the TAB-separated agy 1.1.15 table and folds effor
   assert.deepEqual(base?.efforts, ['low', 'medium', 'high'])
 })
 
+test('parseModelsOutput drops lowercase diagnostic lines (error:/failed:)', () => {
+  // agy may print lowercase 'error:  …' / 'failed:  …' lines; the two-column
+  // parser must not turn them into bogus model slugs.
+  const out = parseModelsOutput('error:  upstream unavailable\nfailed:  retry later\ngemini-3  Gemini 3\n')
+  assert.deepEqual(out.map((m) => m.slug), ['gemini-3'])
+})
+
 test('parseModelsOutput reads the two-column text shape', () => {
   const out = parseModelsOutput('gemini-3-6-flash    Gemini 3.6 Flash\nclaude-sonnet-4-6    Claude Sonnet 4.6\n')
   assert.equal(out.length, 2)
