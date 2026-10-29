@@ -407,6 +407,22 @@ test('stagedPath and defaultMediaDir are deterministic', () => {
 
 // ---- file inlining + schema ----
 
+test('inlineFiles truncation never splits a UTF-8 character', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'inline-utf8-'))
+  try {
+    const N = 256 * 1024 // INLINE_MAX_BYTES
+    const f = join(dir, 'big.txt')
+    // The 3-byte char straddles the byte boundary so a naive byte-slice ends
+    // mid-character and emits U+FFFD in the prompt.
+    await writeFile(f, 'a'.repeat(N - 1) + '你' + 'tail', 'utf8')
+    const out = await inlineFiles('Q:', [f], dir)
+    assert.ok(!out.includes('\uFFFD'), 'no replacement char at the truncation boundary')
+    assert.ok(out.includes('(truncated to the first'))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('inlineFiles inlines textual files, skips binary and missing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'agy-inline-'))
   try {

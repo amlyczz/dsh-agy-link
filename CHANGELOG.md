@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.93 (2026-10-29)
+
+### English
+
+- **Fix(oneshot): don't split a UTF-8 character when truncating an inlined file.**
+  - `inlineFiles()` truncated a large text file with a raw byte slice (`buf.subarray(0, INLINE_MAX_BYTES)`), so if the 256 KiB boundary fell inside a multibyte character the prompt got a replacement char (`�`). Truncation now walks back to a UTF-8 code-point boundary (`truncateUtf8`). Adds a regression test that places a 3-byte char across the boundary.
+
+### 中文
+
+- **修复(oneshot)：截断内联大文件时不再把一个 UTF-8 字符切断。**
+  - `inlineFiles()` 之前用裸字节切片（`buf.subarray(0, INLINE_MAX_BYTES)`），若 256 KiB 边界落在多字节字符中间，prompt 里会出现替换符 `�`。现截断回退到 UTF-8 码点边界（`truncateUtf8`）。补充把一个 3 字节字符跨边界放置的回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.92...v0.4.93
+
 ## 0.4.92 (2026-10-29)
 
 ### English

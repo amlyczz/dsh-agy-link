@@ -11,6 +11,25 @@ import { isAbsolute, join, resolve } from 'node:path'
 /** Per-file inline cap; larger files are truncated. */
 const INLINE_MAX_BYTES = 256 * 1024
 
+/** Truncate a buffer to <= max bytes without splitting a UTF-8 code point. */
+function truncateUtf8(buf: Buffer, max: number): Buffer {
+  if (buf.length <= max) return buf
+  let end = max
+  let i = end - 1
+  let back = 0
+  // Walk back over continuation bytes (10xxxxxx) to the start of this char.
+  while (i >= 0 && (buf[i]! & 0xc0) === 0x80 && back < 3) {
+    i--
+    back++
+  }
+  if (i >= 0) {
+    const lead = buf[i]!
+    const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1
+    if (i + need > end) end = i // the char starting at i does not fully fit
+  }
+  return buf.subarray(0, end)
+}
+
 /** Text-detection: anything that is very likely not binary. */
 function looksTextual(head: string): boolean {
   if (head === '') return true
@@ -45,7 +64,7 @@ export async function inlineFiles(
         note = '(skipped: binary file - reference it by path and let agy read it with its own tools)'
       } else if (buf.byteLength > INLINE_MAX_BYTES) {
         note = '(truncated to the first ' + INLINE_MAX_BYTES + ' bytes)'
-        body = buf.subarray(0, INLINE_MAX_BYTES).toString('utf8')
+        body = truncateUtf8(buf, INLINE_MAX_BYTES).toString('utf8')
       } else {
         body = buf.toString('utf8')
       }
