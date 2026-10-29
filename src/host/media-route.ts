@@ -22,6 +22,15 @@ const MIME_MAP: Record<string, string> = {
 
 const IS_WIN = process.platform === 'win32';
 
+/** decodeURIComponent that returns null instead of throwing on malformed input. */
+function safeDecodeUri(s: string): string | null {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Normalize and resolve a raw path or file:// URL into a system file path.
  * Converts WSL /mnt/X/ and /home/ paths on Windows where possible.
@@ -30,15 +39,21 @@ export function resolveLocalMediaPath(rawPath: string, workspaceRoot?: string): 
   if (!rawPath || typeof rawPath !== 'string') return null;
   let p = rawPath.trim();
 
-  // Strip file:// prefix
+  // Strip file:// prefix. decodeURIComponent throws on a malformed escape (e.g.
+  // a double-encoded query decodes to a literal 'file:///%E0%A4%A'); treat that
+  // as "not a usable path" instead of letting a URIError escape the route.
   if (p.startsWith('file:///')) {
-    p = decodeURIComponent(p.slice(8));
+    const decoded = safeDecodeUri(p.slice(8));
+    if (decoded === null) return null;
+    p = decoded;
     // On Windows, file:///D:/foo -> D:/foo
     if (IS_WIN && !/^[A-Za-z]:/.test(p) && /^\/[A-Za-z]:/.test(p)) {
       p = p.slice(1);
     }
   } else if (p.startsWith('file://')) {
-    p = decodeURIComponent(p.slice(7));
+    const decoded = safeDecodeUri(p.slice(7));
+    if (decoded === null) return null;
+    p = decoded;
     if (IS_WIN && p.startsWith('wsl.localhost/')) {
       p = '\\\\' + p.replace(/\//g, '\\');
     }

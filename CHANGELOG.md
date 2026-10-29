@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.83 (2026-10-29)
+
+### English
+
+- **Fix(media): a malformed `file://` percent-escape no longer throws out of the media route.**
+  - `resolveLocalMediaPath()` called `decodeURIComponent()` unguarded on the `file://` path. A double-encoded query (`?path=file%3A%2F%2F%2F%25E0...`) decodes to the literal `file:///%E0%A4%A`, whose inner decode throws `URIError: URI malformed` straight out of `handleMediaRequest()` (unhandled). Malformed escapes are now decoded via a safe helper that returns `null`, so the route answers `404` instead of throwing. Adds a regression test.
+
+### 中文
+
+- **修复(media)：畸形的 `file://` 百分号转义不再把异常抛出媒体路由。**
+  - `resolveLocalMediaPath()` 对 `file://` 路径直接 `decodeURIComponent()`，未做保护。经双重编码的查询（`?path=file%3A%2F%2F%2F%25E0...`）解析出字面量 `file:///%E0%A4%A`，其内部解码抛出 `URIError: URI malformed` 并从 `handleMediaRequest()` 直接逃逸。现在改用安全解码助手，畸形转义返回 `null`，路由回 `404` 而非抛异常。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.82...v0.4.83
+
 ## 0.4.82 (2026-10-29)
 
 ### English

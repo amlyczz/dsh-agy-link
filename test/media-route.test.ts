@@ -36,6 +36,19 @@ test('media-route: resolveLocalMediaPath handles Windows paths, file://, and rel
   }
 });
 
+test('media-route: malformed percent-encoding in a file:// path is rejected, not thrown', () => {
+  // A double-encoded query (?path=file%3A%2F%2F%2F%25E0...) decodes to the
+  // literal string 'file:///%E0%A4%A', whose inner decodeURIComponent throws a
+  // URIError. The route must reject it (404), never propagate an exception.
+  const bad = 'file:///%E0%A4%A';
+  assert.equal(resolveLocalMediaPath(bad), null, 'malformed escape resolves to null');
+  let status = 0;
+  const res = { writeHead(s: number) { status = s; }, end() {} };
+  const url = '/plugins/agy-link/media?path=' + encodeURIComponent(bad);
+  assert.doesNotThrow(() => handleMediaRequest({ url }, res as never));
+  assert.equal(status, 404);
+});
+
 test('media-route: handleMediaRequest streams existing image and denies non-images', () => {
   const tempDir = join(tmpdir(), 'agy-media-http-test-' + Date.now());
   mkdirSync(tempDir, { recursive: true });
