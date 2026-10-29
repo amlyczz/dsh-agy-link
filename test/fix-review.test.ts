@@ -197,6 +197,13 @@ describe('diagnostics redaction', () => {
 		assert.ok(!out.includes('GOCSPX-abcdef123456789'), 'Google client secret redacted')
 		assert.ok(out.includes('ok=hello world'), 'ordinary text preserved')
 	})
+	test('redacts secret query parameters in arbitrary URLs', () => {
+		const line = 'GET https://example.com/cb?access_token=sekret123&foo=bar&api_key=AIzaNotMatchedShapeNow'
+		const out = redactLine(line)
+		assert.ok(!out.includes('sekret123'), 'access_token value redacted')
+		assert.ok(!out.includes('AIzaNotMatchedShapeNow'), 'api_key query value redacted')
+		assert.ok(out.includes('foo=bar'), 'non-secret query preserved')
+	})
 	test('redacts Basic/Cookie authorization headers', () => {
 		const line = 'GET /x  Authorization: Basic dXNlcjpwYXNz  Cookie: session=abc123secret; theme=dark  X-Api-Key: topsecretvalue'
 		const out = redactLine(line)

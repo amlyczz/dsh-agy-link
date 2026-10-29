@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.91 (2026-10-29)
+
+### English
+
+- **Security(doctor): redact secret URL query parameters (`access_token`, `token`, `api_key`, …).**
+  - `redactLine()` fully redacted accounts.google.com URLs but left secret-bearing query parameters on any other URL (OAuth callbacks, signed URLs) in the clear. Query keys `access_token/refresh_token/id_token/token/api_key/apikey/client_secret/key` are now masked as `<key>=<redacted>` while other query parameters are preserved. Adds a regression test.
+
+### 中文
+
+- **安全(doctor)：脱敏 URL 查询串中的密钥参数（`access_token`、`token`、`api_key` 等）。**
+  - `redactLine()` 只整体脱敏 accounts.google.com 的 URL，其它 URL（OAuth 回调、签名链接）上的密钥查询参数会明文残留。现对 `access_token/refresh_token/id_token/token/api_key/apikey/client_secret/key` 统一掩码为 `<key>=<redacted>`，其它查询参数保留。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.90...v0.4.91
+
 ## 0.4.90 (2026-10-29)
 
 ### English

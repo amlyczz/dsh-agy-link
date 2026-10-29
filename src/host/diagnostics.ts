@@ -57,6 +57,8 @@ export function redactLine(line: string): string {
   // Auth-carrying request/response headers whose scheme is not `Bearer`
   // (Basic auth, cookies, provider key headers) would otherwise leak verbatim.
   out = out.replace(/\b((?:proxy-)?authorization|cookie|set-cookie|x-api-key)\s*:\s*[^\r\n]+/gi, '$1: <redacted>')
+  // Secret-bearing query parameters in any URL (OAuth callbacks, signed URLs).
+  out = out.replace(/([?&](?:access_token|refresh_token|id_token|token|api_key|apikey|client_secret|key)=)[^&\s]+/gi, '$1<redacted>')
   out = out.replace(/\b(?:https?|socks[45]):\/\/[^\s/]*:[^\s/@]*@[^\s]+/gi, '<proxy-url-redacted>')
   return out
 }
