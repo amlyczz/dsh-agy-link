@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.84 (2026-10-29)
+
+### English
+
+- **Perf(parser): parse a multi-line chunk in O(n) instead of O(n²).**
+  - `StreamJsonParser.feed()` walked the buffer with a `while` loop that re-sliced `this.buffer` on every newline — each slice copies the whole remainder, so a large chunk carrying many lines was quadratic in copied bytes. It now splits once (`split('\n')`, keep the torn tail), which is linear; behaviour (incl. `\r\n` stripping and torn-chunk buffering) is unchanged. Adds a large-single-chunk regression test.
+
+### 中文
+
+- **性能(parser)：多行 chunk 由 O(n²) 改为 O(n) 解析。**
+  - `StreamJsonParser.feed()` 原来用 `while` 循环逐行 `this.buffer = this.buffer.slice(...)`，每次 slice 都会复制整个剩余缓冲，含大量行的大 chunk 呈平方级复制。现改为一次性 `split('\n')` 并保留未完成的尾部（线性）；`\r\n` 去除与断块缓冲等行为不变。补充「单个大 chunk」回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.83...v0.4.84
+
 ## 0.4.83 (2026-10-29)
 
 ### English

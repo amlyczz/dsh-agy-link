@@ -248,12 +248,16 @@ export class StreamJsonParser {
   feed(chunk: string): AgyEvent[] {
     this.buffer += chunk
     const out: AgyEvent[] = []
-    let nl: number
-    while ((nl = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, nl).replace(/\r$/, '')
-      this.buffer = this.buffer.slice(nl + 1)
-      const ev = this.takeLine(line)
-      if (ev) out.push(ev)
+    // Split ONCE instead of repeatedly slicing the buffer. A large chunk that
+    // carries many lines used to be O(n^2) in copied bytes (each slice copies
+    // the whole remainder); split() is O(n) and leaves the torn tail in place.
+    if (this.buffer.indexOf('\n') >= 0) {
+      const parts = this.buffer.split('\n')
+      this.buffer = parts.pop() ?? ''
+      for (const part of parts) {
+        const ev = this.takeLine(part.replace(/\r$/, ''))
+        if (ev) out.push(ev)
+      }
     }
     if (this.buffer.length > MAX_STREAM_LINE_BYTES) {
       // No newline for multiple MB: drop the runaway partial line so the buffer

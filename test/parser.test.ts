@@ -42,6 +42,19 @@ test('bounds an over-long line without a newline (no unbounded buffer growth)', 
   assert.equal(ok[0]?.kind, 'init')
 })
 
+test('parses a large single chunk with many lines in one feed', () => {
+  const p = new StreamJsonParser()
+  const lines = Array.from({ length: 2000 }, (_, i) => '{"event":"init","conversation_id":"c' + i + '"}')
+  const evs = p.feed(lines.join('\n') + '\n')
+  assert.equal(evs.length, 2000)
+  assert.ok(evs.every((e) => e.kind === 'init'))
+  // Remainder is empty; a later torn chunk still buffers + completes correctly.
+  assert.equal(p.feed('{"event":"init","conversation_id":"last"}').length, 0)
+  const done = p.feed('\n')
+  assert.equal(done.length, 1)
+  assert.equal(done[0]?.kind, 'init')
+})
+
 test('buffers torn chunks across feeds', () => {
   const p = new StreamJsonParser()
   const out: AgyEvent[] = []
