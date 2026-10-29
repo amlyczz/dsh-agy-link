@@ -81,6 +81,8 @@ test('media-route: handleMediaRequest streams existing image and denies non-imag
     );
     assert.equal(status, 200);
     assert.equal(headers['Content-Type'], 'image/png');
+    assert.equal(headers['X-Content-Type-Options'], 'nosniff', 'no MIME sniffing');
+    assert.match(String(headers['Content-Security-Policy']), /sandbox/, 'CSP sandbox on served media');
 
     // Block non-image text file
     let deniedStatus = 0;

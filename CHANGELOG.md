@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.88 (2026-10-29)
+
+### English
+
+- **Security(media): add `X-Content-Type-Options: nosniff` and a CSP sandbox to served media/assets.**
+  - The media and asset routes serve local image/SVG files from the DSH origin. They now send `X-Content-Type-Options: nosniff` (no MIME sniffing) and `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`, so an operator-supplied SVG cannot execute scripts if opened/navigated directly. Adds header assertions to the media test.
+
+### 中文
+
+- **安全(media)：媒体/静态资源响应增加 `X-Content-Type-Options: nosniff` 与 CSP sandbox。**
+  - 媒体与静态资源路由从 DSH 同源提供本地图片/SVG。现附加 `X-Content-Type-Options: nosniff`（禁止 MIME 嗅探）与 `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`，使运维提供的 SVG 即使被直接打开/导航也无法执行脚本。为媒体测试补充响应头断言。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.87...v0.4.88
+
 ## 0.4.87 (2026-10-29)
 
 ### English

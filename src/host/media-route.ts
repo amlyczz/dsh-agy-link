@@ -151,6 +151,10 @@ export function handleMediaRequest(
       'Cache-Control': 'public, max-age=3600',
       'Access-Control-Allow-Origin': '*',
       'Content-Disposition': 'inline',
+      'X-Content-Type-Options': 'nosniff',
+      // Sandbox defensively: an operator-supplied SVG served from the DSH origin
+      // must not execute scripts if opened/navigated directly.
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     });
 
     const stream = createReadStream(filePath);
@@ -210,6 +214,8 @@ export function handleAssetRequest(
       'Content-Length': st.size,
       'Cache-Control': 'public, max-age=86400',
       'Access-Control-Allow-Origin': '*',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     });
 
     const stream = createReadStream(filePath);
