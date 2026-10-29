@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveLocalMediaPath, handleMediaRequest, handleAssetRequest } from '../src/host/media-route.ts';
-import { existsSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync, rmSync, symlinkSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -109,5 +109,29 @@ test('media-route: handleMediaRequest streams existing image and denies non-imag
     assert.equal(notFoundStatus, 404);
   } finally {
     try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('media-route: handleAssetRequest refuses a symlink that escapes the asset dir', () => {
+  if (process.platform === 'win32') return;
+  const root = mkdtempSync(join(tmpdir(), 'agy-asset-root-'));
+  const outside = mkdtempSync(join(tmpdir(), 'agy-asset-out-'));
+  try {
+    writeFileSync(join(outside, 'secret.txt'), 'SECRET');
+    symlinkSync(join(outside, 'secret.txt'), join(root, 'leak.txt'));
+    let status = 0;
+    const res = {
+      writeHead(s: number) { status = s; },
+      end() {},
+      on() { return this; },
+      once() { return this; },
+      emit() { return true; },
+      write() { return true; },
+    };
+    handleAssetRequest({ url: '/plugins/agy-link/assets/leak.txt' }, res as never, root);
+    assert.notEqual(status, 200, 'must not serve a file outside the asset dir via symlink');
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(outside, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 });

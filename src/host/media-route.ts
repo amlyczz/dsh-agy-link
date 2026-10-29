@@ -1,8 +1,8 @@
 // Media and asset route handler for dsh-agy-link.
 // Serves local images referenced by Antigravity (file://, absolute paths, WSL paths, staged media)
 // and static plugin assets (e.g. mermaid.min.js) safely to DSH Desktop and Web clients.
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, join, resolve } from 'node:path';
+import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
+import { extname, join, resolve, sep } from 'node:path';
 
 const MIME_MAP: Record<string, string> = {
   '.png': 'image/png',
@@ -188,10 +188,24 @@ export function handleAssetRequest(
     return;
   }
 
-  // Prevent directory traversal
-  const safeName = subPath.replace(/\.\./g, '').replace(/^[/\\]+/, '');
-  const filePath = join(assetDir, safeName);
-
+  // Prevent directory traversal AND symlink escape: resolve inside the
+  // canonical asset dir and require the canonical target to stay inside it.
+  let filePath: string;
+  try {
+    const root = realpathSync(assetDir);
+    const candidate = resolve(root, subPath.replace(/^[/\\]+/, ''));
+    const real = realpathSync(candidate);
+    if (real !== root && !real.startsWith(root + sep)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('forbidden');
+      return;
+    }
+    filePath = real;
+  } catch {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('asset not found');
+    return;
+  }
   if (!existsSync(filePath)) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('asset not found');

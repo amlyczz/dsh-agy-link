@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.94 (2026-10-29)
+
+### English
+
+- **Security(media): block symlink escape in the static-asset route.**
+  - `handleAssetRequest()` built the path with `join(assetDir, subPath.replace('\.\.',''))` and only checked `existsSync`. A symlink placed inside the asset dir that pointed outside it would be followed and served (any file type, e.g. a `.txt` with secrets). The route now canonicalizes with `realpathSync` and requires the target to stay inside the canonical asset dir (`403` otherwise). Adds a symlink-escape regression test.
+
+### 中文
+
+- **安全(media)：静态资源路由阻止符号链接逃逸。**
+  - `handleAssetRequest()` 之前用 `join(assetDir, 去掉'..'的 subPath)` + `existsSync` 判断；若资产目录内放入一个指向外部的符号链接，会被跟随并对外提供（任意类型文件，如含密钥的 `.txt`）。现用 `realpathSync` 规范化并要求目标仍在资产目录内（否则 `403`）。补充符号链接逃逸回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.93...v0.4.94
+
 ## 0.4.93 (2026-10-29)
 
 ### English
