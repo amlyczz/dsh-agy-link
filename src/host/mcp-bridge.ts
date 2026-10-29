@@ -19,7 +19,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { homedir } from 'node:os'
 
 const MCP_SERVER_KEY = 'dsh-tools'
@@ -68,13 +68,41 @@ export interface McpBridge {
   close(): Promise<void>
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+/** Loopback request-body cap. Tool arguments are tiny; this only exists so a
+ * token-holding (possibly prompt-injected) agy child cannot OOM the host by
+ * streaming an unbounded body at /call. */
+const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
+
+function readBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<{ tooLarge: boolean; text: string }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
-    req.on('error', () => resolve(''))
+    let size = 0
+    let tooLarge = false
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > maxBytes) {
+        // Stop buffering but keep draining so the client still receives the
+        // 413 (destroying mid-body would surface as ECONNRESET instead).
+        tooLarge = true
+        chunks.length = 0
+        return
+      }
+      chunks.push(c)
+    })
+    req.on('end', () => resolve({ tooLarge, text: tooLarge ? '' : Buffer.concat(chunks).toString('utf8') }))
+    req.on('error', () => resolve({ tooLarge, text: '' }))
   })
+}
+
+/** Constant-time bearer comparison (the token is a shared secret). */
+function bearerMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided, 'utf8')
+  const b = Buffer.from(expected, 'utf8')
+  if (a.length !== b.length) return false
+  return timingSafeEqual(a, b)
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -115,6 +143,8 @@ export function startMcpBridge(opts: {
   /** Map the spawning DSH session id to the agent the call runs on behalf of. */
   resolveAgent?: (sessionId: string) => unknown | Promise<unknown>
   log?: (msg: string) => void
+  /** Max buffered request-body bytes (tests use a small value). */
+  maxBodyBytes?: number
 }): Promise<McpBridge> {
   const token = randomBytes(24).toString('hex')
   let callSeq = 0
@@ -122,7 +152,7 @@ export function startMcpBridge(opts: {
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
       const auth = String(req.headers['authorization'] ?? '')
-      if (auth !== 'Bearer ' + token) {
+      if (!bearerMatches(auth, 'Bearer ' + token)) {
         sendJson(res, 401, { error: 'unauthorized' })
         return
       }
@@ -155,10 +185,14 @@ export function startMcpBridge(opts: {
         return;
       }
       if (req.method === 'POST' && (url === '/call' || url === '/mcp/call')) {
-        const body = await readBody(req)
+        const body = await readBody(req, opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
+        if (body.tooLarge) {
+          sendJson(res, 413, { error: 'request body too large' })
+          return
+        }
         let parsed: { dshName?: unknown; arguments?: unknown } = {}
         try {
-          parsed = JSON.parse(body) as typeof parsed
+          parsed = JSON.parse(body.text) as typeof parsed
         } catch {
           sendJson(res, 400, { error: 'invalid JSON' })
           return

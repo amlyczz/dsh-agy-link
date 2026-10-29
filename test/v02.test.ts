@@ -143,6 +143,52 @@ test('mcp bridge: internal agy_tool is never bridged (listing or execution)', as
   }
 })
 
+test('mcp bridge: rejects oversized request bodies (memory-DoS guard)', async () => {
+  const bridge = await startMcpBridge({
+    bridgeScript: resolve(here, '../dist/bridge.mjs'),
+    tools: () => fakeTools,
+    allowlist: () => '',
+    maxBodyBytes: 1024,
+  })
+  try {
+    const big = 'x'.repeat(4096)
+    const res = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + bridge.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ dshName: 'bash', arguments: { command: big } }),
+    })
+    assert.equal(res.status, 413, 'oversized body is refused before JSON.parse')
+
+    const ok = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + bridge.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ dshName: 'bash', arguments: { command: 'echo hi' } }),
+    })
+    const okBody = (await ok.json()) as { ok: boolean }
+    assert.equal(okBody.ok, true, 'a small call still works')
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('mcp bridge: /call requires the bearer token', async () => {
+  const bridge = await startMcpBridge({
+    bridgeScript: resolve(here, '../dist/bridge.mjs'),
+    tools: () => fakeTools,
+    allowlist: () => '',
+  })
+  try {
+    const res = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ dshName: 'bash', arguments: { command: 'id' } }),
+    })
+    assert.equal(res.status, 401, 'unauthenticated call is rejected')
+  } finally {
+    await bridge.close()
+  }
+})
+
 test('mcp bridge script speaks JSON-RPC over stdio end to end', async () => {
   const bridge = await startMcpBridge({
     bridgeScript: resolve(here, '../dist/bridge.mjs'),

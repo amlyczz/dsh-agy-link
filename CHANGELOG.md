@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.77 (2026-10-29)
+
+### English
+
+- **Security(mcp): harden the loopback endpoint against a token-holding, prompt-injected child.**
+  - **Bounded request body** — `/call` now caps the buffered body at 8 MiB and returns **413 `request body too large`** instead of buffering an unbounded payload, so a compromised/injected agy child cannot OOM the host process by streaming huge tool arguments.
+  - **Constant-time bearer check** — the shared-secret token is compared with `crypto.timingSafeEqual` (length-guarded) rather than `!==`, removing the timing side-channel.
+
+### 中文
+
+- **安全(MCP)：加固 loopback 端点，防御持有 token、被提示词注入的子进程。**
+  - **请求体上限**：`/call` 现在把缓冲上限设为 8 MiB，超限直接返回 **413 `request body too large`**，避免被攻陷/注入的 agy 子进程用超大工具参数把宿主进程内存打爆。
+  - **常量时间 token 校验**：共享密钥改用 `crypto.timingSafeEqual`（先校验长度）比对，消除 `!==` 的时序侧信道。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.76...v0.4.77
+
 ## 0.4.76 (2026-10-29)
 
 ### English

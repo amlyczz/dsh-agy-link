@@ -116,7 +116,10 @@ reference-counted slot is the strongest isolation the plugin can provide.
   restricts the served set **and is
   enforced at execution time** — a `/call` for a tool outside the allowlist is
   refused (403) even when the caller holds the bridge token, so a prompt-injected
-  agy child cannot silently reach tools the operator did not expose.
+  agy child cannot silently reach tools the operator did not expose. The
+  loopback endpoint also caps request bodies (8 MiB → HTTP 413) and compares the
+  bearer token in constant time, so a token-holding but prompt-injected child
+  cannot OOM the host with an unbounded body or probe the token via timing.
   Every bridged call is audit-logged as `mcp call <tool> [<outcome>] <ms>` with
   the caller class and the failure text (never the arguments), so a failed run
   is visible in journald instead of only in transcripts.
