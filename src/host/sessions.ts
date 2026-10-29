@@ -2,8 +2,9 @@
 // Atomic tmp+rename writes with dirty-key merge on reload keep concurrent
 // host processes (web + headless) from clobbering each other — the
 // pi-bridge-proven JSON layout, adapted to the DSH state directory.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { writeFileAtomicSync } from '../common/atomic-write.ts'
 
 export interface SessionBinding {
   conversationId: string
@@ -136,9 +137,9 @@ export class SessionStore {
         const b = this.data[key]
         if (b !== undefined) merged[key] = b
       }
-      const tmp = join(dirname(this.file), '.' + require$$basename(this.file) + '.tmp')
-      writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8')
-      renameSync(tmp, this.file);
+      // Unique temp name + rename: concurrent host processes never share a
+      // temp file (see common/atomic-write.ts).
+      writeFileAtomicSync(this.file, JSON.stringify(merged, null, 2));
       // Adopt the merge so this process sees keys other hosts contributed.
       this.data = merged;
       this.dirty.clear();
@@ -147,12 +148,4 @@ export class SessionStore {
       // best-effort persistence; memory copy still serves this process
     }
   }
-}
-
-// tiny basename to avoid pulling node:path twice for one call;
-// handles BOTH separators — a Windows path contains no '/' and would
-// otherwise turn the tmp filename into garbage (persist silently failed).
-function require$$basename(p: string): string {
-  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-  return i >= 0 ? p.slice(i + 1) : p;
 }

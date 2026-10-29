@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.89 (2026-10-29)
+
+### English
+
+- **Fix(sessions): use a unique temp file for the atomic store write (multi-process safety).**
+  - `SessionStore.persist()` wrote through a deterministic `".sessions.json.tmp"`. Web + headless host processes share one store, so two concurrent persists could interleave into the same temp file and race the rename — corrupting the store or failing a writer with `ENOENT`. Extracted `src/common/atomic-write.ts` (`writeFileAtomicSync`) which uses a per-write unique temp name (`<file>.<pid>.<seq>.<rand>.tmp`) and cleans it up on failure; sessions now uses it. Adds unit tests for uniqueness, no-residue, and failure cleanup.
+
+### 中文
+
+- **修复(sessions)：原子写改用每次唯一的临时文件（多进程安全）。**
+  - `SessionStore.persist()` 之前用固定的 `".sessions.json.tmp"`。Web 与 headless 宿主进程共享同一个 store，并发写会写进同一个临时文件并竞争 rename——导致文件损坏或某个写入者 `ENOENT`。抽出 `src/common/atomic-write.ts`（`writeFileAtomicSync`），临时名每次唯一（`<file>.<pid>.<seq>.<rand>.tmp`），失败时清理；sessions 改用它。补充单测：唯一性、无残留、失败清理。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.88...v0.4.89
+
 ## 0.4.88 (2026-10-29)
 
 ### English
