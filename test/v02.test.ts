@@ -70,6 +70,41 @@ test('mcp bridge: allowlist restricts the served set', async () => {
   }
 })
 
+test('mcp bridge: allowlist restricts EXECUTION, not just the served set', async () => {
+  // Security regression: an agy child holds the bridge token and is exactly the
+  // party mcpToolAllowlist is meant to constrain. Filtering only /tools let a
+  // (possibly prompt-injected) child POST /call with any tool name and bypass
+  // the allowlist entirely. The allowlist must be enforced at execution time.
+  const bridge = await startMcpBridge({
+    bridgeScript: resolve(here, '../dist/bridge.mjs'),
+    tools: () => fakeTools,
+    allowlist: () => 'read',
+  })
+  try {
+    // allowlisted tool executes normally
+    const ok = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + bridge.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ dshName: 'read', arguments: { path: '/etc/hosts' } }),
+    })
+    const okBody = (await ok.json()) as { ok: boolean }
+    assert.equal(okBody.ok, true, 'allowlisted tool still runs')
+
+    // non-allowlisted tool must be refused, not executed
+    const denied = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + bridge.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ dshName: 'bash', arguments: { command: 'id' } }),
+    })
+    assert.equal(denied.status, 403, 'non-allowlisted call is refused')
+    const deniedBody = (await denied.json()) as { ok?: boolean; error?: string }
+    assert.notEqual(deniedBody.ok, true)
+    assert.match(deniedBody.error ?? '', /not allowed/i)
+  } finally {
+    await bridge.close()
+  }
+})
+
 test('mcp bridge script speaks JSON-RPC over stdio end to end', async () => {
   const bridge = await startMcpBridge({
     bridgeScript: resolve(here, '../dist/bridge.mjs'),

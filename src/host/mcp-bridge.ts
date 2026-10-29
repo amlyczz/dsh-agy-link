@@ -176,6 +176,17 @@ export function startMcpBridge(opts: {
             /* logging must never break the call */
           }
         }
+        // Enforce the allowlist at EXECUTION time, not just when listing tools.
+        // The agy child holds the bridge token, so it is exactly the party that
+        // mcpToolAllowlist constrains; filtering only /tools would let a
+        // (possibly prompt-injected) child POST /call with an arbitrary dshName
+        // and reach tools outside the allowlist. Empty allowlist = all allowed.
+        const allow = opts.allowlist().split(',').map((s) => s.trim()).filter(Boolean)
+        if (allow.length > 0 && !allow.includes(dshName)) {
+          audit('denied: not in allowlist')
+          sendJson(res, 403, { error: 'tool not allowed' })
+          return
+        }
         try {
           // Carry the caller: the session that spawned agy is the agent on
           // whose behalf this call runs (issue #55). Without it, tools that

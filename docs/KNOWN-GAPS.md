@@ -111,25 +111,28 @@ reference-counted slot is the strongest isolation the plugin can provide.
   where `agy` 1.4+ actually reads it, merged in and restored on disable).
   Bridged calls carry caller identity via `DSH_MCP_SESSION` so identity-enforcing
   tools (such as `agent_teams`) function correctly. `run_code` and `agy_ask`
-  are never bridged; `mcpToolAllowlist` restricts the set further.
+  are never bridged; `mcpToolAllowlist` restricts the served set **and is
+  enforced at execution time** — a `/call` for a tool outside the allowlist is
+  refused (403) even when the caller holds the bridge token, so a prompt-injected
+  agy child cannot silently reach tools the operator did not expose.
   Every bridged call is audit-logged as `mcp call <tool> [<outcome>] <ms>` with
   the caller class and the failure text (never the arguments), so a failed run
   is visible in journald instead of only in transcripts.
 
-    **Contract for external / plugin callers of `tools.execute(exec)` (see #61):**
-    DSH's `ToolExecutionInput` requires `callId`, `name`, `arguments` **and
-    `signal: AbortSignal`** — a call without `signal` throws
-    `Cannot read properties of undefined (reading 'aborted')` inside any tool
-    that awaits. Omit `agent` entirely when there is no real session (leave it
-    `undefined`, **never** `null`: DSH checks `exec.agent === void 0`, so `null`
-    takes the else branch and reads `null.session`). This plugin's host-side
-    `/call` handler already does both (it mints an `AbortController` per call and
-    resolves the caller from the `x-dsh-session` header, passing `agent` only when
-    one is found). A fabricated `agent.session` cannot pass DSH's live-session
-    store check — there is no supported way to fake a real Session from outside;
-    tools that require one need a real `agent` or they fail by design.
-    Documenting the full DSH-core `execute(exec)` contract and any official
-    sessionless-execution API is upstream work, not this bundle.
+  **Contract for external / plugin callers of `tools.execute(exec)` (see #61):**
+  DSH's `ToolExecutionInput` requires `callId`, `name`, `arguments` **and
+  `signal: AbortSignal`** — a call without `signal` throws
+  `Cannot read properties of undefined (reading 'aborted')` inside any tool
+  that awaits. Omit `agent` entirely when there is no real session (leave it
+  `undefined`, **never** `null`: DSH checks `exec.agent === void 0`, so `null`
+  takes the else branch and reads `null.session`). This plugin's host-side
+  `/call` handler already does both (it mints an `AbortController` per call and
+  resolves the caller from the `x-dsh-session` header, passing `agent` only when
+  one is found). A fabricated `agent.session` cannot pass DSH's live-session
+  store check — there is no supported way to fake a real Session from outside;
+  tools that require one need a real `agent` or they fail by design.
+  Documenting the full DSH-core `execute(exec)` contract and any official
+  sessionless-execution API is upstream work, not this bundle.
 - **DSH `send_message` from an agy child** - DSH's sub-agent runtime appends a
   footer telling the child to report with `send_message({ agent_id: <parent> })`.
   In an agy run that name resolves to agy's **own** `send_message`, which does
