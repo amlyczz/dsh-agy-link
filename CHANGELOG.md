@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.87 (2026-10-29)
+
+### English
+
+- **Security(doctor): tighten existing diagnostics dir/file to 0700/0600 on every write.**
+  - v0.4.86 set `mode` only at creation, so a pre-existing `diagnostics/` directory (0755 from an older version) stayed world-readable, and an overwritten report kept its old mode. `writeDoctorReport()` now `chmod`s the dir to `0700` and the file to `0600` after writing (best-effort). Adds a regression test.
+
+### 中文
+
+- **安全(doctor)：每次写入都把已存在的诊断目录/文件收紧到 0700/0600。**
+  - 0.4.86 只在创建时设 `mode`，因此已存在的 `diagnostics/`（旧版本创建的 0755）仍可被他人读取，覆盖写同名报告也保留旧权限。现 `writeDoctorReport()` 写完后显式 `chmod` 目录为 `0700`、文件为 `0600`（best-effort）。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.86...v0.4.87
+
 ## 0.4.86 (2026-10-29)
 
 ### English

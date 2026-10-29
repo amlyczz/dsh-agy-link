@@ -2,7 +2,7 @@
 // agy environment, catalog state, config snapshot, bindings, and the raw
 // ring buffer of the last stream-json run — with auth URLs, codes, and
 // token-shaped strings redacted before anything hits disk.
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stateDir } from '../common/config.ts'
 import type { PluginConfig } from '../common/types.ts'
@@ -102,9 +102,13 @@ export function writeDoctorReport(deps: DoctorDeps): string {
   lines.push('')
   const dir = join(stateDir(), 'diagnostics')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
+  // mkdir's mode is ignored when the dir already exists (e.g. created 0755 by an
+  // older version); tighten it explicitly so upgrades are not left world-readable.
+  try { chmodSync(dir, 0o700) } catch { /* best effort */ }
   const file = join(dir, 'doctor-' + new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14) + '.md')
-  // The report is redacted but still diagnostic, owner-only: mkdir 0700 + file
-  // 0600 so other local users cannot read config paths / residual log text.
+  // The report is redacted but still diagnostic, owner-only: file 0600 (also
+  // chmod after write in case this exact name already existed from an older run).
   writeFileSync(file, lines.join('\n'), { encoding: 'utf8', mode: 0o600 })
+  try { chmodSync(file, 0o600) } catch { /* best effort */ }
   return file
 }
