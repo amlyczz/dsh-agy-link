@@ -42,8 +42,10 @@ choice, not a fallback applied by this plugin.
 ## Report hygiene
 
 `/agy doctor` writes its report with redaction: Google auth URLs,
-`4/...` authorization codes, `ya29.*` tokens, and `Bearer` headers are
-stripped before the file hits disk. Still read it before attaching.
+`4/...` authorization codes, `ya29.*` access tokens, `1//0…` refresh tokens,
+OIDC/JWT `id_token`s, `AIza…`/`sk-…`/`GOCSPX-…` API keys, credentialed proxy
+URLs, and `Bearer` headers are stripped before the file hits disk. Still read it
+before attaching.
 
 ## HTTP surfaces and request-body caps
 

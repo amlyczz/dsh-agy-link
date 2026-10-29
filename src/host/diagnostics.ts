@@ -49,6 +49,11 @@ export function redactLine(line: string): string {
   // rule above and landed in the doctor report verbatim when agy echoed them.
   out = out.replace(/\b1\/\/0[A-Za-z0-9._-]{10,}/g, '<oauth-refresh-token-redacted>')
   out = out.replace(/\bAIza[0-9A-Za-z_-]{30,}\b/g, '<api-key-redacted>')
+  // OIDC/JWT id_tokens (Google's id_token is a JWT: header.payload.signature)
+  // and provider secret keys that do not share the AIza shape.
+  out = out.replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/g, '<jwt-redacted>')
+  out = out.replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '<api-key-redacted>')
+  out = out.replace(/\bGOCSPX-[A-Za-z0-9_-]{10,}\b/g, '<api-key-redacted>')
   out = out.replace(/\b(?:https?|socks[45]):\/\/[^\s/]*:[^\s/@]*@[^\s]+/gi, '<proxy-url-redacted>')
   return out
 }

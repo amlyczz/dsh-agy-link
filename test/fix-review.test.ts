@@ -188,6 +188,15 @@ describe('diagnostics redaction', () => {
 		assert.ok(!out.includes('AIzaSyA'), 'API key redacted')
 		assert.ok(!out.includes('user:secret'), 'proxy credentials redacted')
 	})
+	test('redacts OIDC/JWT id_tokens, sk- keys and Google client secrets; keeps ordinary text', () => {
+		const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVl'
+		const line = 'id_token=' + jwt + ' grant=sk-proj-AbCdEf0123456789abcdefgh client_secret=GOCSPX-abcdef123456789 ok=hello world'
+		const out = redactLine(line)
+		assert.ok(!out.includes(jwt), 'JWT id_token redacted')
+		assert.ok(!out.includes('sk-proj-AbCdEf0123456789abcdefgh'), 'sk- API key redacted')
+		assert.ok(!out.includes('GOCSPX-abcdef123456789'), 'Google client secret redacted')
+		assert.ok(out.includes('ok=hello world'), 'ordinary text preserved')
+	})
 	test('redactProxyUrl hides credentials, keeps shape', () => {
 		assert.equal(redactProxyUrl('http://user:pass@127.0.0.1:7890'), 'http://***:***@127.0.0.1:7890/')
 		assert.equal(redactProxyUrl('http://127.0.0.1:7890'), 'http://127.0.0.1:7890')

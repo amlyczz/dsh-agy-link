@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.80 (2026-10-29)
+
+### English
+
+- **Security(doctor): redact OIDC/JWT id_tokens and more provider secret shapes in `/agy doctor`.**
+  - `redactLine()` already stripped `ya29.*`, `1//0…` refresh tokens, `AIza…` keys, `Bearer` headers, `4/` codes and proxy credentials, but a Google `id_token` (a JWT `header.payload.signature`), `sk-…` provider keys, and `GOCSPX-…` OAuth client secrets passed through verbatim when agy echoed them into the log ring buffer. All three are now redacted; ordinary text is preserved. Adds regression tests.
+
+### 中文
+
+- **安全(doctor)：`/agy doctor` 额外脱敏 OIDC/JWT id_token 及更多密钥形态。**
+  - `redactLine()` 原本已脱敏 `ya29.*`、`1//0…` refresh token、`AIza…` key、`Bearer` 头、`4/` 授权码与代理凭证，但 Google `id_token`（JWT `header.payload.signature`）、`sk-…` 提供方密钥、`GOCSPX-…` OAuth client secret 在 agy 回显进日志环时仍会原样落入报告。现三类均已脱敏，普通文本保持不变。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.79...v0.4.80
+
 ## 0.4.79 (2026-10-29)
 
 ### English
