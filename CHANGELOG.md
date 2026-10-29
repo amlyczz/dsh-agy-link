@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.86 (2026-10-29)
+
+### English
+
+- **Security(doctor): write the diagnostic report owner-only (dir 0700, file 0600).**
+  - `/agy doctor` wrote its (redacted) report with the default umask (typically 0644), so another local user could read config paths and any residual log text. The diagnostics dir is now `0700` and the report `0600`.
+- **Docs(spec): add the spec index and the security-hardening invariants.**
+  - `.spec/README.md` indexes the project's truth sources; `.spec/security-hardening.md` records the MCP bridge / HTTP / doctor / media / parser security invariants and the exact test that guards each one, so future changes cannot silently relax them.
+
+### 中文
+
+- **安全(doctor)：诊断报告改为仅本人可读（目录 0700、文件 0600）。**
+  - `/agy doctor` 之前按默认 umask 写（通常 0644），同机其他用户可读到配置路径与残留日志。现目录 `0700`、报告 `0600`。
+- **文档(spec)：新增 spec 索引与安全不变式文档。**
+  - `.spec/README.md` 作为真相源索引；`.spec/security-hardening.md` 记录 MCP 桥接 / HTTP / doctor / media / parser 的安全不变式与对应测试，防止后续改动静默放宽。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.85...v0.4.86
+
 ## 0.4.85 (2026-10-29)
 
 ### English

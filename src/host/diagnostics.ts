@@ -101,8 +101,10 @@ export function writeDoctorReport(deps: DoctorDeps): string {
   lines.push('```')
   lines.push('')
   const dir = join(stateDir(), 'diagnostics')
-  mkdirSync(dir, { recursive: true })
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
   const file = join(dir, 'doctor-' + new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14) + '.md')
-  writeFileSync(file, lines.join('\n'), 'utf8')
+  // The report is redacted but still diagnostic, owner-only: mkdir 0700 + file
+  // 0600 so other local users cannot read config paths / residual log text.
+  writeFileSync(file, lines.join('\n'), { encoding: 'utf8', mode: 0o600 })
   return file
 }
