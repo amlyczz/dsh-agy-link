@@ -197,6 +197,14 @@ describe('diagnostics redaction', () => {
 		assert.ok(!out.includes('GOCSPX-abcdef123456789'), 'Google client secret redacted')
 		assert.ok(out.includes('ok=hello world'), 'ordinary text preserved')
 	})
+	test('redacts Basic/Cookie authorization headers', () => {
+		const line = 'GET /x  Authorization: Basic dXNlcjpwYXNz  Cookie: session=abc123secret; theme=dark  X-Api-Key: topsecretvalue'
+		const out = redactLine(line)
+		assert.ok(!out.includes('dXNlcjpwYXNz'), 'Basic auth token redacted')
+		assert.ok(!out.includes('abc123secret'), 'cookie value redacted')
+		assert.ok(!out.includes('topsecretvalue'), 'x-api-key header redacted')
+		assert.ok(out.includes('GET /x'), 'non-secret text preserved')
+	})
 	test('redactProxyUrl hides credentials, keeps shape', () => {
 		assert.equal(redactProxyUrl('http://user:pass@127.0.0.1:7890'), 'http://***:***@127.0.0.1:7890/')
 		assert.equal(redactProxyUrl('http://127.0.0.1:7890'), 'http://127.0.0.1:7890')

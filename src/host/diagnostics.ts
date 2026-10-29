@@ -54,6 +54,9 @@ export function redactLine(line: string): string {
   out = out.replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/g, '<jwt-redacted>')
   out = out.replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '<api-key-redacted>')
   out = out.replace(/\bGOCSPX-[A-Za-z0-9_-]{10,}\b/g, '<api-key-redacted>')
+  // Auth-carrying request/response headers whose scheme is not `Bearer`
+  // (Basic auth, cookies, provider key headers) would otherwise leak verbatim.
+  out = out.replace(/\b((?:proxy-)?authorization|cookie|set-cookie|x-api-key)\s*:\s*[^\r\n]+/gi, '$1: <redacted>')
   out = out.replace(/\b(?:https?|socks[45]):\/\/[^\s/]*:[^\s/@]*@[^\s]+/gi, '<proxy-url-redacted>')
   return out
 }

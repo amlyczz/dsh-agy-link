@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.85 (2026-10-29)
+
+### English
+
+- **Security(doctor): redact `Authorization: Basic`, `Cookie` and `X-Api-Key` headers.**
+  - `redactLine()` only masked `Bearer …` tokens, so a doctor log line carrying `Authorization: Basic <base64>`, `Cookie:` / `Set-Cookie:`, or `X-Api-Key:` values landed in the report verbatim. All auth-carrying headers are now masked (`<name>: <redacted>`) while ordinary text is preserved. Adds a regression test.
+
+### 中文
+
+- **安全(doctor)：脱敏 `Authorization: Basic`、`Cookie`、`X-Api-Key` 等头。**
+  - `redactLine()` 此前只处理 `Bearer …`，因此 doctor 日志中 `Authorization: Basic <base64>`、`Cookie:`/`Set-Cookie:`、`X-Api-Key:` 的值会原样落入报告。现将这些携带凭据的头统一脱敏为 `<name>: <redacted>`，普通文本不变。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.84...v0.4.85
+
 ## 0.4.84 (2026-10-29)
 
 ### English
