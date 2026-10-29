@@ -88,10 +88,15 @@ export class SessionStore {
   cleanupStaleAccounts(validAccountIds: Set<string>): void {
     let changed = false;
     for (const key of Object.keys(this.data)) {
-      const colon = key.indexOf(':');
+      // Session ids may themselves contain ':' (composite keys produced by
+      // other plugins). The account id is the LAST segment and always has the
+      // pool shape `acc_<...>`; split on the last ':' and require that shape so
+      // a colon-containing session key is never mistaken for an account id and
+      // a LIVE binding is never wrongly purged.
+      const colon = key.lastIndexOf(':');
       if (colon >= 0) {
         const accId = key.slice(colon + 1);
-        if (accId && !validAccountIds.has(accId)) {
+        if (/^acc_[A-Za-z0-9_]+$/.test(accId) && !validAccountIds.has(accId)) {
           delete this.data[key];
           this.dirty.delete(key);
           this.removed.add(key);

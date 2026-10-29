@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.82 (2026-10-29)
+
+### English
+
+- **Fix(sessions): don't mis-purge live bindings whose session key contains `:`.**
+  - `cleanupStaleAccounts()` split the binding key on the FIRST `:`. A DSH session id can itself be composite and contain `:` (as several plugins produce), so `ns:sess:acc_valid` parsed its "account id" as `sess:acc_valid`, which is never in the valid set — the cleanup then **deleted a live binding**. It now splits on the LAST `:` and only treats the suffix as an account id when it matches the pool shape `acc_<...>`, so colon-containing session keys are never mistaken for accounts. Adds a regression test.
+
+### 中文
+
+- **修复(sessions)：不再误删会话键本身含 `:` 的有效绑定。**
+  - `cleanupStaleAccounts()` 之前按**第一个** `:` 切分绑定键。DSH 的会话 id 有可能本身是含 `:` 的复合键（部分插件如此），于是 `ns:sess:acc_valid` 被解析出的「账号 id」为 `sess:acc_valid`，永远不在有效集合里——清理逻辑因此**删掉了一个有效绑定**。现在改为按**最后一个** `:` 切分，且仅当后缀符合账号池形态 `acc_<...>` 时才当作账号 id，含 `:` 的会话键不会被误判为账号。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.81...v0.4.82
+
 ## 0.4.81 (2026-10-29)
 
 ### English

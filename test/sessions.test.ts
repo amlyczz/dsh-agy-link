@@ -58,6 +58,20 @@ test('a concurrent writer does not lose the other host bindings (dirty-key merge
   assert.equal(new SessionStore(mergeFile).get('session-b')?.conversationId, 'cb')
 })
 
+test('cleanupStaleAccounts does not mis-purge bindings whose session key contains ":"', () => {
+  // DSH session ids from other plugins can be composite and contain ':'.
+  // Splitting on the FIRST ':' reads "sess:acc_valid" as the account id, which
+  // is never in the valid set, so a LIVE binding was wrongly deleted.
+  const f = join(dir, 'cleanup-colon.json')
+  rmSync(f, { force: true })
+  const store = new SessionStore(f)
+  store.set('ns:sess:acc_valid', { conversationId: 'c1', lastMessageCount: 1, updatedAt: 100 })
+  store.set('ns:sess:acc_gone', { conversationId: 'c2', lastMessageCount: 2, updatedAt: 200 })
+  store.cleanupStaleAccounts(new Set(['acc_valid']))
+  assert.ok(store.get('ns:sess:acc_valid'), 'valid binding survives despite colons in the session key')
+  assert.equal(store.get('ns:sess:acc_gone'), undefined, 'deleted account binding is still purged')
+})
+
 test('cleanupStaleAccounts removes deleted account IDs from sessions.json', () => {
   const cleanupFile = join(dir, 'cleanup.json')
   rmSync(cleanupFile, { force: true })
