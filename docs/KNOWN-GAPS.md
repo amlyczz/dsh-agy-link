@@ -110,8 +110,10 @@ reference-counted slot is the strongest isolation the plugin can provide.
   server in the MCP registry (`~/.gemini/config/mcp_config.json` by default,
   where `agy` 1.4+ actually reads it, merged in and restored on disable).
   Bridged calls carry caller identity via `DSH_MCP_SESSION` so identity-enforcing
-  tools (such as `agent_teams`) function correctly. `run_code` and `agy_ask`
-  are never bridged; `mcpToolAllowlist` restricts the served set **and is
+  tools (such as `agent_teams`) function correctly. Internal loopback-only
+  helpers — `run_code`, `agy_ask`, and the activity-mirror `agy_tool` — are
+  never bridged (excluded from both `/tools` and `/call`); `mcpToolAllowlist`
+  restricts the served set **and is
   enforced at execution time** — a `/call` for a tool outside the allowlist is
   refused (403) even when the caller holds the bridge token, so a prompt-injected
   agy child cannot silently reach tools the operator did not expose.

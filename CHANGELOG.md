@@ -6,11 +6,15 @@
 
 - **Security(mcp): enforce `mcpToolAllowlist` at execution time, not just on `/tools`.**
   - `GET /tools` filtered the served set by `mcpToolAllowlist`, but `POST /call` accepted any tool name (except the internal `run_code`/`agy_ask`). The agy child holds the bridge bearer token, so a prompt-injected or compromised child could `POST /call` for a tool the operator never exposed (e.g. `bash`, `write`) and bypass the allowlist entirely. `/call` now returns **403 `tool not allowed`** for any tool outside a non-empty allowlist, and audit-logs it as `mcp call <tool> [denied: not in allowlist]`. Empty allowlist still means "all non-internal tools" (unchanged).
+- **Security(mcp): stop exposing the internal `agy_tool` mirror over the bridge.**
+  - The internal-tool filter only excluded `run_code`/`agy_ask`, so the activity-mirror tool `agy_tool` (which replays recorded agy tool activity back into DSH) was listed by `/tools` and executable via `/call` — letting the external agy child re-enter the bridge. The exclusion set is now centralized (`INTERNAL_TOOL_NAMES = run_code, agy_ask, agy_tool`) and enforced identically when listing and when executing, so the two can never drift.
 
 ### 中文
 
 - **安全(MCP)：`mcpToolAllowlist` 现在在「执行时」强制生效，而不只是过滤 `/tools` 列表。**
   - 此前 `/tools` 按 allowlist 过滤，但 `POST /call` 只拦内部 `run_code`/`agy_ask`，任意工具名都会被真正执行。agy 子进程本身持有桥接 token，因此被提示词注入或攻陷的子进程可以 `POST /call` 调用运维并未暴露的工具（如 `bash`、`write`），完全绕过 allowlist。现在非空 allowlist 之外的 `/call` 一律返回 **403 `tool not allowed`**，并审计为 `mcp call <tool> [denied: not in allowlist]`。空 allowlist 仍表示「全部非内部工具」（行为不变）。
+- **安全(MCP)：不再把内部的 `agy_tool` 镜像工具暴露给桥接。**
+  - 内部工具过滤此前只排除 `run_code`/`agy_ask`，导致「活动镜像」工具 `agy_tool`（把 agy 记录的工具活动回放到 DSH）会被 `/tools` 列出、并可经 `/call` 执行，等于让外部 agy 子进程重新进入桥接。现将内部工具集合集中为 `INTERNAL_TOOL_NAMES = run_code, agy_ask, agy_tool`，在「列出」与「执行」两处统一生效，避免两处漂移。
 
 **Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.75...v0.4.76
 

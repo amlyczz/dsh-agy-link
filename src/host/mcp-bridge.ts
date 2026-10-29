@@ -24,6 +24,17 @@ import { homedir } from 'node:os'
 
 const MCP_SERVER_KEY = 'dsh-tools'
 
+/**
+ * Tools that must NEVER be exposed to an external MCP client. These are
+ * internal transports / loopback-only helpers of the plugin itself:
+ *  - `run_code`  — the deployment's model-only wrapper around code execution.
+ *  - `agy_ask`   — the plugin's own ask tool (would recurse into agy).
+ *  - `agy_tool`  — replays recorded agy tool activity back into DSH; calling it
+ *                   over the bridge would let the agy child re-enter the bridge.
+ * Kept in one place so the /tools listing and the /call guard can never drift.
+ */
+const INTERNAL_TOOL_NAMES = new Set(['run_code', 'agy_ask', 'agy_tool'])
+
 /** Minimal structural view of the DSH tool registry we need. */
 export interface ToolsServiceLike {
   schemas(): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
@@ -127,8 +138,8 @@ export function startMcpBridge(opts: {
         const tools = svc.schemas()
           .filter((t) => allow.length === 0 || allowSet.has(t.name))
           .filter((t) => {
-            // internal transports and our own ask tool are not bridgeable
-            if (t.name === 'run_code' || t.name === 'agy_ask') return false
+            // internal transports / loopback-only helpers are not bridgeable
+            if (INTERNAL_TOOL_NAMES.has(t.name)) return false
             const mapped = toMcpName(t.name)
             if (seen.has(mapped)) return false // collision after mapping
             seen.add(mapped)
@@ -158,7 +169,7 @@ export function startMcpBridge(opts: {
           return
         }
         const dshName = typeof parsed.dshName === 'string' ? parsed.dshName : ''
-        if (dshName === '' || dshName === 'run_code' || dshName === 'agy_ask') {
+        if (dshName === '' || INTERNAL_TOOL_NAMES.has(dshName)) {
           sendJson(res, 400, { error: 'bad tool name' })
           return;
         }

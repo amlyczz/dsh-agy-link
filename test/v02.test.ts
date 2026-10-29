@@ -105,6 +105,44 @@ test('mcp bridge: allowlist restricts EXECUTION, not just the served set', async
   }
 })
 
+test('mcp bridge: internal agy_tool is never bridged (listing or execution)', async () => {
+  // agy_tool replays recorded agy activity back into DSH; exposing it to the
+  // external agy child would let the child re-enter the bridge (recursion) and
+  // widens the attack surface. Internal-only tools must be filtered from BOTH
+  // /tools and /call, exactly like run_code/agy_ask.
+  const executed: string[] = [];
+  const tools: ToolsServiceLike = {
+    schemas: () => [
+      { name: 'read', description: 'read a file', parameters: {} },
+      { name: 'agy_tool', description: 'internal mirror transport', parameters: {} },
+    ],
+    execute: async (input) => {
+      executed.push(input.name)
+      return { content: [{ type: 'text', text: 'ok' }] }
+    },
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: resolve(here, '../dist/bridge.mjs'),
+    tools: () => tools,
+    allowlist: () => '',
+  })
+  try {
+    const list = await fetch(bridge.url + '/tools', { headers: { authorization: 'Bearer ' + bridge.token } })
+    const body = (await list.json()) as { tools: Array<{ dshName: string }> }
+    assert.ok(!body.tools.map((t) => t.dshName).includes('agy_tool'), 'internal mirror not listed')
+
+    const call = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + bridge.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ dshName: 'agy_tool', arguments: {} }),
+    })
+    assert.equal(call.status, 400, 'internal mirror is refused')
+    assert.equal(executed.length, 0, 'internal mirror never executed')
+  } finally {
+    await bridge.close()
+  }
+})
+
 test('mcp bridge script speaks JSON-RPC over stdio end to end', async () => {
   const bridge = await startMcpBridge({
     bridgeScript: resolve(here, '../dist/bridge.mjs'),
