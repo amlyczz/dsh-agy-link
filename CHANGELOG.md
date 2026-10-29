@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.90 (2026-10-29)
+
+### English
+
+- **Fix(config): parse boolean env/plugin values case-insensitively (`TRUE`, `Yes`, `on`, …).**
+  - `asBool()` only accepted the exact strings `true`/`1`, so `DSH_AGY_MCP_BRIDGE=TRUE` (or `Yes`/`on`) was silently ignored and fell back to the default — a common footgun for boolean env vars. It now trims + lowercases and accepts `true/1/yes/on` and `false/0/no/off`; anything else still falls back. Adds a regression test.
+
+### 中文
+
+- **修复(config)：布尔型 env/配置值大小写不敏感（`TRUE`、`Yes`、`on` 等）。**
+  - `asBool()` 之前只认精确的 `true`/`1`，于是 `DSH_AGY_MCP_BRIDGE=TRUE`（或 `Yes`/`on`）被静默忽略、回落到默认值——布尔环境变量的常见坑。现 trim+小写后接受 `true/1/yes/on` 与 `false/0/no/off`，其它仍回落。补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.89...v0.4.90
+
 ## 0.4.89 (2026-10-29)
 
 ### English

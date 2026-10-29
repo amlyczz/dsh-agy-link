@@ -46,7 +46,13 @@ function asMcpConfigScope(v: unknown): PluginConfig['mcpConfigScope'] | undefine
 
 function asBool(v: unknown): boolean | undefined {
   if (typeof v === 'boolean') return v
-  if (typeof v === 'string') return v === 'true' || v === '1'
+  if (typeof v === 'string') {
+    // Env/config booleans are commonly written TRUE / Yes / on; treat them
+    // case-insensitively instead of silently ignoring anything but "true"/"1".
+    const s = v.trim().toLowerCase()
+    if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true
+    if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false
+  }
   return undefined
 }
 

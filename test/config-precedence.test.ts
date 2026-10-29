@@ -16,6 +16,15 @@ test('runtime configurable fields override entries; entries supply missing field
   assert.equal(cfg.askTool, false)
 })
 
+test('boolean env vars are case-insensitive and accept yes/on/off', () => {
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'TRUE' }, {}).mcpBridge, true)
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'Yes' }, {}).mcpBridge, true)
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'on' }, {}).mcpBridge, true)
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'OFF' }, {}).mcpBridge, false)
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'No' }, {}).mcpBridge, false)
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'garbage' }, {}).mcpBridge, false, 'unknown falls back to base default')
+})
+
 test('longToolIdleMinutes is configurable, accepts 0 (disable) and reads the env override', () => {
   assert.equal(resolveConfig({}, {}, {}).longToolIdleMinutes, 240)
   assert.equal(resolveConfig({ longToolIdleMinutes: 30 }, {}, {}).longToolIdleMinutes, 30)
