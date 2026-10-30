@@ -263,4 +263,39 @@ test('repairMermaidSource heals latest 4-subgraph decomposition pipeline diagram
   assert.ok(!repaired.includes('A1 + A2 -->'))
 })
 
+test('enqueueMermaidRender serializes concurrent diagram renders', async () => {
+  const { enqueueMermaidRender } = await import('../src/client/mermaid.ts')
+  const order: string[] = []
+  const mk = (name: string, delay: number) => async () => {
+    order.push('start:' + name)
+    await new Promise((r) => setTimeout(r, delay))
+    order.push('end:' + name)
+    return name
+  }
+  // Queued in order even though b/c would resolve far sooner than a.
+  const results = await Promise.all([
+    enqueueMermaidRender(mk('a', 30)),
+    enqueueMermaidRender(mk('b', 1)),
+    enqueueMermaidRender(mk('c', 1)),
+  ])
+  assert.deepEqual(results, ['a', 'b', 'c'])
+  assert.deepEqual(order, ['start:a', 'end:a', 'start:b', 'end:b', 'start:c', 'end:c'])
+})
+
+test('enqueueMermaidRender keeps the chain alive after a failing task', async () => {
+  const { enqueueMermaidRender } = await import('../src/client/mermaid.ts')
+  const order: string[] = []
+  const bad = enqueueMermaidRender(async () => {
+    order.push('bad')
+    throw new Error('boom')
+  })
+  const after = enqueueMermaidRender(async () => {
+    order.push('after')
+    return 42
+  })
+  await assert.rejects(bad, /boom/)
+  assert.equal(await after, 42)
+  assert.deepEqual(order, ['bad', 'after'])
+})
+
 

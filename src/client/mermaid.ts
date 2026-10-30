@@ -373,6 +373,26 @@ export function isInvalidOrCollapsedSvg(svg: string | null | undefined): boolean
 	return false
 }
 
+// Mermaid's render() is not reentrant: it writes shared temporary nodes into
+// document.body, and our post-render cleanup sweeps every one of them. When a
+// single scan pass sees several diagrams at once — a long answer with two or
+// three charts, or the first lazy load resolving for every already-pending
+// block — the concurrent renders clobber each other's temp DOM. The losers
+// throw, and auto-sniffed blocks then silently "fall back" to a plain code
+// block that looks exactly like "the diagram just didn't render". Serialize
+// every render through one chain so exactly one diagram is drawn at a time.
+let renderChain: Promise<void> = Promise.resolve()
+
+/** Queue a render task behind the previous one. Failures never break the chain. */
+export function enqueueMermaidRender<T>(task: () => Promise<T>): Promise<T> {
+	const run = renderChain.then(task, task)
+	renderChain = run.then(
+		() => undefined,
+		() => undefined,
+	)
+	return run
+}
+
 async function renderInto(block: HTMLElement, source: string, lang = ''): Promise<void> {
 	// Drop a previous overlay so a React rebuild can re-render cleanly.
 	block.querySelector('[data-agy-mermaid-svg]')?.remove()
@@ -380,18 +400,19 @@ async function renderInto(block: HTMLElement, source: string, lang = ''): Promis
 	mount.setAttribute('data-agy-mermaid-svg', '1')
 	block.appendChild(mount)
 
-	const api = await loadMermaid()
-	if (api === null) {
-		// Offline: keep the source visible and explain once.
-		block.setAttribute('data-agy-mermaid', 'error')
-		mount.setAttribute('data-agy-mermaid-error', '1')
-		mount.textContent = 'Mermaid renderer unavailable (offline). Diagram source stays below.'
-		return
-	}
-	renderSeq += 1
-	const id = 'agy-mmd-' + renderSeq
-	let targetSource = source
-	try {
+	await enqueueMermaidRender(async () => {
+		const api = await loadMermaid()
+		if (api === null) {
+			// Offline: keep the source visible and explain once.
+			block.setAttribute('data-agy-mermaid', 'error')
+			mount.setAttribute('data-agy-mermaid-error', '1')
+			mount.textContent = 'Mermaid renderer unavailable (offline). Diagram source stays below.'
+			return
+		}
+		renderSeq += 1
+		const id = 'agy-mmd-' + renderSeq
+		let targetSource = source
+		try {
 		// Pre-validate diagram syntax; try auto-repairing common LLM syntax errors if raw fails
 		let parseValidated = false
 		if (typeof api.parse === 'function') {
@@ -468,9 +489,10 @@ async function renderInto(block: HTMLElement, source: string, lang = ''): Promis
 			block.setAttribute('data-agy-mermaid', 'error')
 			mount.innerHTML = '<div class="agy-mermaid-warn">⚠️ Mermaid 图表解析失败，已保留原始代码呈现</div>'
 		}
-	} finally {
-		cleanupTempElements(id)
-	}
+		} finally {
+			cleanupTempElements(id)
+		}
+	})
 }
 
 // Streaming conversations mutate the DOM at high frequency; the scan itself

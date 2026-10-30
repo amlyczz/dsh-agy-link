@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.96 (2026-10-30)
+
+### English
+
+- **Fix(client/mermaid): serialize diagram rendering so multiple charts don't clobber each other and silently degrade to code blocks.**
+  - `mermaid.render()` is not reentrant: it injects shared temporary nodes into `document.body`, and `renderInto()`'s post-render `cleanupTempElements()` sweeps all of them. When one scan pass found two or more diagrams at once (a long answer with several charts, or the first lazy load resolving for every already-pending block), concurrent renders removed each other's in-flight temp DOM — the losers threw and auto-sniffed blocks silently set `data-agy-mermaid="fallback"`, i.e. the diagram simply stayed a plain `代码块`. All renders now go through a single `enqueueMermaidRender()` promise chain so exactly one diagram is drawn at a time; a failing task never breaks the chain. Adds serialization regression tests (verified live: 4 concurrent generic fences now all render).
+- **Fix(adapter): session-title calls keep their format constraints (forward the system prompt) and don't force plan mode.**
+  - When DSH generates a session title (`options.purpose === 'session-title'`), the length/single-line/no-prefix constraints live in `options.system`, which was dropped (forwardSystemPrompt off, only review whitelisted), and aux calls were forced into `--mode plan` — chatty models then emitted conversational preambles that DSH stored verbatim as the title. Title calls now forward `options.system` and use `cfg.permissionMode` (no forced plan). Corrected from #63 (which used an invalid `'default'` mode); adds a regression test.
+
+### 中文
+
+- **修复(client/mermaid)：串行化图表渲染，避免一次扫描内的多个图表相互踩踏、静默降级成代码块。**
+  - `mermaid.render()` 不是可重入的：它会向 `document.body` 注入共享的临时节点，而 `renderInto()` 渲染后的 `cleanupTempElements()` 会清扫全部这类节点。当一次扫描同时命中两个及以上图表（长回答里有多个图表，或首次懒加载对所有待渲染块同时 resolve）时，并发渲染会互相删掉对方正在用的临时 DOM——败者抛错，自动嗅探的块静默进入 `data-agy-mermaid="fallback"`，也就是图表没渲染、仍显示成普通「代码块」。现在所有渲染都经过单一 `enqueueMermaidRender()` promise 链串行执行，单个任务失败也不会中断整条链。新增串行化回归测试（已在真实客户端实测：4 个并发通用代码围栏全部渲染成功）。
+- **修复(adapter)：会话标题调用保留格式约束（转发系统提示词）且不强制 plan 模式。**
+  - 生成会话标题时，单行/无前缀等格式约束位于 `options.system`，此前被丢弃且 aux 调用被强加 `--mode plan`，导致模型输出客套前缀被原样当作标题。现标题调用转发 `options.system` 并使用 `cfg.permissionMode`（不再强制 plan）。实现修正自 #63（其使用了无效的 `'default'` 模式）；补充回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.95...v0.4.96
+
 ## 0.4.95 (2026-10-30)
 
 ### English
