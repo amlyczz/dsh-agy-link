@@ -807,6 +807,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
         pool.deleteAccount(id)
+        // Deleting the active/primary account changes the effective account.
+        notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
@@ -820,6 +822,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const id = typeof body.id === 'string' ? body.id : ''
         const enabled = typeof body.enabled === 'boolean' ? body.enabled : true
         const ok = pool.setAccountEnabled(id, enabled)
+        // Enabling/disabling the active account changes which models are live.
+        if (ok) notifyPicker()
         sendJson(res as RawRes, ok ? 200 : 400, { ok, pool: pool.getPoolData() })
       })()
     }})
@@ -844,7 +848,12 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
-        pool.setPrimaryAccount(id)
+        if (pool.setPrimaryAccount(id)) {
+          // Same contract as /pool/set-active: switching the primary changes
+          // the effective account and its model catalog / Argon visibility.
+          notifyPicker()
+          void catalog.forceRefreshAndNotify(id).catch(() => undefined)
+        }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
@@ -953,7 +962,14 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const id = typeof body.id === 'string' ? body.id : ''
         const ok = id !== '' && pool.setActiveAccount(id)
         if (ok) {
-          void catalog.forceRefresh(id).catch(() => undefined)
+          // Switching the active account changes BOTH the discovered catalog
+          // (per-account plans differ, e.g. Gemini 4 Argon) AND the Argon
+          // visibility gate in listModels(). Discover this account, then emit
+          // the update unconditionally — otherwise the composer's cached model
+          // snapshot keeps showing the previous account's models (Argon
+          // missing after switching to a Pro/Ultra account).
+          notifyPicker()
+          void catalog.forceRefreshAndNotify(id).catch(() => undefined)
         }
         sendJson(res as RawRes, ok ? 200 : 400, { ok, pool: pool.getPoolData() })
       })()
@@ -966,7 +982,13 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const ids = Array.isArray(body.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === 'string') : []
-        pool.reorderAccounts(ids)
+        if (pool.reorderAccounts(ids)) {
+          // Reordering clears the sticky active pointers, so the effective
+          // account may change; refresh it and re-announce the model list.
+          const activeId = pool.getActiveAccountId('google')
+          notifyPicker()
+          if (activeId) void catalog.forceRefreshAndNotify(activeId).catch(() => undefined)
+        }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.97 (2026-10-30)
+
+### English
+
+- **Fix(pool): switching the active account ("设为当前使用" / set primary) now refreshes that account's model catalog and always re-announces the model picker, so the composer's cached list updates immediately (e.g. Gemini 4 Argon appears after switching to a Pro/Ultra account).**
+  - `/pool/set-active` refreshed via `catalog.forceRefresh(id)` and relied on `ModelCatalog` emitting an update *only when the catalog contents changed*. But the composer model picker caches its snapshot and re-reads only on the `llm/adapters-updated` event, and the visible set also depends on the active account's plan (`listModels()` filters the Argon family). So switching to an account whose catalog happened to match the previous one left the picker showing the old models (Argon missing). Added `ModelCatalog.forceRefreshAndNotify()` — refresh the target account, then emit unconditionally — and wired it into `/pool/set-active`, `/pool/primary` and `/pool/reorder`; `enable`/`remove` now announce too. Adds a regression test (identical catalog still re-announces).
+
+### 中文
+
+- **修复(pool)：切换「设为当前使用」/主用账号后会刷新该账号的模型目录并强制重新广播，会话窗口的模型列表立即更新（切到 Pro/Ultra 账号后 Gemini 4 Argon 正常出现）。**
+  - `/pool/set-active` 之前只调 `catalog.forceRefresh(id)`，且 `ModelCatalog` 仅在**目录内容发生变化**时才发更新事件；但会话模型选择器缓存快照、只在 `llm/adapters-updated` 事件后重读，而可见集还取决于当前账号的套餐（`listModels()` 会按账号过滤 Argon）。因此切到「目录恰好与之前相同」的账号时，选择器仍显示旧模型（Argon 不出现）。新增 `ModelCatalog.forceRefreshAndNotify()`（刷新目标账号后**无条件**广播），并接入 `/pool/set-active`、`/pool/primary`、`/pool/reorder`；`enable`/`remove` 也会广播。补充回归测试（目录未变也重新广播）。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.96...v0.4.97
+
 ## 0.4.96 (2026-10-30)
 
 ### English

@@ -301,7 +301,26 @@ export class ModelCatalog {
     return this.get(accountId);
   }
 
-  private async refresh(accountId?: string): Promise<void> {
+  /**
+   * Refresh one account's catalog, then ALWAYS announce a picker update.
+   *
+   * `refresh()` only fires onUpdate when the catalog *contents* changed. But
+   * switching the active account changes the picker's visible set even when
+   * the catalog itself is identical — `listModels()` filters the Argon family
+   * by the active account's plan, and it resolves `catalog.get(accountId)`,
+   * which must be populated for the newly active account before the picker
+   * re-reads. So an account switch must (a) discover that account's catalog and
+   * (b) emit the update unconditionally, or the composer's cached model
+   * snapshot keeps showing the previous account's models (e.g. no Argon after
+   * switching to a Pro/Ultra account).
+   */
+  async forceRefreshAndNotify(accountId?: string): Promise<Catalog> {
+    await this.refresh(accountId, false);
+    this.onUpdate?.();
+    return this.get(accountId);
+  }
+
+  private async refresh(accountId?: string, announce = true): Promise<void> {
     try {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 30_000);
@@ -321,7 +340,7 @@ export class ModelCatalog {
           } else {
             this.current = newCatalog;
           }
-          if (changed) {
+          if (changed && announce) {
             this.onUpdate?.();
           }
           return;

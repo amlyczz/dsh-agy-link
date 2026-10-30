@@ -347,4 +347,32 @@ test('REGRESSION: refreshIfNeeded(accountId) does not skip an un-cached account 
   assert.equal(catalog.hasAccountCatalog('acc_free'), true)
 })
 
+test('forceRefreshAndNotify re-announces the picker even when the account catalog is unchanged', async () => {
+  let updates = 0
+  const out = 'gemini-3.8-flash\tGemini 3.8 Flash\ngemini-4-argon\tGemini 4 Argon'
+  const catalog = new ModelCatalog(
+    async () => ({ stdout: out, stderr: '' }),
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+    () => { updates += 1 },
+  )
+
+  // First switch: fallback -> discovered (changed), so refresh() also notifies.
+  await catalog.forceRefreshAndNotify('acc_pro')
+  assert.equal(updates, 1)
+  assert.ok(catalog.get('acc_pro').models.some((m) => m.id === 'gemini-4-argon'))
+
+  // Second switch back to the same account with identical output: refresh()
+  // alone would stay silent (contents unchanged), but switching the active
+  // account must still re-announce so the composer re-reads the model list.
+  await catalog.forceRefreshAndNotify('acc_pro')
+  assert.equal(updates, 2, 'account switch must always emit llm/adapters-updated')
+
+  // A plain forceRefresh with unchanged contents must NOT notify (documents the
+  // difference the fix relies on).
+  const before = updates
+  await catalog.forceRefresh('acc_pro')
+  assert.equal(updates, before)
+})
+
 
