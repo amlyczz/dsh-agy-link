@@ -298,4 +298,31 @@ test('enqueueMermaidRender keeps the chain alive after a failing task', async ()
   assert.deepEqual(order, ['bad', 'after'])
 })
 
+test('sourceSignature distinguishes streaming prefixes from the final source', async () => {
+  const { sourceSignature } = await import('../src/client/mermaid.ts')
+  const partial = 'flowchart TD\n    In["H"] --> B1'
+  const full = partial + '\n    B1 --> B2'
+  assert.equal(sourceSignature(partial), sourceSignature(partial))
+  assert.notEqual(sourceSignature(partial), sourceSignature(full))
+  assert.notEqual(sourceSignature('flowchart TD'), sourceSignature('flowchart TD '))
+})
+
+test('mermaidScanAction retries a block once its streamed source settles', async () => {
+  const { mermaidScanAction } = await import('../src/client/mermaid.ts')
+  // Never attempted -> render immediately (no settle delay for finished blocks).
+  assert.equal(mermaidScanAction(null, null, null, 'a'), 'render')
+  // Already handled this exact source -> skip.
+  assert.equal(mermaidScanAction('done', 'a', null, 'a'), 'skip')
+  // Same source previously failed -> don't hammer it.
+  assert.equal(mermaidScanAction('fallback', 'a', null, 'a'), 'skip')
+  assert.equal(mermaidScanAction('error', 'a', null, 'a'), 'skip')
+  // A render is in flight -> skip.
+  assert.equal(mermaidScanAction('busy', 'a', null, 'b'), 'skip')
+  // Source changed after an attempt: wait one quiet pass, then render.
+  assert.equal(mermaidScanAction('fallback', 'a', null, 'b'), 'wait')
+  assert.equal(mermaidScanAction('fallback', 'a', 'b', 'b'), 'render')
+  // A partial diagram that rendered mid-stream is re-rendered for the full text.
+  assert.equal(mermaidScanAction('done', 'a', 'b', 'b'), 'render')
+})
+
 

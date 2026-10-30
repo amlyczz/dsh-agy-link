@@ -493,6 +493,9 @@ async function renderInto(block: HTMLElement, source: string, lang = ''): Promis
 			cleanupTempElements(id)
 		}
 	})
+	// A streaming message can rewrite this block while the render was in flight.
+	// The next pass compares signatures and re-renders the settled final text.
+	scheduleScan()
 }
 
 // Streaming conversations mutate the DOM at high frequency; the scan itself
@@ -508,6 +511,46 @@ function scheduleScan(): void {
 	}, 150)
 }
 
+/**
+ * Cheap content signature for a block's current source.
+ *
+ * Streaming rewrites the block in place (React keeps the same element and only
+ * replaces the text), so the `data-agy-mermaid` state survives every chunk.
+ * Without a signature, a block first scanned mid-stream parsed as incomplete
+ * source, fell back to "not a diagram", and was never retried — the finished
+ * diagram stayed a plain code block forever. The signature lets the scanner
+ * notice that the source changed and try again.
+ */
+export function sourceSignature(source: string): string {
+	let h = 5381
+	for (let i = 0; i < source.length; i++) h = ((h << 5) + h + source.charCodeAt(i)) | 0
+	return source.length + ':' + (h >>> 0).toString(36)
+}
+
+export type MermaidScanAction = 'skip' | 'wait' | 'render'
+
+/**
+ * Decide what the scanner should do with one block.
+ *
+ * - `skip`: already rendered this exact source, or a render is in flight.
+ * - `wait`: the source changed since the last attempt; require one quiet pass
+ *   so a streaming block is not rendered for every intermediate prefix.
+ * - `render`: first attempt (no signature yet), or the source settled after a
+ *   previous attempt.
+ */
+export function mermaidScanAction(
+	state: string | null,
+	renderedSig: string | null,
+	pendingSig: string | null,
+	sig: string,
+): MermaidScanAction {
+	if (state === 'busy') return 'skip'
+	if (renderedSig === sig) return 'skip'
+	// Never attempted: render immediately (non-streaming blocks keep zero delay).
+	if (renderedSig === null) return 'render'
+	return pendingSig === sig ? 'render' : 'wait'
+}
+
 function scan(): void {
 	if (typeof document === 'undefined') return
 	if (isInteractionLocked()) return
@@ -516,14 +559,27 @@ function scan(): void {
 	for (let i = 0; i < blocks.length; i++) {
 		const block = blocks[i]
 		if (!block) continue
-		const state = block.getAttribute('data-agy-mermaid')
-		// Error blocks stay source-visible; they are retried only when React
-		// genuinely rebuilds the block (which wipes the state attribute).
-		if (state === 'done' || state === 'busy' || state === 'error' || state === 'fallback') continue
 		const lang = fenceLang(block)
 		const source = readSource(block)
 		if (source === '') continue
 		if (!isMermaidBlock(lang, source)) continue
+		const state = block.getAttribute('data-agy-mermaid')
+		const sig = sourceSignature(source)
+		const action = mermaidScanAction(
+			state,
+			block.getAttribute('data-agy-mermaid-sig'),
+			block.getAttribute('data-agy-mermaid-pending'),
+			sig,
+		)
+		if (action === 'skip') continue
+		if (action === 'wait') {
+			block.setAttribute('data-agy-mermaid-pending', sig)
+			// Re-check shortly: the next quiet pass confirms the text settled.
+			scheduleScan()
+			continue
+		}
+		block.removeAttribute('data-agy-mermaid-pending')
+		block.setAttribute('data-agy-mermaid-sig', sig)
 		block.setAttribute('data-agy-mermaid', 'busy')
 		void renderInto(block, source, lang)
 	}

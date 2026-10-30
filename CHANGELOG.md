@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(client/mermaid): re-render a diagram after streaming settles instead of leaving the finished reply as a code block.**
+  - A streaming reply rewrites its code block in place (React keeps the element and only replaces the text), so the scanner's `data-agy-mermaid` state survived every chunk. The first pass usually saw an incomplete mermaid prefix, failed to parse, and silently marked the block `fallback`; when the full text arrived the element was never rebuilt, so the block was skipped forever and stayed a plain `代码块` until the user switched sessions (which remounts the block and wipes the state — exactly the "切走再切回就显示了" symptom). The scanner now fingerprints the current source (`sourceSignature`) and remembers what it last attempted (`data-agy-mermaid-sig`); when the text changes it waits one quiet pass (`data-agy-mermaid-pending`, so intermediate stream prefixes are not rendered) and then renders the settled source. `renderInto()` also reschedules a scan on completion so a source change during an in-flight render is caught. Adds `mermaidScanAction`/`sourceSignature` regression tests (verified live: partial → full in place now ends `done` with an SVG).
+
+### 中文
+
+- **修复(client/mermaid)：流式回复结束后会自动重渲染图表，不再把已经完整的回复留成代码块。**
+  - 流式输出会**原地改写**代码块（React 复用同一个元素、只替换文本），所以扫描器打的 `data-agy-mermaid` 状态会一直保留。第一遍扫描往往看到的是**不完整的 mermaid 前缀**，解析失败后被静默标成 `fallback`；等完整文本到达时元素并没有重建，于是永远跳过、一直显示成普通「代码块」——直到你切到别的会话再切回来（元素被重新挂载、状态被清空）才渲染，这正是“切走再切回就显示了”的现象。现在扫描器会给当前源码打指纹（`sourceSignature`）并记住上次尝试过的源码（`data-agy-mermaid-sig`）：源码变化时先等一个“安静”的扫描周期（`data-agy-mermaid-pending`，避免把流式中间态每个前缀都渲染一遍），确认稳定后再渲染完整内容。`renderInto()` 完成时也会补一次扫描，覆盖“渲染过程中源码又变了”的情况。新增 `mermaidScanAction`/`sourceSignature` 回归测试（已实测：partial → full 原地更新后最终 `done` 并出图）。
+
 ## 0.4.97 (2026-10-30)
 
 ### English
