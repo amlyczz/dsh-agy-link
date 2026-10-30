@@ -327,10 +327,67 @@ function parseArgs(block: ToolBlock): Record<string, unknown> | null {
 	}
 }
 
-function mirrorInfo(block: ToolBlock): { tool: string; input: Record<string, unknown> } | null {
+function cleanString(val: unknown): string {
+	if (typeof val !== 'string') return '';
+	let s = val.trim();
+	if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+		s = s.slice(1, -1).trim();
+	}
+	return s;
+}
+
+function parseInnerArgs(raw: unknown): Record<string, unknown> {
+	if (raw === undefined || raw === null) return {};
+	if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+	if (typeof raw === 'string') {
+		let s = raw.trim();
+		if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+			try {
+				const unquoted = JSON.parse(s) as unknown;
+				if (typeof unquoted === 'string') s = unquoted.trim();
+			} catch {
+				// ignore
+			}
+		}
+		try {
+			const parsed = JSON.parse(s) as unknown;
+			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+				return parsed as Record<string, unknown>;
+			}
+			return { value: parsed };
+		} catch {
+			return { value: raw };
+		}
+	}
+	return { value: raw };
+}
+
+function cleanResultText(text: string): string {
+	const trimmed = text.trim();
+	if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+		try {
+			const obj = JSON.parse(trimmed) as { content?: unknown };
+			if (Array.isArray(obj?.content)) {
+				const parts: string[] = [];
+				for (const item of obj.content) {
+					const blk = item as { type?: string; text?: unknown };
+					if (blk?.type === 'text' && typeof blk.text === 'string') {
+						parts.push(blk.text);
+					}
+				}
+				if (parts.length > 0) return parts.join('\n');
+			}
+		} catch {
+			// not JSON
+		}
+	}
+	return text;
+}
+
+function mirrorInfo(block: ToolBlock): { tool: string; input: Record<string, unknown>; server?: string } | null {
 	const a = parseArgs(block);
 	if (a === null) return null;
-	const tool = typeof a.tool === 'string' ? a.tool : '';
+	let tool = typeof a.tool === 'string' ? a.tool : '';
 	if (tool === '') return null;
 	let input: Record<string, unknown> = {};
 	const raw = a.input;
@@ -344,7 +401,27 @@ function mirrorInfo(block: ToolBlock): { tool: string; input: Record<string, unk
 			input = { value: raw };
 		}
 	}
-	return { tool, input };
+	let server = typeof a.server === 'string' && a.server !== '' ? cleanString(a.server) : undefined;
+
+	// Unwrap MCP meta-tools: call_mcp_tool, callMcpTool, call_mcp, mcp_call
+	if (/^(call_mcp_tool|callMcpTool|call_mcp|mcp_call)$/i.test(tool)) {
+		const s = pick(input, 'ServerName', 'server_name', 'serverName', 'server');
+		if (s) server = cleanString(s);
+		const innerTool = pick(input, 'ToolName', 'tool_name', 'toolName', 'name', 'tool');
+		const rawInner = input.Arguments ?? input.arguments ?? input.args ?? input.parameters ?? input.params ?? input.input;
+		if (innerTool) {
+			tool = cleanString(innerTool);
+			input = parseInnerArgs(rawInner);
+		}
+	} else if (tool.startsWith('mcp__')) {
+		const parts = tool.slice(5).split('__');
+		if (parts.length >= 2) {
+			server = parts[0];
+			tool = parts.slice(1).join('__');
+		}
+	}
+
+	return { tool, input, ...(server ? { server } : {}) };
 }
 
 function pick(input: Record<string, unknown>, ...keys: string[]): string | undefined {
@@ -372,7 +449,8 @@ function resultText(block: ToolBlock): string {
 			parts.push((b as { text: string }).text);
 		}
 	}
-	return parts.join('\n');
+	const text = parts.join('\n');
+	return cleanResultText(text);
 }
 
 function isSettled(block: ToolBlock): boolean {
@@ -386,10 +464,10 @@ function isError(block: ToolBlock): boolean {
 
 // ---- Card classification --------------------------------------------------
 
-const TERMINAL_TOOLS = new Set(['run_command', 'bash', 'execute_command']);
+const TERMINAL_TOOLS = new Set(['run_command', 'bash', 'execute_command', 'ops_bash', 'sh', 'shell']);
 const DIFF_TOOLS = new Set(['replace_file_content', 'edit_file', 'replace_in_file', 'edit', 'write_to_file', 'write_file', 'create_file']);
 const READ_TOOLS = new Set(['read_file', 'view_file', 'read', 'open_file']);
-const SEARCH_TOOLS = new Set(['find_by_name', 'glob', 'search_files', 'grep_search', 'search', 'search_file_content', 'grep', 'search_web', 'web_search']);
+const SEARCH_TOOLS = new Set(['find_by_name', 'glob', 'ops_glob', 'search_files', 'grep_search', 'search', 'ops_grep', 'search_file_content', 'grep', 'search_web', 'web_search']);
 const LIST_TOOLS = new Set(['list_dir', 'ls']);
 const DELETE_TOOLS = new Set(['delete_file', 'remove_file', 'rm']);
 const QUESTION_TOOLS = new Set(['ask_question', 'ask', 'question']);
@@ -400,6 +478,7 @@ export type CardKind = 'terminal' | 'diff' | 'read' | 'search' | 'list' | 'delet
 export interface MirrorCardModel {
 	kind: CardKind;
 	tool?: string;
+	server?: string;
 	title: string;
 	command?: string;
 	cwd?: string;
@@ -434,6 +513,7 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 		return {
 			kind: 'question',
 			tool,
+			server: info.server,
 			title: qTitle,
 			output: out,
 			questions,
@@ -447,6 +527,7 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 		return {
 			kind: 'image',
 			tool,
+			server: info.server,
 			title: desc ?? `Generate Image · ${name}`,
 			prompt,
 			imageName: name,
@@ -456,12 +537,16 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 		};
 	}
 	if (TERMINAL_TOOLS.has(tool)) {
-		const command = pick(input, 'CommandLine', 'command_line', 'command', 'cmd', 'Cmd') ?? JSON.stringify(input);
-		const cwdVal = pick(input, 'Cwd', 'cwd', 'WorkingDirectory', 'working_directory') ?? cwd;
+		const command = pick(input, 'CommandLine', 'command_line', 'command', 'cmd', 'Cmd')
+			?? (desc && desc.startsWith('$ ') ? desc.replace(/\s*·\s*.*$/, '').replace(/^\$\s*/, '') : undefined)
+			?? JSON.stringify(input);
+		const cwdVal = pick(input, 'Cwd', 'cwd', 'WorkingDirectory', 'working_directory', 'workdir', 'WorkDir') ?? cwd;
+		const rowTitle = desc !== undefined && !desc.startsWith('$ ') && desc !== command ? desc + ' · ' + command : command;
 		return {
 			kind: 'terminal',
 			tool,
-			title: desc !== undefined ? desc + ' · ' + command : command,
+			server: info.server,
+			title: rowTitle,
 			command,
 			...(cwdVal !== undefined ? { cwd: cwdVal } : {}),
 			output: out,
@@ -477,7 +562,7 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 		const title = desc !== undefined && !isGenericDesc && !desc.includes(path)
 			? `${action} ${path} · ${desc}`
 			: `${action} ${path}`;
-		return { kind: 'diff', tool, title, path: rawPath, oldText, newText, output: out };
+		return { kind: 'diff', tool, server: info.server, title, path: rawPath, oldText, newText, output: out };
 	}
 	if (READ_TOOLS.has(tool)) {
 		const path = pick(input, 'AbsolutePath', 'absolute_path', 'TargetFile', 'target_file', 'path', 'file_path', 'filename', 'Path', 'FilePath', 'FileName', 'targetFile') ?? '';
@@ -487,6 +572,7 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 		return {
 			kind: isImg ? 'image' : 'read',
 			tool,
+			server: info.server,
 			title: desc ? `${desc} · ${path}` : path !== '' ? 'Read ' + path : 'Read',
 			path,
 			output: out,
@@ -498,19 +584,21 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 		};
 	}
 	if (SEARCH_TOOLS.has(tool)) {
-		const q = pick(input, 'query', 'Query', 'pattern', 'Pattern', 'regex', 'Regex', 'QueryString') ?? '';
-		return { kind: 'search', tool, title: desc ?? (q !== '' ? 'Search ' + q : 'Search'), output: out };
+		const rawPat = input.query ?? input.Query ?? input.pattern ?? input.Pattern ?? input.regex ?? input.Regex ?? input.QueryString;
+		const q = Array.isArray(rawPat) ? rawPat.join(', ') : (typeof rawPat === 'string' ? rawPat : (pick(input, 'query', 'Query', 'pattern', 'Pattern', 'regex', 'Regex', 'QueryString') ?? ''));
+		return { kind: 'search', tool, server: info.server, title: desc ?? (q !== '' ? 'Search ' + q : 'Search'), output: out };
 	}
 	if (LIST_TOOLS.has(tool)) {
 		const path = pick(input, 'DirectoryPath', 'directory_path', 'path', 'directory', 'Path', 'Directory', 'SearchDirectory', 'search_directory', 'AbsolutePath') ?? '';
-		return { kind: 'list', tool, title: desc ?? (path !== '' ? 'List ' + path : 'List directory'), output: out };
+		return { kind: 'list', tool, server: info.server, title: desc ?? (path !== '' ? 'List ' + path : 'List directory'), output: out };
 	}
 	if (DELETE_TOOLS.has(tool)) {
 		const path = pick(input, 'TargetFile', 'target_file', 'path', 'file_path', 'Path', 'FilePath', 'AbsolutePath') ?? '';
-		return { kind: 'delete', tool, title: desc ?? 'Delete ' + path, output: out };
+		return { kind: 'delete', tool, server: info.server, title: desc ?? 'Delete ' + path, output: out };
 	}
-	const title = desc ?? (tool !== '' ? tool : 'agy_tool');
-	return { kind: 'generic', tool, title, output: out, raw: parsedArgsRaw(block) };
+	const defaultTitle = info.server ? `${info.server}: ${tool}` : (tool !== '' ? tool : 'agy_tool');
+	const title = desc ?? defaultTitle;
+	return { kind: 'generic', tool, server: info.server, title, output: out, raw: parsedArgsRaw(block) };
 }
 
 // ---- Helpers --------------------------------------------------------------
@@ -594,7 +682,10 @@ function displayTitle(model: MirrorCardModel, t?: Translate): string {
 		case 'image':
 			return tr(t, 'tv.image', 'Image');
 		default:
-			return model.tool ? model.tool.replace(/_/g, ' ') : tr(t, 'tv.tool', 'Tool');
+			if (model.tool && model.tool !== 'agy_tool') {
+				return model.server ? `${model.server}: ${model.tool}` : model.tool.replace(/_/g, ' ');
+			}
+			return tr(t, 'tv.tool', 'Tool');
 	}
 }
 
@@ -621,6 +712,9 @@ function displaySummary(model: MirrorCardModel, cwd?: string, home?: string): st
 	}
 	if (model.kind === 'image') {
 		return model.prompt || model.title;
+	}
+	if (model.server && model.title.startsWith(`${model.server}: `)) {
+		return model.title.slice(model.server.length + 2);
 	}
 	return model.title;
 }
@@ -972,7 +1066,7 @@ function CardBody({ model, openFile, cwd, home, inspect, t }: {
 				h('div', { className: 'agy-tv-card-header' },
 					h('div', { className: 'agy-tv-card-header-left' },
 						IconCodeOutline16(13),
-						h('span', { className: 'agy-tv-card-path' }, model.tool || 'Tool')
+						h('span', { className: 'agy-tv-card-path' }, model.server ? `${model.server}: ${model.tool}` : (model.title || model.tool || 'Tool'))
 					),
 					h(CopyButton, { text: copyText, t })
 				),
@@ -1192,6 +1286,11 @@ function AgyRunCodeToolView(props?: unknown): unknown {
 	const raw = block !== undefined ? parsedArgsRaw(block) : '{}';
 	const mirror = parseAgyMirrorFromCode(raw);
 	if (mirror === null) return AgyCodeToolView(typed);
+	let description: string | undefined;
+	try {
+		const parsed = JSON.parse(raw) as { description?: unknown };
+		if (typeof parsed?.description === 'string' && parsed.description !== '') description = parsed.description;
+	} catch { /* ignore */ }
 	const synthetic = {
 		...block,
 		call: {
@@ -1201,6 +1300,7 @@ function AgyRunCodeToolView(props?: unknown): unknown {
 				run: mirror.run,
 				step: mirror.step,
 				...(mirror.tool !== undefined ? { tool: mirror.tool } : {}),
+				...(description !== undefined ? { input: { description } } : {}),
 			}),
 		},
 	} as unknown as ToolBlock;

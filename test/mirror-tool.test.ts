@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { RunRecording, RunRegistry } from '../src/host/recording.ts'
-import { defineAgyMirrorTool, presentMirrorCall, buildMirrorRunCode, parseMirrorInvocation, toolStepBrief } from '../src/host/mirror-tool.ts'
+import { defineAgyMirrorTool, presentMirrorCall, buildMirrorRunCode, parseMirrorInvocation, toolStepBrief, unwrapMcpTool } from '../src/host/mirror-tool.ts'
 
 function fakeSignal(): AbortSignal {
   return new AbortController().signal
@@ -356,5 +356,158 @@ test('presentMirrorResult parses exit code from command output', () => {
     { content: [{ type: 'text', text: 'The command exited with code 1.' }], isError: true },
   )
   assert.equal((fail as { exitCode?: number }).exitCode, 1)
+
+  const opsBashFail = term?.(
+    { run: 'r', step: 2, tool: 'ops_bash', input: { command: 'exit 2' } },
+    { content: [{ type: 'text', text: 'error line\n[exit code 2]' }], isError: false },
+  )
+  assert.equal((opsBashFail as { exitCode?: number }).exitCode, 2)
+
+  const opsBashTimeout = term?.(
+    { run: 'r', step: 3, tool: 'ops_bash', input: { command: 'sleep 60' } },
+    { content: [{ type: 'text', text: '[command timed out after 30000ms]' }], isError: false },
+  )
+  assert.equal((opsBashTimeout as { exitCode?: number }).exitCode, 1)
+})
+
+test('unwrapMcpTool correctly unwraps call_mcp_tool and namespaced tools', () => {
+  // agy JSON string format with quotes
+  const unwrap1 = unwrapMcpTool('call_mcp_tool', {
+    ServerName: '"dsh-ops"',
+    ToolName: '"ops_bash"',
+    Arguments: '{"command":"git status","workdir":"/app"}',
+  })
+  assert.equal(unwrap1.isMcp, true)
+  assert.equal(unwrap1.tool, 'ops_bash')
+  assert.equal(unwrap1.server, 'dsh-ops')
+  assert.equal(unwrap1.input.command, 'git status')
+  assert.equal(unwrap1.input.workdir, '/app')
+
+  // object arguments format
+  const unwrap2 = unwrapMcpTool('callMcpTool', {
+    server_name: 'dsh-ops',
+    tool_name: 'ops_grep',
+    arguments: { pattern: 'test_func', path: 'src' },
+  })
+  assert.equal(unwrap2.isMcp, true)
+  assert.equal(unwrap2.tool, 'ops_grep')
+  assert.equal(unwrap2.server, 'dsh-ops')
+  assert.equal(unwrap2.input.pattern, 'test_func')
+
+  // namespaced mcp__ format
+  const unwrap3 = unwrapMcpTool('mcp__dsh-ops__ops_glob', { pattern: ['**/*.ts'] })
+  assert.equal(unwrap3.isMcp, true)
+  assert.equal(unwrap3.tool, 'ops_glob')
+  assert.equal(unwrap3.server, 'dsh-ops')
+
+  // non-mcp tool unchanged
+  const unwrap4 = unwrapMcpTool('run_command', { CommandLine: 'ls' })
+  assert.equal(unwrap4.isMcp, false)
+  assert.equal(unwrap4.tool, 'run_command')
+  assert.equal(unwrap4.input.CommandLine, 'ls')
+})
+
+test('call_mcp_tool projects into native terminal and search cards', () => {
+  // ops_bash via call_mcp_tool -> TerminalCallView
+  const bashCall = presentMirrorCall({
+    tool: 'call_mcp_tool',
+    input: {
+      ServerName: '"dsh-ops"',
+      ToolName: '"ops_bash"',
+      Arguments: '{"command":"git log -n 5 --oneline","workdir":"/workspace"}',
+    },
+  })
+  assert.equal(bashCall?.card, 'terminal')
+  if (bashCall?.card === 'terminal') {
+    assert.equal(bashCall.title, 'git log -n 5 --oneline')
+    assert.equal(bashCall.cwd, '/workspace')
+  }
+
+  // ops_glob via call_mcp_tool -> Search GenericCallView
+  const globCall = presentMirrorCall({
+    tool: 'call_mcp_tool',
+    input: {
+      ServerName: 'dsh-ops',
+      ToolName: 'ops_glob',
+      Arguments: { pattern: ['**/*.ts', '!node_modules/**'] },
+    },
+  })
+  assert.equal(globCall?.card, 'generic')
+  if (globCall?.card === 'generic') {
+    assert.equal(globCall.kind, 'search')
+    assert.equal(globCall.title, 'Search **/*.ts, !node_modules/**')
+  }
+
+  // custom generic MCP tool -> GenericCallView with server prefix
+  const customCall = presentMirrorCall({
+    tool: 'call_mcp_tool',
+    input: {
+      ServerName: 'task-tracker',
+      ToolName: 'list_todos',
+      Arguments: { limit: 10 },
+    },
+  })
+  assert.equal(customCall?.card, 'generic')
+  if (customCall?.card === 'generic') {
+    assert.equal(customCall.title, 'task-tracker: list_todos')
+  }
+
+  // toolStepBrief unwraps MCP tools
+  assert.equal(
+    toolStepBrief('call_mcp_tool', {
+      ServerName: '"dsh-ops"',
+      ToolName: '"ops_bash"',
+      Arguments: '{"command":"git status"}',
+    }),
+    '$ git status',
+  )
+  assert.equal(
+    toolStepBrief('call_mcp_tool', {
+      ServerName: 'dsh-ops',
+      ToolName: 'ops_glob',
+      Arguments: { pattern: ['*.json'] },
+    }),
+    'search *.json',
+  )
+  assert.equal(
+    toolStepBrief('call_mcp_tool', {
+      ServerName: 'my-service',
+      ToolName: 'custom_query',
+      Arguments: {},
+    }),
+    'my-service: custom_query',
+  )
+})
+
+test('recorded call_mcp_tool step resolves and executes transparently', async () => {
+  const reg = new RunRegistry()
+  const rec = reg.create()
+  rec.append({
+    kind: 'step',
+    stepKey: 't1',
+    stepKind: 'tool',
+    text: '',
+    tool: {
+      name: 'call_mcp_tool',
+      args: {
+        ServerName: '"dsh-ops"',
+        ToolName: '"ops_bash"',
+        Arguments: '{"command":"git branch"}',
+      },
+      output: '* main\n[exit code 0]',
+    },
+  } as never)
+
+  const mirror = defineAgyMirrorTool({ runs: reg })
+  const cursor = { run: rec.runId, step: 0 }
+  assert.equal(await mirror.execute(cursor as never, { signal: fakeSignal() } as never), '* main\n[exit code 0]')
+
+  const card = mirror.presentCall?.(cursor)
+  assert.equal((card as { card: string } | undefined)?.card, 'terminal')
+  assert.equal((card as { title?: string } | undefined)?.title, 'git branch')
+
+  const res = mirror.presentResult?.(cursor, { content: [{ type: 'text', text: '* main\n[exit code 0]' }], isError: false })
+  assert.equal((res as { card: string } | undefined)?.card, 'terminal')
+  assert.equal((res as { exitCode?: number } | undefined)?.exitCode, 0)
 })
 
