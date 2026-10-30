@@ -130,6 +130,17 @@ export function windowsQuote(arg: string): string {
  * the real user profile). GEMINI_CLI_HOME is honored by the agy CLI on all
  * platforms for its .gemini dir.
  */
+/**
+ * Linux/Unix: env that points D-Bus at a nonexistent, per-account PRIVATE path
+ * so agy cannot fall through to the desktop Secret Service (gnome-keyring) and
+ * read the primary account's token. The path lives INSIDE the isolated home:
+ * a shared world-writable path (e.g. /tmp/…) could be hijacked by another local
+ * user binding a fake bus socket there and MITM-ing the Secret Service lookup.
+ */
+export function linuxDbusDisabledEnv(dir: string): { DBUS_SESSION_BUS_ADDRESS: string } {
+  return { DBUS_SESSION_BUS_ADDRESS: 'unix:path=' + join(dir, '.no-dbus-session') }
+}
+
 export function isolatedHomeEnv(dir: string): Record<string, string> {
   const geminiDir = join(dir, '.gemini')
   const env: Record<string, string> = {
@@ -149,7 +160,7 @@ export function isolatedHomeEnv(dir: string): Record<string, string> {
     // Linux/Unix: block the user-wide D-Bus Secret Service session bus so agy
     // is forced to read the isolated per-account token file instead of falling
     // through to the desktop's gnome-keyring / secret-tool (which holds the primary).
-    env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/tmp/nonexistent-agy-bus'
+    Object.assign(env, linuxDbusDisabledEnv(dir))
   }
   return env
 }

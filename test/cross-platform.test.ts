@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { binCandidates, consoleOutputEncoding, decodeConsoleLine, isolatedHomeEnv, isCmdShim, nodeScriptEnv, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT, withAgyQuietEnv } from '../src/host/runner.ts'
+import { binCandidates, consoleOutputEncoding, decodeConsoleLine, isolatedHomeEnv, linuxDbusDisabledEnv, isCmdShim, nodeScriptEnv, resolveAgyBin, startAgyProcess, windowsQuote, buildStreamInputLine, shouldUsePromptStdin, ARGV_PROMPT_LIMIT, withAgyQuietEnv } from '../src/host/runner.ts'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -71,8 +71,16 @@ test('isolatedHomeEnv always sets HOME + GEMINI_CLI_HOME', () => {
   } else if (process.platform === 'linux') {
     // Linux/Unix: DBUS_SESSION_BUS_ADDRESS must be blocked so agy doesn't fall
     // through to the desktop user's Secret Service session bus (gnome-keyring).
-    assert.equal(env.DBUS_SESSION_BUS_ADDRESS, 'unix:path=/tmp/nonexistent-agy-bus')
+    assert.equal(env.DBUS_SESSION_BUS_ADDRESS, 'unix:path=' + join('/tmp/acc1', '.no-dbus-session'))
   }
+})
+
+test('linuxDbusDisabledEnv uses a per-account private bus path, never shared /tmp', () => {
+  const a = linuxDbusDisabledEnv('/home/acc1').DBUS_SESSION_BUS_ADDRESS
+  const b = linuxDbusDisabledEnv('/home/acc2').DBUS_SESSION_BUS_ADDRESS
+  assert.equal(a, 'unix:path=' + join('/home/acc1', '.no-dbus-session'))
+  assert.ok(!a.includes('/tmp/'), 'must not point at a world-writable shared /tmp socket')
+  assert.notEqual(a, b, 'each account gets its own address')
 })
 
 test('isCmdShim detects cmd/bat case-insensitively', () => {

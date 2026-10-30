@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.95 (2026-10-30)
+
+### English
+
+- **Fix(runner): stop Linux pool accounts from reading the desktop Secret Service (primary token) — isolate D-Bus per account.** (thanks @superwiboy, #62)
+  - On Linux with a desktop session, agy's credential reader queries the OS Secret Service (gnome-keyring/secret-tool) before the isolated token file, so pooled sub-accounts silently used the primary account's token (primary quota drained, sub-accounts at 0 usage). `isolatedHomeEnv()` now sets `DBUS_SESSION_BUS_ADDRESS` to a nonexistent, **per-account private** path (`<home>/.no-dbus-session`), forcing agy to read only its slot token.
+  - Hardening over the original patch: the dummy bus path is private to each isolated home instead of a shared world-writable `/tmp` path (which a local user could hijack by binding a fake bus socket). Adds `linuxDbusDisabledEnv()` + tests.
+
+### 中文
+
+- **修复(runner)：Linux 池账号不再穿透到桌面 Secret Service（读到主账号 token）——按账号隔离 D-Bus。**（感谢 @superwiboy，#62）
+  - Linux 桌面会话下，agy 读取凭据时会先查系统 Secret Service（gnome-keyring/secret-tool），导致池内子账号静默使用主账号 token（主账号额度被耗、子账号 0 用量）。`isolatedHomeEnv()` 现在把 `DBUS_SESSION_BUS_ADDRESS` 指向一个不存在、且**每账号私有**的路径（`<home>/.no-dbus-session`），强制 agy 只读自己 slot 的 token。
+  - 相较原补丁的加固：临时 bus 路径使用各账号私有 home，而非共享可写的 `/tmp` 路径（后者可能被本机其他用户伪造 bus socket 劫持）。新增 `linuxDbusDisabledEnv()` 及测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.94...v0.4.95
+
 ## 0.4.94 (2026-10-29)
 
 ### English
