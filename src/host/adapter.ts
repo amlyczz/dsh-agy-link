@@ -1029,7 +1029,8 @@ export class AgyAdapter extends LlmAdapter {
     const bin = this.deps.bin()
     if (!bin) throw new LlmError('agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install', Err.AGY_NOT_INSTALLED)
     const isReview = typeof options.system === 'string' && options.system.includes('REVIEW_POLICY')
-    const isAux = options.purpose === 'compaction' || options.purpose === 'session-title' || isReview
+    const isTitle = options.purpose === 'session-title'
+    const isAux = options.purpose === 'compaction' || isTitle || isReview
     if (isAux && !isReview && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
@@ -1516,7 +1517,7 @@ export class AgyAdapter extends LlmAdapter {
     // JSON.parse throws — the tool call is denied instead of reviewed. The
     // isReview probe above already identifies these calls, so forward the
     // policy whenever it fires rather than requiring the global opt-in.
-    if (cfg.forwardSystemPrompt || isReview) {
+    if (cfg.forwardSystemPrompt || isReview || isTitle) {
       const sysInstruction = options.system || (() => {
         const sm = messages.find((m) => m.role === 'system')
         return sm ? textOf(sm).trim() : ''
@@ -1795,12 +1796,13 @@ export class AgyAdapter extends LlmAdapter {
       )
       prompt = trimToUtf8Bytes(prompt, AGY_PROMPT_SAFE_BYTES)
     }
+    const effectivePermissionMode = isTitle ? (cfg.permissionMode === 'skip' ? 'skip' : 'default') : (isAux ? 'plan' : cfg.permissionMode)
     const argsBase = this.buildArgs({
       prompt,
       model: activeModelForArgs,
       effort,
       conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
-      permissionMode: isAux ? 'plan' : cfg.permissionMode,
+      permissionMode: effectivePermissionMode,
       timeoutMs: cfg.timeoutMs,
       printTimeoutMinutes,
       extraArgs: cfg.extraArgs,
@@ -1815,7 +1817,7 @@ export class AgyAdapter extends LlmAdapter {
           model: activeModelForArgs,
           effort,
           conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
-          permissionMode: isAux ? 'plan' : cfg.permissionMode,
+          permissionMode: effectivePermissionMode,
           timeoutMs: cfg.timeoutMs,
           printTimeoutMinutes,
           extraArgs: cfg.extraArgs,

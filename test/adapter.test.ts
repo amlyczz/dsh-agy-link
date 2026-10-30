@@ -1186,6 +1186,28 @@ test('review calls forward the REVIEW_POLICY system prompt without the global op
   assert.ok(prompt.startsWith('System instructions:'), 'the policy leads the prompt')
 })
 
+test('session-title auxiliary calls forward the system prompt and do not force plan mode', async () => {
+  const { adapter } = makeAdapter({ forwardSystemPrompt: false, permissionMode: 'skip' })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-session-title.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  const titleSystem = 'Create a concise title for an AI coding-assistant session from the supplied human messages.\nReturn only the title on one line, **in plain text of natural language**, with no quotes, prefix, explanation, Markdown, XML, or terminal control codes. No code is allowed.'
+  await runTurn(adapter, [
+    msg('user', 'Generate the session title from this JSON array of human messages:\n[{"seq":1,"text":"echo test"}]'),
+  ], { sessionId: 'sess-title' as never, system: titleSystem, purpose: 'session-title' } as never)
+
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  const prompt = argv[argv.indexOf('-p') + 1] ?? ''
+  assert.ok(prompt.includes('System instructions:\n' + titleSystem), 'title instructions reach the model')
+  assert.ok(prompt.includes('Generate the session title'), 'the user prompt is present')
+  assert.ok(prompt.startsWith('System instructions:'), 'the policy leads the prompt')
+  const modeIdx = argv.indexOf('--mode')
+  if (modeIdx !== -1) {
+    assert.notEqual(argv[modeIdx + 1], 'plan', 'title call must not inject plan mode')
+  }
+})
+
 test('ordinary turns keep dropping the system prompt while the opt-in is off', async () => {
   const { adapter } = makeAdapter({ forwardSystemPrompt: false })
   process.env.FAKE_AGY_MODE = 'ok'
