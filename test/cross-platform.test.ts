@@ -68,6 +68,10 @@ test('isolatedHomeEnv always sets HOME + GEMINI_CLI_HOME', () => {
     const drive = isolatedHomeEnv('C:\\Users\\acc1')
     assert.equal(drive.HOMEDRIVE, 'C:')
     assert.equal(drive.HOMEPATH, '\\Users\\acc1')
+  } else if (process.platform === 'linux') {
+    // Linux/Unix: DBUS_SESSION_BUS_ADDRESS must be blocked so agy doesn't fall
+    // through to the desktop user's Secret Service session bus (gnome-keyring).
+    assert.equal(env.DBUS_SESSION_BUS_ADDRESS, 'unix:path=/tmp/nonexistent-agy-bus')
   }
 })
 

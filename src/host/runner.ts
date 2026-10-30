@@ -145,6 +145,11 @@ export function isolatedHomeEnv(dir: string): Record<string, string> {
       env.HOMEDRIVE = m[1] as string
       env.HOMEPATH = m[2] as string
     }
+  } else if (process.platform === 'linux') {
+    // Linux/Unix: block the user-wide D-Bus Secret Service session bus so agy
+    // is forced to read the isolated per-account token file instead of falling
+    // through to the desktop's gnome-keyring / secret-tool (which holds the primary).
+    env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/tmp/nonexistent-agy-bus'
   }
   return env
 }
