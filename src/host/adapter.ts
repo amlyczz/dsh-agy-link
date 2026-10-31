@@ -25,7 +25,7 @@ import { agyHomeDirFor, readAgyRunLogText, snapshotAgyLogs } from './agy-log.ts'
 import { stateDir } from '../common/config.ts'
 import { SENT_IMAGE_IDS_MAX, type SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
-import { getGitHeadContent } from './mirror-tool.ts'
+import { getGitHeadContent, unwrapMcpTool } from './mirror-tool.ts'
 import { detectGoalContext, isGoalToolContinuation, isPlanToolContinuation, isPlanMode, type GoalContext } from './dsh-goal.ts'
 
 type ForeignSource = { source?: { kind?: string; provider?: string; callId?: string; replayState?: unknown } }
@@ -2654,9 +2654,10 @@ export class AgyAdapter extends LlmAdapter {
               }
             }
             // For write_to_file / create_file: if old content is not already present, resolve from git HEAD
-            const toolName = ev.tool.name
+            const unwrapped = unwrapMcpTool(ev.tool.name, resolved.get(i) ?? ev.tool.args)
+            const toolName = unwrapped.tool
             if (toolName === 'write_to_file' || toolName === 'write_file' || toolName === 'create_file') {
-              const currentArgs = resolved.get(i) ?? (typeof ev.tool.args === 'object' && ev.tool.args !== null ? (ev.tool.args as Record<string, unknown>) : {})
+              const currentArgs = unwrapped.input
               const targetFile = (currentArgs.TargetFile ?? currentArgs.target_file ?? currentArgs.path ?? currentArgs.AbsolutePath) as string | undefined
               if (targetFile && typeof targetFile === 'string' && !currentArgs.oldText && !currentArgs.old_string && !currentArgs.TargetContent) {
                 const head = getGitHeadContent(targetFile)

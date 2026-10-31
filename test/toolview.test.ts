@@ -243,3 +243,83 @@ test('makeToggle: flips back and forth across many clicks (collapse -> expand re
   toggle()
   assert.equal(state, false)
 })
+
+test('mirrorCardModel: call_mcp_tool -> unwrap ops_bash into terminal card', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: {
+        run: 'r1',
+        step: 11,
+        tool: 'call_mcp_tool',
+        input: {
+          ServerName: '"dsh-ops"',
+          ToolName: '"ops_bash"',
+          Arguments: '{"command":"git diff HEAD~1","workdir":"/src"}',
+        },
+      },
+      content: ['diff output'],
+    }),
+  )
+  assert.equal(m.kind, 'terminal')
+  assert.equal(m.tool, 'ops_bash')
+  assert.equal(m.server, 'dsh-ops')
+  assert.equal(m.command, 'git diff HEAD~1')
+  assert.equal(m.cwd, '/src')
+  assert.equal(m.output, 'diff output')
+})
+
+test('mirrorCardModel: call_mcp_tool -> unwrap ops_glob into search card', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: {
+        run: 'r1',
+        step: 12,
+        tool: 'call_mcp_tool',
+        input: {
+          ServerName: 'dsh-ops',
+          ToolName: 'ops_glob',
+          Arguments: { pattern: ['src/**/*.ts', '!**/*.d.ts'] },
+        },
+      },
+      content: ['src/index.ts\nsrc/client.ts'],
+    }),
+  )
+  assert.equal(m.kind, 'search')
+  assert.equal(m.tool, 'ops_glob')
+  assert.equal(m.server, 'dsh-ops')
+  assert.equal(m.title, 'Search src/**/*.ts, !**/*.d.ts')
+})
+
+test('mirrorCardModel: call_mcp_tool -> unwrap generic MCP tool with server prefix', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: {
+        run: 'r1',
+        step: 13,
+        tool: 'call_mcp_tool',
+        input: {
+          ServerName: 'dsh-tools',
+          ToolName: 'task_board_list',
+          Arguments: {},
+        },
+      },
+      content: ['[{"id":1}]'],
+    }),
+  )
+  assert.equal(m.kind, 'generic')
+  assert.equal(m.tool, 'task_board_list')
+  assert.equal(m.server, 'dsh-tools')
+  assert.equal(m.title, 'dsh-tools: task_board_list')
+})
+
+test('mirrorCardModel: direct ops_bash tool classifies as terminal', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: { run: 'r1', step: 14, tool: 'ops_bash', input: { command: 'npm run test' } },
+      content: ['pass'],
+    }),
+  )
+  assert.equal(m.kind, 'terminal')
+  assert.equal(m.tool, 'ops_bash')
+  assert.equal(m.command, 'npm run test')
+})

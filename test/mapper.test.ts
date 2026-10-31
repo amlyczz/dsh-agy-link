@@ -157,6 +157,70 @@ test('completed tool step cuts the span into native agy_tool call in standard mo
   assert.equal(text, 'Working on it')
 })
 
+test('completed call_mcp_tool step unwraps ops_bash in standard and code mode', () => {
+  // Standard (native) mode
+  const mNative = newSpan('run-mcp', false, false)
+  const chunksNative = mapAll(mNative, [
+    {
+      kind: 'step',
+      stepKey: '1',
+      stepKind: 'tool',
+      state: 'ACTIVE',
+      text: '',
+      tool: {
+        name: 'call_mcp_tool',
+        args: { ServerName: '"dsh-ops"', ToolName: '"ops_bash"', Arguments: '{"command":"git branch -a"}' },
+      },
+    },
+    {
+      kind: 'step',
+      stepKey: '1',
+      stepKind: 'tool',
+      state: 'DONE',
+      text: '',
+      tool: {
+        name: 'call_mcp_tool',
+        args: { ServerName: '"dsh-ops"', ToolName: '"ops_bash"', Arguments: '{"command":"git branch -a"}' },
+        output: '* main',
+      },
+    },
+  ])
+
+  // Verify live progress reasoning delta was unwrapped
+  const reasoningDeltas = chunksNative.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.ok(reasoningDeltas.includes('ops_bash (dsh-ops)'), reasoningDeltas)
+
+  // Verify tool-call block is unwrapped to ops_bash with server: dsh-ops
+  const endNative = toolCallEnd(chunksNative)
+  assert.equal(endNative.block.name, 'agy_tool')
+  const argsNative = JSON.parse(endNative.block.arguments) as { run: string; step: number; tool: string; server?: string; input: Record<string, unknown> }
+  assert.equal(argsNative.tool, 'ops_bash')
+  assert.equal(argsNative.server, 'dsh-ops')
+  assert.deepEqual(argsNative.input, { command: 'git branch -a' })
+
+  // Code Mode
+  const mCode = newSpan('run-mcp', false, true)
+  const chunksCode = mapAll(mCode, [
+    {
+      kind: 'step',
+      stepKey: '1',
+      stepKind: 'tool',
+      state: 'DONE',
+      text: '',
+      tool: {
+        name: 'call_mcp_tool',
+        args: { ServerName: '"dsh-ops"', ToolName: '"ops_bash"', Arguments: '{"command":"git branch -a"}' },
+        output: '* main',
+      },
+    },
+  ])
+  const endCode = toolCallEnd(chunksCode)
+  assert.equal(endCode.block.name, 'run_code')
+  const argsCode = JSON.parse(endCode.block.arguments) as { code: string; description: string }
+  assert.equal(argsCode.description, '$ git branch -a · ops_bash')
+  assert.ok(argsCode.code.includes('replay recorded agy tool step 0 (ops_bash)'), argsCode.code)
+})
+
 test('completed tool step with state DONE cuts even when tool.output is undefined (replace_file_content)', () => {
   const m = newSpan('run-xyz', false, false)
   const chunks = mapAll(m, [

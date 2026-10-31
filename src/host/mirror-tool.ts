@@ -100,8 +100,11 @@ export function buildMirrorRunCode(
 }
 
 /** Short human preview for a recorded tool step (used in Code Mode titles). */
-export function toolStepBrief(toolName: string, args: unknown): string {
-  const a = (args !== null && typeof args === 'object' ? args : {}) as Record<string, unknown>
+export function toolStepBrief(toolName: string, args: unknown, server?: string): string {
+  const unwrapped = unwrapMcpTool(toolName, args)
+  const effTool = unwrapped.tool
+  const a = unwrapped.input
+  const effServer = server ?? unwrapped.server
   const pickStr = (...keys: string[]): string => {
     for (const k of keys) {
       const v = a[k]
@@ -109,55 +112,57 @@ export function toolStepBrief(toolName: string, args: unknown): string {
     }
     return ''
   }
-  if (toolName === 'run_command' || toolName === 'execute_command') {
+  if (effTool === 'run_command' || effTool === 'execute_command' || effTool === 'ops_bash' || effTool === 'bash' || effTool === 'sh' || effTool === 'shell') {
     const cmd = pickStr('CommandLine', 'command_line', 'Command', 'command', 'Cmd', 'cmd')
     return cmd !== '' ? '$ ' + cmd.slice(0, 80) : 'run command'
   }
-  if (toolName === 'view_file' || toolName === 'read_file') {
+  if (effTool === 'view_file' || effTool === 'read_file' || effTool === 'read') {
     return 'read ' + (pickStr('AbsolutePath', 'absolute_path', 'Path', 'path', 'TargetFile', 'File') || 'file')
   }
-  if (toolName === 'write_to_file' || toolName === 'create_file') {
+  if (effTool === 'write_to_file' || effTool === 'create_file' || effTool === 'write_file') {
     return 'write ' + (pickStr('TargetFile', 'target_file', 'Path', 'path', 'AbsolutePath', 'File') || 'file')
   }
-  if (toolName === 'replace_file_content' || toolName === 'edit_file') {
+  if (effTool === 'replace_file_content' || effTool === 'edit_file' || effTool === 'edit') {
     return 'edit ' + (pickStr('TargetFile', 'target_file', 'Path', 'path', 'AbsolutePath', 'File') || 'file')
   }
-  if (toolName === 'grep_search' || toolName === 'search') {
-    return 'search ' + (pickStr('Query', 'query', 'SearchPattern') || '')
+  if (effTool === 'grep_search' || effTool === 'search' || effTool === 'ops_grep' || effTool === 'ops_glob' || effTool === 'glob' || effTool === 'find_by_name' || effTool === 'search_files' || effTool === 'search_file_content' || effTool === 'grep') {
+    const rawPat = a.pattern ?? a.Pattern ?? a.query ?? a.Query ?? a.SearchPattern
+    const pat = Array.isArray(rawPat) ? rawPat.join(', ') : (typeof rawPat === 'string' ? rawPat.trim() : '')
+    return pat !== '' ? 'search ' + pat.slice(0, 80) : 'search'
   }
-  if (toolName === 'search_web' || toolName === 'web_search') {
+  if (effTool === 'search_web' || effTool === 'web_search') {
     return 'search web ' + (pickStr('query', 'Query', 'search_query', 'q') || '')
   }
-  if (toolName === 'read_url_content' || toolName === 'web_fetch' || toolName === 'fetch_web_page') {
+  if (effTool === 'read_url_content' || effTool === 'web_fetch' || effTool === 'fetch_web_page') {
     return 'fetch ' + (pickStr('Url', 'url', 'target_url', 'targetUrl') || 'url')
   }
-  if (toolName === 'list_dir' || toolName === 'list_directory') {
+  if (effTool === 'list_dir' || effTool === 'list_directory' || effTool === 'ls') {
     return 'ls ' + (pickStr('DirectoryPath', 'directory_path', 'Path', 'path', 'AbsolutePath') || '.')
   }
-  if (toolName === 'manage_task') {
+  if (effTool === 'manage_task') {
     const action = pickStr('Action', 'action') || 'manage'
     const id = pickStr('TaskId', 'taskId', 'task_id')
     return id !== '' ? 'task ' + action + ' ' + id : 'task ' + action
   }
-  if (toolName === 'schedule') {
+  if (effTool === 'schedule') {
     const prompt = pickStr('Prompt', 'prompt')
     const cron = pickStr('CronExpression', 'cron_expression')
     const dur = pickStr('DurationSeconds', 'duration_seconds')
     const timing = cron ? 'cron ' + cron : dur ? dur + 's' : ''
     return timing ? 'schedule ' + timing : (prompt ? 'schedule ' + prompt.slice(0, 40) : 'schedule')
   }
-  if (toolName === 'invoke_subagent') {
+  if (effTool === 'invoke_subagent') {
     const subs = a.Subagents ?? a.subagents
     const firstRole = Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown }).Role === 'string'
       ? (subs[0] as { Role: string }).Role
       : ''
     return firstRole ? 'subagent: ' + firstRole : 'invoke subagent'
   }
-  if (toolName === 'send_message') {
+  if (effTool === 'send_message') {
     const recipient = pickStr('Recipient', 'recipient', 'to')
     return recipient ? 'msg ' + recipient : 'send message'
   }
-  return toolName
+  return effServer ? effServer + ': ' + effTool : effTool
 }
 
 /** Extract the (run, step) cursor embedded by buildMirrorRunCode. */
@@ -189,6 +194,100 @@ function toolInput(args: { input?: unknown }): Record<string, unknown> {
   return { value: raw }
 }
 
+export interface UnwrappedToolCall {
+  tool: string
+  input: Record<string, unknown>
+  server?: string
+  isMcp: boolean
+}
+
+export function cleanString(val: unknown): string {
+  if (typeof val !== 'string') return ''
+  let s = val.trim()
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim()
+  }
+  return s
+}
+
+export function parseInnerArgs(raw: unknown): Record<string, unknown> {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
+  if (typeof raw === 'string') {
+    let s = raw.trim()
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+      try {
+        const unquoted = JSON.parse(s) as unknown
+        if (typeof unquoted === 'string') s = unquoted.trim()
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      const parsed = JSON.parse(s) as unknown
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+      return { value: parsed }
+    } catch {
+      return { value: raw }
+    }
+  }
+  return { value: raw }
+}
+
+export function unwrapMcpTool(toolName: string, rawArgs: unknown): UnwrappedToolCall {
+  const input = toolInput({ input: rawArgs })
+  const isMetaMcp = /^(call_mcp_tool|callMcpTool|call_mcp|mcp_call)$/i.test(toolName)
+  if (isMetaMcp) {
+    const server = cleanString(pick(input, 'ServerName', 'server_name', 'serverName', 'server'))
+    const innerTool = cleanString(pick(input, 'ToolName', 'tool_name', 'toolName', 'name', 'tool'))
+    const rawInner = input.Arguments ?? input.arguments ?? input.args ?? input.parameters ?? input.params ?? input.input
+    const innerInput = parseInnerArgs(rawInner)
+    if (innerTool !== '') {
+      return {
+        tool: innerTool,
+        input: innerInput,
+        ...(server !== '' ? { server } : {}),
+        isMcp: true,
+      }
+    }
+  }
+
+  if (toolName.startsWith('mcp__')) {
+    const parts = toolName.slice(5).split('__')
+    if (parts.length >= 2) {
+      const server = parts[0]
+      const innerTool = parts.slice(1).join('__')
+      return { tool: innerTool, input, ...(server ? { server } : {}), isMcp: true }
+    }
+  }
+
+  return { tool: toolName, input, isMcp: false }
+}
+
+export function cleanResultText(text: string): string {
+  const trimmed = text.trim()
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const obj = JSON.parse(trimmed) as { content?: unknown }
+      if (Array.isArray(obj?.content)) {
+        const parts: string[] = []
+        for (const item of obj.content) {
+          const blk = item as { type?: string; text?: unknown }
+          if (blk?.type === 'text' && typeof blk.text === 'string') {
+            parts.push(blk.text)
+          }
+        }
+        if (parts.length > 0) return parts.join('\n')
+      }
+    } catch {
+      // not JSON
+    }
+  }
+  return text
+}
+
 /**
  * agy serializes tool args with PascalCase keys (CommandLine, AbsolutePath,
  * SearchDirectory, TargetFile, TargetContent, ReplacementContent, CodeContent…);
@@ -206,16 +305,21 @@ function pick(input: Record<string, unknown>, ...keys: string[]): string | undef
 
 /** Native pending-card projection for one mirrored agy tool call. */
 export function presentMirrorCall(args: unknown): ToolCallView | undefined {
-  const a = args as { tool?: unknown; input?: unknown }
-  const name = typeof a?.tool === 'string' ? a.tool : ''
-  const input = toolInput(a as { input?: unknown })
+  const a = args as { tool?: unknown; input?: unknown; server?: unknown }
+  const unwrapped = unwrapMcpTool(typeof a?.tool === 'string' ? a.tool : '', a?.input)
+  const name = unwrapped.tool
+  const input = unwrapped.input
+  const server = typeof a?.server === 'string' && a.server !== '' ? a.server : unwrapped.server
   switch (name) {
     case 'run_command':
     case 'bash':
-    case 'execute_command': {
+    case 'execute_command':
+    case 'ops_bash':
+    case 'sh':
+    case 'shell': {
       const command = pick(input, 'CommandLine', 'command_line', 'command', 'cmd', 'Cmd') ?? JSON.stringify(input)
       const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
-      const cwd = pick(input, 'Cwd', 'cwd', 'WorkingDirectory', 'working_directory')
+      const cwd = pick(input, 'Cwd', 'cwd', 'WorkingDirectory', 'working_directory', 'workdir', 'WorkDir')
       const view: TerminalCallView = {
         card: 'terminal',
         title: command,
@@ -351,8 +455,10 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     }
     case 'find_by_name':
     case 'glob':
+    case 'ops_glob':
     case 'search_files': {
-      const q = pick(input, 'pattern', 'Pattern', 'query', 'Query', 'regex', 'Regex', 'QueryString') ?? ''
+      const rawPat = input.pattern ?? input.Pattern ?? input.query ?? input.Query ?? input.regex ?? input.Regex ?? input.QueryString
+      const q = Array.isArray(rawPat) ? rawPat.join(', ') : (typeof rawPat === 'string' ? rawPat : (pick(input, 'pattern', 'Pattern', 'query', 'Query', 'regex', 'Regex', 'QueryString') ?? ''))
       const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
       const title = desc ?? (q !== '' ? 'Search ' + q : 'Search')
       const view: GenericCallView = { card: 'generic', title, kind: 'search' }
@@ -360,9 +466,11 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     }
     case 'grep_search':
     case 'search':
+    case 'ops_grep':
     case 'search_file_content':
     case 'grep': {
-      const q = pick(input, 'query', 'Query', 'pattern', 'Pattern', 'regex', 'Regex', 'QueryString') ?? ''
+      const rawPat = input.query ?? input.Query ?? input.pattern ?? input.Pattern ?? input.regex ?? input.Regex ?? input.QueryString
+      const q = Array.isArray(rawPat) ? rawPat.join(', ') : (typeof rawPat === 'string' ? rawPat : (pick(input, 'query', 'Query', 'pattern', 'Pattern', 'regex', 'Regex', 'QueryString') ?? ''))
       const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
       const title = desc ?? (q !== '' ? 'Search ' + q : 'Search')
       const view: GenericCallView = { card: 'generic', title, kind: 'search' }
@@ -469,7 +577,8 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     }
     default: {
       const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
-      const view: GenericCallView = { card: 'generic', title: desc ?? (name !== '' ? name : 'agy tool'), rawInput: input }
+      const fallbackTitle = server ? `${server}: ${name}` : (name !== '' ? name : 'agy tool')
+      const view: GenericCallView = { card: 'generic', title: desc ?? fallbackTitle, rawInput: input }
       return view
     }
   }
@@ -477,18 +586,23 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
 
 /** Native completed-card projection for one mirrored agy tool call. */
 export function presentMirrorResult(args: unknown, result: { content: unknown[]; isError: boolean }): ToolResultView | undefined {
-  const a = args as { tool?: unknown }
-  const name = typeof a?.tool === 'string' ? a.tool : ''
-  const text = resultText(result.content)
+  const a = args as { tool?: unknown; input?: unknown }
+  const unwrapped = unwrapMcpTool(typeof a?.tool === 'string' ? a.tool : '', a?.input)
+  const name = unwrapped.tool
+  const rawText = resultText(result.content)
+  const text = cleanResultText(rawText)
   switch (name) {
     case 'run_command':
     case 'bash':
-    case 'execute_command': {
+    case 'execute_command':
+    case 'ops_bash':
+    case 'sh':
+    case 'shell': {
       let exitCode: number | undefined
-      const m = /The command exited with code (\d+)/i.exec(text)
+      const m = /The command exited with code (\d+)/i.exec(text) ?? /\[exit code (\d+)\]/i.exec(text)
       if (m && m[1]) {
         exitCode = parseInt(m[1], 10)
-      } else if (result.isError) {
+      } else if (/\[command timed out/i.test(text) || result.isError) {
         exitCode = 1
       }
       const view: TerminalResultView = { card: 'terminal', output: text, ...(exitCode !== undefined ? { exitCode } : {}) }
@@ -561,15 +675,24 @@ export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
   // embeds — resolve the tool name/input from the recording so cards still
   // render with full detail. Keeps replayed sessions identical to live ones.
   const enrichArgs = (args: Record<string, unknown>): Record<string, unknown> => {
-    if (typeof args.tool === 'string' && args.tool !== '') return args
-    const runId = typeof args.run === 'string' ? args.run : ''
-    const step = typeof args.step === 'number' ? args.step : -1
-    const t = deps.runs.get(runId)?.toolEventAt(step) ?? null
-    if (t === null) return args
+    let tool = typeof args.tool === 'string' ? args.tool : ''
+    let input = args.input
+    let server = typeof args.server === 'string' ? args.server : undefined
+    if (tool === '' || /^(call_mcp_tool|callMcpTool|call_mcp|mcp_call)$/i.test(tool)) {
+      const runId = typeof args.run === 'string' ? args.run : ''
+      const step = typeof args.step === 'number' ? args.step : -1
+      const t = deps.runs.get(runId)?.toolEventAt(step) ?? null
+      if (t !== null) {
+        if (tool === '') tool = t.name
+        input ??= t.args
+      }
+    }
+    const unwrapped = unwrapMcpTool(tool, input)
     return {
       ...args,
-      tool: t.name,
-      ...(args.input === undefined && t.args !== undefined ? { input: t.args } : {}),
+      tool: unwrapped.tool,
+      input: unwrapped.input,
+      ...(unwrapped.server ? { server: unwrapped.server } : server ? { server } : {}),
     }
   }
   return defineTool({

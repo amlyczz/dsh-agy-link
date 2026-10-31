@@ -18,7 +18,7 @@ import type { LlmFailure, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-
 import * as dshLlm from '@deepseek-ai/dsh-llm'
 import type { AgyEvent, RawUsage } from '../common/types.ts'
 import { mirrorCallId } from './recording.ts'
-import { buildMirrorRunCode, MIRROR_TOOL_NAME, WRAPPER_TOOL_NAME, toolStepBrief } from './mirror-tool.ts'
+import { buildMirrorRunCode, MIRROR_TOOL_NAME, WRAPPER_TOOL_NAME, toolStepBrief, unwrapMcpTool } from './mirror-tool.ts'
 import { type GoalContext, buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock } from './dsh-goal.ts'
 
 export const toToolCallId: (id: string) => ToolCallId =
@@ -386,8 +386,10 @@ export class EventMapper {
           ) {
             this.pendingAnnounced.add(ev.stepKey)
             yield* this.ensureBlock('reasoning')
+            const unwrapped = unwrapMcpTool(ev.tool.name, ev.tool.args)
+            const label = unwrapped.server ? `${unwrapped.tool} (${unwrapped.server})` : unwrapped.tool
             const d = this.appendDelta(
-              '[agy tool running: ' + ev.tool.name + ' — the result card streams when it finishes]\n',
+              '[agy tool running: ' + label + ' — the result card streams when it finishes]\n',
             )
             if (d) yield d
           }
@@ -413,13 +415,16 @@ export class EventMapper {
         const effectiveArgs = fullArgs !== undefined
           ? { ...fullArgs, ...(typeof ev.tool.args === 'object' ? ev.tool.args as Record<string, unknown> : {}) }
           : ev.tool.args
+        const unwrapped = unwrapMcpTool(ev.tool.name, effectiveArgs)
+        const brief = toolStepBrief(unwrapped.tool, unwrapped.input, unwrapped.server)
         const argumentsJson = useCode
-          ? JSON.stringify(buildMirrorRunCode(this.opts.runId, absIndex, ev.tool.name, toolStepBrief(ev.tool.name, effectiveArgs)))
+          ? JSON.stringify(buildMirrorRunCode(this.opts.runId, absIndex, unwrapped.tool, brief))
           : JSON.stringify({
               run: this.opts.runId,
               step: absIndex,
-              tool: ev.tool.name,
-              ...(effectiveArgs !== undefined ? { input: effectiveArgs } : {}),
+              tool: unwrapped.tool,
+              ...(unwrapped.server !== undefined ? { server: unwrapped.server } : {}),
+              ...(unwrapped.input !== undefined ? { input: unwrapped.input } : {}),
             })
         const rawCallId = mirrorCallId(this.opts.runId, absIndex)
         const assignedCallId = rememberToolCallId(this.toolCallStates, rawCallId, toolName)
