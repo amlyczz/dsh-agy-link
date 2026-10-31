@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.99 (2026-10-31)
+
+### English
+
+- **Feat(toolview): unwrap Antigravity MCP meta-tools into native terminal/search cards.** (thanks @Ronnoc, #64)
+  - External MCP tools are dispatched by agy through meta-tools (`call_mcp_tool` / `callMcpTool` / `mcp__<server>__<tool>`), so every MCP call previously rendered as one repetitive `call_mcp_tool` card with raw JSON. Host mirror presenters and Client toolviews now unwrap the inner invocation: terminal-ish tools (`ops_bash`, `sh`, `shell`, …) become native Terminal cards (`$ cmd`, cwd, exit code, timeout), glob/grep become Search cards, and other MCP tools show as `<server>: <tool>`. MCP text envelopes (`{content:[{type:'text',text}]}`) are cleaned. Adds tests (588+ passing).
+
+### 中文
+
+- **新增(toolview)：把 Antigravity 的 MCP 元工具拆包为原生终端/搜索卡片。**（感谢 @Ronnoc，#64）
+  - 外部 MCP 工具由 agy 经元工具（`call_mcp_tool` 等）调度，此前所有 MCP 调用都退化成一个重复的 `call_mcp_tool` 原始 JSON 卡片。现 Host 镜像 Presenter 与 Client Toolview 都会拆包内层调用：终端类（`ops_bash`/`sh`/`shell`…）渲染为原生终端卡片（`$ cmd`、cwd、退出码、超时），glob/grep 渲染为搜索卡片，其它 MCP 显示 `<server>: <tool>`；并清理 MCP 文本信封。补充测试（588+ 通过）。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.98...v0.4.99
+
 ## 0.4.98 (2026-10-30)
 
 ### English
