@@ -2604,7 +2604,7 @@ export class AgyAdapter extends LlmAdapter {
           if (recordedThought !== undefined) {
             resolvedThoughts.set(i, recordedThought)
           } else if (ev.kind === 'step') {
-            const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
+            const rawObj = 'raw' in ev && ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
             const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
             const activeConvId =
               rec.conversationId ??
@@ -2634,7 +2634,7 @@ export class AgyAdapter extends LlmAdapter {
             }
           }
           if (pendingThoughtSteps.size > 0) {
-            const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
+            const rawObj = 'raw' in ev && ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
             const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
             const activeConvId =
               rec.conversationId ??
@@ -2659,7 +2659,7 @@ export class AgyAdapter extends LlmAdapter {
             }
           }
           if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool) {
-            const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
+            const rawObj = 'raw' in ev && ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
             const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
             const activeConvId =
               rec.conversationId ??
