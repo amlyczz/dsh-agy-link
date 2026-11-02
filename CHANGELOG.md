@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.100 (2026-11-02)
+
+### English
+
+- **Fix(host): stop dropping reasoning text on tool turns; debounce the negative thought cache.** (thanks @Ronnoc, #65)
+  - With `--input-format stream-json`, thought text is written asynchronously to agy's SQLite DB, so on turns that immediately call a tool the initial `text` step often found `null`, and `cache.checkedSteps` then cached that miss for 5 minutes — the model's thoughts never surfaced. The cache miss skip is now a 500 ms debounce, pending thought steps are retried when tool steps arrive, and `flushBannerOnlyThoughts()` appends late-arriving prose to the reasoning block before a tool cut / result envelope closes it. Also resolves conversation DB dirs from the real HOME for isolated pool accounts.
+
+### 中文
+
+- **修复(host)：工具轮不再丢弃思考正文；负缓存改为短去抖。**（感谢 @Ronnoc，#65）
+  - `--input-format stream-json` 下思考正文异步写入 agy 的 SQLite，若回合立即调用工具，初始 `text` 步骤常读不到（null），而 `cache.checkedSteps` 会把这次未命中缓存 5 分钟，导致思考内容永远不显示。现未命中跳过改为 500ms 去抖、工具步骤到来时重试待定思考步骤，并在工具切分/结果信封关闭前用 `flushBannerOnlyThoughts()` 补写迟到的正文；同时支持从真实 HOME 解析池账号的会话 DB 目录。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.99...v0.4.100
+
 ## 0.4.99 (2026-10-31)
 
 ### English
