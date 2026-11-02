@@ -132,6 +132,58 @@ test('a bridged call carries the agent of the spawning session', async () => {
   }
 })
 
+test('a PTC bridge call is a nested dispatch; a native call is not', async () => {
+  const parents: Array<symbol | undefined> = []
+  const echo = { name: 'echo', description: 'echo', parameters: { type: 'object', properties: {} } }
+  const tools = {
+    schemas: (scope?: unknown) => {
+      // DSH exposes its reserved run_code transport only outside native mode;
+      // that is the same signal the bridge uses to detect a PTC surface.
+      const list = [echo]
+      return (scope as { id?: string } | undefined)?.id === 'ptc'
+        ? [...list, { name: 'run_code', description: 'PTC transport', parameters: { type: 'object', properties: {} } }]
+        : list
+    },
+    execute: async (input: { name: string; parent?: symbol; signal: AbortSignal }) => {
+      assert.ok(input.signal instanceof AbortSignal)
+      parents.push(input.parent)
+      return { content: [{ type: 'text', text: input.parent === undefined ? 'native' : 'nested' }] }
+    },
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    tools: () => tools,
+    allowlist: () => 'echo',
+    resolveAgent: (sessionId) => (sessionId === 'session-ptc' ? { id: 'ptc' } : undefined),
+  })
+  try {
+    const call = async (headers: Record<string, string>) => {
+      const res = await fetch(bridge.url + '/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token, ...headers },
+        body: JSON.stringify({ dshName: 'echo', arguments: {} }),
+      })
+      return (await res.json()) as { ok: boolean; text?: string; error?: string }
+    }
+
+    const first = await call({ 'X-DSH-Session': 'session-ptc' })
+    const second = await call({ 'X-DSH-Session': 'session-ptc' })
+    assert.equal(first.ok, true)
+    assert.equal(first.text, 'nested')
+    assert.equal(second.text, 'nested')
+    assert.equal(typeof parents.at(-2), 'symbol', 'a PTC call must carry a parent token')
+    assert.equal(typeof parents.at(-1), 'symbol')
+    assert.notEqual(parents.at(-2), parents.at(-1), 'each dispatch gets a fresh token')
+
+    const native = await call({})
+    assert.equal(native.ok, true)
+    assert.equal(native.text, 'native')
+    assert.equal(parents.at(-1), undefined, 'native calls must not look like PTC dispatch')
+  } finally {
+    await bridge.close()
+  }
+})
+
 test('both DSH session key forms resolve without rewriting a bare id', async () => {
   const lookups: string[] = []
   const seen: Array<unknown> = []
