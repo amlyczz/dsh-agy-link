@@ -409,6 +409,34 @@ test('thinking turn with resolvedThoughts emits real thought text into reasoning
   assert.deepEqual(blockStarts, ['reasoning', 'tool-call'])
 })
 
+test('thinking turn starting with banner-only flushes prose before tool cut when resolvedThoughts updates', () => {
+  const thoughtsMap = new Map<number, string>()
+  const m = new EventMapper({
+    runId: 'r-flush-thoughts',
+    cutOnTool: true,
+    resolvedThoughts: thoughtsMap,
+  })
+  // absIndex = 0: init
+  const c0 = [...m.map({ kind: 'init', conversationId: 'c1' }, 0)]
+  // absIndex = 1: thinking turn with usage, but thoughtsMap not ready yet
+  const c1 = [...m.map({ kind: 'step', stepKey: '2', stepKind: 'text', text: '', usage: { thinking_tokens: 24 } }, 1)]
+  const reasoning1 = c1.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning1, '[agy · 24 tokens]\n')
+
+  // DB read catches up in the background
+  thoughtsMap.set(1, 'Need to run ops_bash to inspect directory.')
+
+  // absIndex = 2: tool step arrives
+  const c2 = [...m.map({ kind: 'step', stepKey: '3', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'ops_bash', args: { command: 'ls' }, output: 'ok' } }, 2)]
+  const reasoning2 = c2.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning2, 'Need to run ops_bash to inspect directory.\n')
+
+  // Block types order across c1 + c2: reasoning block started, reasoning deltas emitted, closed, then tool-call
+  const allChunks = [...c0, ...c1, ...c2]
+  const blockStarts = allChunks.filter((c) => c.type === 'block-start').map((c) => (c as { blockType: string }).blockType)
+  assert.deepEqual(blockStarts, ['reasoning', 'tool-call'])
+})
+
 test('streamed answer with deferred resolvedThoughts emits real thought text in trailing reasoning block', () => {
   const thoughtsMap = new Map<number, string>([
     [1, 'Double-checked 1+1=2, calculation is sound.'],

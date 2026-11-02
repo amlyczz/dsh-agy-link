@@ -2596,6 +2596,7 @@ export class AgyAdapter extends LlmAdapter {
         supportsPlanExit,
       })
       let i = from
+      const pendingThoughtSteps = new Map<number, string>()
       try {
         for await (const ev of rec.eventsFrom(from)) {
           if (abortedLocally || signal?.aborted) break
@@ -2624,9 +2625,36 @@ export class AgyAdapter extends LlmAdapter {
                 if (th !== null && th.trim() !== '') {
                   resolvedThoughts.set(i, th)
                   rec.setThoughts(i, th)
+                } else if ((ev.usage?.thinking_tokens ?? 0) > 0 || ev.stepKind === 'thinking') {
+                  pendingThoughtSteps.set(i, ev.stepKey)
                 }
               } catch {
                 // DB read failure is non-fatal; fallback to token annotation.
+              }
+            }
+          }
+          if (pendingThoughtSteps.size > 0) {
+            const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
+            const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
+            const activeConvId =
+              rec.conversationId ??
+              (typeof rawObj?.conversation_id === 'string' ? rawObj.conversation_id : null) ??
+              (typeof stepUpdate?.conversation_id === 'string' ? stepUpdate.conversation_id : null)
+            if (activeConvId !== null) {
+              for (const [prevI, prevStepKey] of Array.from(pendingThoughtSteps.entries())) {
+                const prevStepIdx = parseInt(prevStepKey, 10)
+                if (Number.isFinite(prevStepIdx)) {
+                  try {
+                    const th = await readStepThoughts(activeConvId, prevStepIdx, rec.accountHome)
+                    if (th !== null && th.trim() !== '') {
+                      resolvedThoughts.set(prevI, th)
+                      rec.setThoughts(prevI, th)
+                      pendingThoughtSteps.delete(prevI)
+                    }
+                  } catch {
+                    // non-fatal
+                  }
+                }
               }
             }
           }

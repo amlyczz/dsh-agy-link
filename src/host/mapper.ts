@@ -173,6 +173,7 @@ export class EventMapper {
    * banner and the entry is consumed.
    */
   private readonly bannerOnlyShown = new Set<string>()
+  private readonly bannerOnlyIndices = new Map<string, number>()
   private bannerOnlyThinkingEmitted = false
   private sawTextStep: boolean
   private finished = false
@@ -240,7 +241,12 @@ export class EventMapper {
     const bannerAlreadyShown = this.bannerOnlyShown.has(stepKey)
     // Consume the flag only when prose is present — the banner-only emission
     // itself must keep it set for the later prose append.
-    if (hasText) this.bannerOnlyShown.delete(stepKey)
+    if (hasText) {
+      this.bannerOnlyShown.delete(stepKey)
+      this.bannerOnlyIndices.delete(stepKey)
+    } else {
+      this.bannerOnlyIndices.set(stepKey, absIndex)
+    }
 
     yield* this.ensureBlock('reasoning')
     const banner =
@@ -261,10 +267,28 @@ export class EventMapper {
    * it mints the mirror callId and is what continuation detection parses
    * back out of the DSH message list.
    */
+
+  /**
+   * Flush any thinking prose that resolved in the DB after its banner-only
+   * placeholder already streamed (e.g. tool-heavy steps where thoughts resolved
+   * during tool execution).
+   */
+  private *flushBannerOnlyThoughts(): Generator<StreamChunk> {
+    if (this.bannerOnlyShown.size === 0) return
+    for (const [stepKey, absIdx] of Array.from(this.bannerOnlyIndices.entries())) {
+      if (!this.bannerOnlyShown.has(stepKey)) continue
+      const text = this.opts.resolvedThoughts?.get(absIdx)
+      if (text !== undefined && text.trim() !== '') {
+        yield* this.emitThinking(stepKey, absIdx, 0)
+        this.bannerOnlyIndices.delete(stepKey)
+      }
+    }
+  }
   *map(ev: AgyEvent, absIndex: number): Generator<StreamChunk> {
     if (this.finished) return
     if (ev.kind === 'init') return
     if (ev.kind === 'garbage') return
+    yield* this.flushBannerOnlyThoughts()
     if (ev.kind === 'step') {
       if (ev.usage) this.opts.usage?.noteStepUsage(ev.usage)
       if (ev.stepKind === 'text') {
@@ -398,6 +422,7 @@ export class EventMapper {
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)
         if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
+        yield* this.flushBannerOnlyThoughts()
         // Cut the span: close any open block, then one tool-call block.
         // In Code Mode: addressed to run_code wrapping tools['agy_tool']({ run, step }).
         // In Native Mode: addressed to agy_tool directly with { run, step, tool, input }.
@@ -481,6 +506,7 @@ export class EventMapper {
       const d = this.appendDelta(ev.response)
       if (d) yield d
     }
+    yield* this.flushBannerOnlyThoughts()
     const close = this.closeOpen()
     if (close) yield close
     yield { type: 'usage', usage: usageFromRaw(this.opts.usage?.finalUsage(ev.usage) ?? ev.usage) }
