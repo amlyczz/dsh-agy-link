@@ -42,14 +42,18 @@ export function conversationsDirCandidates(accountHome?: string): string[] {
   if (gch !== undefined && gch !== '') push(join(gch, 'antigravity-cli', 'conversations'))
   push(AGY_DB_DIR)
   push(join(homedir(), '.gemini', 'antigravity-cli', 'conversations'))
-  const poolBase = join(homedir(), '.dsh', 'agy-accounts')
-  try {
-    for (const ent of readdirSync(poolBase)) {
-      if (ent.startsWith('.')) continue
-      push(join(poolBase, ent, '.gemini', 'antigravity-cli', 'conversations'))
+  const realHome = process.env.USERPROFILE || process.env.HOME || homedir()
+  const poolBases = [join(homedir(), '.dsh', 'agy-accounts')]
+  if (realHome && realHome !== homedir()) poolBases.push(join(realHome, '.dsh', 'agy-accounts'))
+  for (const pb of poolBases) {
+    try {
+      for (const ent of readdirSync(pb)) {
+        if (ent.startsWith('.')) continue
+        push(join(pb, ent, '.gemini', 'antigravity-cli', 'conversations'))
+      }
+    } catch {
+      // pool not installed
     }
-  } catch {
-    // pool not installed
   }
   return dirs
 }
@@ -605,7 +609,7 @@ export async function readFullToolArgs(
   if (cache?.conversationId === conversationId && cache.loaded && (now - cacheTime) < MAX_CACHE_AGE_MS) {
     const cached = cache.steps.get(stepIndex)
     if (cached !== undefined) return cached
-    if (cache.checkedSteps.has(stepIndex)) return null
+    if (cache.checkedSteps.has(stepIndex) && (now - cacheTime) < 500) return null
   }
 
   await loadCached(conversationId, accountHome)
@@ -629,7 +633,7 @@ export async function readStepThoughts(
   if (cache?.conversationId === conversationId && cache.loaded && (now - cacheTime) < MAX_CACHE_AGE_MS) {
     const cached = cache.thoughts.get(stepIndex)
     if (cached !== undefined) return cached
-    if (cache.checkedSteps.has(stepIndex)) return null
+    if (cache.checkedSteps.has(stepIndex) && (now - cacheTime) < 500) return null
   }
 
   await loadCached(conversationId, accountHome)

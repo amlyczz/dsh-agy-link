@@ -53,7 +53,7 @@ test('suffixDelta grows by suffix and falls back to newline+full', () => {
 test('ok run without tools emits ordered protocol: blocks, usage, finish last', () => {
   const m = newSpan()
   const chunks = mapAll(m, [
-    { kind: 'init', conversationId: 'c1' },
+    { kind: 'init', conversationId: 'c1', raw: {} },
     { kind: 'step', stepKey: '1', stepKind: 'thinking', text: 'Think' },
     { kind: 'step', stepKey: '2', stepKind: 'text', text: 'Hi there' },
     { kind: 'result', conversationId: 'c1', ok: true, response: 'Hi there', usage: { input_tokens: 7, output_tokens: 4, thinking_tokens: 2, cache_read_tokens: 1 } },
@@ -89,7 +89,7 @@ test('result usage reports the last PER-CALL step sample, never the cumulative e
   }
   const m = new EventMapper({ runId: 'ru1', cutOnTool: true, usage: tracker })
   const chunks = mapAll(m, [
-    { kind: 'init', conversationId: 'c1' },
+    { kind: 'init', conversationId: 'c1', raw: {} },
     { kind: 'step', stepKey: '1', stepKind: 'text', text: 'part one', usage: { input_tokens: 15_000, output_tokens: 100 } },
     { kind: 'step', stepKey: '2', stepKind: 'text', text: 'part two', usage: { input_tokens: 16_800, output_tokens: 160 } },
     { kind: 'result', conversationId: 'c1', ok: true, response: 'part one part two', usage: { input_tokens: 31_800, output_tokens: 260 } },
@@ -113,7 +113,7 @@ test('result usage falls back to the envelope when no step carried usage', () =>
   }
   const m = new EventMapper({ runId: 'ru2', cutOnTool: true, usage: tracker })
   const chunks = mapAll(m, [
-    { kind: 'init', conversationId: 'c1' },
+    { kind: 'init', conversationId: 'c1', raw: {} },
     { kind: 'step', stepKey: '1', stepKind: 'text', text: 'hi' },
     { kind: 'result', conversationId: 'c1', ok: true, response: 'hi', usage: { input_tokens: 14_726, output_tokens: 166 } },
   ])
@@ -396,7 +396,7 @@ test('thinking turn with resolvedThoughts emits real thought text into reasoning
     resolvedThoughts: thoughtsMap,
   })
   const chunks = mapAll(m, [
-    { kind: 'init', conversationId: 'c1' },
+    { kind: 'init', conversationId: 'c1', raw: {} },
     // absIndex = 1
     { kind: 'step', stepKey: '2', stepKind: 'text', text: '', usage: { thinking_tokens: 42 } },
     // absIndex = 2
@@ -406,6 +406,34 @@ test('thinking turn with resolvedThoughts emits real thought text into reasoning
   assert.equal(reasoning, '[agy · 42 tokens] Plan: check file status first, then decide whether to edit.\n')
   // Block types order: reasoning start/delta/end, then tool-call
   const blockStarts = chunks.filter((c) => c.type === 'block-start').map((c) => (c as { blockType: string }).blockType)
+  assert.deepEqual(blockStarts, ['reasoning', 'tool-call'])
+})
+
+test('thinking turn starting with banner-only flushes prose before tool cut when resolvedThoughts updates', () => {
+  const thoughtsMap = new Map<number, string>()
+  const m = new EventMapper({
+    runId: 'r-flush-thoughts',
+    cutOnTool: true,
+    resolvedThoughts: thoughtsMap,
+  })
+  // absIndex = 0: init
+  const c0 = [...m.map({ kind: 'init', conversationId: 'c1', raw: {} }, 0)]
+  // absIndex = 1: thinking turn with usage, but thoughtsMap not ready yet
+  const c1 = [...m.map({ kind: 'step', stepKey: '2', stepKind: 'text', text: '', usage: { thinking_tokens: 24 }, raw: {} }, 1)]
+  const reasoning1 = c1.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning1, '[agy · 24 tokens]\n')
+
+  // DB read catches up in the background
+  thoughtsMap.set(1, 'Need to run ops_bash to inspect directory.')
+
+  // absIndex = 2: tool step arrives
+  const c2 = [...m.map({ kind: 'step', stepKey: '3', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'ops_bash', args: { command: 'ls' }, output: 'ok' }, raw: {} }, 2)]
+  const reasoning2 = c2.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
+  assert.equal(reasoning2, 'Need to run ops_bash to inspect directory.\n')
+
+  // Block types order across c1 + c2: reasoning block started, reasoning deltas emitted, closed, then tool-call
+  const allChunks = [...c0, ...c1, ...c2]
+  const blockStarts = allChunks.filter((c) => c.type === 'block-start').map((c) => (c as { blockType: string }).blockType)
   assert.deepEqual(blockStarts, ['reasoning', 'tool-call'])
 })
 
@@ -648,7 +676,7 @@ test('EventMapper emits update_goal tool-call when in goal continuation round', 
   })
 
   const chunks = mapAll(m, [
-    { kind: 'init', conversationId: 'c1' },
+    { kind: 'init', conversationId: 'c1', raw: {} },
     { kind: 'step', stepKey: '1', stepKind: 'text', text: 'All tasks completed successfully!' },
     { kind: 'result', conversationId: 'c1', ok: true, response: 'All tasks completed successfully!', usage: {} },
   ])
@@ -677,7 +705,7 @@ test('EventMapper emits update_goal tool-call even when result envelope ok: fals
   })
 
   const chunks = mapAll(m, [
-    { kind: 'init', conversationId: 'c1' },
+    { kind: 'init', conversationId: 'c1', raw: {} },
     { kind: 'step', stepKey: '1', stepKind: 'text', text: 'Work is finished!' },
     {
       kind: 'result',
@@ -708,7 +736,7 @@ test('EventMapper emits exit_plan_mode tool-call when in plan mode', () => {
   })
 
   const chunks = mapAll(m, [
-    { kind: 'init', conversationId: 'c1' },
+    { kind: 'init', conversationId: 'c1', raw: {} },
     { kind: 'step', stepKey: '1', stepKind: 'text', text: '# Architecture Plan\n\n1. Phase one' },
     { kind: 'result', conversationId: 'c1', ok: true, response: '# Architecture Plan\n\n1. Phase one', usage: {} },
   ])
