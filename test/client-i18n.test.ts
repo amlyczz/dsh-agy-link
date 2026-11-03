@@ -77,8 +77,9 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
   assert.equal(dictionaries.size, 4)
   // conversation.session.header.actions + settings.section + plugins.bundle.config
   // + plugins.row.config + agy_tool + run_code toolviews
-  // + conversation.chat.node(agy-translation) + conversation.chat.assistant-actions
-  assert.equal(registeredSlots.length, 8)
+  // + conversation.chat.node(agy-translation) + conversation.chat.turnTail
+  // + conversation.chat.assistant-actions
+  assert.equal(registeredSlots.length, 9)
   assert.equal(registeredSlots[0]!.options.locale, 'agy-link')
   assert.equal(registeredSlots[1]!.options.id, 'agy-link')
   assert.equal(registeredSlots[2]!.options.key, 'dsh-agy-link')
@@ -86,7 +87,8 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
   assert.equal(registeredSlots[4]!.options.id, 'agy-tool-view')
   assert.equal(registeredSlots[5]!.options.id, 'agy-run-code-view')
   assert.equal(registeredSlots[6]!.options.key, 'agy-translation')
-  assert.equal(registeredSlots[7]!.options.name, 'conversation.chat.assistant-actions')
+  assert.equal(registeredSlots[7]!.options.name, 'conversation.chat.turnTail')
+  assert.equal(registeredSlots[8]!.options.name, 'conversation.chat.assistant-actions')
   const t = locale.bind('agy-link')
   locale.setLocale('pt-BR'); assert.equal(t('account.add'), 'Adicionar conta Google')
   locale.setLocale('es'); assert.equal(t('account.add'), 'Añadir cuenta de Google')

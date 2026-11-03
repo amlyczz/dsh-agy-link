@@ -146,12 +146,15 @@ function makeService(options: {
 }) {
   const calls: RunnerCall[] = []
   const records: Array<{ sessionId: string; record: TranslationRecord }> = []
+  // Records are appended to the session log the same way the host does, so the
+  // dedupe path (findTranslationRecord) sees what a real session would.
+  const events: SessionEventLike[] = [...log]
   const cfg = options.cfg ?? defaultConfig()
   let index = 0
   const service = new TranslationService({
     cfg: () => cfg,
     catalog: () => catalog,
-    getSession: (id) => (id === 's1' ? { id: 's1', log } : undefined),
+    getSession: (id) => (id === 's1' ? { id: 's1', log: events } : undefined),
     run: async (req) => {
       calls.push({ prompt: req.prompt, model: req.model, ...(req.effort === undefined ? {} : { effort: req.effort }) })
       options.onRun?.(calls[calls.length - 1]!)
@@ -161,6 +164,7 @@ function makeService(options: {
     },
     appendRecord: (sessionId, record) => {
       records.push({ sessionId, record })
+      events.push({ type: 'plugin:agy-link/translation', seq: 42, data: record as unknown })
       return 42
     },
     ...(options.autoEnabled === undefined ? {} : { autoEnabled: options.autoEnabled }),
@@ -252,6 +256,24 @@ test('a cached hit never inherits another call\'s turn/record metadata', async (
   assert.equal(second.cached, true)
   assert.equal(second.turn, undefined)
   assert.equal(second.recordSeq, undefined)
+})
+
+test('a turn already translated with the same recipe is served from its durable record', async () => {
+  const { service, calls, records } = makeService({ runs: [{ ok: true, text: '人话版' }] })
+  const first = await service.translateTurn('s1', 1)
+  assert.equal(first.ok, true)
+  assert.equal(first.recordSeq, 42)
+  const second = await service.translateTurn('s1', 1)
+  assert.equal(second.ok, true)
+  assert.equal(second.cached, true)
+  assert.equal(second.recordSeq, 42, 'the existing card is handed back, not a new one')
+  assert.equal(second.text, '人话版')
+  assert.equal(calls.length, 1, 'no second model call')
+  assert.equal(records.length, 1, 'no duplicate record')
+  // An explicit force still re-runs and appends a fresh record.
+  const forced = await service.translateTurn('s1', 1, { force: true })
+  assert.equal(forced.cached, false)
+  assert.equal(calls.length, 2)
 })
 
 test('translateTurn refuses a still-running turn', async () => {

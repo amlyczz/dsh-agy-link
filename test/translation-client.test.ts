@@ -165,9 +165,35 @@ test('per-reply action is registered for historical turns', () => {
   const { slots } = mount()
   const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
   assert.ok(action, 'conversation.chat.assistant-actions must be registered')
-  const element = action!.component({ messageId: 'm1', t: (key: string) => key }) as ElementLike
+  const element = action!.component({ messageId: 'm1', sessionId: 's1', t: (key: string) => key }) as ElementLike
   assert.ok(isElement(element))
   assert.equal(element.type, 'button')
+})
+
+test('every list-slot registration carries a row id (id is the row identity)', () => {
+  const { slots } = mount()
+  const listSlots = slots.filter((s) => s.options.key === undefined)
+  assert.ok(listSlots.length >= 2, 'turn tail + message actions must both be registered')
+  for (const slot of listSlots) {
+    assert.ok(
+      typeof slot.options.id === 'string' && slot.options.id !== '',
+      'list slot ' + String(slot.options.name) + ' needs a non-empty id',
+    )
+  }
+})
+
+test('the per-turn chip renders the Gemini affordance at the end of a turn', () => {
+  const { slots } = mount()
+  const chip = slots.find((s) => s.options.name === 'conversation.chat.turnTail')
+  assert.ok(chip, 'conversation.chat.turnTail must be registered')
+  assert.equal(chip!.options.id, 'agy-tsl-turn')
+  const element = chip!.component({ sessionId: 's1', turn: { turn: 3 }, seq: 9, t: (key: string) => key }) as ElementLike
+  assert.ok(isElement(element))
+  const text = collectText(element).join(' ')
+  assert.match(text, /Translate to plain language/)
+  // Without a session or a turn number the chip stays out of the way.
+  assert.equal(chip!.component({ sessionId: '', turn: { turn: 3 }, t: (k: string) => k }), null)
+  assert.equal(chip!.component({ sessionId: 's1', t: (k: string) => k }), null)
 })
 
 test('standalone enable/disable toggles keep a visible border in both states', () => {

@@ -103,6 +103,7 @@ const CSS = `
 .agy-tsl-action:hover { background: rgba(139,92,246,.2); }
 .agy-tsl-action[data-state="working"] { opacity: .7; cursor: progress; }
 .agy-tsl-action[data-state="error"] { border-color: rgba(244,63,94,.5); color: #f43f5e; background: rgba(244,63,94,.1); }
+.agy-tsl-row { display: flex; align-items: center; gap: 6px; padding: 2px 0 4px 2px; }
 `
 
 function injectStyles(): void {
@@ -321,45 +322,120 @@ const TranslationCard = (props?: Record<string, unknown>): unknown => {
 }
 
 // ---------------------------------------------------------------------------
-// Per-message action button (historical turns)
+// Per-turn and per-message affordances
 // ---------------------------------------------------------------------------
 
-type ActionState = 'idle' | 'working' | 'done' | 'error'
+type ActionState = 'idle' | 'working' | 'done' | 'error' | 'hidden'
 
+async function getTurnState(sessionId: string, turn: number): Promise<{ state?: string } | null> {
+	try {
+		const res = await win.fetch?.(
+			base + '/plugins/agy-link/translate/turn?session=' + encodeURIComponent(sessionId) + '&turn=' + String(turn),
+		)
+		if (!res || !res.ok) return null
+		return (await res.json()) as { state?: string }
+	} catch {
+		return null
+	}
+}
+
+function translateLabel(props: Record<string, unknown> | undefined, key: string, fallback: string): string {
+	const fn = props?.t as ((k: string) => string) | undefined
+	if (typeof fn !== 'function') return fallback
+	try {
+		const value = fn(key)
+		return value === key ? fallback : value
+	} catch {
+		return fallback
+	}
+}
+
+/**
+ * Per-reply hover action ("译成人话"). Session scopes hand the owning session id
+ * through the slot's `inject(sessionId)` face, so no global session lookup is
+ * needed here.
+ */
 const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	const messageId = typeof props?.messageId === 'string' ? props.messageId : ''
+	const injectedSession = typeof props?.sessionId === 'string' ? props.sessionId : ''
 	const ctx = props?.ctx as ClientContextLike | undefined
-	const t = (key: string, fallback: string): string => {
-		const fn = props?.t as ((k: string) => string) | undefined
-		if (typeof fn !== 'function') return fallback
-		try {
-			const value = fn(key)
-			return value === key ? fallback : value
-		} catch {
-			return fallback
-		}
-	}
+	const fallbackSession = injectedSession === '' && ctx !== undefined ? currentSessionId(ctx) : ''
+	const sessionId = injectedSession !== '' ? injectedSession : fallbackSession
 	const [state, setState] = useState<ActionState>('idle')
 	if (messageId === '') return null
 	const run = (): void => {
-		if (state === 'working') return
-		const sessionId = ctx === undefined ? '' : currentSessionId(ctx)
-		if (sessionId === '') return
+		if (state === 'working' || sessionId === '') return
 		setState('working')
 		void postTranslate({ sessionId, messageId, persist: true }).then((res) => {
 			setState(res?.ok === true ? 'done' : 'error')
-			setTimeout(() => setState('idle'), 2000)
+			setTimeout(() => setState('idle'), 2_000)
 		}).catch(() => setState('error'))
 	}
 	const label =
 		state === 'working'
-			? t('tsl.translating', 'Translating…')
+			? translateLabel(props, 'tsl.translating', 'Translating…')
 			: state === 'done'
-				? t('tsl.badge', 'Gemini translation')
+				? translateLabel(props, 'tsl.badge', 'Gemini translation')
 				: state === 'error'
-					? t('tsl.retry', 'Retry')
-					: '🗣 ' + t('tsl.translate', 'Translate to plain language')
-	return h('button', { type: 'button', className: 'agy-tsl-action', 'data-state': state, onClick: run, title: t('tsl.byGemini', 'Translated by Gemini') }, label)
+					? translateLabel(props, 'tsl.retry', 'Retry')
+					: '🗣 ' + translateLabel(props, 'tsl.translate', 'Translate to plain language')
+	return h('button', { type: 'button', className: 'agy-tsl-action', 'data-state': state, onClick: run, title: translateLabel(props, 'tsl.byGemini', 'Translated by Gemini') }, label)
+}
+
+/**
+ * Per-turn chip shown at the end of every completed turn. This is the visible
+ * "Gemini 翻译" option the user asked for: it appears after each turn, hides
+ * itself once a durable translation exists for that turn, and pays nothing
+ * until clicked.
+ */
+const TurnTranslateChip = (props?: Record<string, unknown>): unknown => {
+	const injectedSession = typeof props?.sessionId === 'string' ? props.sessionId : ''
+	const ctx = props?.ctx as ClientContextLike | undefined
+	const fallbackSession = injectedSession === '' && ctx !== undefined ? currentSessionId(ctx) : ''
+	const sessionId = injectedSession !== '' ? injectedSession : fallbackSession
+	const rawTurn = props?.turn as { turn?: unknown } | number | undefined
+	const turn =
+		typeof rawTurn === 'number'
+			? rawTurn
+			: rawTurn !== null && typeof rawTurn === 'object' && typeof rawTurn.turn === 'number'
+				? rawTurn.turn
+				: undefined
+	const [state, setState] = useState<ActionState>('idle')
+	useEffect(() => {
+		if (sessionId === '' || turn === undefined) return
+		let cancelled = false
+		void getTurnState(sessionId, turn).then((res) => {
+			if (!cancelled && res?.state === 'ready') setState('hidden')
+		})
+		return () => {
+			cancelled = true
+		}
+	}, [sessionId, turn])
+	if (sessionId === '' || turn === undefined) return null
+	if (state === 'hidden' || state === 'done') return null
+	const run = (): void => {
+		if (state === 'working') return
+		setState('working')
+		void postTranslate({ sessionId, turn, persist: true }).then((res) => {
+			setState(res?.ok === true ? 'done' : 'error')
+			if (res?.ok !== true) setTimeout(() => setState('idle'), 2_500)
+		}).catch(() => setState('error'))
+	}
+	const label =
+		state === 'working'
+			? '✨ ' + translateLabel(props, 'tsl.translating', 'Translating…')
+			: state === 'error'
+				? translateLabel(props, 'tsl.retry', 'Retry')
+				: '🗣 ' + translateLabel(props, 'tsl.translate', 'Translate to plain language')
+	return h('div', { className: 'agy-tsl-row' },
+		h('button', {
+			type: 'button',
+			className: 'agy-tsl-action',
+			'data-state': state,
+			onClick: run,
+			title: translateLabel(props, 'tsl.byGemini', 'Translated by Gemini'),
+		}, label),
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +487,7 @@ export function translationDefinition(): Record<string, unknown> {
 	}
 }
 
-/** Mount the card renderer, the event Definition and the per-reply button. */
+/** Mount the card renderer, the event Definition and both affordances. */
 export function installTranslationUi(ctx: ClientContextLike, localeNs: string): () => void {
 	injectStyles()
 	const disposers: Array<() => void> = []
@@ -427,16 +503,40 @@ export function installTranslationUi(ctx: ClientContextLike, localeNs: string): 
 	}
 
 	try {
+		// Keyed slot: the key IS the row identity (one card renderer per node kind).
 		ctx.slots.inject('conversation.chat.node', () =>
 			ctx.slots.register({ name: 'conversation.chat.node', key: TRANSLATION_KIND, locale: localeNs }, TranslationCard as never),
 		)
+		// List slots: `id` is the row identity (a registration without one never
+		// renders), and a session-scoped `inject(sessionId)` face is what hands
+		// the component the owning session.
+		ctx.slots.inject('conversation.chat.turnTail', () =>
+			ctx.slots.register(
+				{
+					name: 'conversation.chat.turnTail',
+					id: 'agy-tsl-turn',
+					order: 20,
+					locale: localeNs,
+					inject: (sessionId: string) => ({ sessionId }),
+				},
+				((props?: Record<string, unknown>) => TurnTranslateChip({ ...(props ?? {}), ctx })) as never,
+			),
+		)
 		ctx.slots.inject('conversation.chat.assistant-actions', () =>
-			ctx.slots.register({ name: 'conversation.chat.assistant-actions', locale: localeNs }, ((props?: Record<string, unknown>) =>
-				TranslateAction({ ...(props ?? {}), ctx })) as never),
+			ctx.slots.register(
+				{
+					name: 'conversation.chat.assistant-actions',
+					id: 'agy-tsl-message',
+					order: 20,
+					locale: localeNs,
+					inject: (sessionId: string) => ({ sessionId }),
+				},
+				((props?: Record<string, unknown>) => TranslateAction({ ...(props ?? {}), ctx })) as never,
+			),
 		)
 	} catch (e) {
 		// A UI without the chat slots keeps the event Definition (history cards
-		// still render) and simply loses the per-reply button.
+		// still render) and simply loses the affordances.
 		console.warn('[dsh-agy-link] translation slots unavailable:', e)
 	}
 

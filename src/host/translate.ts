@@ -304,7 +304,34 @@ export function turnOfMessage(
 }
 
 /**
- * The translator instruction. Kept in the user message (aux calls drop
+ * The newest durable translation record for one turn (optionally narrowed to an
+ * exact model/effort recipe). Used to dedupe repeated requests so clicking the
+ * per-turn affordance twice can never stack two identical cards.
+ */
+export function findTranslationRecord(
+  events: readonly SessionEventLike[],
+  turn: number,
+  model?: string,
+  effort?: string,
+): { seq: number; text: string; model: string; effort: string } | null {
+  let found: { seq: number; text: string; model: string; effort: string } | null = null
+  for (const ev of events) {
+    if (ev.type !== TRANSLATION_RECORD_TYPE) continue
+    const d = dataOf(ev)
+    const recordTurn = num(d.turn)
+    if (recordTurn !== turn) continue
+    const recordModel = typeof d.model === 'string' ? d.model : ''
+    const recordEffort = typeof d.effort === 'string' ? d.effort : ''
+    if (model !== undefined && model !== '' && recordModel !== model) continue
+    if (effort !== undefined && recordEffort !== effort) continue
+    const text = typeof d.text === 'string' ? d.text : ''
+    if (text.trim() === '') continue
+    found = { seq: num(ev.seq) ?? 0, text, model: recordModel, effort: recordEffort }
+  }
+  return found
+}
+
+/** The translator instruction. Kept in the user message (aux calls drop
  * `options.system` unless `forwardSystemPrompt` is on), and deliberately
  * explicit about "never invent facts": a cheerful paraphrase that adds a
  * promise the agent never made is worse than no translation at all.
@@ -660,9 +687,26 @@ export class TranslationService {
       const target = this.target(opts)
       return { ...emptyResult(target.model, target.effort), error: 'the current turn is still running', code: 'TRANSIENT' }
     }
+    const target = this.target(opts)
+    if (opts.force !== true) {
+      const existing = findTranslationRecord(events, turn, target.model, target.effort)
+      if (existing !== null) {
+        // Already translated with this exact recipe: hand back the durable card
+        // instead of paying for a second identical call.
+        return {
+          ok: true,
+          text: existing.text,
+          model: existing.model === '' ? target.model : existing.model,
+          effort: existing.effort,
+          cached: true,
+          durationMs: 0,
+          recordSeq: existing.seq,
+          turn,
+        }
+      }
+    }
     const answer = opts.full === true ? allTextOfTurn(events, turn) : finalAnswerOfTurn(events, turn)
     if (answer === null || answer.text.trim() === '') {
-      const target = this.target(opts)
       return { ...emptyResult(target.model, target.effort), error: 'no assistant text in turn ' + turn, code: 'TURN_NOT_FOUND' }
     }
     const res = await this.translate(
@@ -681,6 +725,12 @@ export class TranslationService {
       res.recordSeq = await this.appendRecord(sessionId, turn, answer, res)
     }
     return res
+  }
+
+  /** Durable translation already stored for one turn (status route / chip). */
+  existingTurn(sessionId: string, turn: number, model?: string, effort?: string): { seq: number; text: string; model: string; effort: string } | null {
+    const events = sessionEvents(this.deps.getSession(sessionId))
+    return findTranslationRecord(events, turn, model, effort)
   }
 
   /** Translate the newest completed turn of a session. */

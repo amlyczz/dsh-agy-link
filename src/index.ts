@@ -757,6 +757,18 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     const m = (req as { method?: unknown }).method
     return typeof m === 'string' ? m.toUpperCase() : 'GET'
   };
+  const queryParam = (req: unknown, key: string): string => {
+    const rawUrl = (req as { url?: unknown }).url
+    if (typeof rawUrl !== 'string') return ''
+    const m = new RegExp('[?&]' + key + '=([^&]+)').exec(rawUrl)
+    if (m === null) return ''
+    const raw = m[1] ?? ''
+    try {
+      return decodeURIComponent(raw)
+    } catch {
+      return raw
+    }
+  };
 
     reg({ kind: 'exact', path: '/plugins/agy-link/status', handler: (_req, res) => {
       void (async () => {
@@ -1253,22 +1265,25 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       })()
     }})
     reg({ kind: 'exact', path: '/plugins/agy-link/translate/pending', handler: (req, res) => {
-      const rawUrl = (req as { url?: unknown }).url
-      let session = ''
-      if (typeof rawUrl === 'string') {
-        const m = /[?&]session=([^&]+)/.exec(rawUrl)
-        if (m !== null) {
-          try {
-            session = decodeURIComponent(m[1] ?? '')
-          } catch {
-            session = m[1] ?? ''
-          }
-        }
-      }
+      const session = queryParam(req, 'session')
       sendJson(res as RawRes, 200, {
         items: translation.pendingFor(session === '' ? undefined : session),
         stats: translation.stats(),
       })
+    }})
+    // Per-turn question the chat chip asks before showing its affordance: is a
+    // durable translation already stored for this turn's reply?
+    reg({ kind: 'exact', path: '/plugins/agy-link/translate/turn', handler: (req, res) => {
+      const session = queryParam(req, 'session')
+      const turn = Number(queryParam(req, 'turn'))
+      if (session === '' || !Number.isFinite(turn)) {
+        sendJson(res as RawRes, 400, { error: 'session and turn are required' })
+        return
+      }
+      const existing = translation.existingTurn(session, turn)
+      sendJson(res as RawRes, 200, existing === null
+        ? { state: 'idle' }
+        : { state: 'ready', seq: existing.seq, model: existing.model, effort: existing.effort })
     }})
 
     reg({ kind: 'exact', path: '/plugins/agy-link/qr', handler: (_req, res) => {
