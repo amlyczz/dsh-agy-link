@@ -191,8 +191,40 @@ test('per-reply action is an icon-only Gemini button in the action strip', () =>
   assert.match(source, /content: attr\(data-tip\)/)
   assert.match(source, /\.agy-tsl-wrap:hover::after/)
   assert.equal(/className: ["']agy-tsl-tip["']/.test(source), false, 'the element-based tooltip is gone')
+  // The wrapper also decides which side the bubble goes on (see below).
+  assert.equal(typeof element.props?.onMouseEnter, 'function')
+  assert.equal(typeof element.props?.onFocus, 'function')
   // No session → no button (the slot's inject face is required).
   assert.equal(action!.component({ messageId: 'm1', t: (k: string) => k }), null)
+})
+
+test('the hint is placed above the row, and flips below only near the top edge', () => {
+  // Regression: below-anchoring covered the bubble with the composer for the
+  // newest reply (the row sits at the bottom of the transcript). Above is the
+  // default — which is also the "no script" fallback — and the flip exists only
+  // for a row within one bubble of the scroller's top edge.
+  const { slots } = mount()
+  const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
+  const wrapper = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => k }) as ElementLike
+  const place = wrapper.props?.onMouseEnter as (e: unknown) => void
+
+  const sideFor = (top: number): string => {
+    const attrs: Record<string, string> = {}
+    place({ currentTarget: { getBoundingClientRect: () => ({ top }), setAttribute: (k: string, v: string) => { attrs[k] = v }, parentElement: null } })
+    return attrs['data-tip-side'] ?? ''
+  }
+  assert.equal(sideFor(600), 'top', 'a reply low on the screen keeps the hint above')
+  assert.equal(sideFor(64), 'top', 'one bubble of room above is still enough')
+  assert.equal(sideFor(24), 'bottom', 'no room above → flip below instead of being cut')
+  assert.equal(sideFor(0), 'bottom')
+  // A malformed/absent event must never throw (the handler runs inside hover).
+  assert.doesNotThrow(() => place(undefined))
+  assert.doesNotThrow(() => place({ currentTarget: undefined }))
+
+  // The stylesheet owns the geometry: above by default, flipped only for [data-tip-side].
+  assert.match(source, /bottom: calc\(100% \+ 6px\); left: 50%/)
+  assert.match(source, /\.agy-tsl-wrap\[data-tip-side="bottom"\]::after/)
+  assert.match(source, /top: calc\(100% \+ 6px\); bottom: auto/)
 })
 
 test('the style sheet refreshes itself when a reload left a stale tag behind', () => {

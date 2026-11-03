@@ -125,7 +125,7 @@ const CSS = `
 .agy-tsl-wrap { position: relative; display: inline-flex; align-items: center; }
 .agy-tsl-wrap::after {
   content: attr(data-tip);
-  position: absolute; top: calc(100% + 6px); left: 50%;
+  position: absolute; bottom: calc(100% + 6px); left: 50%;
   transform: translateX(-50%);
   padding: 3px 7px; border-radius: var(--dsw-radius-sm, 8px);
   background: var(--dsw-alias-tooltip-bg, #1f2229);
@@ -136,6 +136,13 @@ const CSS = `
   max-width: min(50vw, calc(100vw - 24px));
   pointer-events: none;
   opacity: 0; visibility: hidden; z-index: 60;
+}
+/* Inside the transcript, below the LAST reply, there is no room: the bubble was
+   covered by the composer. Above is the default; the flip below is for a row
+   near the top edge of the scroller, where above would be cut instead. The
+   handler sets data-tip-side on hover/focus (JS off = always above = safe). */
+.agy-tsl-wrap[data-tip-side="bottom"]::after {
+  top: calc(100% + 6px); bottom: auto;
 }
 .agy-tsl-wrap:hover::after,
 .agy-tsl-wrap:focus-within::after {
@@ -458,6 +465,52 @@ function errorGlyph(): unknown {
 	)
 }
 
+/**
+ * Bubble height (13px/20px text + 3px padding + 1px border) plus the 6px gap.
+ * Kept as a constant so the flip decision and the CSS agree.
+ */
+const TIP_BLOCK_PX = 32
+
+/** Nearest scrollable ancestor's top edge — the box the bubble can be clipped by. */
+function clipTopFor(node: { parentElement?: unknown; getBoundingClientRect?: () => { top: number } } | null): number {
+  let current = node?.parentElement as { parentElement?: unknown; getBoundingClientRect?: () => { top: number } } | null | undefined
+  while (current !== null && current !== undefined) {
+    try {
+      const style = (win as unknown as { getComputedStyle?: (el: unknown) => { overflowY?: string } }).getComputedStyle?.(current)
+      const overflowY = style?.overflowY ?? ''
+      if (/(auto|scroll|hidden)/.test(overflowY)) {
+        return current.getBoundingClientRect?.().top ?? 0
+      }
+    } catch {
+      // no layout access: treat it as unclipped
+    }
+    current = current.parentElement as typeof current
+  }
+  return 0
+}
+
+/**
+ * Put the hint where it cannot be covered. Above is right for a reply at the
+ * bottom of the transcript (the common case — hovers happen on the newest
+ * reply, right above the composer); below is right only when the row sits within
+ * one bubble of the scroller's top edge. The decision is written to a data
+ * attribute so the stylesheet owns the geometry (and a missing script degrades
+ * to "always above" rather than to a hidden hint).
+ */
+function placeTip(event?: { currentTarget?: unknown }): void {
+  const el = event?.currentTarget as
+    | { getBoundingClientRect?: () => { top: number }; setAttribute?: (k: string, v: string) => void }
+    | undefined
+  if (el?.getBoundingClientRect === undefined || el.setAttribute === undefined) return
+  try {
+    const anchorTop = el.getBoundingClientRect().top
+    const clipTop = clipTopFor(el as { parentElement?: unknown })
+    el.setAttribute('data-tip-side', anchorTop - clipTop < TIP_BLOCK_PX ? 'bottom' : 'top')
+  } catch {
+    // leave it on the stylesheet default (above)
+  }
+}
+
 function tooltipText(props: Record<string, unknown> | undefined, key: string, fallback: string): string {
 	const fn = props?.t as ((k: string) => string) | undefined
 	if (typeof fn !== 'function') return fallback
@@ -569,7 +622,12 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 
 	return h(
 		'span',
-		{ className: 'agy-tsl-wrap', 'data-tip': title },
+		{
+			className: 'agy-tsl-wrap',
+			'data-tip': title,
+			onMouseEnter: placeTip,
+			onFocus: placeTip,
+		},
 		h(
 			'button',
 			{
