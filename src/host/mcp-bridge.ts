@@ -38,12 +38,21 @@ const INTERNAL_TOOL_NAMES = new Set(['run_code', 'agy_ask', 'agy_tool'])
 
 /** Minimal structural view of the DSH tool registry we need. */
 export interface ToolsServiceLike {
-  schemas(): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+  /**
+   * `scope` is a DSH Agent. Passing it matters for PTC detection: a native
+   * scope has no `run_code` tool, while a PTC scope exposes it.
+   */
+  schemas(scope?: unknown): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
   execute(input: {
     callId: string
     name: string
     arguments: unknown
     agent?: unknown
+    /**
+     * Present only for a nested (PTC `run_code`) dispatch. DSH uses this token
+     * to reject direct model calls in PTC; native calls must leave it unset.
+     */
+    parent?: symbol
     /**
      * Caller-owned cancellation, required by DSH's `ToolExecutionInput`. Tools
      * read `exec.signal` before/while they settle, so a call without one throws
@@ -243,12 +252,20 @@ export function startMcpBridge(opts: {
           res.once('close', () => {
             if (!res.writableEnded) controller.abort()
           })
+          // PTC mode rejects model-direct tool calls. `run_code` is the only
+          // non-native tool DSH exposes; when it is visible, mark this bridged
+          // call as a nested dispatch so the scheduler does not collapse it.
+          // Native mode must not carry a parent token: pre-execute hooks treat
+          // any parent as a PTC dispatch and look for a matching session-log
+          // start, which a native call does not have.
+          const isPtc = svc.schemas(agent).some((tool) => tool.name === 'run_code')
           const result = await svc.execute({
             callId: 'agy-mcp-' + callSeq,
             name: dshName,
             arguments: parsed.arguments ?? {},
             signal: controller.signal,
             ...(agent === undefined ? {} : { agent }),
+            ...(isPtc ? { parent: Symbol('agy-mcp-' + callSeq) } : {}),
           })
           audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
           sendJson(res, 200, { ok: true, text: resultText(result) })
