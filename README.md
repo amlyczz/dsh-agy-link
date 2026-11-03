@@ -281,6 +281,7 @@ Have multiple Google Antigravity / Gemini accounts? **dsh-agy-link makes multi-a
 | 🖼 **Multimodal Images** | Stages images to local storage and passes safe absolute paths via `--add-dir` |
 | 🤝 **`agy_ask` Delegation** | Allows other DSH models to delegate subtasks to Antigravity models |
 | ⌨️ **`/agy` Commands** | Full command suite: `status`, `pool`, `auth`, `models`, `mode`, `effort`, `workspace`, `goal`, `session`, `enable-account`, `disable-account`, `clear`, `doctor`, `help` |
+| 🗣 **`/tsl` Plain-Language Translation** | Gemini rewrites the agent's final answer in plain language and the card is pinned under that reply (persisted in the session, labelled "Gemini translation", original text preserved); `/tsl auto on` translates every new turn |
 
 ---
 
@@ -334,6 +335,42 @@ dsh plugin --profile web add dsh-agy-link
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refreshes agy's update-check timestamp before every spawn so its `--bg-updater` child chain (the Windows console-flash root cause) never starts. `false` restores agy's own auto-update checks |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in 7-day weekly quota warmup: sends a minimal probe when the weekly window has reset or is cold, activating the 7-day timer. Scans every 5 minutes; this path talks directly to Google's internal endpoints, so assess the risk-control tradeoff yourself |
 | `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-4-6` | Model list used for warmup probes (comma-separated); an empty list disables automatic warmup |
+| `autoTranslate` | `DSH_AGY_AUTO_TRANSLATE` | `false` | Auto plain-language translation after every completed turn (card under the reply). Per-session override: `/tsl auto on\|off` |
+| `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | Model used by `/tsl` and auto mode; falls back through the live catalog when absent |
+| `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `high` | Reasoning effort for effort-capable translate models |
+| `translateTargetLanguage` | `DSH_AGY_TRANSLATE_LANG` | `中文（简体）` | Target language wording in the translator prompt |
+
+---
+
+## 🗣 Plain-language translation (`/tsl`)
+
+Not every model writes plainly. `/tsl` sends the current session's output to a
+Gemini model (default `gemini-3.8-flash` · `high`) and gets a "human language"
+rewrite back.
+
+```
+/tsl                       # translate the last completed turn
+/tsl 3                     # translate turn 3
+/tsl --full                # include the turn's intermediate narration
+/tsl --text 任意文本…       # translate arbitrary text (no card)
+/tsl --model claude-sonnet-5-5 --effort medium
+/tsl --print               # also echo the body in the command result
+/tsl auto on|off|status    # per-session auto mode
+```
+
+- The result is stored as a durable `plugin:agy-link/translation` session
+  record and rendered as a **"Gemini translation" card pinned directly under the
+  reply it translates** — it survives reloads and never enters the model-visible
+  history.
+- Every reply also gets a hover action **"译成人话"** so historical turns can be
+  translated on demand.
+- The translation call rides this plugin's own auxiliary adapter route, so it
+  uses the same account pool: **when an account is out of quota it is cooled
+  down and the request retries on the next account automatically** (watch
+  `/agy pool` for the switch).
+- Translation is strictly opt-in (`autoTranslate: false` by default) because it
+  spends quota per turn. Toggle it in **Settings → Antigravity**, or per session
+  with `/tsl auto on`.
 
 ---
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 (2026-11-03)
+
+### English
+
+- **Feat(translate): `/tsl` — Gemini rewrites the session output in plain language, pinned under the reply.**
+  - One unified entry (`TranslationService`) serves three consumers: the `/tsl` command, an opt-in automatic post-turn hook, and a per-reply "译成人话" action. The model call rides this plugin's own auxiliary adapter route (`purpose:'translation'`), so it uses the same account pool — **a quota-exhausted account is cooled down and the retry lands on the next account automatically** — while staying out of conversation bindings, tools and concurrency slots.
+  - Defaults to `gemini-3.8-flash` · `high` (configurable, with a live-catalog fallback chain). Each result is persisted as a `plugin:agy-link/translation` session record and rendered as a labelled **"✨ Gemini translation" card anchored directly under the translated reply**; it survives reloads, keeps the original text behind a toggle, and never enters model-visible history. Historical turns get the same card from a hover action.
+  - Auto mode is **off by default** (`autoTranslate`, toggled in Settings → Antigravity, or per session with `/tsl auto on`). It reacts only to new `turn/end` completions, skips turns already produced by the translate model, throttles repeated runs, and never disturbs the agent loop when translation fails.
+  - Adapter: `purpose:'translation'` joins the auxiliary channel but keeps the caller's explicit reasoning effort (aux calls would otherwise pin Gemini to `low`) and is exempt from `allowAuxiliary`.
+
+### 中文
+
+- **新增(翻译)：`/tsl` —— 用 Gemini 把会话输出改写成大白话，并固定显示在该回复下方。**
+  - 统一入口 `TranslationService` 同时服务三个消费者：`/tsl` 命令、可选的"回合结束自动翻译"、以及每条回复上的「译成人话」按钮。模型调用走本插件自己的辅助通道（`purpose:'translation'`），复用同一账号池——**额度耗尽的账号会被冷却，重试自动落到下一个账号**，同时不绑会话、不暴露工具、不占并发槽。
+  - 默认 `gemini-3.8-flash` · `high`（可配置，并有目录回退链）。结果以 `plugin:agy-link/translation` 记录持久化，渲染为「✨ Gemini 译文」卡片并**锚定在被翻译回复的正下方**：重载后仍在、可展开对照原文、永不进入模型可见历史。历史回合通过悬浮按钮按需生成同一张卡片。
+  - 自动模式**默认关闭**（`autoTranslate`，设置 → Antigravity 开关，或 `/tsl auto on` 按会话覆盖）：只响应新的 `turn/end`，跳过翻译模型自己产出的回合，限制重复频率，翻译失败绝不影响 agent 主循环。
+  - 适配器：`purpose:'translation'` 纳入辅助通道，但保留调用方显式档位（否则辅助调用会把 Gemini 钉在 `low`），且不受 `allowAuxiliary` 限制。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.100...v0.5.0
+
 ## 0.4.100 (2026-11-02)
 
 ### English

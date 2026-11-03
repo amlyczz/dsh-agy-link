@@ -153,6 +153,31 @@ export interface PluginConfig {
   autoWarmup: boolean
   /** Models monitored/used for auto-warmup. Defaults to ['gemini-3.8-flash', 'claude-sonnet-4-6']. */
   warmupModels: readonly string[]
+  /**
+   * Auto "plain language" translation after every completed agent turn
+   * (default OFF). The finished turn's final answer is sent to the translate
+   * model and the result is persisted as a `plugin:agy-link/translation`
+   * session record, rendered as a labelled Gemini card under that reply.
+   */
+  autoTranslate: boolean
+  /** Model used for translation (default `gemini-3.8-flash`; falls back through the live catalog). */
+  translateModel: string
+  /** Reasoning effort for effort-capable translate models (default `high`). */
+  translateEffort: string
+  /** Target language wording passed to the translator prompt. */
+  translateTargetLanguage: string
+  /** Per-request source text cap; longer answers are chunked by paragraph. */
+  translateMaxChars: number
+  /** Output token cap for one translation call. */
+  translateMaxTokens: number
+  /** Watchdog for one translation call. */
+  translateTimeoutMs: number
+  /** Extra attempts after the first failed translation (each retry re-picks an account). */
+  translateRetries: number
+  /** Skip translating turns already produced by the translate model itself. */
+  translateSkipSameModel: boolean
+  /** Minimum spacing between automatic translations inside one session (0 = no throttle). */
+  translateMinIntervalMs: number
 }
 
 // Full fallback line-up, mined from the agy 1.1.13 binary. Serves the
@@ -243,6 +268,18 @@ export function defaultConfig(): PluginConfig {
     // explicitly with `autoWarmup: true` / DSH_AGY_AUTO_WARMUP=1.
     autoWarmup: false,
     warmupModels: ['gemini-3.8-flash', 'claude-sonnet-4-6'],
+    // Translation is strictly opt-in: it spends quota on every completed
+    // turn, so the default must never silently start billing a user.
+    autoTranslate: false,
+    translateModel: 'gemini-3.8-flash',
+    translateEffort: 'high',
+    translateTargetLanguage: '中文（简体）',
+    translateMaxChars: 8_000,
+    translateMaxTokens: 4_096,
+    translateTimeoutMs: 120_000,
+    translateRetries: 2,
+    translateSkipSameModel: true,
+    translateMinIntervalMs: 3_000,
   }
 }
 

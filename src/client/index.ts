@@ -9,6 +9,7 @@ import { en, es, NS, ptBR, zh, type AgyLocaleKey } from './locales.ts';
 import { installAutoExpandReasoning } from './reasoning.ts';
 import { installImageEnhancer } from './images.ts';
 import { installDecisionChips } from './decisions.ts';
+import { installTranslationUi } from './translate.ts';
 import { ensureScrollListener, disposeScrollListener, setOverlaySuspended } from './scroll-guard.ts';
 
 
@@ -98,6 +99,9 @@ interface StatusPayload {
 	hiddenModels?: readonly string[];
 	autoWarmup?: boolean;
 	warmupModels?: readonly string[];
+	autoTranslate?: boolean;
+	translateModel?: string;
+	translateEffort?: string;
 	bindings?: number;
 	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
 }
@@ -2299,6 +2303,18 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 							onClick: () => void setCfg('autoWarmup', status?.autoWarmup === false),
 						}, status?.autoWarmup !== false ? t('account.disable') : t('account.enable')),
 					),
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+						h('div', { style: { display: 'flex', flexDirection: 'column' } },
+							h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.autoTranslate')),
+							h('span', { style: S.muted }, t('config.autoTranslateDesc')),
+						),
+						h('button', {
+							type: 'button',
+							style: status?.autoTranslate === true ? S.segBtnActive : S.segBtn,
+							disabled: loadingAction === 'config:autoTranslate',
+							onClick: () => void setCfg('autoTranslate', status?.autoTranslate !== true),
+						}, status?.autoTranslate === true ? t('account.disable') : t('account.enable')),
+					),
 					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
 						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('models.label')),
 						catalogModels.length === 0
@@ -2583,6 +2599,18 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 
 	// Interactive user decision & choice chips (recovered working tree).
 	ctx.effect(() => installDecisionChips());
+	// Gemini plain-language translation: the persisted record card plus the
+	// per-reply "译成人话" action. Contained: a host that lacks uiConversation
+	// or the chat slots must keep every other plugin contribution (header badge,
+	// settings, toolviews) alive instead of failing the whole client apply.
+	ctx.effect(() => {
+		try {
+			return installTranslationUi(ctx as never, NS);
+		} catch (e) {
+			console.warn('[dsh-agy-link] translation UI unavailable:', e);
+			return () => {};
+		}
+	});
 
 	// Custom Antigravity brand icon inside Settings dialog nav list
 	ctx.effect(() => installSettingsNavIcon(ctx, () => locale.bind(NS)('section.label')));

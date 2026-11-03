@@ -1030,10 +1030,16 @@ export class AgyAdapter extends LlmAdapter {
     if (!bin) throw new LlmError('agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install', Err.AGY_NOT_INSTALLED)
     const isReview = typeof options.system === 'string' && options.system.includes('REVIEW_POLICY')
     const isTitle = options.purpose === 'session-title'
+    // Translation (`purpose:'translation'`, this plugin's own auxiliary route):
+    // rides the aux channel so it joins no conversation binding, sees no tools
+    // and runs in plan mode, but keeps the caller's explicit reasoning effort
+    // (aux calls are otherwise pinned to 'low') and is never gated by
+    // `allowAuxiliary` — it is a user-invoked feature, not a background helper.
+    const isTranslate = (options.purpose as string | undefined) === 'translation'
     // Title calls are aux, but must not be forced into plan mode (that drops the
     // length/format constraints): see the mode selection below.
-    const isAux = options.purpose === 'compaction' || isTitle || isReview
-    if (isAux && !isReview && !cfg.allowAuxiliary) {
+    const isAux = options.purpose === 'compaction' || isTitle || isReview || isTranslate
+    if (isAux && !isReview && !isTranslate && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
     // Prefer direct native agy_tool cards when the host registered the mirror
@@ -1139,7 +1145,7 @@ export class AgyAdapter extends LlmAdapter {
     // ids, but validate explicit reasoning efforts against known entries.
     let effort: string | undefined
     if (isGemini) {
-      if (isAux) {
+      if (isAux && !isTranslate) {
         effort = 'low'
       } else if (options.reasoningEffort !== undefined) {
         const wanted = String(options.reasoningEffort)

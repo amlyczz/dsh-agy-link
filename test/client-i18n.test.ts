@@ -39,7 +39,7 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
   const dictionaries = new Map<string, Record<string, string>>()
   const cleanup: (() => void)[] = []
   const subscribers = new Set<() => void>()
-  const registeredSlots: { options: { id?: string; key?: string; label?: string | (() => string); locale?: string } }[] = []
+  const registeredSlots: { options: { name?: string; id?: string; key?: string; label?: string | (() => string); locale?: string } }[] = []
   const locale = {
     addLanguage(language: { id: string; label: string; fallback: string }) {
       assert.equal(catalog.has(language.id), false)
@@ -66,7 +66,7 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
     effect(callback: () => (() => void)) { cleanup.push(callback()) },
     slots: {
       inject(_name: string, callback: () => (() => void)) { cleanup.push(callback()) },
-      register(options: { id?: string; key?: string; label?: string | (() => string); locale?: string }) { registeredSlots.push({ options }); return () => {} },
+      register(options: { name?: string; id?: string; key?: string; label?: string | (() => string); locale?: string }) { registeredSlots.push({ options }); return () => {} },
     },
   }
   // Cordis inject entries are hard deps (issue #24): locale must be listed
@@ -77,13 +77,16 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
   assert.equal(dictionaries.size, 4)
   // conversation.session.header.actions + settings.section + plugins.bundle.config
   // + plugins.row.config + agy_tool + run_code toolviews
-  assert.equal(registeredSlots.length, 6)
+  // + conversation.chat.node(agy-translation) + conversation.chat.assistant-actions
+  assert.equal(registeredSlots.length, 8)
   assert.equal(registeredSlots[0]!.options.locale, 'agy-link')
   assert.equal(registeredSlots[1]!.options.id, 'agy-link')
   assert.equal(registeredSlots[2]!.options.key, 'dsh-agy-link')
   assert.equal(registeredSlots[3]!.options.key, 'dsh-agy-link#agy-link')
   assert.equal(registeredSlots[4]!.options.id, 'agy-tool-view')
   assert.equal(registeredSlots[5]!.options.id, 'agy-run-code-view')
+  assert.equal(registeredSlots[6]!.options.key, 'agy-translation')
+  assert.equal(registeredSlots[7]!.options.name, 'conversation.chat.assistant-actions')
   const t = locale.bind('agy-link')
   locale.setLocale('pt-BR'); assert.equal(t('account.add'), 'Adicionar conta Google')
   locale.setLocale('es'); assert.equal(t('account.add'), 'Añadir cuenta de Google')

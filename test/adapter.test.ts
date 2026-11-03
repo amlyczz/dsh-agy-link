@@ -654,6 +654,33 @@ test('aux calls rejected when allowAuxiliary is false', async () => {
   )
 })
 
+test('translation calls ride the aux channel: plan mode, explicit effort, no session binding', async () => {
+  // Regression for the /tsl route: `purpose:'translation'` must behave like an
+  // auxiliary call (no conversation binding, no tools, plan mode) while keeping
+  // the caller's reasoning effort — aux calls would otherwise force Gemini to
+  // 'low' — and it must not be blocked by allowAuxiliary.
+  const { adapter, store } = makeAdapter({ allowAuxiliary: false })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-tsl.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  const chunks = await collect(
+    adapter.stream(
+      opts([msg('user', 'translate this')], {
+        purpose: 'translation' as never,
+        reasoningEffort: 'high' as never,
+        sessionId: 'sess-tsl' as never,
+      }),
+    ),
+  )
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  assert.equal(argv[argv.indexOf('--mode') + 1], 'plan', 'aux translation must run in plan mode')
+  assert.equal(argv[argv.indexOf('--effort') + 1], 'high', 'explicit effort must survive the aux path')
+  assert.equal(store.get('sess-tsl'), undefined, 'aux translation must not create a conversation binding')
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  assert.notEqual(finish.reason.kind, 'error')
+})
+
 test('compaction prompt flattens the whole history', async () => {
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'

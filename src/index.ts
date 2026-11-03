@@ -8,12 +8,15 @@ import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { dshHome, overridesPath, readOverrides, resolveConfig, stateDir } from './common/config.ts'
-import { PLUGIN_ID, PROVIDER_ID, type PluginConfig } from './common/types.ts'
+import { Err, PLUGIN_ID, PROVIDER_ID, type PluginConfig } from './common/types.ts'
 import type { ManagedAccount } from './common/pool-types.ts'
 import { AgyAdapter } from './host/adapter.ts'
 import { defineAgyAskTool } from './host/ask-tool.ts'
 import { AuthHelper } from './host/auth.ts'
 import { agyCommandDefinition } from './host/commands.ts'
+import { TranslationService, TRANSLATION_RECORD_TYPE, type TranslationRecord } from './host/translate.ts'
+import { tslCommandDefinition } from './host/tsl-command.ts'
+import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
@@ -407,6 +410,114 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     },
   })
 
+  // ---- plain-language translation (spec: .spec/translation.md) ----
+  // One service serves /tsl, the automatic post-turn hook and the per-message
+  // button. The model call is a hand-built auxiliary request against this
+  // plugin's own adapter (`purpose:'translation'`), which is what makes account
+  // selection, quota cooldowns and per-account proxy/HOME identical to real
+  // turns: a spent account is cooled down by the adapter and the retry lands
+  // on the next one.
+  type SessionLike = {
+    id?: string
+    log?: readonly { type: string; seq?: number; data?: unknown }[]
+    events?: readonly { type: string; seq?: number; data?: unknown }[]
+    header?: { cwd?: string }
+  }
+  type SessionsServiceLike = { get(id: unknown): SessionLike | undefined }
+  const sessionsSvc = (): SessionsServiceLike | undefined =>
+    (ctx.get('sessions') as SessionsServiceLike | undefined) ?? ((ctx as unknown as { sessions?: SessionsServiceLike }).sessions)
+  const sessionAuto = new Map<string, boolean>()
+
+  type AppendPluginRecord = (session: unknown, type: string, data: unknown) => number
+  let appendPluginRecordPromise: Promise<AppendPluginRecord | null> | null = null
+  const loadAppendPluginRecord = (): Promise<AppendPluginRecord | null> => {
+    if (appendPluginRecordPromise === null) {
+      appendPluginRecordPromise = (async () => {
+        try {
+          // Non-literal specifier: keeps this optional peer out of the build's
+          // static resolution while still using the host-provided instance.
+          const spec = '@deepseek-ai/dsh-session'
+          const mod = (await import(spec)) as { appendPluginRecord?: AppendPluginRecord }
+          return typeof mod.appendPluginRecord === 'function' ? mod.appendPluginRecord : null
+        } catch (e) {
+          log('translation records unavailable: ' + String(e))
+          return null
+        }
+      })()
+    }
+    return appendPluginRecordPromise
+  }
+
+  const translation = new TranslationService({
+    cfg: getConfig,
+    catalog: () => catalog.get(),
+    getSession: (id) => sessionsSvc()?.get(id),
+    autoEnabled: (id) => sessionAuto.get(id) ?? getConfig().autoTranslate,
+    log,
+    run: async (req) => {
+      const startedAt = Date.now()
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(new Error('translation timed out after ' + req.timeoutMs + 'ms')), Math.max(1_000, req.timeoutMs))
+      timer.unref?.()
+      const signal = req.signal === undefined ? controller.signal : AbortSignal.any([req.signal, controller.signal])
+      try {
+        const messages = [createUserMessage({ content: [{ type: 'text', text: req.prompt }], source: { kind: 'user' } })]
+        // `purpose:'translation'` is this plugin's own auxiliary route (see
+        // AgyAdapter.stream): no conversation binding, no tools, plan mode.
+        const options = {
+          provider: PROVIDER_ID,
+          model: req.model,
+          ...(req.sessionId === undefined ? {} : { sessionId: req.sessionId }),
+          messages,
+          maxTokens: req.maxTokens,
+          ...(req.effort === undefined || req.effort === '' ? {} : { reasoningEffort: req.effort }),
+          purpose: 'translation',
+          signal,
+        } as unknown as GenerateOptions
+        let text = ''
+        let failure: { code?: string; message?: string } | null = null
+        const stream = ctx.llm.stream(options) as AsyncIterable<StreamChunk>
+        for await (const chunk of stream) {
+          if (chunk.type === 'text-delta') {
+            text += chunk.text
+          } else if (chunk.type === 'finish') {
+            const reason = chunk.reason
+            if (reason.kind === 'error' || reason.kind === 'aborted') {
+              const f = (reason as { failure?: { code?: string; message?: string } }).failure
+              failure = { ...(f?.code === undefined ? {} : { code: f.code }), ...(f?.message === undefined ? {} : { message: f.message }) }
+            }
+          }
+        }
+        const durationMs = Date.now() - startedAt
+        if (failure !== null) {
+          return { ok: false, text: text.trim(), durationMs, ...(failure.code === undefined ? {} : { code: failure.code }), ...(failure.message === undefined ? {} : { error: failure.message }) }
+        }
+        const trimmed = text.trim()
+        if (trimmed === '') {
+          return { ok: false, text: '', durationMs, code: Err.AGY_ERROR, error: 'the translate model returned no text' }
+        }
+        return { ok: true, text: trimmed, durationMs }
+      } catch (e) {
+        const err = e as { code?: string; message?: string }
+        return { ok: false, text: '', durationMs: Date.now() - startedAt, ...(err.code === undefined ? {} : { code: err.code }), error: err.message ?? String(e) }
+      } finally {
+        clearTimeout(timer)
+      }
+    },
+    appendRecord: async (sessionId, record: TranslationRecord) => {
+      const session = sessionsSvc()?.get(sessionId)
+      if (session === undefined) return null
+      const append = await loadAppendPluginRecord()
+      if (append === null) return null
+      try {
+        return append(session, TRANSLATION_RECORD_TYPE, record)
+      } catch (e) {
+        log('failed to persist translation record: ' + String(e))
+        return null
+      }
+    },
+  })
+
   const setOverride = (key: string, value: unknown): void => {
     const file = overridesPath()
     const current = readOverrides(file)
@@ -498,6 +609,53 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       },
     }),
   )
+
+  // ---- /tsl command (Gemini plain-language translation) ----
+  ctx.commands.register(
+    tslCommandDefinition({
+      cfg: getConfig,
+      translate: () => translation,
+      setOverride,
+      sessionAuto: {
+        get: (id) => sessionAuto.get(id),
+        set: (id, value) => {
+          if (value === undefined) sessionAuto.delete(id)
+          else sessionAuto.set(id, value)
+        },
+      },
+      sessions: () => sessionsSvc(),
+    }),
+  )
+
+  // ---- automatic post-turn translation ----
+  // Reacts to the durable turn boundary, never to a render event. The append
+  // of the translation record happens after the awaited model call, so it can
+  // never reenter the session's publication boundary (Session.append refuses
+  // that); a listener must not append synchronously here.
+  ctx.effect(() => {
+    const unlisten = ctx.on(
+      'session/event',
+      (subject: unknown, event: unknown) => {
+        try {
+          const ev = event as { type?: string; data?: { turn?: unknown; reason?: { kind?: string } } } | null
+          if (ev === null || ev.type !== 'turn/end') return
+          if (ev.data?.reason?.kind !== 'completed') return
+          const turn = ev.data?.turn
+          if (typeof turn !== 'number') return
+          const session = subject as { id?: unknown } | null
+          const id = session?.id === undefined || session?.id === null ? '' : String(session.id)
+          if (id === '') return
+          void translation.autoTranslateTurn(id, turn).catch(() => undefined)
+        } catch {
+          // contained: a translation failure must never disturb the agent loop
+        }
+      },
+      { global: true },
+    )
+    return () => {
+      if (typeof unlisten === 'function') unlisten()
+    }
+  })
 
   // ---- tool registrations (agy_ask + the agy_tool mirror) ----
   // The tools service is reached through a reactive ctx.inject sub-fiber:
@@ -625,6 +783,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           hiddenModels: cfg.hiddenModels,
           autoWarmup: cfg.autoWarmup,
           warmupModels: cfg.warmupModels,
+          autoTranslate: cfg.autoTranslate,
+          translateModel: cfg.translateModel,
+          translateEffort: cfg.translateEffort,
+          translateTargetLanguage: cfg.translateTargetLanguage,
+          translateState: { pending: translation.pendingFor(), stats: translation.stats() },
           bindings: Object.keys(store.all()).length,
               lastRun,
         })
@@ -1000,7 +1163,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
-        const allowed = ['permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels']
+        const allowed = [
+          'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
+          'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateMinIntervalMs',
+        ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
           return
@@ -1022,6 +1188,89 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
       })()
     }})
+    // ---- translation surface (client card + history button) ----
+    reg({ kind: 'exact', path: '/plugins/agy-link/translate', handler: (req, res) => {
+      void (async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req, true)
+        if (body.__invalidJson === true) {
+          sendJson(res as RawRes, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const text = typeof body.text === 'string' ? body.text : ''
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+        const messageId = typeof body.messageId === 'string' ? body.messageId : ''
+        const turn = typeof body.turn === 'number' && Number.isFinite(body.turn) ? body.turn : undefined
+        const force = body.force === true
+        const full = body.full === true
+        const persist = body.persist !== false
+        const model = typeof body.model === 'string' && body.model.trim() !== '' ? body.model.trim() : undefined
+        const effort = typeof body.effort === 'string' && body.effort.trim() !== '' ? body.effort.trim() : undefined
+        const lang = typeof body.lang === 'string' && body.lang.trim() !== '' ? body.lang.trim() : undefined
+        const opts = {
+          force,
+          full,
+          persist,
+          ...(model === undefined ? {} : { model }),
+          ...(effort === undefined ? {} : { effort }),
+          ...(lang === undefined ? {} : { targetLanguage: lang }),
+        }
+        try {
+          let result
+          if (text.trim() !== '') {
+            result = await translation.translate({
+              text,
+              force,
+              ...(model === undefined ? {} : { model }),
+              ...(effort === undefined ? {} : { effort }),
+              ...(lang === undefined ? {} : { targetLanguage: lang }),
+            })
+          } else if (sessionId !== '' && messageId !== '') {
+            result = await translation.translateMessage(sessionId, messageId, opts)
+          } else if (sessionId !== '' && turn !== undefined) {
+            result = await translation.translateTurn(sessionId, turn, opts)
+          } else if (sessionId !== '') {
+            result = await translation.translateLastTurn(sessionId, opts)
+          } else {
+            sendJson(res as RawRes, 400, { error: 'text, or sessionId (+ turn/messageId), is required' })
+            return
+          }
+          const status =
+            result.ok
+              ? 200
+              : result.code === 'TRANSIENT'
+                ? 409
+                : result.code === 'TURN_NOT_FOUND' || result.code === 'MESSAGE_NOT_FOUND' || result.code === 'EMPTY_TEXT'
+                  ? 400
+                  : 502
+          sendJson(res as RawRes, status, result)
+        } catch (e) {
+          sendJson(res as RawRes, 500, { error: String(e) })
+        }
+      })()
+    }})
+    reg({ kind: 'exact', path: '/plugins/agy-link/translate/pending', handler: (req, res) => {
+      const rawUrl = (req as { url?: unknown }).url
+      let session = ''
+      if (typeof rawUrl === 'string') {
+        const m = /[?&]session=([^&]+)/.exec(rawUrl)
+        if (m !== null) {
+          try {
+            session = decodeURIComponent(m[1] ?? '')
+          } catch {
+            session = m[1] ?? ''
+          }
+        }
+      }
+      sendJson(res as RawRes, 200, {
+        items: translation.pendingFor(session === '' ? undefined : session),
+        stats: translation.stats(),
+      })
+    }})
+
     reg({ kind: 'exact', path: '/plugins/agy-link/qr', handler: (_req, res) => {
       void (async () => {
         const st = auth.status()

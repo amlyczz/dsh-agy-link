@@ -149,6 +149,16 @@ export function resolveConfig(
     suppressAgyAutoUpdate: asBool(get('suppressAgyAutoUpdate')) ?? base.suppressAgyAutoUpdate,
     autoWarmup: asBool(get('autoWarmup')) ?? base.autoWarmup,
     warmupModels: asStringArray(get('warmupModels')) ?? base.warmupModels,
+    autoTranslate: asBool(get('autoTranslate')) ?? base.autoTranslate,
+    translateModel: asString(get('translateModel')) ?? base.translateModel,
+    translateEffort: asString(get('translateEffort')) ?? base.translateEffort,
+    translateTargetLanguage: asString(get('translateTargetLanguage')) ?? base.translateTargetLanguage,
+    translateMaxChars: asNum(get('translateMaxChars')) ?? base.translateMaxChars,
+    translateMaxTokens: asNum(get('translateMaxTokens')) ?? base.translateMaxTokens,
+    translateTimeoutMs: asNum(get('translateTimeoutMs')) ?? base.translateTimeoutMs,
+    translateRetries: asNum(get('translateRetries')) ?? base.translateRetries,
+    translateSkipSameModel: asBool(get('translateSkipSameModel')) ?? base.translateSkipSameModel,
+    translateMinIntervalMs: asNum(get('translateMinIntervalMs')) ?? base.translateMinIntervalMs,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -231,5 +241,12 @@ export function resolveConfig(
     const wm = asStringArray(env.DSH_AGY_WARMUP_MODELS.split(','))
     if (wm) cfg.warmupModels = wm
   }
+  if (env.DSH_AGY_AUTO_TRANSLATE !== undefined) {
+    const at = asBool(env.DSH_AGY_AUTO_TRANSLATE)
+    if (at !== undefined) cfg.autoTranslate = at
+  }
+  if (env.DSH_AGY_TRANSLATE_MODEL) cfg.translateModel = env.DSH_AGY_TRANSLATE_MODEL
+  if (env.DSH_AGY_TRANSLATE_EFFORT) cfg.translateEffort = env.DSH_AGY_TRANSLATE_EFFORT
+  if (env.DSH_AGY_TRANSLATE_LANG) cfg.translateTargetLanguage = env.DSH_AGY_TRANSLATE_LANG
   return cfg
 }
