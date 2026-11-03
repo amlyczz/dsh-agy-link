@@ -496,6 +496,10 @@ const RETRYABLE_CODES = new Set<string>([
   Err.AUTH,
   Err.TIMEOUT,
   Err.PROCESS_EXIT,
+  // Not an account problem and not deterministic either: the model finished
+  // without any text (an empty candidate). Re-asking is the only cure, and the
+  // second attempt almost always returns prose.
+  Err.EMPTY_RESPONSE,
 ])
 
 function failureText(code: string | undefined, message: string | undefined): string {
@@ -510,6 +514,8 @@ function failureText(code: string | undefined, message: string | undefined): str
     case Err.RATE_LIMIT:
     case Err.QUOTA:
       return 'Antigravity quota exhausted on every available account'
+    case Err.EMPTY_RESPONSE:
+      return 'the model returned nothing this time — retry'
     default:
       return 'translation failed'
   }
@@ -693,7 +699,10 @@ export class TranslationService {
       }
       if (last.ok) return last
       if (last.code === 'ABORTED' || (last.code !== undefined && !RETRYABLE_CODES.has(last.code))) break
-      if (attempt < max) await delay(150 * (attempt + 1), signal)
+      // An empty candidate is not a queue/account stall, so a token delay would
+      // just re-ask into the same flake: give the model a beat before retrying.
+      const pause = last.code === Err.EMPTY_RESPONSE ? 900 * (attempt + 1) : 150 * (attempt + 1)
+      if (attempt < max) await delay(pause, signal)
     }
     return last
   }

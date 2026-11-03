@@ -488,6 +488,14 @@ export const Err = {
   AUX_DISABLED: 'AUX_DISABLED',
   BUSY: 'BUSY',
   /**
+   * The model finished cleanly but emitted no visible text at all. agy/Gemini
+   * occasionally returns an empty candidate — observed as a normal `stop`
+   * envelope with no text block after ~25s — so this is kept distinct from the
+   * deterministic AGY_ERROR failures: it is transient, and the bounded retry
+   * almost always gets text on the next attempt.
+   */
+  EMPTY_RESPONSE: 'EMPTY_RESPONSE',
+  /**
    * Canonical provider-neutral code for context window overflow.
    * Enables DSH agent loop to trigger context auto-compaction rather than aborting.
    */

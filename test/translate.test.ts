@@ -229,6 +229,23 @@ test('empty text short-circuits without a model call', async () => {
   assert.equal(calls.length, 0)
 })
 
+test('an empty model response is retried and the retry wins', async () => {
+  // Regression: agy/Gemini occasionally finishes a clean `stop` with no text at
+  // all (25s, no error envelope). That used to surface as a generic AGY_ERROR
+  // and the user just saw a failed translation; it is transient, so it now has
+  // its own code and rides the bounded retry.
+  const { service, calls } = makeService({
+    runs: [
+      { ok: false, code: 'EMPTY_RESPONSE', error: 'the translate model returned no text (finish: stop)' },
+      { ok: true, text: '人话版' },
+    ],
+  })
+  const res = await service.translate({ text: '一段黑话' })
+  assert.equal(res.ok, true)
+  assert.equal(res.text, '人话版')
+  assert.equal(calls.length, 2, 'the empty response must be re-asked once')
+})
+
 test('translateTurn appends a durable record anchored at the final message', async () => {
   const { service, records } = makeService({ runs: [{ ok: true, text: '人话版' }] })
   const res = await service.translateTurn('s1', 1)

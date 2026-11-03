@@ -479,12 +479,14 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         } as unknown as GenerateOptions
         let text = ''
         let failure: { code?: string; message?: string } | null = null
+        let finishKind: string | undefined
         const stream = ctx.llm.stream(options) as AsyncIterable<StreamChunk>
         for await (const chunk of stream) {
           if (chunk.type === 'text-delta') {
             text += chunk.text
           } else if (chunk.type === 'finish') {
             const reason = chunk.reason
+            finishKind = reason.kind
             if (reason.kind === 'error' || reason.kind === 'aborted') {
               const f = (reason as { failure?: { code?: string; message?: string } }).failure
               failure = { ...(f?.code === undefined ? {} : { code: f.code }), ...(f?.message === undefined ? {} : { message: f.message }) }
@@ -497,7 +499,12 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         }
         const trimmed = text.trim()
         if (trimmed === '') {
-          return { ok: false, text: '', durationMs, code: Err.AGY_ERROR, error: 'the translate model returned no text' }
+          // A clean stop with zero text is agy/Gemini returning an empty
+          // candidate. Report it as its own (retryable) code, and leave the
+          // finish kind + model in the host log so a recurrence is diagnosable.
+          const detail = finishKind === undefined ? '' : ' (finish: ' + finishKind + ')'
+          log('translation produced no text: model=' + req.model + ' effort=' + (req.effort === undefined || req.effort === '' ? '-' : req.effort) + ' durationMs=' + durationMs + detail)
+          return { ok: false, text: '', durationMs, code: Err.EMPTY_RESPONSE, error: 'the translate model returned no text' + detail }
         }
         return { ok: true, text: trimmed, durationMs }
       } catch (e) {
