@@ -8,7 +8,8 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { utf8Bytes } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
 import { AccountPoolManager } from '../src/host/pool.ts'
 import { SessionStore } from '../src/host/sessions.ts'
@@ -750,6 +751,51 @@ test('buildDigest bounds output and keeps newest turns', () => {
   assert.ok(full.includes('turn-three'))
   assert.ok(full.indexOf('turn-one') < full.indexOf('turn-two'))
   assert.ok(full.indexOf('turn-two') < full.indexOf('turn-three'), 'historical turns must precede the latest task')
+})
+
+test('buildDigest keeps the head and tail of tool results, not the payload (80/20)', () => {
+  // A history budget is eaten by tool payloads, not by asks and answers. Tool
+  // result lines are now middle-elided, so the same budget carries more prose:
+  // the verdict at the end of a command stays reachable, the dump does not.
+  const dump = 'BEGIN-' + 'x'.repeat(30_000) + '-EXIT CODE 0'
+  const msgs = [
+    msg('user', 'run the build'),
+    {
+      role: 'user',
+      content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: dump }] }],
+      source: { kind: 'tool', callId: 'c1' },
+    } as unknown as Message,
+    msg('assistant', 'The build passed and I moved on.'),
+  ]
+  const core = buildDigest(msgs, 0, 40_000, { maxLineBytes: 40_000 })
+  assert.match(core, /Tool result: BEGIN-/, 'the tool line is still present, head first')
+  assert.match(core, /EXIT CODE 0/, 'the tail verdict survives')
+  assert.match(core, /\[elided \d+B\]/, 'the middle is elided with a marker')
+  const start = core.indexOf('Tool result: ')
+  const end = core.lastIndexOf('EXIT CODE 0') + 'EXIT CODE 0'.length
+  const toolSegment = core.slice(start, end)
+  assert.ok(utf8Bytes(toolSegment) <= 900, 'one tool line is capped near 800 B, got ' + utf8Bytes(toolSegment))
+  assert.ok(core.includes('The build passed and I moved on.'), 'prose is never elided')
+
+  // Same budget with the old giant tool cap keeps far less prose.
+  const legacy = buildDigest(msgs, 0, 40_000, { maxLineBytes: 40_000, toolLineBytes: 40_000 })
+  assert.ok(utf8Bytes(legacy) > utf8Bytes(core), 'the elided digest is the smaller one')
+})
+
+test('elideMiddle bounds the result and keeps both ends', () => {
+  const text = 'AAAA' + 'm'.repeat(5_000) + 'ZZZZ'
+  const out = elideMiddle(text, 400)
+  assert.ok(utf8Bytes(out) <= 400, 'must respect the ceiling')
+  assert.ok(out.startsWith('AAAA'))
+  assert.ok(out.endsWith('ZZZZ'))
+  assert.match(out, /\[elided \d+B\]/)
+  assert.equal(elideMiddle('short', 400), 'short')
+  assert.equal(elideMiddle('anything', 0), '')
+  // CJK must not be cut mid-code point.
+  const cjk = '中'.repeat(2_000)
+  const cut = elideMiddle(cjk, 300)
+  assert.ok(!cut.includes('\uFFFD'))
+  assert.ok(utf8Bytes(cut) <= 300)
 })
 
 test('buildDigest never lets tool-result bulk eat the live task (issue #35)', () => {

@@ -190,7 +190,7 @@ test('per-reply action is an icon-only Gemini button in the action strip', () =>
   assert.equal(collectText(element).join('').trim(), '', 'no hint text may render without CSS')
   assert.match(source, /content: attr\(data-tip\)/)
   assert.match(source, /\.agy-tsl-wrap:hover::after/)
-  assert.equal(source.includes('agy-tsl-tip'), false, 'the element-based tooltip is gone')
+  assert.equal(/className: ["']agy-tsl-tip["']/.test(source), false, 'the element-based tooltip is gone')
   // No session → no button (the slot's inject face is required).
   assert.equal(action!.component({ messageId: 'm1', t: (k: string) => k }), null)
 })

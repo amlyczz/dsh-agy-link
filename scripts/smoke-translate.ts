@@ -13,6 +13,7 @@ import { RunRegistry } from '../src/host/recording.ts'
 import { buildTranslationPrompt } from '../src/host/translate.ts'
 import { defaultConfig } from '../src/common/types.ts'
 import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -29,7 +30,11 @@ const adapter = new AgyAdapter({
   log: (m: string) => console.error('[agy]', m),
 })
 
-const source = process.argv[2] ?? '构建完成，退出码 0。\n\n- dist/index.js — 1.4M\n- 工作区干净，dist/ 为 .gitignore 产物，无待提交变更。'
+// argv: [source text] | --file <path> | (nothing = built-in sample)
+const fromFile = process.argv[2] === '--file' && process.argv[3] !== undefined
+const source = fromFile
+  ? readFileSync(process.argv[3]!, 'utf8')
+  : process.argv[2] ?? '构建完成，退出码 0。\n\n- dist/index.js — 1.4M\n- 工作区干净，dist/ 为 .gitignore 产物，无待提交变更。'
 const prompt = buildTranslationPrompt(source, '中文（简体）', 8000)
 
 const options = {

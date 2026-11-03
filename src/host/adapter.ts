@@ -327,6 +327,32 @@ export function trimToUtf8Bytes(s: string, maxBytes: number, note = true): strin
   return s.slice(0, lo) + marker
 }
 
+/**
+ * Keep the head and the tail of a long payload, dropping the middle. Command
+ * output and file dumps put the verdict at one end and the setup at the other,
+ * so half the bytes buy nearly all of the signal — the 80/20 cut for tool
+ * results inside a history digest.
+ *
+ * @param text - raw payload.
+ * @param capBytes - UTF-8 byte ceiling for the returned text.
+ * @returns the payload unchanged when it already fits, else head + marker + tail.
+ */
+export function elideMiddle(text: string, capBytes: number): string {
+  if (capBytes <= 0) return ''
+  if (utf8Bytes(text) <= capBytes) return text
+  const headBytes = Math.max(1, Math.floor((capBytes - 24) / 2))
+  const marker = '\n…[elided ' + (utf8Bytes(text) - capBytes) + 'B]…\n'
+  const head = trimToUtf8Bytes(text, headBytes, false)
+  // Walk back from the end until the tail fits its own half.
+  const tailBytes = headBytes
+  let tailStart = text.length
+  for (let i = text.length; i >= 0; i--) {
+    if (utf8Bytes(text.slice(i)) > tailBytes) break
+    tailStart = i
+  }
+  return head + marker + text.slice(tailStart)
+}
+
 /** agy 1.4.x silently truncates a single user message at 192,000 UTF-8 bytes
  * (measured: a 300 KB ASCII prompt kept exactly 192,000 B; a 490 KB CJK prompt
  * kept 191,998 B) and the cut lands on the TAIL. Every prompt we build must
@@ -365,6 +391,15 @@ export interface DigestBudget {
   maxBytes?: number
   /** Per-line byte ceiling so one huge tool result cannot eat the budget. */
   maxLineBytes?: number
+  /**
+   * Per-line byte ceiling for TOOL RESULT lines specifically. Tool results are
+   * payloads (file dumps, log tails, search hits), not decisions, and they are
+   * what normally eats a history budget: with one cap for everything a couple of
+   * `cat`-style outputs crowd out the asks and answers that carry the thread.
+   * Defaults to `min(800, maxLineBytes)` — the 80/20 rule: keep the head+tail
+   * verdict of every tool call, spend the rest of the budget on prose.
+   */
+  toolLineBytes?: number
   /** Include the reserved "User: <latest task>" line (default true). */
   includeTaskLine?: boolean
 }
@@ -377,6 +412,7 @@ export function buildDigest(
 ): string {
   const includeTaskLine = budgetOpts.includeTaskLine !== false
   const perLineCap = budgetOpts.maxLineBytes
+  const toolLineCap = budgetOpts.toolLineBytes ?? (perLineCap === undefined ? 800 : Math.min(800, perLineCap))
   const capLine = (line: string): string =>
     perLineCap !== undefined && utf8Bytes(line) > perLineCap
       ? trimToUtf8Bytes(line, perLineCap)
@@ -393,7 +429,11 @@ export function buildDigest(
     const text = stripNulBytes(textOf(m))
     if (text === '') continue
     if (taskLine !== '' && !isToolResultMessage(m) && m.role === 'user' && text === taskText) continue
-    otherLines.push(capLine(digestLabel(m) + text))
+    otherLines.push(
+      isToolResultMessage(m)
+        ? capLine(digestLabel(m) + elideMiddle(text, toolLineCap))
+        : capLine(digestLabel(m) + text),
+    )
   }
 
   let budget = maxChars

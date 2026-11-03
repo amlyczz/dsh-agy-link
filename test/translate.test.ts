@@ -56,12 +56,24 @@ const log: SessionEventLike[] = [
   assistant(2, 2, '第二个回合的答案。'),
 ]
 
-test('prompt carries language, rules and the source text', () => {
+test('prompt stays a one-liner: plain words, no format mandate, source fenced', () => {
   const p = buildTranslationPrompt('原文内容', '中文（简体）', 4000)
-  assert.match(p, /人话翻译器/)
+  assert.match(p, /通俗易懂/)
   assert.match(p, /中文（简体）/)
-  assert.match(p, /不新增事实/)
-  assert.match(p, /<output>\n原文内容\n<\/output>/)
+  assert.match(p, /别用行话/)
+  assert.match(p, /别改原意/)
+  assert.match(p, /<content>\n原文内容\n<\/content>/)
+  // The rule list that produced headings and bullet lists is gone.
+  assert.doesNotMatch(p, /结论先行/)
+  assert.doesNotMatch(p, /输出 Markdown/)
+  assert.doesNotMatch(p, /^\d\. /m)
+  // Short source: no length talk at all. Long source: one budget hint, still no format.
+  assert.doesNotMatch(p, /有点长/)
+  const long = buildTranslationPrompt('x'.repeat(5_000), '中文（简体）', 8_000)
+  assert.match(long, /挑重点讲清楚/)
+  assert.doesNotMatch(long, /输出 Markdown/)
+  // Instructions stay far shorter than the material they carry.
+  assert.ok(p.split('\n')[0]!.length < 200, 'the instruction is one short line')
 })
 
 test('chunkText never exceeds the cap and keeps every paragraph', () => {

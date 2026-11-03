@@ -362,21 +362,24 @@ export function findTranslationRecord(
 export function buildTranslationPrompt(text: string, targetLanguage: string, maxChars: number): string {
   const lang = targetLanguage.trim() === '' ? '中文（简体）' : targetLanguage.trim()
   const limit = Math.max(MIN_TEXT_LIMIT, Math.round(maxChars))
-  return [
-    '你是「人话翻译器」。把下面 AI 助手的输出改写成' + lang + '的大白话。',
-    '规则：',
-    '1. 结论先行：第一段用 1-3 句说清「做了什么、结果如何」。',
-    '2. 去黑话：把术语、缩写、内部变量名、代码路径换成日常说法；必须保留的专有名词用「中文（English）」并列一次。',
-    '3. 不新增事实：原文没有的结论、数字、承诺一律不许出现；拿不准就写「不确定」。',
-    '4. 保留可执行信息：文件名、命令、报错、待办清单用列表保留，但每条后面补一句白话解释。',
-    '5. 不复述原文，不加前言后语，不道歉，不提问。',
-    '6. 如果原文已经是大白话，只输出「原文已经是人话」再加一句总结。',
-    '输出 Markdown，不超过 ' + limit + ' 字。',
+  // Deliberately one short line. The earlier rule list ("结论先行 / 去黑话 /
+  // 保留可执行信息 / 输出 Markdown …") made the model write a book report:
+  // headings, bullet lists, formal register. What the reader wants is the same
+  // thing explained out loud, so the only constraints kept are the ones that
+  // stop it from drifting: plain words, keep the meaning, invent nothing, and
+  // answer with the explanation alone. A long source gets one budget hint — the
+  // 80/20 cut — instead of a format mandate.
+  const long = text.length > Math.min(2_000, Math.floor(limit / 4))
+  const lines = [
+    '用' + lang + '把下面这段内容通俗易懂地讲一遍，就像跟同事随口解释一样：用大白话、短句，别用行话和缩写，别写标题或分点列表，别改原意、别加原文没有的内容。',
+    ...(long ? ['原文有点长，挑重点讲清楚就行，没提到的细节不用硬补。'] : []),
+    '只输出这段讲解本身。',
     '',
-    '<output>',
+    '<content>',
     text,
-    '</output>',
-  ].join('\n')
+    '</content>',
+  ]
+  return lines.join('\n')
 }
 
 /**
