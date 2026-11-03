@@ -12,7 +12,11 @@
 
 - **Client polish, same release.** The settings panel drops the permission-mode and reasoning-effort rows — the permission mode stays `skip` (still overridable by config / `DSH_AGY_MODE`, e.g. headless runs) and the reasoning effort is now chosen per model in the session **model menu**, defaulting to `high` and mapping 1:1 to agy's levels. Auto-warmup and auto-translate toggles use native `[ On | Off ]` segmented capsule button groups matching pool scheduling, cleanly demonstrating that auto-translation is disabled by default.
 
-- **Fix(client): closed-loop translation action state machine & DSH event extraction.** The Gemini translation button now transitions cleanly through `idle` (Gemini spark) -> `working` (true circular SVG spinner with rotation animation and click guard) -> `done` (green checkmark, reverts after 2.5s) / `error` (red retry icon, reverts after 3s), stopping event propagation on click. On the host side, `sessionEvents()` reads real DSH sessions via `session.snapshotEvents()` and `session.ownEvents()`, and `appendRecord()` supports native `session.append()`, eliminating `SESSION_UNAVAILABLE` failures when requesting translations. Unindexed messages fall back gracefully to the latest completed turn.
+- **Fix(client): closed-loop translation action state machine & DSH event extraction.** The Gemini translation button now transitions cleanly through `idle` (Gemini spark) -> `working` (true circular SVG spinner with rotation animation and click guard) -> `done` (green checkmark, kept while the card exists) / `error` (red retry icon, reverts after 3s), stopping event propagation on click. On the host side, `sessionEvents()` reads real DSH sessions via `session.snapshotEvents()` and `session.ownEvents()`, and `appendRecord()` supports native `session.append()`, eliminating `SESSION_UNAVAILABLE` failures when requesting translations. Unindexed messages fall back gracefully to the latest completed turn.
+
+- **Fix(client): the hint actually shows, and the button state survives a remount.** Three follow-ups from dogfooding:
+  - **Hover hint**: the native `title` bubble never appeared inside the desktop shell (and DSH's internal `Tooltip` primitive is not exposed to plugin bundles), so the action now owns a small CSS tooltip (`span.agy-tsl-tip`, `role=tooltip`) driven by `:hover`/`:focus-within`. It grows to the **right** because the action strip hugs the left edge of the reply, where a centred bubble would be clipped by the transcript scroller. Verified with a real hover in a browser against the shipped CSS.
+  - **State persistence**: the chat timeline re-creates the panel when the window regains focus, so component-local state used to snap back to `idle` mid-flight ("the state vanishes when I switch windows"). The state now lives in a module-level map plus an in-flight set, and on every mount the button asks the new `GET /plugins/agy-link/translate/state?session=&message=` whether this reply already owns a durable record — so **a finished translation keeps its ✓ after a window switch, a session switch or a full page reload**, and a request still running is restored as the spinner instead of looking un-translated. A successful run now stays `done` (the card is durable) instead of reverting to `idle` after 2.5s; only an error auto-clears, back to retryable `idle` after 3s.
 
 ### 中文
 
@@ -24,7 +28,11 @@
 
 - **同版本内的客户端打磨。** 设置面板移除「权限模式」与「思考强度」两行——权限模式固定 `skip`（仍可用配置 / `DSH_AGY_MODE` 覆盖，例如无头运行），思考强度改在会话的**模型下拉框**里按模型选择，默认 `high`，与 agy 的等级一一对应；自动预热与自动翻译切换均采用原生分段胶囊按钮组（`[ 开启 | 关闭 ]`），与调度策略视觉统一，明确呈现默认关闭状态（关闭态高亮），杜绝歧义。
 
-- **修复(client/host)：Gemini 翻译动作状态机闭环与真实 DSH 事件提取。** 翻译按钮状态机完整闭环：`idle`（Gemini 星形图标）→ `working`（**真正的 SVG 旋转 Loading 圆环态**，禁用重复点击并阻止事件冒泡）→ `done`（绿色对勾，2.5 秒后自动复位）/ `error`（红色重试警告，3 秒后复位），各状态附带专用提示文案。服务端 `sessionEvents()` 深度适配真实 DSH 会话的 `session.snapshotEvents()` / `session.ownEvents()`，`appendRecord()` 支持原生 `session.append()` 持久化通道，根治点击翻译报 `SESSION_UNAVAILABLE` 导致无反应的问题；若特定消息 ID 未能精确定位，自动平滑回退至最新已完结回合。
+- **修复(client/host)：Gemini 翻译动作状态机闭环与真实 DSH 事件提取。** 翻译按钮状态机完整闭环：`idle`（Gemini 星形图标）→ `working`（**真正的 SVG 旋转 Loading 圆环态**，禁用重复点击并阻止事件冒泡）→ `done`（绿色对勾，卡片存在期间保持）/ `error`（红色重试警告，3 秒后复位），各状态附带专用提示文案。服务端 `sessionEvents()` 深度适配真实 DSH 会话的 `session.snapshotEvents()` / `session.ownEvents()`，`appendRecord()` 支持原生 `session.append()` 持久化通道，根治点击翻译报 `SESSION_UNAVAILABLE` 导致无反应的问题；若特定消息 ID 未能精确定位，自动平滑回退至最新已完结回合。
+
+- **修复(client)：提示注记真的显示出来了，按钮状态也能跨重挂载存活。** 三条来自实机使用的问题：
+  - **悬浮提示**：桌面壳内原生 `title` 气泡从不弹出（DSH 内部 `Tooltip` 基元也未对插件包开放），故动作自绘一个 CSS 提示注记（`span.agy-tsl-tip`，`role=tooltip`），由 `:hover`/`:focus-within` 驱动；因为动作条紧贴回复左缘，注记**向右展开**，避免气泡被会话滚动容器裁切。已在浏览器中用真实 hover 对照打包后的 CSS 验证。
+  - **状态持久化**：窗口重获焦点时聊天时间线会重建面板，组件内状态曾导致转圈中途被打回 `idle`（"切窗口状态就消失了"）。现有状态放入模块级 Map + 在途 Set，且每次挂载都会通过新增的 `GET /plugins/agy-link/translate/state?session=&message=` 询问该回复是否已有持久化记录——因此**翻译完成后，切窗口、切会话乃至整页刷新都仍保留 ✓**，仍在跑的请求也会还原成转圈态而不是看起来没翻译过。翻译成功后保持 `done`（卡片本身是持久的），不再 2.5 秒后回退 `idle`；只有失败态会在 3 秒后回到可重试的 `idle`。
 
 **Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.100...v0.5.0
 

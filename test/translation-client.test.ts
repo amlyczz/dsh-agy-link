@@ -50,8 +50,9 @@ function loadPlugin() {
     createElement(type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): ElementLike {
       return { type, props, children }
     },
-    useState<S>(initial: S): [S, (next: S | ((prev: S) => S)) => void] {
-      return [initial, () => undefined]
+    useState<S>(initial: S | (() => S)): [S, (next: S | ((prev: S) => S)) => void] {
+      const value = typeof initial === 'function' ? (initial as () => S)() : initial
+      return [value, () => undefined]
     },
     useEffect(): void {},
     useRef<S>(initial: S): { current: S } {
@@ -167,16 +168,37 @@ test('per-reply action is an icon-only Gemini button in the action strip', () =>
   assert.ok(action, 'conversation.chat.assistant-actions must be registered')
   const element = action!.component({ messageId: 'm1', sessionId: 's1', t: (key: string) => key }) as ElementLike
   assert.ok(isElement(element))
-  assert.equal(element.type, 'button')
+  // The button is wrapped in a span that carries our own tooltip; the native
+  // `title` bubble does not show inside the desktop shell.
+  assert.equal(element.type, 'span')
+  assert.equal(element.props?.className, 'agy-tsl-wrap')
+  const button = element.children[0] as ElementLike
+  assert.equal(button.type, 'button')
   // Icon-only: a single <svg> glyph, no text label (the label is the tooltip).
-  assert.equal(element.children.length, 1)
-  const glyph = element.children[0] as ElementLike
+  assert.equal(button.children.length, 1)
+  const glyph = button.children[0] as ElementLike
   assert.equal(glyph.type, 'svg')
-  assert.equal(collectText(element).join('').trim(), '')
-  assert.equal(typeof element.props?.title, 'string')
-  assert.ok(String(element.props?.title).length > 0)
+  assert.equal(collectText(button).join('').trim(), '')
+  assert.equal(button.props?.title, undefined, 'no native title; the span tooltip owns the hint')
+  assert.equal(typeof button.props?.['aria-label'], 'string')
+  // The tooltip element carries the same text and is a real node.
+  const tip = element.children[1] as ElementLike
+  assert.equal(tip.type, 'span')
+  assert.equal(tip.props?.className, 'agy-tsl-tip')
+  assert.equal(tip.props?.role, 'tooltip')
+  assert.ok(collectText(tip).join('').length > 0)
   // No session → no button (the slot's inject face is required).
   assert.equal(action!.component({ messageId: 'm1', t: (k: string) => k }), null)
+})
+
+test('action state survives a remount and re-derives from the session record', () => {
+  // Regression: the chat timeline re-creates the panel on window focus, so a
+  // component-local state reset the button to idle mid-flight. State now lives
+  // in a module map and is re-read from GET /translate/state on mount.
+  assert.match(source, /ACTION_STATE = /)
+  assert.match(source, /ACTION_INFLIGHT = /)
+  assert.match(source, /agy-link\/translate\/state/)
+  assert.match(source, /state === ["']ready["'] \? ["']done["']/)
 })
 
 test('every list-slot registration carries a row id (id is the row identity)', () => {

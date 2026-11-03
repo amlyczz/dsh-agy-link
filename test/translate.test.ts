@@ -329,6 +329,19 @@ test('sessionEvents reads from snapshotEvents and ownEvents', () => {
   assert.equal(sessionEvents({ ownEvents: () => log } as any).length, log.length)
 })
 
+test('existingMessage answers the reply button so a finished card survives a remount', async () => {
+  const { service } = makeService({ runs: [{ ok: true, text: '人话版' }] })
+  // Nothing stored yet: the button must stay idle.
+  assert.equal(service.existingMessage('s1', 'm-1-3'), null)
+  assert.equal(service.isPending('s1'), false)
+  // Translate, which persists a record carrying messageId = m-1-3.
+  await service.translateMessage('s1', 'm-1-3')
+  const existing = service.existingMessage('s1', 'm-1-3')
+  assert.ok(existing, 'the stored translation must be found by message id')
+  assert.equal(existing!.text, '人话版')
+  assert.equal(existing!.model, 'gemini-3.8-flash')
+})
+
 test('autoTranslateTurn translates and persists when enabled', async () => {
   const { service, records } = makeService({ runs: [{ ok: true, text: '人话版' }], autoEnabled: () => true })
   const res = await service.autoTranslateTurn('s1', 1)

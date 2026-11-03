@@ -113,6 +113,33 @@ const CSS = `
 .agy-tsl-icon[data-state="error"] { color: #ef4444; }
 .agy-tsl-icon svg { width: 15px; height: 15px; display: block; }
 @keyframes agy-tsl-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+/* Own tooltip: the native title bubble never showed inside the desktop shell,
+   and DSH's Tooltip primitive is not exposed to plugin bundles, so the hint is
+   a plain absolutely-positioned span driven by :hover/:focus-within. It grows to
+   the right because the action strip hugs the left edge of the reply, where a
+   centred bubble would be clipped by the transcript scroller. */
+.agy-tsl-wrap { position: relative; display: inline-flex; align-items: center; }
+.agy-tsl-tip {
+  position: absolute; bottom: calc(100% + 8px); left: -6px;
+  transform: translateY(2px);
+  padding: 5px 9px; border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-3, #23262f);
+  color: var(--dsw-alias-label-primary, #f8fafc);
+  font-size: 11.5px; line-height: 1.45; font-weight: 400; letter-spacing: .01em;
+  white-space: nowrap; width: max-content; max-width: 260px;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0,0,0,.26), 0 0 0 1px rgba(127,127,127,.16);
+  opacity: 0; visibility: hidden; z-index: 60;
+  transition: opacity .12s ease, transform .12s ease, visibility .12s;
+}
+.agy-tsl-tip::after {
+  content: ''; position: absolute; top: 100%; left: 14px;
+  border: 4px solid transparent; border-top-color: var(--dsw-alias-bg-layer-3, #23262f);
+}
+.agy-tsl-wrap:hover .agy-tsl-tip,
+.agy-tsl-wrap:focus-within .agy-tsl-tip {
+  opacity: 1; visibility: visible; transform: translateY(0);
+}
 `
 
 function injectStyles(): void {
@@ -173,6 +200,18 @@ async function postTranslate(body: Record<string, unknown>): Promise<{ ok?: bool
 		if (!res) return null
 		const payload = (await res.json()) as Record<string, unknown>
 		return payload as { ok?: boolean; text?: string; error?: string; code?: string }
+	} catch {
+		return null
+	}
+}
+
+/** Ask the host whether this reply already owns a durable translation. */
+async function getMessageState(sessionId: string, messageId: string): Promise<{ state?: string } | null> {
+	try {
+		const url = base + '/plugins/agy-link/translate/state?session=' + encodeURIComponent(sessionId) + '&message=' + encodeURIComponent(messageId)
+		const res = await win.fetch?.(url)
+		if (!res) return null
+		return (await res.json()) as { state?: string }
 	} catch {
 		return null
 	}
@@ -417,6 +456,15 @@ function tooltipText(props: Record<string, unknown> | undefined, key: string, fa
 }
 
 /**
+ * Per-reply action state, kept outside React so it survives a remount: the chat
+ * timeline virtualises nodes and DSH re-creates the whole panel when the window
+ * regains focus, which used to reset the button to `idle` mid-flight. The map is
+ * the in-page truth; the host's durable record is the truth across page loads.
+ */
+const ACTION_STATE = new Map<string, ActionState>()
+const ACTION_INFLIGHT = new Set<string>()
+
+/**
  * Icon-only "translate with Gemini" action rendered into the assistant action
  * strip (`conversation.chat.assistant-actions`), so it lines up with copy,
  * thumbs, link and usage. The label lives in the hover tooltip only.
@@ -426,26 +474,65 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	const injectedSession = typeof props?.sessionId === 'string' ? props.sessionId : ''
 	const ctx = props?.ctx as ClientContextLike | undefined
 	const sessionId = injectedSession !== '' ? injectedSession : ctx === undefined ? '' : currentSessionId(ctx)
-	const [state, setState] = useState<ActionState>('idle')
+	const key = sessionId + '\u0000' + messageId
+	const [state, setState] = useState<ActionState>(() =>
+		ACTION_INFLIGHT.has(key) ? 'working' : ACTION_STATE.get(key) ?? 'idle',
+	)
+
+	// A remount must not lose a finished translation: ask the session whether a
+	// durable record already exists for this reply.
+	useEffect(() => {
+		if (messageId === '' || sessionId === '') return
+		let alive = true
+		void getMessageState(sessionId, messageId).then((res) => {
+			if (!alive || res === null) return
+			const next: ActionState | null =
+				res.state === 'ready' ? 'done' : res.state === 'busy' ? 'working' : null
+			if (next === null) return
+			ACTION_STATE.set(key, next)
+			if (next === 'working') ACTION_INFLIGHT.add(key)
+			setState((prev) => (prev === next ? prev : next))
+		})
+		return () => {
+			alive = false
+		}
+	}, [key, messageId, sessionId])
+
 	if (messageId === '' || sessionId === '') return null
+
+	const apply = (next: ActionState): void => {
+		ACTION_STATE.set(key, next)
+		setState(next)
+	}
 
 	const run = (e?: { stopPropagation?: () => void; preventDefault?: () => void }): void => {
 		e?.stopPropagation?.()
 		e?.preventDefault?.()
 		if (state === 'working') return
-		setState('working')
-		void postTranslate({ sessionId, messageId, persist: true }).then((res) => {
-			if (res?.ok === true) {
-				setState('done')
-				setTimeout(() => setState('idle'), 2_500)
-			} else {
-				setState('error')
-				setTimeout(() => setState('idle'), 3_000)
-			}
-		}).catch(() => {
-			setState('error')
-			setTimeout(() => setState('idle'), 3_000)
-		})
+		ACTION_INFLIGHT.add(key)
+		apply('working')
+		void postTranslate({ sessionId, messageId, persist: true })
+			.then((res) => {
+				ACTION_INFLIGHT.delete(key)
+				if (res?.ok === true) {
+					// Stay "done": the card is now in the session and this state is
+					// re-derived from it on every remount, so reverting to idle would
+					// only make the affordance flicker back to looking un-translated.
+					apply('done')
+					return
+				}
+				apply('error')
+				setTimeout(() => {
+					if (!ACTION_INFLIGHT.has(key)) apply('idle')
+				}, 3_000)
+			})
+			.catch(() => {
+				ACTION_INFLIGHT.delete(key)
+				apply('error')
+				setTimeout(() => {
+					if (!ACTION_INFLIGHT.has(key)) apply('idle')
+				}, 3_000)
+			})
 	}
 
 	const title =
@@ -467,37 +554,41 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 					: geminiGlyph()
 
 	return h(
-		'button',
-		{
-			type: 'button',
-			className: 'agy-tsl-icon',
-			'data-state': state,
-			disabled: state === 'working',
-			onClick: run,
-			title,
-			'aria-label': title,
-			style: {
-				display: 'inline-flex',
-				alignItems: 'center',
-				justifyContent: 'center',
-				width: '24px',
-				height: '24px',
-				padding: '0',
-				border: 'none',
-				borderRadius: '6px',
-				background: 'transparent',
-				color:
-					state === 'working'
-						? 'var(--dsw-alias-state-business-primary, #2563eb)'
-						: state === 'done'
-							? '#10b981'
-							: state === 'error'
-								? '#ef4444'
-								: 'var(--dsw-alias-label-tertiary, #8a8f98)',
-				cursor: state === 'working' ? 'wait' : 'pointer',
+		'span',
+		{ className: 'agy-tsl-wrap' },
+		h(
+			'button',
+			{
+				type: 'button',
+				className: 'agy-tsl-icon',
+				'data-state': state,
+				disabled: state === 'working',
+				onClick: run,
+				'aria-label': title,
+				style: {
+					display: 'inline-flex',
+					alignItems: 'center',
+					justifyContent: 'center',
+					width: '24px',
+					height: '24px',
+					padding: '0',
+					border: 'none',
+					borderRadius: '6px',
+					background: 'transparent',
+					color:
+						state === 'working'
+							? 'var(--dsw-alias-state-business-primary, #2563eb)'
+							: state === 'done'
+								? '#10b981'
+								: state === 'error'
+									? '#ef4444'
+									: 'var(--dsw-alias-label-tertiary, #8a8f98)',
+					cursor: state === 'working' ? 'wait' : 'pointer',
+				},
 			},
-		},
-		glyph,
+			glyph,
+		),
+		h('span', { className: 'agy-tsl-tip', role: 'tooltip' }, title),
 	)
 }
 

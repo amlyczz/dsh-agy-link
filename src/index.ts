@@ -1302,6 +1302,24 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         ? { state: 'idle' }
         : { state: 'ready', seq: existing.seq, model: existing.model, effort: existing.effort })
     }})
+    // Per-message question the reply button asks on mount: does this reply
+    // already own a durable translation? Keeps the button's "done" state after
+    // a remount / window switch / page reload, and reports "busy" while a
+    // translation for the session is still running.
+    reg({ kind: 'exact', path: '/plugins/agy-link/translate/state', handler: (req, res) => {
+      const session = queryParam(req, 'session')
+      const message = queryParam(req, 'message')
+      if (session === '' || message === '') {
+        sendJson(res as RawRes, 400, { error: 'session and message are required' })
+        return
+      }
+      const existing = translation.existingMessage(session, message)
+      if (existing !== null) {
+        sendJson(res as RawRes, 200, { state: 'ready', seq: existing.seq, model: existing.model, effort: existing.effort })
+        return
+      }
+      sendJson(res as RawRes, 200, { state: translation.isPending(session) ? 'busy' : 'idle' })
+    }})
 
     reg({ kind: 'exact', path: '/plugins/agy-link/qr', handler: (_req, res) => {
       void (async () => {

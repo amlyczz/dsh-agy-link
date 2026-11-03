@@ -756,6 +756,41 @@ export class TranslationService {
     return findTranslationRecord(events, turn, model, effort)
   }
 
+  /**
+   * Durable translation already stored for the turn that owns one assistant
+   * message. The per-reply button asks this on mount, so a finished
+   * translation still shows as "done" after a remount, a window switch or a
+   * page reload — the card lives in the session, so the affordance reads its
+   * state from the session too.
+   */
+  existingMessage(
+    sessionId: string,
+    messageId: string,
+  ): { seq: number; text: string; model: string; effort: string } | null {
+    const events = sessionEvents(this.deps.getSession(sessionId))
+    for (const ev of events) {
+      if (ev.type !== TRANSLATION_RECORD_TYPE) continue
+      const d = dataOf(ev)
+      if (d.messageId !== messageId) continue
+      const text = typeof d.text === 'string' ? d.text : ''
+      if (text.trim() === '') continue
+      return {
+        seq: num(ev.seq) ?? 0,
+        text,
+        model: typeof d.model === 'string' ? d.model : '',
+        effort: typeof d.effort === 'string' ? d.effort : '',
+      }
+    }
+    const located = turnOfMessage(events, messageId)
+    if (located === null) return null
+    return findTranslationRecord(events, located.turn)
+  }
+
+  /** True while a translation is running for this session. */
+  isPending(sessionId: string): boolean {
+    return this.pending.has(sessionId)
+  }
+
   /** Translate the newest completed turn of a session. */
   async translateLastTurn(sessionId: string, opts: TranslateTurnOptions = {}, signal?: AbortSignal): Promise<TranslateResult> {
     const events = sessionEvents(this.deps.getSession(sessionId))
