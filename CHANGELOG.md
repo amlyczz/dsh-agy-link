@@ -12,7 +12,7 @@
 
 - **Client polish, same release.** The settings panel drops the permission-mode and reasoning-effort rows — the permission mode stays `skip` (still overridable by config / `DSH_AGY_MODE`, e.g. headless runs) and the reasoning effort is now chosen per model in the session **model menu**, defaulting to `high` and mapping 1:1 to agy's levels. The standalone enable/disable toggles keep a visible border in both states, and the auto-translate label no longer repeats "(every turn)".
 
-- **Fix(client): the translation affordances actually render now.** The per-reply action was registered into a list slot without a row `id` — list slots use `id` as the row identity, so the row never rendered. Both affordances now declare ids and receive their owning session through the slot's `inject(sessionId)` face. A new **per-turn chip** appears at the end of every completed turn ("🗣 译成人话"): it hides itself once a durable translation exists for that turn, and it costs nothing until clicked. Repeated requests for a turn already translated with the same model/effort now hand back the stored record instead of paying for a duplicate call.
+- **Fix(client): the translation action actually renders now.** The per-reply action was registered into a list slot without a row `id` — list slots use `id` as the row identity, so the row never rendered. It now declares an `id`, receives its owning session through the slot's `inject(sessionId)` face, and renders as an **icon-only Gemini spark in the assistant action strip** (same row as copy / thumbs / link), with the explanation in the hover tooltip and a spinner while it works. Repeated requests for a turn already translated with the same model/effort hand back the stored record instead of paying for a duplicate call.
 
 ### 中文
 
@@ -24,7 +24,7 @@
 
 - **同版本内的客户端打磨。** 设置面板移除「权限模式」与「思考强度」两行——权限模式固定 `skip`（仍可用配置 / `DSH_AGY_MODE` 覆盖，例如无头运行），思考强度改在会话的**模型下拉框**里按模型选择，默认 `high`，与 agy 的等级一一对应；单按钮的「启用/停用」在两种状态下都有可见边框；自动翻译标签不再重复「（每回合）」。
 
-- **修复(client)：翻译入口现在真的显示出来了。** 之前「译成人话」注册进 list 槽时没给行 `id`——list 槽用 `id` 作为行身份，所以那一行从未渲染；现在两个入口都声明了 `id`，并通过槽的 `inject(sessionId)` 直接拿到所属会话。新增**每回合末尾的「🗣 译成人话」小按钮**：每个回合结束后出现，该回合已有持久化译文时自动隐藏，不点就不消耗额度；同一回合用同一模型/档位重复请求时直接复用已存记录，不再重复调用。
+- **修复(client)：翻译入口现在真的显示出来了。** 之前「译成人话」注册进 list 槽时没给行 `id`——list 槽用 `id` 作为行身份，所以那一行从未渲染。现在它声明了 `id`，通过槽的 `inject(sessionId)` 拿到所属会话，并渲染为**复制/点赞/链接同一行里的 Gemini 星形图标**（纯图标、无文字，说明放在 hover 提示里，翻译中显示转圈）。同一回合用同一模型/档位重复请求时直接复用已存记录，不再重复调用。
 
 **Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.100...v0.5.0
 

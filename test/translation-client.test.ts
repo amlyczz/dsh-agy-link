@@ -161,19 +161,28 @@ test('card renders a labelled Gemini block and its markdown body', () => {
   assert.match(text, /a\.ts/)
 })
 
-test('per-reply action is registered for historical turns', () => {
+test('per-reply action is an icon-only Gemini button in the action strip', () => {
   const { slots } = mount()
   const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
   assert.ok(action, 'conversation.chat.assistant-actions must be registered')
   const element = action!.component({ messageId: 'm1', sessionId: 's1', t: (key: string) => key }) as ElementLike
   assert.ok(isElement(element))
   assert.equal(element.type, 'button')
+  // Icon-only: a single <svg> glyph, no text label (the label is the tooltip).
+  assert.equal(element.children.length, 1)
+  const glyph = element.children[0] as ElementLike
+  assert.equal(glyph.type, 'svg')
+  assert.equal(collectText(element).join('').trim(), '')
+  assert.equal(typeof element.props?.title, 'string')
+  assert.ok(String(element.props?.title).length > 0)
+  // No session → no button (the slot's inject face is required).
+  assert.equal(action!.component({ messageId: 'm1', t: (k: string) => k }), null)
 })
 
 test('every list-slot registration carries a row id (id is the row identity)', () => {
   const { slots } = mount()
   const listSlots = slots.filter((s) => s.options.key === undefined)
-  assert.ok(listSlots.length >= 2, 'turn tail + message actions must both be registered')
+  assert.ok(listSlots.length >= 1)
   for (const slot of listSlots) {
     assert.ok(
       typeof slot.options.id === 'string' && slot.options.id !== '',
@@ -182,26 +191,18 @@ test('every list-slot registration carries a row id (id is the row identity)', (
   }
 })
 
-test('the per-turn chip renders the Gemini affordance at the end of a turn', () => {
+test('the turn-tail chip is gone (the action lives in the icon strip only)', () => {
   const { slots } = mount()
-  const chip = slots.find((s) => s.options.name === 'conversation.chat.turnTail')
-  assert.ok(chip, 'conversation.chat.turnTail must be registered')
-  assert.equal(chip!.options.id, 'agy-tsl-turn')
-  const element = chip!.component({ sessionId: 's1', turn: { turn: 3 }, seq: 9, t: (key: string) => key }) as ElementLike
-  assert.ok(isElement(element))
-  const text = collectText(element).join(' ')
-  assert.match(text, /Translate to plain language/)
-  // Without a session or a turn number the chip stays out of the way.
-  assert.equal(chip!.component({ sessionId: '', turn: { turn: 3 }, t: (k: string) => k }), null)
-  assert.equal(chip!.component({ sessionId: 's1', t: (k: string) => k }), null)
+  assert.equal(slots.some((s) => s.options.name === 'conversation.chat.turnTail'), false)
 })
 
-test('standalone enable/disable toggles keep a visible border in both states', () => {
+test('standalone enable/disable toggles are a bordered pill in both states', () => {
   // Regression: the auto-warmup / auto-translate rows carry one state button
   // outside a segment group; the bare segBtn/segBtnActive entries left the OFF
-  // state transparent and borderless ("启用" rendered as plain text).
-  assert.match(source, /--agy-toggle-border/)
-  assert.match(source, /--agy-toggle-bg/)
-  assert.match(source, /--agy-toggle-on-border/)
-  assert.match(source, /toggleOn/)
+  // state transparent and borderless ("启用" rendered as plain text). The
+  // toggle is now a class-based pill with a hover state and a filled ON state.
+  assert.match(source, /\.agy-toggle\s*\{/)
+  assert.match(source, /border: 1px solid var\(--dsw-alias-border-l3/)
+  assert.match(source, /\.agy-toggle\[data-on="true"\]/)
+  assert.match(source, /\.agy-toggle:hover/)
 })

@@ -95,15 +95,23 @@ const CSS = `
   margin: 0; padding: 8px 12px; border-top: 1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.28));
   font-size: 12.5px; color: var(--dsw-alias-label-secondary, #aaa); white-space: pre-wrap; max-height: 260px; overflow: auto;
 }
-.agy-tsl-action {
-  display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px;
-  border-radius: 999px; border: 1px solid rgba(139,92,246,.35); background: rgba(139,92,246,.10);
-  color: #a78bfa; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+/* Icon-only action that sits in the same strip as copy / thumbs / link, with
+   the same neutral tint so it reads as part of that group. */
+.agy-tsl-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--dsw-alias-label-tertiary, #8a8f98);
+  cursor: pointer; transition: background .15s ease, color .15s ease;
 }
-.agy-tsl-action:hover { background: rgba(139,92,246,.2); }
-.agy-tsl-action[data-state="working"] { opacity: .7; cursor: progress; }
-.agy-tsl-action[data-state="error"] { border-color: rgba(244,63,94,.5); color: #f43f5e; background: rgba(244,63,94,.1); }
-.agy-tsl-row { display: flex; align-items: center; gap: 6px; padding: 2px 0 4px 2px; }
+.agy-tsl-icon:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid, rgba(127,127,127,.14));
+  color: var(--dsw-alias-label-primary, #eee);
+}
+.agy-tsl-icon:disabled { opacity: .5; cursor: default; }
+.agy-tsl-icon[data-state="error"] { color: #f43f5e; }
+.agy-tsl-icon svg { width: 15px; height: 15px; display: block; }
+.agy-tsl-icon[data-state="working"] svg { animation: agy-tsl-spin 1s linear infinite; }
+@keyframes agy-tsl-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 `
 
 function injectStyles(): void {
@@ -325,21 +333,19 @@ const TranslationCard = (props?: Record<string, unknown>): unknown => {
 // Per-turn and per-message affordances
 // ---------------------------------------------------------------------------
 
-type ActionState = 'idle' | 'working' | 'done' | 'error' | 'hidden'
+type ActionState = 'idle' | 'working' | 'done' | 'error'
 
-async function getTurnState(sessionId: string, turn: number): Promise<{ state?: string } | null> {
-	try {
-		const res = await win.fetch?.(
-			base + '/plugins/agy-link/translate/turn?session=' + encodeURIComponent(sessionId) + '&turn=' + String(turn),
-		)
-		if (!res || !res.ok) return null
-		return (await res.json()) as { state?: string }
-	} catch {
-		return null
-	}
+/** Four-point Gemini spark, filled with `currentColor` so it inherits the icon
+ *  tint of DSH's action strip and looks native next to copy/thumbs/link. */
+const GEMINI_STAR = 'M12 1.6c.7 3.9 2.2 6.7 4.1 8.5 1.9 1.9 4.6 3 8.3 3.9-3.7.9-6.4 2-8.3 3.9-1.9 1.8-3.4 4.6-4.1 8.5-.7-3.9-2.2-6.7-4.1-8.5C6.1 16 3.4 14.9-.3 14c3.7-.9 6.4-2 8.3-3.9C9.8 8.3 11.3 5.5 12 1.6z'
+
+function geminiGlyph(): unknown {
+	return h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true' },
+		h('path', { d: GEMINI_STAR }),
+	)
 }
 
-function translateLabel(props: Record<string, unknown> | undefined, key: string, fallback: string): string {
+function tooltipText(props: Record<string, unknown> | undefined, key: string, fallback: string): string {
 	const fn = props?.t as ((k: string) => string) | undefined
 	if (typeof fn !== 'function') return fallback
 	try {
@@ -351,90 +357,45 @@ function translateLabel(props: Record<string, unknown> | undefined, key: string,
 }
 
 /**
- * Per-reply hover action ("译成人话"). Session scopes hand the owning session id
- * through the slot's `inject(sessionId)` face, so no global session lookup is
- * needed here.
+ * Icon-only "translate with Gemini" action rendered into the assistant action
+ * strip (`conversation.chat.assistant-actions`), so it lines up with copy,
+ * thumbs, link and usage. The label lives in the hover tooltip only.
  */
 const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	const messageId = typeof props?.messageId === 'string' ? props.messageId : ''
 	const injectedSession = typeof props?.sessionId === 'string' ? props.sessionId : ''
 	const ctx = props?.ctx as ClientContextLike | undefined
-	const fallbackSession = injectedSession === '' && ctx !== undefined ? currentSessionId(ctx) : ''
-	const sessionId = injectedSession !== '' ? injectedSession : fallbackSession
+	const sessionId = injectedSession !== '' ? injectedSession : ctx === undefined ? '' : currentSessionId(ctx)
 	const [state, setState] = useState<ActionState>('idle')
-	if (messageId === '') return null
+	if (messageId === '' || sessionId === '') return null
 	const run = (): void => {
-		if (state === 'working' || sessionId === '') return
+		if (state === 'working') return
 		setState('working')
 		void postTranslate({ sessionId, messageId, persist: true }).then((res) => {
 			setState(res?.ok === true ? 'done' : 'error')
 			setTimeout(() => setState('idle'), 2_000)
 		}).catch(() => setState('error'))
 	}
-	const label =
+	const title =
 		state === 'working'
-			? translateLabel(props, 'tsl.translating', 'Translating…')
-			: state === 'done'
-				? translateLabel(props, 'tsl.badge', 'Gemini translation')
-				: state === 'error'
-					? translateLabel(props, 'tsl.retry', 'Retry')
-					: '🗣 ' + translateLabel(props, 'tsl.translate', 'Translate to plain language')
-	return h('button', { type: 'button', className: 'agy-tsl-action', 'data-state': state, onClick: run, title: translateLabel(props, 'tsl.byGemini', 'Translated by Gemini') }, label)
-}
-
-/**
- * Per-turn chip shown at the end of every completed turn. This is the visible
- * "Gemini 翻译" option the user asked for: it appears after each turn, hides
- * itself once a durable translation exists for that turn, and pays nothing
- * until clicked.
- */
-const TurnTranslateChip = (props?: Record<string, unknown>): unknown => {
-	const injectedSession = typeof props?.sessionId === 'string' ? props.sessionId : ''
-	const ctx = props?.ctx as ClientContextLike | undefined
-	const fallbackSession = injectedSession === '' && ctx !== undefined ? currentSessionId(ctx) : ''
-	const sessionId = injectedSession !== '' ? injectedSession : fallbackSession
-	const rawTurn = props?.turn as { turn?: unknown } | number | undefined
-	const turn =
-		typeof rawTurn === 'number'
-			? rawTurn
-			: rawTurn !== null && typeof rawTurn === 'object' && typeof rawTurn.turn === 'number'
-				? rawTurn.turn
-				: undefined
-	const [state, setState] = useState<ActionState>('idle')
-	useEffect(() => {
-		if (sessionId === '' || turn === undefined) return
-		let cancelled = false
-		void getTurnState(sessionId, turn).then((res) => {
-			if (!cancelled && res?.state === 'ready') setState('hidden')
-		})
-		return () => {
-			cancelled = true
-		}
-	}, [sessionId, turn])
-	if (sessionId === '' || turn === undefined) return null
-	if (state === 'hidden' || state === 'done') return null
-	const run = (): void => {
-		if (state === 'working') return
-		setState('working')
-		void postTranslate({ sessionId, turn, persist: true }).then((res) => {
-			setState(res?.ok === true ? 'done' : 'error')
-			if (res?.ok !== true) setTimeout(() => setState('idle'), 2_500)
-		}).catch(() => setState('error'))
-	}
-	const label =
-		state === 'working'
-			? '✨ ' + translateLabel(props, 'tsl.translating', 'Translating…')
+			? tooltipText(props, 'tsl.translating', 'Translating…')
 			: state === 'error'
-				? translateLabel(props, 'tsl.retry', 'Retry')
-				: '🗣 ' + translateLabel(props, 'tsl.translate', 'Translate to plain language')
-	return h('div', { className: 'agy-tsl-row' },
-		h('button', {
+				? tooltipText(props, 'tsl.retry', 'Retry')
+				: state === 'done'
+					? tooltipText(props, 'tsl.badge', 'Gemini translation')
+					: tooltipText(props, 'tsl.actionTip', 'Rewrite this reply in plain language with Gemini')
+	return h(
+		'button',
+		{
 			type: 'button',
-			className: 'agy-tsl-action',
+			className: 'agy-tsl-icon',
 			'data-state': state,
+			disabled: state === 'working',
 			onClick: run,
-			title: translateLabel(props, 'tsl.byGemini', 'Translated by Gemini'),
-		}, label),
+			title,
+			'aria-label': title,
+		},
+		geminiGlyph(),
 	)
 }
 
@@ -510,18 +471,6 @@ export function installTranslationUi(ctx: ClientContextLike, localeNs: string): 
 		// List slots: `id` is the row identity (a registration without one never
 		// renders), and a session-scoped `inject(sessionId)` face is what hands
 		// the component the owning session.
-		ctx.slots.inject('conversation.chat.turnTail', () =>
-			ctx.slots.register(
-				{
-					name: 'conversation.chat.turnTail',
-					id: 'agy-tsl-turn',
-					order: 20,
-					locale: localeNs,
-					inject: (sessionId: string) => ({ sessionId }),
-				},
-				((props?: Record<string, unknown>) => TurnTranslateChip({ ...(props ?? {}), ctx })) as never,
-			),
-		)
 		ctx.slots.inject('conversation.chat.assistant-actions', () =>
 			ctx.slots.register(
 				{
