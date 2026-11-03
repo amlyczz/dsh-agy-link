@@ -96,6 +96,14 @@ export interface OneShotResult {
 export interface OneShotDeps {
   cfg: () => PluginConfig
   bin: () => string | null
+  /**
+   * Models agy already refused `--effort` for (issue #67). The one-shot path
+   * (`agy_ask`) spawns agy directly, so it must honour the same learned list the
+   * adapter does — otherwise a level the model rejects fails that tool too.
+   */
+  effortUnsupported?: () => readonly string[]
+  /** Persist a freshly refused model and let the picker re-read capabilities. */
+  onEffortUnsupported?: (model: string) => void
 }
 
 export async function runAgyOnce(
@@ -190,7 +198,12 @@ export async function runAgyOnce(
     return { ok: false, text: '', conversationId, error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs }
   }
   if (outcome.code !== 0 && text === '') {
-    return { ok: false, text: '', conversationId, error: 'agy exited with code ' + outcome.code + ': ' + outcome.stderrTail.slice(-300), durationMs: outcome.durationMs }
+    // Prefer the result envelope's own error over a bare "exited 1": agy reports
+    // causes like `invalid model selection (… --effort …)` ONLY there (issue #67),
+    // and a caller cannot learn from a message that hides them.
+    const envelopeError = parser.stats.lastResultError ?? ''
+    const detail = envelopeError !== '' ? envelopeError : outcome.stderrTail.slice(-300)
+    return { ok: false, text: '', conversationId, error: 'agy exited with code ' + outcome.code + ': ' + detail, durationMs: outcome.durationMs }
   }
   return { ok: text !== '', text: text === '' ? '(no output)' : text, conversationId, durationMs: outcome.durationMs }
 }

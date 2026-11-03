@@ -7,6 +7,7 @@ import type { Catalog } from './models.ts'
 import { defaultEffortFor, findEntry } from './models.ts'
 import type { OneShotDeps } from './oneshot.ts'
 import { runAgyOnce } from './oneshot.ts'
+import { parseEffortUnsupported } from './adapter.ts'
 
 const ALIASES: Readonly<Record<string, string>> = {
   flash: 'gemini',
@@ -117,18 +118,35 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
         ? args.readPaths.split(/[ ,]+/).filter(Boolean)
         : []
       // Effort defaults to the bridge default (high-first) for effort models.
+      // A model agy has already refused `--effort` for (issue #67) is asked
+      // without the flag — the catalog is advisory, the refusal is the truth.
       const entry = findEntry(deps.catalog(), model)
-      const effort = args.effort ?? (entry?.efforts ? defaultEffortFor(entry, cfg) : undefined)
-      const res = await runAgyOnce(deps, {
-        prompt: args.prompt,
-        model: model === '' ? undefined : model,
-        effort,
-        mode: args.mode,
-        timeoutMs: args.timeoutMinutes ? args.timeoutMinutes * 60_000 : undefined,
-        signal: exec.signal,
-        readPaths,
-        schema: parsedSchema,
-      })
+      const wanted = args.effort ?? (entry?.efforts ? defaultEffortFor(entry, cfg) : undefined)
+      const learned = deps.effortUnsupported?.() ?? []
+      const refusedBefore = wanted !== undefined && learned.some((m) => m !== '' && (m === model || m === entry?.id))
+      const call = (effort: string | undefined) =>
+        runAgyOnce(deps, {
+          prompt: args.prompt,
+          model: model === '' ? undefined : model,
+          effort,
+          mode: args.mode,
+          timeoutMs: args.timeoutMinutes ? args.timeoutMinutes * 60_000 : undefined,
+          signal: exec.signal,
+          readPaths,
+          schema: parsedSchema,
+        })
+      let effort = refusedBefore ? undefined : wanted
+      let res = await call(effort)
+      if (!res.ok && effort !== undefined) {
+        const refused = parseEffortUnsupported(String(res.error ?? ''))
+        if (refused !== null) {
+          // Learn it (persist + refresh the picker) and replay once without the
+          // flag, exactly like the streaming path does.
+          deps.onEffortUnsupported?.(refused)
+          effort = undefined
+          res = await call(undefined)
+        }
+      }
       if (!res.ok) {
         throw new Error('agy_ask failed: ' + (res.error ?? 'unknown error'))
       }

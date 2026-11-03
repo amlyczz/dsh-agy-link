@@ -731,7 +731,13 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     const want = getConfig().askTool && bin() !== null
     if (want && askToolDispose.current === null && toolsSvcRef.current) {
       const reg = toolsSvcRef.current.register(
-        defineAgyAskTool({ cfg: getConfig, bin, catalog: () => catalog.get() }),
+        defineAgyAskTool({
+          cfg: getConfig,
+          bin,
+          catalog: () => catalog.get(),
+          effortUnsupported: () => readEffortUnsupported(),
+          onEffortUnsupported: (model) => rememberEffortUnsupported(model),
+        }),
       ) as unknown as () => void
       askToolDispose.current = typeof reg === 'function' ? reg : null
     } else if (!want && askToolDispose.current !== null) {
