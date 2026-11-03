@@ -10,6 +10,8 @@
   - Auto mode is **off by default** (`autoTranslate`, toggled in Settings → Antigravity, or per session with `/tsl auto on`). It reacts only to new `turn/end` completions, skips turns already produced by the translate model, throttles repeated runs, and never disturbs the agent loop when translation fails.
   - Adapter: `purpose:'translation'` joins the auxiliary channel but keeps the caller's explicit reasoning effort (aux calls would otherwise pin Gemini to `low`) and is exempt from `allowAuxiliary`.
 
+- **Client polish, same release.** The settings panel drops the permission-mode and reasoning-effort rows — the permission mode stays `skip` (still overridable by config / `DSH_AGY_MODE`, e.g. headless runs) and the reasoning effort is now chosen per model in the session **model menu**, defaulting to `high` and mapping 1:1 to agy's levels. The standalone enable/disable toggles keep a visible border in both states, and the auto-translate label no longer repeats "(every turn)".
+
 ### 中文
 
 - **新增(翻译)：`/tsl` —— 用 Gemini 把会话输出改写成大白话，并固定显示在该回复下方。**
@@ -17,6 +19,8 @@
   - 默认 `gemini-3.8-flash` · `high`（可配置，并有目录回退链）。结果以 `plugin:agy-link/translation` 记录持久化，渲染为「✨ Gemini 译文」卡片并**锚定在被翻译回复的正下方**：重载后仍在、可展开对照原文、永不进入模型可见历史。历史回合通过悬浮按钮按需生成同一张卡片。
   - 自动模式**默认关闭**（`autoTranslate`，设置 → Antigravity 开关，或 `/tsl auto on` 按会话覆盖）：只响应新的 `turn/end`，跳过翻译模型自己产出的回合，限制重复频率，翻译失败绝不影响 agent 主循环。
   - 适配器：`purpose:'translation'` 纳入辅助通道，但保留调用方显式档位（否则辅助调用会把 Gemini 钉在 `low`），且不受 `allowAuxiliary` 限制。
+
+- **同版本内的客户端打磨。** 设置面板移除「权限模式」与「思考强度」两行——权限模式固定 `skip`（仍可用配置 / `DSH_AGY_MODE` 覆盖，例如无头运行），思考强度改在会话的**模型下拉框**里按模型选择，默认 `high`，与 agy 的等级一一对应；单按钮的「启用/停用」在两种状态下都有可见边框；自动翻译标签不再重复「（每回合）」。
 
 **Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.4.100...v0.5.0
 

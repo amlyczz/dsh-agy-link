@@ -48,9 +48,9 @@ No DSH, clique no selo `AGY (n)` e selecione **Add Account** para concluir o log
 | --- | --- | --- | --- |
 | `enabled` | `DSH_AGY_ENABLED` | `true` | Liga/desliga o plugin |
 | `agyBin` | `DSH_AGY_BIN` | autodetectado | Caminho do executável `agy` |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip`, `plan` ou `accept-edits` |
+| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip`, `plan` ou `accept-edits` (não é mais alternável no painel; config/env ainda pode sobrescrever) |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | padrão do agy | Slug do modelo padrão |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | padrão do modelo | `low`, `medium` ou `high` |
+| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | `low`, `medium` ou `high`; escolha por modelo no menu de modelos da sessão |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Timeout do watchdog, em ms |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Orçamento de inatividade (minutos) enquanto um passo de ferramenta está aberto; `0` = manter `timeoutMs` |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | cwd da sessão | Raiz do workspace |

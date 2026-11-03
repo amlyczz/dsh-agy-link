@@ -201,7 +201,9 @@ export function defaultConfig(): PluginConfig {
     extraArgs: [],
     permissionMode: 'skip',
     defaultModel: '',
-    defaultEffort: '',
+    // Explicit 'high' (not ''): effort-capable models default to the highest
+    // agy offers, and the per-model choice now lives in DSH's model menu.
+    defaultEffort: 'high',
     timeoutMs: 600_000,
     longToolIdleMinutes: 240,
     /**

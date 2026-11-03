@@ -144,9 +144,9 @@ dsh plugin --profile web add dsh-agy-link
 | --- | --- | --- | --- |
 | `enabled` | `DSH_AGY_ENABLED` | `true` | 插件主开关 |
 | `agyBin` | `DSH_AGY_BIN` | 自动探测 | 显式指定 `agy` 二进制路径 |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | 权限模式：`skip`（无人值守执行）/ `plan` / `accept-edits` |
+| `permissionMode` | `DSH_AGY_MODE` | `skip` | 权限模式：`skip`（无人值守执行）/ `plan` / `accept-edits`。设置面板已不再提供切换，默认固定 `skip`；`plan` / `accept-edits` 仍可用配置或 `DSH_AGY_MODE` 覆盖（例如无头运行） |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `(agy 默认)` | 默认模型 slug |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `(模型默认)` | 思考预算：`low` / `medium` / `high` |
+| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | 思考预算：`low` / `medium` / `high`。设置面板已不再列出——请在会话的**模型下拉框**里按模型选择（与 agy 的等级一一对应，默认 `high`） |
 | `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | 在 `/model` 选择器中隐藏的模型 slug 列表（黑名单语义，新模型默认可见；建议直接在设置面板"模型显示"中点选管理） |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | 单轮活跃看门狗超时（毫秒） |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | 存在未完成工具步骤（ACTIVE）时的空闲预算（分钟）；`0` = 不抬高预算，卡死的工具按 `timeoutMs` 快速失败 |
@@ -325,9 +325,9 @@ dsh plugin --profile web add dsh-agy-link
 | --- | --- | --- | --- |
 | `enabled` | `DSH_AGY_ENABLED` | `true` | Master switch |
 | `agyBin` | `DSH_AGY_BIN` | auto-detected | Path to `agy` binary |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` (unattended execution) / `plan` / `accept-edits` |
+| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` (unattended execution) / `plan` / `accept-edits`. The settings panel no longer switches this; it stays `skip` by default, and `plan` / `accept-edits` remain available through config or `DSH_AGY_MODE` (e.g. headless runs) |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `(agy default)` | Default model slug |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `(model default)` | Thinking budget: `low` / `medium` / `high` |
+| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | Thinking budget: `low` / `medium` / `high`. No longer listed in the settings panel — pick it per model in the session **model menu** (the levels map 1:1 to agy, default `high`) |
 | `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | Model slugs hidden from the `/model` picker (deny-list, newly discovered models stay visible; manage them via the "Model visibility" row in the settings panel) |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Activity watchdog timeout in milliseconds |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget while a tool step is ACTIVE (minutes); `0` keeps the normal `timeoutMs` budget so wedged tools fail fast |
