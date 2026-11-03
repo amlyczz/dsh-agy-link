@@ -50,7 +50,7 @@ In DSH, click the `AGY (n)` badge and choose **Add Account** to complete Google 
 | `agyBin` | `DSH_AGY_BIN` | auto-detected | Path to the `agy` executable |
 | `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip`, `plan`, or `accept-edits` (no longer switchable in the settings panel; config/env still override) |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | agy default | Default model slug |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | `low`, `medium`, or `high`; choose it per model in the session model menu |
+| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | `low`, `medium`, `high`, or `auto`; the settings panel row seeds the session model menu, which can override it per model |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Activity watchdog timeout in ms |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget (minutes) while an agy tool step is still open; `0` = keep `timeoutMs` so a wedged tool fails fast |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | session cwd | Workspace root |

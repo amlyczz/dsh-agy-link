@@ -56,10 +56,21 @@ test('console dictionary keys exist in every shipped language', () => {
   const required = [
     'console.title', 'status.ready', 'status.needsAuth', 'account.add',
     'header.refreshQuota', 'quota.fiveHour', 'quota.weekly', 'permission.label',
+    'config.defaultEffort', 'config.defaultEffortDesc',
+    'effort.auto', 'effort.low', 'effort.medium', 'effort.high',
   ];
   for (const [lang, dict] of Object.entries(languages)) {
     for (const key of required) {
       assert.ok(typeof dict[key] === 'string' && dict[key]!.length > 0, `${lang} is missing "${key}"`);
     }
   }
+});
+
+test('settings panel keeps the default thinking-effort row', () => {
+  // The row is the seed for the session model menu; it was dropped once and must
+  // stay: the model menu can still override it per model.
+  const source = readFileSync(join(root, 'dist', 'client.js'), 'utf8');
+  assert.match(source, /config\.defaultEffort/)
+  assert.match(source, /setCfg\(["']defaultEffort["'], ["']high["']\)/)
+  assert.match(source, /setCfg\(["']defaultEffort["'],\s*["']['"]\)/)
 });
