@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, parseEffortUnsupported, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { utf8Bytes } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
 import { AccountPoolManager } from '../src/host/pool.ts'
@@ -738,6 +738,84 @@ test('buildArgs assembles flags per ADR-3/8/10', () => {
   })
   assert.equal(claudeArgs[claudeArgs.indexOf('--model') + 1], 'claude-opus-4-6-thinking')
   assert.ok(!claudeArgs.includes('--effort'), 'effort flag stripped for non-gemini models')
+})
+
+test('issue #67: an `--effort` refusal is learned and the call replayed without it', async () => {
+  // agy 1.4.6 refuses the WHOLE invocation when --effort is passed to a model
+  // that does not accept one, naming the model in the error. Effort support is
+  // advisory in our catalog, so the refusal is the truth: learn it, stop asking,
+  // and replay the same call once without the flag instead of failing the turn.
+  const invocations = join(workDir, 'effort-invocations.txt')
+  rmSync(invocations, { force: true })
+  const argsFile = join(workDir, 'effort-args.json')
+  process.env.FAKE_AGY_MODE = 'effort-unsupported'
+  process.env.FAKE_AGY_INVOCATION_FILE = invocations
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  try {
+    const { adapter } = makeAdapter()
+    const chunks = await collect(adapter.stream(opts([msg('user', 'hi')], { model: 'gemini-3.8-flash', reasoningEffort: 'medium' } as Partial<GenerateOptions>)))
+    const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+    const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+    assert.equal(finish.type, 'finish')
+    assert.equal(finish.reason.kind, 'stop', 'the replay must end as a normal stop, not an error')
+    assert.match(text, /answered without --effort/)
+    // Two spawns: the refused attempt, then the replay.
+    const spawns = readFileSync(invocations, 'utf8').split('\n').filter(Boolean).length
+    assert.equal(spawns, 2, 'exactly one replay')
+    // The flag survives the FIRST argv and is gone from the replay's argv.
+    const lastArgs = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    assert.equal(lastArgs.includes('--effort'), false, 'the replay must not pass --effort')
+    // Learned in-process: later runs do not ask, and the picker stops offering levels.
+    assert.equal(adapter.isEffortUnsupported('gemini-3.8-flash'), true)
+    assert.deepEqual(adapter.effortUnsupportedModels(), ['gemini-3.8-flash'])
+    const resolved = (await adapter.resolveModel('antigravity', 'gemini-3.8-flash')) as { reasoning?: unknown }
+    assert.equal(resolved.reasoning, undefined, 'a learned model advertises no efforts')
+    // A second call for the same model never asks again: one spawn, no --effort.
+    rmSync(invocations, { force: true })
+    const again = await collect(adapter.stream(opts([msg('user', 'hi again')], { model: 'gemini-3.8-flash', reasoningEffort: 'medium' } as Partial<GenerateOptions>)))
+    assert.equal((again[again.length - 1] as { reason: { kind: string } }).reason.kind, 'stop')
+    assert.equal(readFileSync(invocations, 'utf8').split('\n').filter(Boolean).length, 1)
+    assert.equal((JSON.parse(readFileSync(argsFile, 'utf8')) as string[]).includes('--effort'), false)
+  } finally {
+    delete process.env.FAKE_AGY_INVOCATION_FILE
+    delete process.env.FAKE_AGY_ARGS_FILE
+    process.env.FAKE_AGY_MODE = 'ok'
+  }
+})
+
+test('issue #67: a persisted / seeded refusal is honoured before any spawn', async () => {
+  const argsFile = join(workDir, 'seeded-args.json')
+  const invocations = join(workDir, 'seeded-invocations.txt')
+  rmSync(invocations, { force: true })
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  process.env.FAKE_AGY_INVOCATION_FILE = invocations
+  try {
+    const { adapter } = makeAdapter({}, { effortUnsupported: () => ['gemini-3.8-flash'] })
+    await collect(adapter.stream(opts([msg('user', 'hi')], { model: 'gemini-3.8-flash', reasoningEffort: 'medium' } as Partial<GenerateOptions>)))
+    // Seeded from the host's list: the very first spawn already omits the flag.
+    assert.equal(readFileSync(invocations, 'utf8').split('\n').filter(Boolean).length, 1)
+    assert.equal((JSON.parse(readFileSync(argsFile, 'utf8')) as string[]).includes('--effort'), false)
+    const resolved = (await adapter.resolveModel('antigravity', 'gemini-3.8-flash')) as { reasoning?: unknown }
+    assert.equal(resolved.reasoning, undefined)
+    // An unrelated model keeps its levels.
+    const other = (await adapter.resolveModel('antigravity', 'gemini-3.7-flash')) as { reasoning?: { efforts?: unknown[] } }
+    assert.ok(Array.isArray(other.reasoning?.efforts), 'unrelated models keep their effort row')
+  } finally {
+    delete process.env.FAKE_AGY_ARGS_FILE
+    delete process.env.FAKE_AGY_INVOCATION_FILE
+  }
+})
+
+test('parseEffortUnsupported reads the real agy refusal text', () => {
+  const real = 'invalid model selection (--model "gemini-3.8-flash" --effort "medium"): --effort is not supported for model "gemini-3.8-flash"'
+  assert.equal(parseEffortUnsupported(real), 'gemini-3.8-flash')
+  assert.equal(parseEffortUnsupported('--effort is not supported for model gemini-4-argon'), 'gemini-4-argon')
+  assert.equal(parseEffortUnsupported('provider/x --effort "medium" is not supported for model "x-1"'), 'x-1')
+  assert.equal(parseEffortUnsupported('quota exhausted'), null)
+  assert.equal(parseEffortUnsupported(''), null)
+  // A model refusal WITHOUT any --effort mention is not ours to act on.
+  assert.equal(parseEffortUnsupported('invalid model selection (--model "nope")'), null)
 })
 
 test('buildDigest bounds output and keeps newest turns', () => {

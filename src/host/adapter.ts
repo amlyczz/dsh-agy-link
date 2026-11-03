@@ -353,6 +353,37 @@ export function elideMiddle(text: string, capBytes: number): string {
   return head + marker + text.slice(tailStart)
 }
 
+/**
+ * agy refuses the WHOLE invocation when `--effort` is passed to a model that
+ * does not accept one (issue #67, agy 1.4.6 / Windows):
+ *
+ *   invalid model selection (--model "gemini-3.8-flash" --effort "medium"):
+ *   --effort is not supported for model "gemini-3.8-flash"
+ *
+ * Effort support is a MODEL property, and our catalog only knows it as advisory
+ * (the fallback list is a guess, and agy builds differ). The refusal names the
+ * exact model, which is what makes learning it possible.
+ *
+ * @param text - stdout envelope error, stderr tail, or a mapped failure message.
+ * @returns the refused model id, or null when this is not an effort refusal.
+ */
+export function parseEffortUnsupported(text: string): string | null {
+  if (text === '' || !/--effort/i.test(text)) return null
+  const named = text.match(/--effort(?:\s+"?[A-Za-z0-9._-]+"?)?\s+is not supported for model\s+"?([A-Za-z0-9._:\/-]+)"?/i)
+  if (named !== null && named[1] !== undefined && named[1] !== '') return named[1]
+  if (/invalid model selection/i.test(text)) {
+    const model = text.match(/--model\s+"?([A-Za-z0-9._:\/-]+)"?/i)
+    if (model !== null && model[1] !== undefined && model[1] !== '') return model[1]
+  }
+  return null
+}
+
+/** Same-model comparison that ignores a provider prefix and case. */
+export function sameModelId(a: string, b: string): boolean {
+  const norm = (s: string): string => s.trim().toLowerCase().replace(/^.*\//, '')
+  return norm(a) === norm(b) && norm(a) !== ''
+}
+
 /** agy 1.4.x silently truncates a single user message at 192,000 UTF-8 bytes
  * (measured: a 300 KB ASCII prompt kept exactly 192,000 B; a 490 KB CJK prompt
  * kept 191,998 B) and the cut lands on the TAIL. Every prompt we build must
@@ -524,6 +555,16 @@ export interface AgyAdapterDeps {
   getMediaBaseUrl?: () => string | null
   /** Synchronizes active model selection back to DSH input box / session */
   syncSessionModel?: (sessionId: string, model: string, effort?: string) => void
+  /**
+   * Models already known to reject `--effort` (learned from an agy refusal and
+   * persisted by the host, so a restart does not repeat the failed attempt).
+   */
+  effortUnsupported?: () => readonly string[]
+  /**
+   * A model refused `--effort`: persist it and let the picker re-read the
+   * capabilities it advertises (its effort row must disappear).
+   */
+  onEffortUnsupported?: (model: string) => void
 }
 
 // ---- stream() -------------------------------------------------------------
@@ -697,6 +738,52 @@ async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: number):
 }
 
 export class AgyAdapter extends LlmAdapter {
+  /**
+   * Models agy has refused `--effort` for (issue #67). Seeded from the host's
+   * persisted list on first use, then grown by each refusal. Effort support is
+   * advisory in our catalog, so the refusal — not the catalog — is the truth.
+   */
+  private effortLessCache: Set<string> | null = null
+
+  /** Models currently known to reject `--effort` (persisted seed + learned). */
+  effortUnsupportedModels(): string[] {
+    return [...this.effortLessModels()]
+  }
+
+  /** True when `--effort` must not be passed to this model. */
+  isEffortUnsupported(model: string): boolean {
+    if (model === '') return false
+    for (const known of this.effortLessModels()) {
+      if (sameModelId(known, model)) return true
+    }
+    return false
+  }
+
+  /** Learn a refusal: remember it, tell the host to persist + refresh the picker. */
+  learnEffortUnsupported(model: string): void {
+    if (model === '') return
+    const set = this.effortLessModels()
+    if (this.isEffortUnsupported(model)) return
+    set.add(model)
+    this.deps.log?.(
+      'agy refused --effort for model "' + model + '" — it is now run without an effort flag'
+        + ' (effort support is advisory in the catalog; see issue #67)',
+    )
+    try {
+      this.deps.onEffortUnsupported?.(model)
+    } catch {
+      // Persistence is best-effort: the in-process learning already unblocks it.
+    }
+  }
+
+  private effortLessModels(): Set<string> {
+    if (this.effortLessCache === null) {
+      const seeded = this.deps.effortUnsupported?.() ?? []
+      this.effortLessCache = new Set((Array.isArray(seeded) ? seeded : []).filter((m) => typeof m === 'string' && m.trim() !== ''))
+    }
+    return this.effortLessCache
+  }
+
   private readonly warnedKeys = new Set<string>()
   /** sessionKey -> in-flight run, for steer-time preemption. */
   private readonly activeRuns = new Map<string, RunRecording>()
@@ -963,7 +1050,9 @@ export class AgyAdapter extends LlmAdapter {
       context: { contextWindow },
       defaultMaxTokens: typeof cfg.maxTokensDefault === 'number' && cfg.maxTokensDefault > 0 ? cfg.maxTokensDefault : 8192,
     }
-    if (entry && Array.isArray(entry.efforts) && entry.efforts.length > 0) {
+    if (this.isEffortUnsupported(cleanId)) {
+      // Learned refusal (issue #67): do not offer levels the model rejects.
+    } else if (entry && Array.isArray(entry.efforts) && entry.efforts.length > 0) {
       const cleanEfforts = Array.from(new Set(entry.efforts.filter((e) => typeof e === 'string' && e.trim() !== '')))
       if (cleanEfforts.length > 0) {
         const def = defaultEffortFor({ ...entry, efforts: cleanEfforts }, cfg)
@@ -1064,7 +1153,60 @@ export class AgyAdapter extends LlmAdapter {
     return args
   }
 
+  /**
+   * Effort self-healing wrapper around {@link streamAttempt} (issue #67).
+   *
+   * agy refuses an ENTIRE invocation when `--effort` is passed to a model that
+   * does not accept one, and that refusal arrives before any output — so the call
+   * is safe to replay. On the refusal the model is learned as effort-less (the
+   * host persists it, so its picker row disappears and later runs never ask) and
+   * the same call is replayed once without `--effort`: a hard turn failure
+   * becomes one extra spawn. The refusal text itself is the evidence that WE
+   * passed the flag, so the replay does not depend on who requested the effort
+   * (an explicit request, `defaultEffort`, or the aux channel's pinning).
+   */
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    for (let attempt = 0; ; attempt++) {
+      // A refused attempt emits a bare `usage` chunk before its error finish
+      // (measured on agy 1.4.6). Usage is telemetry, not output: hold it back so
+      // a replayed attempt cannot double-count tokens, and treat only real
+      // content as "the caller has already seen something".
+      let emitted = false
+      const telemetry: StreamChunk[] = []
+      let finish: StreamChunk | null = null
+      for await (const chunk of this.streamAttempt(options, attempt > 0)) {
+        if (chunk.type === 'finish') {
+          // Hold the finish back one step: a refusal must not reach the caller
+          // when the replay is about to succeed.
+          finish = chunk
+          continue
+        }
+        if (chunk.type === 'usage') {
+          telemetry.push(chunk)
+          continue
+        }
+        emitted = true
+        yield chunk
+      }
+      if (finish === null) {
+        for (const chunk of telemetry) yield chunk
+        return
+      }
+      if (attempt === 0 && !emitted && finish.reason.kind === 'error') {
+        const failure = (finish.reason as { failure?: { message?: string } }).failure
+        const refused = parseEffortUnsupported(String(failure?.message ?? ''))
+        if (refused !== null) {
+          this.learnEffortUnsupported(refused)
+          continue
+        }
+      }
+      for (const chunk of telemetry) yield chunk
+      yield finish
+      return
+    }
+  }
+
+  private async *streamAttempt(options: GenerateOptions, suppressEffort = false): AsyncIterable<StreamChunk> {
     const cfg = this.deps.getConfig()
     const bin = this.deps.bin()
     if (!bin) throw new LlmError('agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install', Err.AGY_NOT_INSTALLED)
@@ -1184,8 +1326,13 @@ export class AgyAdapter extends LlmAdapter {
     // The catalog is advisory (the fallback list may be stale): accept unknown
     // ids, but validate explicit reasoning efforts against known entries.
     let effort: string | undefined
-    if (isGemini) {
-      if (isAux && !isTranslate) {
+    if (isGemini && !suppressEffort) {
+      if (this.isEffortUnsupported(model)) {
+        // agy told us this model takes no --effort (issue #67). Asking again
+        // would fail the whole invocation, so the flag is dropped silently —
+        // the requested level is simply not selectable on this agy build.
+        effort = undefined
+      } else if (isAux && !isTranslate) {
         effort = 'low'
       } else if (options.reasoningEffort !== undefined) {
         const wanted = String(options.reasoningEffort)

@@ -17,6 +17,8 @@ export interface DoctorDeps {
   catalog: () => ModelCatalog
   store: () => SessionStore
   recentLines: () => readonly string[];
+  /** Models agy refused `--effort` for (issue #67); absent = none known. */
+  effortUnsupported?: () => readonly string[]
 }
 
 /**
@@ -88,6 +90,12 @@ export function writeDoctorReport(deps: DoctorDeps): string {
   lines.push('- catalog: ' + cat.source + ' — ' + cat.models.length + ' models' + (cat.lastError === undefined ? '' : ' — error: ' + cat.lastError))
   for (const m of cat.models) {
     lines.push('  - ' + m.id + (m.efforts ? ' [' + m.efforts.join('/') + ']' : ''))
+  }
+  const effortLess = deps.effortUnsupported?.() ?? []
+  if (effortLess.length > 0) {
+    // Support signal for issue #67: the catalog is advisory, so this records the
+    // models whose `--effort` this agy build actually refused.
+    lines.push('- effort-unsupported (learned from agy refusals): ' + effortLess.join(', '))
   }
   lines.push('- conversation bindings: ' + Object.keys(bindings).length)
   for (const [k, b] of Object.entries(bindings)) {

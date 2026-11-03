@@ -4,6 +4,8 @@
 //   real-fail (soft capacity) | real-bare (deterministic bare result error)
 //   quota-once (account-scoped failure on the FIRST invocation only, then succeeds)
 //   location-denied — result envelope with the real "User location is not supported" refusal, exit 3
+//   effort-unsupported — issue #67: refuses `--effort` for the named model with
+//                   exit 1, and answers normally when the effort is absent
 //   ok            — legacy flat event shapes (kept for compat coverage)
 //   real          — real agy 1.1.15 stream-json shapes (nested step_update
 //                   envelopes, agent_response text_delta fragments,
@@ -92,6 +94,40 @@ if (mode === 'location-denied') {
     },
   })
   process.exit(3)
+}
+
+// Issue #67: agy refuses the WHOLE invocation when `--effort` is passed to a
+// model that does not accept one (agy 1.4.6 on Windows, model gemini-3.8-flash).
+// The refusal carries the exact model id, and a run WITHOUT --effort succeeds —
+// that is what the adapter has to learn from.
+if (mode === 'effort-unsupported') {
+  const at = argv.indexOf('--effort')
+  if (at >= 0) {
+    const effort = argv[at + 1] ?? ''
+    const modelAt = argv.indexOf('--model')
+    const model = modelAt >= 0 ? (argv[modelAt + 1] ?? '') : ''
+    emit({
+      event: 'result',
+      result: {
+        conversation_id: '',
+        status: 'ERROR',
+        response: '',
+        error: 'invalid model selection (--model "' + model + '" --effort "' + effort + '"): --effort is not supported for model "' + model + '"',
+        duration_seconds: 0,
+        num_turns: 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    })
+    process.exit(1)
+  }
+  // Without --effort the SAME call succeeds. Text-only steps (no tool step), so
+  // the span ends as a plain `stop` and the test can tell a replay from a
+  // tool-continuation.
+  emit({ event: 'init', conversation_id: conv, model: 'gemini-3.8-flash' })
+  emit({ event: 'step_update', idx: 1, step_type: 'text', text: 'answered' })
+  emit({ event: 'step_update', idx: 1, step_type: 'text', text: 'answered without --effort' })
+  emit({ event: 'result', result: { conversation_id: conv, status: 'DONE', response: 'answered without --effort', duration_seconds: 1, num_turns: 1, usage: { input_tokens: 900, output_tokens: 40, total_tokens: 940 } } })
+  process.exit(0)
 }
 
 // Google-side account/region eligibility refusal (issue #32).

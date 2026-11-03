@@ -292,6 +292,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     log,
     runs,
     getMediaBaseUrl: () => (webServerPort.current ? `http://127.0.0.1:${webServerPort.current}/plugins/agy-link/media` : null),
+    effortUnsupported: () => readEffortUnsupported(),
+    onEffortUnsupported: (model) => rememberEffortUnsupported(model),
     sessionCwd: (sessionId) => {
       const sessions = ctx.get('sessions') as { get(id: unknown): { header?: { cwd?: string } } | undefined } | undefined
       return sessions?.get(sessionId)?.header?.cwd
@@ -449,6 +451,38 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       })()
     }
     return appendPluginRecordPromise
+  }
+
+  // Models agy refused `--effort` for (issue #67). Effort support is advisory in
+  // our catalog — with the fallback list active, an agy build that rejects the
+  // flag for a model would otherwise fail EVERY turn that asks for a level. The
+  // refusal is learned once, persisted here, and the picker is told to re-read
+  // the capabilities (the model's effort row then disappears).
+  const effortUnsupportedPath = (): string => join(stateDir(), 'effort-unsupported.json')
+  let effortUnsupportedCache: string[] | null = null
+  const readEffortUnsupported = (): readonly string[] => {
+    if (effortUnsupportedCache !== null) return effortUnsupportedCache
+    try {
+      const raw = existsSync(effortUnsupportedPath()) ? JSON.parse(readFileSync(effortUnsupportedPath(), 'utf8')) : []
+      effortUnsupportedCache = Array.isArray(raw)
+        ? raw.filter((m): m is string => typeof m === 'string' && m.trim() !== '')
+        : []
+    } catch {
+      effortUnsupportedCache = []
+    }
+    return effortUnsupportedCache
+  }
+  const rememberEffortUnsupported = (model: string): void => {
+    const known = readEffortUnsupported()
+    if (known.some((m) => m.trim().toLowerCase() === model.trim().toLowerCase())) return
+    effortUnsupportedCache = [...known, model]
+    try {
+      mkdirSync(stateDir(), { recursive: true })
+      writeFileSync(effortUnsupportedPath(), JSON.stringify(effortUnsupportedCache, null, 2), 'utf8')
+    } catch (e) {
+      log('failed to persist the effort-unsupported list: ' + String(e))
+    }
+    notifyPicker()
   }
 
   const translation = new TranslationService({
@@ -629,6 +663,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           catalog: () => catalog,
           store: () => store,
           recentLines: () => lastParser.recentLines,
+          effortUnsupported: () => adapter.effortUnsupportedModels(),
         })
       },
     }),
@@ -825,6 +860,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           translateTargetLanguage: cfg.translateTargetLanguage,
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },
           bindings: Object.keys(store.all()).length,
+          effortUnsupported: adapter.effortUnsupportedModels(),
               lastRun,
         })
       })()
