@@ -58,7 +58,7 @@ function loadPlugin(): { plugin: { apply: (ctx: unknown) => void; inject: string
         className: '',
         children: [],
         classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
-        setAttribute(k, v) { this.attrs[k] = v; this.id = k === 'id' ? v : this.id },
+        setAttribute(this: NodeAny, k: string, v: string) { this.attrs[k] = v; if (k === 'id') this.id = v },
         addEventListener: () => {},
         removeEventListener: () => {},
         appendChild: (child: unknown) => { (node as unknown as { children: unknown[] }).children.push(child) },

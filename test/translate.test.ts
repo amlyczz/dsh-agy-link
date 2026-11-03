@@ -9,7 +9,9 @@ import {
   finalAnswerOfTurn,
   isTurnRunning,
   lastCompletedTurn,
+  buildTranslationSetup,
   resolveTranslateTarget,
+  sessionDigest,
   sessionEvents,
   turnOfMessage,
   type SessionEventLike,
@@ -26,6 +28,11 @@ const catalog: Catalog = {
     { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', efforts: ['low', 'medium', 'high'] },
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', efforts: null },
   ],
+}
+
+function messageIdOfTest(ev: SessionEventLike): string | undefined {
+  const d = (ev as { data?: { message?: { id?: string } } }).data
+  return d?.message?.id
 }
 
 function assistant(turn: number, step: number, text: string, model = 'auto/deepseek-v4.1-flash', id = `m-${turn}-${step}`): SessionEventLike {
@@ -47,11 +54,13 @@ function assistant(turn: number, step: number, text: string, model = 'auto/deeps
 
 const log: SessionEventLike[] = [
   { type: 'turn/start', seq: 1, data: { turn: 1 } },
+  { type: 'user/message', seq: 2, data: { turn: 1, message: { role: 'user', id: 'u-1-1', content: [{ type: 'text', text: '把翻译功能做好' }] } } },
   assistant(1, 1, '先看下代码。'),
   assistant(1, 2, ''),
   assistant(1, 3, '最终答复：构建通过。'),
   { type: 'turn/end', seq: 110, data: { turn: 1, reason: { kind: 'completed' } } },
   { type: 'turn/start', seq: 111, data: { turn: 2 } },
+  { type: 'user/message', seq: 112, data: { turn: 2, message: { role: 'user', id: 'u-2-1', content: [{ type: 'text', text: '再修 hover' }] } } },
   assistant(2, 1, ''),
   assistant(2, 2, '第二个回合的答案。'),
 ]
@@ -149,6 +158,8 @@ interface RunnerCall {
   prompt: string
   model: string
   effort?: string
+  text?: string
+  setup?: string
 }
 
 function makeService(options: {
@@ -168,8 +179,16 @@ function makeService(options: {
     cfg: () => cfg,
     catalog: () => catalog,
     getSession: (id) => (id === 's1' ? { id: 's1', log: events } : undefined),
+    sessionCwd: (id) => (id === 's1' ? '/work/project' : undefined),
+    sessionLogPath: (id) => (id === 's1' ? '/dsh/sessions/-work-project-/session-s1/session.v4.jsonl.zstd' : undefined),
     run: async (req) => {
-      calls.push({ prompt: req.prompt, model: req.model, ...(req.effort === undefined ? {} : { effort: req.effort }) })
+      calls.push({
+        prompt: req.prompt,
+        model: req.model,
+        ...(req.effort === undefined ? {} : { effort: req.effort }),
+        ...(req.text === undefined ? {} : { text: req.text }),
+        ...(req.setup === undefined ? {} : { setup: req.setup }),
+      })
       options.onRun?.(calls[calls.length - 1]!)
       const next = options.runs[Math.min(index, options.runs.length - 1)]!
       index++
@@ -231,6 +250,38 @@ test('exhausted quota maps to NO_ACCOUNT', async () => {
   assert.equal(res.ok, false)
   assert.equal(res.code, 'NO_ACCOUNT')
   assert.match(res.error ?? '', /quota/i)
+})
+
+test('the bound translation conversation gets a persona once and the text after', async () => {
+  // One agy conversation per DSH session: the setup carries WHO agy is, which
+  // session it serves, that session's workspace, where its history lives and how
+  // to read it, plus a bounded digest — and the raw text always rides along so
+  // the adapter can use the same call to seed and translate.
+  const { service, calls } = makeService({ runs: [{ ok: true, text: '人话版' }] })
+  const res = await service.translate({ text: '一段黑话', sessionId: 's1' })
+  assert.equal(res.ok, true)
+  const call = calls[0]!
+  assert.equal(call.text, '一段黑话', 'the raw text is passed through for the bound path')
+  const setup = call.setup ?? ''
+  assert.match(setup, /人话翻译器/)
+  assert.match(setup, /DSH 会话 id：s1/)
+  assert.match(setup, /\/work\/project/, 'agy is told the session workspace')
+  assert.match(setup, /session\.v4\.jsonl\.zstd/, 'and where the raw session log is')
+  assert.match(setup, /zstd -dc/, 'and how to read it')
+  assert.match(setup, /<digest>[\s\S]*用户：/, 'with a digest of the asks so the first reply has context')
+  assert.match(setup, /只把需要翻译的原文发给你/)
+  // The self-contained prompt still exists for hosts that do NOT bind.
+  assert.match(call.prompt, /通俗易懂/)
+  assert.match(call.prompt, /<content>\n一段黑话\n<\/content>/)
+})
+
+test('sessionDigest keeps asks and answers, newest first, bounded', () => {
+  const d = sessionDigest(log, 8_000)
+  assert.match(d, /用户：/)
+  assert.match(d, /回复：/)
+  assert.ok(d.indexOf('最终答复：构建通过。') >= 0, 'the answers are in there')
+  const tight = sessionDigest(log, 400)
+  assert.ok(tight.length <= 400 + 20, 'bounded, got ' + tight.length)
 })
 
 test('empty text short-circuits without a model call', async () => {
@@ -329,8 +380,11 @@ test('autoTranslateTurn is skipped when the switch is off', async () => {
 })
 
 test('autoTranslateTurn skips a turn already produced by the translate model', async () => {
-  const events = [...log]
-  events[3] = assistant(1, 3, 'Gemini 自己的输出', 'gemini-3.8-flash')
+  // Rewrite by identity, not by index: the fixture gained a user event and a
+  // positional edit silently retargeted the wrong message.
+  const events = log.map((ev) => (ev.type === 'assistant/message' && messageIdOfTest(ev) === 'm-1-3'
+    ? assistant(1, 3, 'Gemini 自己的输出', 'gemini-3.8-flash')
+    : ev))
   let runs = 0
   const service = new TranslationService({
     cfg: () => defaultConfig(),

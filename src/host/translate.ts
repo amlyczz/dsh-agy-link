@@ -102,8 +102,60 @@ export interface SessionEventLike {
   data?: unknown
 }
 
+/** Persona block for the bound translation conversation (sent once). */
+export interface TranslationSetupInput {
+  sessionId: string
+  cwd?: string
+  logPath?: string
+  targetLanguage: string
+  digest?: string
+}
+
+/**
+ * The block agy receives ONCE, when its translation conversation is created:
+ * who it is, which DSH session it serves, where that session's history lives and
+ * how to read it, plus a bounded digest so the first translation already has
+ * context. Later translations send only the source text (see the adapter's
+ * `agyTranslateSession` handling).
+ */
+export function buildTranslationSetup(input: TranslationSetupInput): string {
+  const lang = input.targetLanguage.trim() === '' ? '中文（简体）' : input.targetLanguage.trim()
+  const lines = [
+    '你是「人话翻译器」，长期服务于 DSH 的一个会话。以后我只把需要翻译的原文发给你，你直接把它讲成人话。',
+    '',
+    '- DSH 会话 id：' + (input.sessionId === '' ? '(未知)' : input.sessionId),
+  ]
+  if (input.cwd !== undefined && input.cwd !== '') lines.push('- 该会话的工作目录：' + input.cwd)
+  if (input.digest !== undefined && input.digest.trim() !== '') {
+    lines.push('', '该会话到目前为止的摘要（供你理解上下文，不必翻译它）：', '', '<digest>', input.digest.trim(), '</digest>')
+  }
+  if (input.logPath !== undefined && input.logPath !== '') {
+    lines.push(
+      '',
+      '需要完整历史时可以自己读：原始日志在 ' + input.logPath + '（zstd 压缩的 JSONL，每行一个事件）。读取示例：',
+      "  zstd -dc '" + input.logPath + "' | jq -c 'select(.type==\"assistant/message\") | {turn:.data.turn, text:([.data.message.content[]?.text] | join(\"\"))}' | tail -40",
+      '没有 jq 就用 python3 逐行 json.loads 过滤；不要修改这些文件。',
+    )
+  }
+  lines.push(
+    '',
+    '规则：',
+    '1. 说' + lang + '的大白话、短句，别用行话和缩写；别写标题、别分点列条目；别改原意、别加原文没有的内容。',
+    '2. 只输出讲解本身，不要前言、不要复述我发的内容、不要问我问题。',
+    '3. 默认直接翻译我发的这段文字；需要上下文时可以读上面的摘要或日志文件。',
+  )
+  return lines.join('\n')
+}
+
 export interface TranslationRunnerRequest {
   prompt: string
+  /**
+   * The message a BOUND translation conversation receives: the short request line
+   * with the source inside it (the persona went out once, when it was created).
+   */
+  text?: string
+  /** Persona block for the bound conversation (sent only when it is created). */
+  setup?: string
   sessionId?: string
   model: string
   effort?: string
@@ -133,6 +185,10 @@ export interface TranslationServiceDeps {
   appendRecord?: (sessionId: string, record: TranslationRecord) => number | null | Promise<number | null>
   /** Per-session auto-translate override (set by `/tsl auto on|off`). */
   autoEnabled?: (sessionId: string) => boolean
+  /** The DSH session's workspace, handed to agy so its cwd matches the project. */
+  sessionCwd?: (sessionId: string) => string | undefined
+  /** Absolute path of that session's raw log, so agy can read the history itself. */
+  sessionLogPath?: (sessionId: string) => string | undefined
   log?: (msg: string) => void
   now?: () => number
 }
@@ -352,6 +408,54 @@ export function findTranslationRecord(
     found = { seq: num(ev.seq) ?? 0, text, model: recordModel, effort: recordEffort }
   }
   return found
+}
+
+/** Text of one `user/message` event (the asks that carry the thread). */
+function userTextOf(ev: SessionEventLike): string {
+  const d = dataOf(ev)
+  const message = d.message !== null && typeof d.message === 'object' ? (d.message as Record<string, unknown>) : {}
+  const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : []
+  return content
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => String(b.text))
+    .join('\n')
+}
+
+/**
+ * A bounded "what happened so far" digest for the setup block: the session's asks
+ * and final answers, newest kept, each clipped. The full log stays on disk for
+ * agy to read itself when it wants more.
+ */
+export function sessionDigest(events: readonly SessionEventLike[], maxChars: number): string {
+  const cap = Math.max(200, Math.round(maxChars / 4))
+  const parts: string[] = []
+  const done = new Set<number>()
+  for (const ev of events) {
+    if (ev.type === 'user/message') {
+      const text = userTextOf(ev).trim()
+      if (text !== '') parts.push('用户：' + clip(text, 400))
+      continue
+    }
+    if (ev.type !== 'assistant/message') continue
+    const turn = num(dataOf(ev).turn)
+    if (turn === undefined || done.has(turn)) continue
+    const answer = finalAnswerOfTurn(events, turn)
+    if (answer === null || answer.text.trim() === '') continue
+    done.add(turn)
+    parts.push('回复：' + clip(answer.text, 900))
+  }
+  let kept = ''
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const next = parts[i]! + '\n' + kept
+    if (next.length > cap) break
+    kept = next
+  }
+  return kept.trim()
+}
+
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= max ? flat : flat.slice(0, max) + '…'
 }
 
 /** The translator instruction. Kept in the user message (aux calls drop
@@ -626,10 +730,19 @@ export class TranslationService {
     const chunks = chunkText(text, cfg.translateMaxChars)
     const out: string[] = []
     let accountId: string | undefined
+    // The persona block is rebuilt per request (pure) but only used by the
+    // adapter when the translation conversation is created.
+    const setupEvents = sessionId === undefined ? [] : sessionEvents(this.deps.getSession(sessionId))
     for (const chunk of chunks) {
       const res = await this.withRetry(
         {
+          // Self-contained prompt: used verbatim when the run is NOT bound to a
+          // translation conversation (older host, or the knob turned off).
           prompt: buildTranslationPrompt(chunk, language, cfg.translateMaxChars),
+          // Bound path: the raw text alone, plus the persona that is sent only
+          // when that conversation is created.
+          text: chunk,
+          setup: sessionId === undefined ? undefined : this.setupFor(sessionId, language, setupEvents),
           ...(sessionId === undefined ? {} : { sessionId }),
           model: target.model,
           ...(target.effort === '' ? {} : { effort: target.effort }),
@@ -708,6 +821,24 @@ export class TranslationService {
       if (attempt < max) await delay(pause, signal)
     }
     return last
+  }
+
+  /**
+   * Persona block for one DSH session's translation conversation. Built on every
+   * request (pure and cheap) but only USED when that conversation is created, so
+   * a conversation that was lost re-seeds itself with fresh context.
+   */
+  private setupFor(sessionId: string, language: string, events: readonly SessionEventLike[]): string | undefined {
+    const cwd = this.deps.sessionCwd?.(sessionId)
+    const logPath = this.deps.sessionLogPath?.(sessionId)
+    const digest = sessionDigest(events, this.deps.cfg().translateMaxChars)
+    return buildTranslationSetup({
+      sessionId,
+      targetLanguage: language,
+      ...(cwd === undefined || cwd === '' ? {} : { cwd }),
+      ...(logPath === undefined || logPath === '' ? {} : { logPath }),
+      ...(digest === '' ? {} : { digest }),
+    })
   }
 
   /** Translate one turn of a session and (optionally) persist the card record. */

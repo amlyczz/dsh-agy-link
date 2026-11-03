@@ -6,7 +6,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dshHome, overridesPath, readOverrides, resolveConfig, stateDir } from './common/config.ts'
 import { Err, PLUGIN_ID, PROVIDER_ID, type PluginConfig } from './common/types.ts'
 import type { ManagedAccount } from './common/pool-types.ts'
@@ -294,10 +294,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     getMediaBaseUrl: () => (webServerPort.current ? `http://127.0.0.1:${webServerPort.current}/plugins/agy-link/media` : null),
     effortUnsupported: () => readEffortUnsupported(),
     onEffortUnsupported: (model) => rememberEffortUnsupported(model),
-    sessionCwd: (sessionId) => {
-      const sessions = ctx.get('sessions') as { get(id: unknown): { header?: { cwd?: string } } | undefined } | undefined
-      return sessions?.get(sessionId)?.header?.cwd
-    },
+    sessionCwd: (sessionId) => sessionWorkspace(sessionId),
     sessionGoal: (sessionId) => {
       try {
         const agents = (ctx.get('agents') as { get(id: unknown): unknown } | undefined)
@@ -485,11 +482,40 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     notifyPicker()
   }
 
+  /** The DSH session's own workspace (agy runs there, per the translation spec). */
+  const sessionWorkspace = (sessionId: string): string | undefined => {
+    const sessions = ctx.get('sessions') as { get(id: unknown): { header?: { cwd?: string } } | undefined } | undefined
+    return sessions?.get(sessionId)?.header?.cwd
+  }
+  /**
+   * Absolute path of a DSH session's raw log. Handed to agy in the translation
+   * setup so it can read the conversation itself on demand (the bucket directory
+   * name is derived from the workspace, so the session id is what we search by).
+   */
+  const sessionLogFile = (sessionId: string): string | undefined => {
+    if (sessionId === '') return undefined
+    try {
+      const root = join(dshHome(), 'sessions')
+      for (const bucket of readdirSync(root)) {
+        const dir = join(root, bucket, 'session-' + sessionId)
+        if (!existsSync(dir)) continue
+        for (const name of readdirSync(dir)) {
+          if (name.startsWith('session.') && name.endsWith('.jsonl.zstd')) return join(dir, name)
+        }
+      }
+    } catch {
+      // No sessions directory (or no permission): the setup simply omits the path.
+    }
+    return undefined
+  }
+
   const translation = new TranslationService({
     cfg: getConfig,
     catalog: () => catalog.get(),
     getSession: (id) => sessionsSvc()?.get(id),
     autoEnabled: (id) => sessionAuto.get(id) ?? getConfig().autoTranslate,
+    sessionCwd: (id) => sessionWorkspace(id),
+    sessionLogPath: (id) => sessionLogFile(id),
     log,
     run: async (req) => {
       const startedAt = Date.now()
@@ -499,8 +525,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       const signal = req.signal === undefined ? controller.signal : AbortSignal.any([req.signal, controller.signal])
       try {
         const messages = [createUserMessage({ content: [{ type: 'text', text: req.prompt }], source: { kind: 'user' } })]
-        // `purpose:'translation'` is this plugin's own auxiliary route (see
-        // AgyAdapter.stream): no conversation binding, no tools, plan mode.
+        // `purpose:'translation'` is this plugin's own route (see
+        // AgyAdapter.stream): plan mode, no tool mirroring, and — unlike the
+        // other aux purposes — a conversation of its OWN per DSH session, so the
+        // persona is sent once and later translations carry only the text.
         const options = {
           provider: PROVIDER_ID,
           model: req.model,
@@ -510,6 +538,16 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           ...(req.effort === undefined || req.effort === '' ? {} : { reasoningEffort: req.effort }),
           purpose: 'translation',
           signal,
+          // One agy conversation per DSH session for translations: the PERSONA
+          // (who agy is, which DSH session it serves, where that session's
+          // history lives, plus a digest) is sent once. The short request line
+          // still rides every call — measured on real agy, a bare text or even a
+          // 6-char cue in a bound conversation produced an EMPTY or off-task
+          // answer ("I am researching the codebase…"), while the one-liner
+          // answered immediately every time.
+          ...(getConfig().translateBindConversation && req.setup !== undefined
+            ? { agyTranslateSession: { setup: req.setup, text: req.prompt } }
+            : {}),
         } as unknown as GenerateOptions
         let text = ''
         let failure: { code?: string; message?: string } | null = null
@@ -1243,7 +1281,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
           'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
-          'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateMinIntervalMs',
+          'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })

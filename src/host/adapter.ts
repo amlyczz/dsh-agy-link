@@ -1221,6 +1221,22 @@ export class AgyAdapter extends LlmAdapter {
     // Title calls are aux, but must not be forced into plan mode (that drops the
     // length/format constraints): see the mode selection below.
     const isAux = options.purpose === 'compaction' || isTitle || isReview || isTranslate
+    // Translation with its OWN agy conversation (1:1 with the DSH session). The
+    // host hands over two strings: `setup` (persona + the DSH session id + how to
+    // read that session's history) and `text` (this reply's source). The setup is
+    // sent ONCE, when the conversation is created; every later translation sends
+    // only the text, because agy already holds the persona. The conversation is
+    // bound under `${sessionKey}#tsl` so it never collides with the turn
+    // conversation of the same DSH session.
+    const translateSessionRaw = (options as { agyTranslateSession?: unknown }).agyTranslateSession
+    const translateSession =
+      isTranslate && typeof translateSessionRaw === 'object' && translateSessionRaw !== null
+        ? {
+            setup: String((translateSessionRaw as { setup?: unknown }).setup ?? ''),
+            text: String((translateSessionRaw as { text?: unknown }).text ?? ''),
+          }
+        : null
+    const isTranslateSession = translateSession !== null
     if (isAux && !isReview && !isTranslate && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
@@ -1521,13 +1537,17 @@ export class AgyAdapter extends LlmAdapter {
     // families the user is not currently running).
     if (account && !isAux) this.deps.pool?.markAccountActive(account.id)
 
-    const sessionAccountKey = account ? `${sessionKey}:${account.id}` : sessionKey
+    // A translation conversation is keyed apart from the turn conversation of the
+    // same DSH session, and it persists like one (the point of the 1:1 mapping).
+    const bindingKey = isTranslateSession && sessionKey !== '' ? `${sessionKey}#tsl` : sessionKey
+    const persistBinding = !isAux || isTranslateSession
+    const sessionAccountKey = account ? `${bindingKey}:${account.id}` : bindingKey
     let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
-    if (binding === undefined && sessionKey !== '') {
-      binding = this.deps.store.get(sessionKey)
+    if (binding === undefined && bindingKey !== '') {
+      binding = this.deps.store.get(bindingKey)
       if (binding === undefined && account === undefined) {
         for (const [k, b] of Object.entries(this.deps.store.all())) {
-          if (k.startsWith(`${sessionKey}:`)) {
+          if (k.startsWith(`${bindingKey}:`)) {
             binding = b
             break
           }
@@ -1559,7 +1579,7 @@ export class AgyAdapter extends LlmAdapter {
 
     // Model switch detection: If model changed in the session, drop stale agy conversation binding
     const currentModel = activeModel === '' ? cfg.defaultModel : activeModel
-    if (!isAux && binding !== undefined && binding.model && binding.model !== currentModel) {
+    if (persistBinding && binding !== undefined && binding.model && binding.model !== currentModel) {
       if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
       binding = undefined
     }
@@ -1574,7 +1594,7 @@ export class AgyAdapter extends LlmAdapter {
       (binding.lastMessageCount > 10 && messages.length < Math.floor(binding.lastMessageCount * 0.8)) ||
       (binding.lastMessageCount <= 10 && messages.length < binding.lastMessageCount - 2)
     )
-    if (!isAux && binding !== undefined && isCompacted) {
+    if (persistBinding && binding !== undefined && isCompacted) {
       if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
       binding = undefined
     } else if (binding !== undefined && messages.length < binding.lastMessageCount) {
@@ -1587,7 +1607,17 @@ export class AgyAdapter extends LlmAdapter {
     // digest may add one before the multimodal section runs.
     let stagedDirs: string[] = []
     let prompt = ''
-    if (isAux && options.purpose === 'compaction') {
+    if (isTranslateSession) {
+      // The persona (role, the DSH session id, where its history lives and how to
+      // read it) travels with the FIRST message only. Once agy owns the
+      // conversation, every later translation is just the source text — no
+      // instruction to re-send, which is the whole point of the 1:1 mapping.
+      const lastMessage = messages[messages.length - 1] ?? messages[0]
+      const text = translateSession.text !== '' ? translateSession.text : lastMessage === undefined ? '' : textOf(lastMessage)
+      prompt = binding === undefined
+        ? translateSession.setup + (translateSession.setup === '' ? '' : '\n\n=====\n\n') + text
+        : text
+    } else if (isAux && options.purpose === 'compaction') {
       const cap = cfg.compactionMaxChars > 0 ? cfg.compactionMaxChars : 800_000
       const parts: string[] = []
       let used = 0
@@ -1995,7 +2025,7 @@ export class AgyAdapter extends LlmAdapter {
       prompt,
       model: activeModelForArgs,
       effort,
-      conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
+      conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
       permissionMode: isAux && !isTitle ? 'plan' : cfg.permissionMode,
       timeoutMs: cfg.timeoutMs,
       printTimeoutMinutes,
@@ -2010,7 +2040,7 @@ export class AgyAdapter extends LlmAdapter {
           prompt,
           model: activeModelForArgs,
           effort,
-          conversationId: !isAux && binding !== undefined ? binding.conversationId : undefined,
+          conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
           permissionMode: isAux && !isTitle ? 'plan' : cfg.permissionMode,
           timeoutMs: cfg.timeoutMs,
           printTimeoutMinutes,
@@ -2555,7 +2585,7 @@ export class AgyAdapter extends LlmAdapter {
         this.failoverBudget.delete(sessionKey)
         this.rateLimitFailover.delete(sessionKey)
         this.clearNetworkStreak(sessionKey)
-        if (!isAux && sessionAccountKey !== '' && !superseded) {
+        if (persistBinding && sessionAccountKey !== '' && !superseded) {
           const finalId = binding !== undefined ? binding.conversationId : conversationId
           if (finalId) {
             this.deps.store.set(sessionAccountKey, {
@@ -2649,10 +2679,10 @@ export class AgyAdapter extends LlmAdapter {
         // question and answers it instead of the newest message (the "latest
         // input ignored" bug, reproduced from session-c65a826e turns 17→19).
         const interruptedTurn = failure.kind === 'aborted' || outcome.timedOut === true
-        if (!isAux && sessionAccountKey !== '' && staleConversation) {
+        if (persistBinding && sessionAccountKey !== '' && staleConversation) {
           // If auth expired or conversation rejected, drop stale binding
           this.deps.store.delete(sessionAccountKey)
-        } else if (!isAux && sessionAccountKey !== '' && !superseded) {
+        } else if (persistBinding && sessionAccountKey !== '' && !superseded) {
           // Abort / timeout / process-exit still leave a usable agy
           // conversation behind once init or the result envelope named one.
           // Persisting it here is what lets the next hop continue instead of

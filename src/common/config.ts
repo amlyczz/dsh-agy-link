@@ -158,6 +158,7 @@ export function resolveConfig(
     translateTimeoutMs: asNum(get('translateTimeoutMs')) ?? base.translateTimeoutMs,
     translateRetries: asNum(get('translateRetries')) ?? base.translateRetries,
     translateSkipSameModel: asBool(get('translateSkipSameModel')) ?? base.translateSkipSameModel,
+    translateBindConversation: asBool(get('translateBindConversation')) ?? base.translateBindConversation,
     translateMinIntervalMs: asNum(get('translateMinIntervalMs')) ?? base.translateMinIntervalMs,
   }
   // Env wins last (spec ADR-13).

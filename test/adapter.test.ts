@@ -740,6 +740,65 @@ test('buildArgs assembles flags per ADR-3/8/10', () => {
   assert.ok(!claudeArgs.includes('--effort'), 'effort flag stripped for non-gemini models')
 })
 
+test('translation runs keep ONE agy conversation per DSH session (persona once, text after)', async () => {
+  // The source text must not carry the instruction again: the persona (who agy
+  // is, which DSH session it serves, where that session's history lives) travels
+  // with the FIRST message only, and the conversation is bound under
+  // `<sessionKey>#tsl` so it never collides with the turn conversation.
+  process.env.FAKE_AGY_MODE = 'real'
+  const argsFile = join(workDir, 'tsl-args.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  try {
+    const { adapter, store } = makeAdapter()
+    // `text` is the short request line (the persona travels in `setup` only).
+    const first = await collect(adapter.stream({
+      provider: 'antigravity',
+      model: 'gemini-3.7-flash',
+      sessionId: 'sess-bind-1',
+      messages: [msg('user', '原文 A')],
+      purpose: 'translation',
+      agyTranslateSession: { setup: '你是人话翻译器。', text: '把它讲成人话：\n\n原文 A' },
+    } as unknown as GenerateOptions))
+    assert.equal((first[first.length - 1] as { reason: { kind: string } }).reason.kind, 'stop')
+    const firstArgs = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    const promptAt = firstArgs.indexOf('-p')
+    assert.ok(promptAt >= 0, 'the prompt rides argv for a short message')
+    const firstPrompt = firstArgs[promptAt + 1]!
+    assert.match(firstPrompt, /人话翻译器/)
+    assert.match(firstPrompt, /原文 A/)
+    assert.match(firstPrompt, /把它讲成人话/)
+    assert.equal(firstArgs.includes('--conversation'), false, 'the first call CREATES the conversation')
+
+    const bound = store.all()['sess-bind-1#tsl']
+    assert.ok(bound?.conversationId, 'a translation conversation is bound under <session>#tsl')
+    assert.equal(store.all()['sess-bind-1'], undefined, 'the turn binding of the same session is untouched')
+
+    // Second translation: same conversation, and the prompt is ONLY the text.
+    const second = await collect(adapter.stream({
+      provider: 'antigravity',
+      model: 'gemini-3.7-flash',
+      sessionId: 'sess-bind-1',
+      messages: [msg('user', '原文 B')],
+      purpose: 'translation',
+      agyTranslateSession: { setup: '你是人话翻译器。', text: '把它讲成人话：\n\n原文 B' },
+    } as unknown as GenerateOptions))
+    assert.equal((second[second.length - 1] as { reason: { kind: string } }).reason.kind, 'stop')
+    const secondArgs = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    const at = secondArgs.indexOf('--conversation')
+    assert.ok(at >= 0, 'the second call reuses the conversation')
+    assert.equal(secondArgs[at + 1], bound.conversationId)
+    const secondPrompt = secondArgs[secondArgs.indexOf('-p') + 1]!
+    assert.equal(secondPrompt, '把它讲成人话：\n\n原文 B', 'the short request line, without the persona block')
+    assert.doesNotMatch(secondPrompt, /你是人话翻译器/, 'the persona is NOT re-sent')
+    assert.doesNotMatch(secondPrompt, /人话翻译器/)
+    // Plan mode (read-only) is what lets agy read the session files it was told about.
+    assert.ok(secondArgs.includes('--mode') && secondArgs[secondArgs.indexOf('--mode') + 1] === 'plan')
+  } finally {
+    delete process.env.FAKE_AGY_ARGS_FILE
+    process.env.FAKE_AGY_MODE = 'ok'
+  }
+})
+
 test('issue #67: an `--effort` refusal is learned and the call replayed without it', async () => {
   // agy 1.4.6 refuses the WHOLE invocation when --effort is passed to a model
   // that does not accept one, naming the model in the error. Effort support is

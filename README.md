@@ -339,6 +339,7 @@ dsh plugin --profile web add dsh-agy-link
 | `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | Model used by `/tsl` and auto mode; falls back through the live catalog when absent |
 | `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `high` | Reasoning effort for effort-capable translate models |
 | `translateTargetLanguage` | `DSH_AGY_TRANSLATE_LANG` | `中文（简体）` | Target language wording in the translator prompt |
+| `translateBindConversation` | — | `true` | Keep ONE agy conversation per DSH session for translations: the persona (who it is, the DSH session id, that session's workspace, the path of its raw log and how to read it, plus a digest) is sent once; later translations reuse it and send only the short request line |
 
 ---
 

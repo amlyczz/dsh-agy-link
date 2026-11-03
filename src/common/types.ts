@@ -175,6 +175,12 @@ export interface PluginConfig {
   /** Extra attempts after the first failed translation (each retry re-picks an account). */
   translateRetries: number
   /** Skip translating turns already produced by the translate model itself. */
+  /**
+   * Run translations inside ONE agy conversation per DSH session (1:1), so the
+   * persona — including that session's id, its workspace and where its history
+   * lives — is sent once and every later translation sends only the source text.
+   */
+  translateBindConversation: boolean
   translateSkipSameModel: boolean
   /** Minimum spacing between automatic translations inside one session (0 = no throttle). */
   translateMinIntervalMs: number
@@ -280,6 +286,7 @@ export function defaultConfig(): PluginConfig {
     translateMaxTokens: 4_096,
     translateTimeoutMs: 120_000,
     translateRetries: 2,
+    translateBindConversation: true,
     translateSkipSameModel: true,
     translateMinIntervalMs: 3_000,
   }
