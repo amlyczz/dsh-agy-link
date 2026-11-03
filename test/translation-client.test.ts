@@ -31,13 +31,71 @@ function collectText(node: unknown, out: string[] = []): string[] {
   return out
 }
 
-function loadPlugin() {
+function loadPlugin(): { plugin: { apply: (ctx: unknown) => void; inject: string[] }; dom: { bodyChildren: Array<Record<string, unknown>> } } {
   let loaded: { factory: (require: (id: string) => unknown) => unknown } | undefined
+  // Minimal DOM: the tooltip placement is real code, so the test drives it with a
+  // fake document/window instead of asserting on a source regex.
+  interface NodeLike {
+    id?: string
+    textContent?: string
+    isConnected?: boolean
+    style: { cssText?: string; display?: string; left?: string; top?: string }
+    attrs: Record<string, string>
+    setAttribute(k: string, v: string): void
+    getBoundingClientRect(): { left: number; top: number; bottom: number; width: number; height: number }
+    remove(): void
+  }
+  type NodeAny = NodeLike & { dataset: Record<string, string>; className: string }
+  const bodyChildren: NodeLike[] = []
+  const tipSize = { width: 200, height: 26 }
+  const fakeDocument = {
+    body: { appendChild: (n: NodeLike) => { bodyChildren.push(n) } },
+    createElement: (): NodeLike => {
+      const node: NodeLike = {
+        style: {},
+        attrs: {},
+        dataset: {},
+        className: '',
+        children: [],
+        classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
+        setAttribute(k, v) { this.attrs[k] = v; this.id = k === 'id' ? v : this.id },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        appendChild: (child: unknown) => { (node as unknown as { children: unknown[] }).children.push(child) },
+        append: () => {},
+        getBoundingClientRect: () => ({ left: 0, top: 0, bottom: tipSize.height, width: tipSize.width, height: tipSize.height }),
+        remove() { const at = bodyChildren.indexOf(node); if (at >= 0) bodyChildren.splice(at, 1); node.isConnected = false },
+        isConnected: true,
+      } as unknown as NodeLike
+      return node
+    },
+    getElementById: (id: string) => bodyChildren.find((n) => n.id === id) ?? null,
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    head: { appendChild: () => {} },
+    documentElement: { appendChild: () => {} },
+  }
   vm.runInNewContext(
     source,
     {
-      window: { __ModuleLoader__: { load(value: typeof loaded) { loaded = value } } },
-      globalThis: {},
+      window: {
+        __ModuleLoader__: { load(value: typeof loaded) { loaded = value } },
+        document: fakeDocument,
+        innerWidth: 1200,
+        innerHeight: 800,
+      },
+      document: fakeDocument,
+      MutationObserver: class { observe(): void {} disconnect(): void {} takeRecords(): unknown[] { return [] } },
+      requestAnimationFrame: (cb: (t: number) => void) => { cb(0); return 0 },
+      cancelAnimationFrame: () => {},
+      // NOTE: no `globalThis` key — the plugin's `win` IS globalThis, and injecting
+      // an empty object here shadowed it, hiding the fake document/window from it.
+      // Viewport metrics therefore belong on the sandbox itself, exactly as
+      // window.innerWidth is visible through globalThis in a real browser.
+      innerWidth: 1200,
+      innerHeight: 800,
       setInterval: () => 0,
       clearInterval: () => {},
       setTimeout: () => 0,
@@ -62,11 +120,12 @@ function loadPlugin() {
       return factory()
     },
   }
-  return loaded.factory((id) => {
+  const plugin = loaded.factory((id) => {
     if (id === 'react') return react
     if (id === 'react-dom') return {}
     throw new Error('unexpected browser dependency: ' + id)
   }) as { apply: (ctx: unknown) => void; inject: string[] }
+  return { plugin, dom: { bodyChildren: bodyChildren as unknown as Array<Record<string, unknown>> } }
 }
 
 interface Definition {
@@ -114,9 +173,9 @@ function mount() {
       },
     },
   }
-  const plugin = loadPlugin()
+  const { plugin, dom } = loadPlugin()
   plugin.apply(ctx)
-  return { definitions, slots }
+  return { definitions, slots, dom }
 }
 
 test('client registers the translation conversation definition', () => {
@@ -181,16 +240,18 @@ test('per-reply action is an icon-only Gemini button in the action strip', () =>
   assert.equal(collectText(button).join('').trim(), '')
   assert.equal(button.props?.title, undefined, 'no native title; the CSS hint owns the label')
   assert.equal(typeof button.props?.['aria-label'], 'string')
-  // The hint is a `data-tip` attribute drawn by ::after — NOT a real text node.
-  // A DOM node leaked the label into the action row as inline text whenever the
-  // stylesheet was missing (which is what the stale-style-tag bug produced).
-  assert.equal(element.children.length, 1, 'the wrapper must not carry a tooltip element')
-  assert.equal(typeof element.props?.['data-tip'], 'string')
-  assert.ok(String(element.props?.['data-tip']).length > 0)
-  assert.equal(collectText(element).join('').trim(), '', 'no hint text may render without CSS')
-  assert.match(source, /content: attr\(data-tip\)/)
-  assert.match(source, /\.agy-tsl-wrap:hover::after/)
-  assert.equal(/className: ["']agy-tsl-tip["']/.test(source), false, 'the element-based tooltip is gone')
+  // The label lives in a body-level node shown on hover — never in this row, so a
+  // missing stylesheet cannot leak it into the action strip as inline text (that
+  // is what the old pseudo-element/`data-tip` design did when a stale sheet
+  // suppressed the new rules).
+  assert.equal(element.children.length, 1, 'the wrapper carries only the button')
+  assert.equal(collectText(element).join('').trim(), '', 'no hint text inside the row')
+  for (const handler of ['onMouseEnter', 'onFocus', 'onMouseLeave', 'onBlur']) {
+    assert.equal(typeof element.props?.[handler], 'function', handler + ' must be wired')
+  }
+  assert.match(source, /\.agy-tsl-tip \{/)
+  assert.match(source, /position: fixed/)
+  assert.equal(source.includes('content: attr(data-tip)'), false, 'the pseudo-element hint is gone')
   // The wrapper also decides which side the bubble goes on (see below).
   assert.equal(typeof element.props?.onMouseEnter, 'function')
   assert.equal(typeof element.props?.onFocus, 'function')
@@ -198,33 +259,61 @@ test('per-reply action is an icon-only Gemini button in the action strip', () =>
   assert.equal(action!.component({ messageId: 'm1', t: (k: string) => k }), null)
 })
 
-test('the hint is placed above the row, and flips below only near the top edge', () => {
-  // Regression: below-anchoring covered the bubble with the composer for the
-  // newest reply (the row sits at the bottom of the transcript). Above is the
-  // default — which is also the "no script" fallback — and the flip exists only
-  // for a row within one bubble of the scroller's top edge.
-  const { slots } = mount()
+test('the hint is ONE body-level node, placed below the anchor, clamped, then hidden', () => {
+  // DSH's own tooltip is a portal: it is never below-in-the-scroller, so the
+  // composer cannot cover it. Ours is a body-level fixed node for exactly that
+  // reason — and it must stay "below", like every other hint in the strip.
+  const { slots, dom } = mount()
   const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
-  const wrapper = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => k }) as ElementLike
-  const place = wrapper.props?.onMouseEnter as (e: unknown) => void
+  // A real translator so the assertion below proves the LOCALIZED label rides the
+  // node (the fallback is deliberately used when a key comes back unchanged).
+  const wrapper = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => 'T:' + k }) as ElementLike
+  const show = wrapper.props?.onMouseEnter as (e: unknown) => void
+  const hide = wrapper.props?.onMouseLeave as () => void
+  const box = (left: number, top: number, width = 24, bottom = top + 24) => ({
+    currentTarget: { getBoundingClientRect: () => ({ left, top, width, bottom }) },
+  })
 
-  const sideFor = (top: number): string => {
-    const attrs: Record<string, string> = {}
-    place({ currentTarget: { getBoundingClientRect: () => ({ top }), setAttribute: (k: string, v: string) => { attrs[k] = v }, parentElement: null } })
-    return attrs['data-tip-side'] ?? ''
-  }
-  assert.equal(sideFor(600), 'top', 'a reply low on the screen keeps the hint above')
-  assert.equal(sideFor(64), 'top', 'one bubble of room above is still enough')
-  assert.equal(sideFor(24), 'bottom', 'no room above → flip below instead of being cut')
-  assert.equal(sideFor(0), 'bottom')
-  // A malformed/absent event must never throw (the handler runs inside hover).
-  assert.doesNotThrow(() => place(undefined))
-  assert.doesNotThrow(() => place({ currentTarget: undefined }))
+  show(box(600, 100, 24, 124))
+  assert.equal(dom.bodyChildren.length, 1, 'hovering creates the shared node once')
+  const node = dom.bodyChildren[0]! as { style: Record<string, string>; textContent?: string; attrs: Record<string, string> }
+  assert.equal(node.attrs.role, 'tooltip')
+  assert.equal(node.style.display, 'inline-flex', 'shown on hover')
+  assert.equal(node.textContent, 'T:tsl.actionTip', 'the localized label rides the node, not the row')
+  // BELOW the anchor: bottom(124) + 6px gap; horizontally centred (600+12-100).
+  assert.equal(node.style.top, '130px')
+  assert.equal(node.style.left, '512px')
 
-  // The stylesheet owns the geometry: above by default, flipped only for [data-tip-side].
-  assert.match(source, /bottom: calc\(100% \+ 6px\); left: 50%/)
-  assert.match(source, /\.agy-tsl-wrap\[data-tip-side="bottom"\]::after/)
-  assert.match(source, /top: calc\(100% \+ 6px\); bottom: auto/)
+  // A second hover reuses the same node instead of stacking hints.
+  show(box(300, 200))
+  assert.equal(dom.bodyChildren.length, 1, 'singleton')
+  assert.equal(node.style.top, '230px')
+
+  // Left edge: clamped to the 8px margin instead of overflowing the viewport.
+  show(box(0, 200))
+  assert.equal(node.style.left, '8px')
+
+  // Viewport bottom: flipping above is the only case that does — a row low on
+  // the screen with a composer under it still shows the hint below (over the
+  // composer), exactly like the DSH portal does.
+  show(box(600, 700, 24, 724))
+  assert.equal(Number(String(node.style.top).replace('px', '')), 730, 'a row low in the transcript keeps the hint BELOW, over the composer')
+  show(box(600, 780, 24, 804))
+  const flipped = Number(String(node.style.top).replace('px', ''))
+  assert.ok(flipped < 780, 'only the viewport edge flips it above (got ' + flipped + ')')
+
+  // Never throws on a partial event, and always hides on leave.
+  assert.doesNotThrow(() => show(undefined))
+  assert.doesNotThrow(() => show({ currentTarget: undefined }))
+  hide()
+  assert.equal(node.style.display, 'none')
+
+  // The stylesheet carries the DSH tokens for the node.
+  assert.match(source, /\.agy-tsl-tip \{/)
+  assert.match(source, /background: var\(--dsw-alias-tooltip-bg/)
+  assert.match(source, /color: var\(--dsw-static-neutral-bluish-00/)
+  assert.match(source, /border-radius: var\(--dsw-radius-sm/)
+  assert.match(source, /position: fixed/)
 })
 
 test('the style sheet refreshes itself when a reload left a stale tag behind', () => {

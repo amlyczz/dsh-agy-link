@@ -117,16 +117,13 @@ const CSS = `
 @keyframes agy-tsl-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 /* Own tooltip: the native title bubble never showed inside the desktop shell,
    and DSH's Tooltip primitive is not exposed to plugin bundles. It mirrors that
-   primitive's own bubble (same tokens: --dsw-alias-tooltip-bg / 13px-20px /
-   3px 7px / --dsw-radius-sm, no caret, below the anchor) so the strip has ONE
-   tooltip look. Drawn from the data-tip attribute with pseudo-elements, so a
-   missing stylesheet degrades to "no hint" instead of leaking the label into the
-   row as inline text. */
+   primitive: same tokens (--dsw-alias-tooltip-bg / --dsw-static-neutral-bluish-00
+   / 13px-20px / 3px 7px / --dsw-radius-sm), no caret, BELOW the anchor, and — like
+   the primitive's portal — a body-level fixed node, so the transcript
+   scroller can neither clip it nor let the composer cover it. */
 .agy-tsl-wrap { position: relative; display: inline-flex; align-items: center; }
-.agy-tsl-wrap::after {
-  content: attr(data-tip);
-  position: absolute; bottom: calc(100% + 6px); left: 50%;
-  transform: translateX(-50%);
+.agy-tsl-tip {
+  position: fixed; z-index: 1100;
   padding: 3px 7px; border-radius: var(--dsw-radius-sm, 8px);
   background: var(--dsw-alias-tooltip-bg, #1f2229);
   color: var(--dsw-static-neutral-bluish-00, #fff);
@@ -135,23 +132,11 @@ const CSS = `
   box-sizing: border-box; width: max-content;
   max-width: min(50vw, calc(100vw - 24px));
   pointer-events: none;
-  opacity: 0; visibility: hidden; z-index: 60;
-}
-/* Inside the transcript, below the LAST reply, there is no room: the bubble was
-   covered by the composer. Above is the default; the flip below is for a row
-   near the top edge of the scroller, where above would be cut instead. The
-   handler sets data-tip-side on hover/focus (JS off = always above = safe). */
-.agy-tsl-wrap[data-tip-side="bottom"]::after {
-  top: calc(100% + 6px); bottom: auto;
-}
-.agy-tsl-wrap:hover::after,
-.agy-tsl-wrap:focus-within::after {
-  opacity: 1; visibility: visible;
   animation: agy-tsl-tip-in .15s var(--ds-ease-in-out, ease-in-out);
 }
 @keyframes agy-tsl-tip-in { 0% { opacity: 0; } 100% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .agy-tsl-wrap:hover::after, .agy-tsl-wrap:focus-within::after { animation: none; }
+  .agy-tsl-tip { animation: none; }
 }
 `
 
@@ -466,49 +451,96 @@ function errorGlyph(): unknown {
 }
 
 /**
- * Bubble height (13px/20px text + 3px padding + 1px border) plus the 6px gap.
- * Kept as a constant so the flip decision and the CSS agree.
+ * The hint lives in one body-level node, like DSH's own tooltip portal.
+ *
+ * Two reasons it is not a pseudo-element on the row any more:
+ *   1. the transcript scroller clips its children, so a bubble anchored below the
+ *      LAST reply (the row right above the composer) was cut off, and anchoring
+ *      it above instead broke alignment with every other tooltip in the strip;
+ *   2. `position: fixed` on the row cannot escape a transformed ancestor, so the
+ *      node is appended to <body> where nothing can clip it.
+ * Inline styles keep it hidden and positioned even if our stylesheet is missing,
+ * so a stale sheet can never leak the label into the action row.
  */
-const TIP_BLOCK_PX = 32
+const TIP_ID = 'dsh-agy-link-tsl-tip'
+const TIP_GAP_PX = 6
+const TIP_MARGIN_PX = 8
+const TIP_MAX_WIDTH_VW = 0.5
 
-/** Nearest scrollable ancestor's top edge — the box the bubble can be clipped by. */
-function clipTopFor(node: { parentElement?: unknown; getBoundingClientRect?: () => { top: number } } | null): number {
-  let current = node?.parentElement as { parentElement?: unknown; getBoundingClientRect?: () => { top: number } } | null | undefined
-  while (current !== null && current !== undefined) {
-    try {
-      const style = (win as unknown as { getComputedStyle?: (el: unknown) => { overflowY?: string } }).getComputedStyle?.(current)
-      const overflowY = style?.overflowY ?? ''
-      if (/(auto|scroll|hidden)/.test(overflowY)) {
-        return current.getBoundingClientRect?.().top ?? 0
-      }
-    } catch {
-      // no layout access: treat it as unclipped
-    }
-    current = current.parentElement as typeof current
+type TipNode = {
+  textContent?: string
+  isConnected?: boolean
+  hidden?: boolean
+  style: { cssText?: string; display?: string; left?: string; top?: string }
+  setAttribute?: (k: string, v: string) => void
+  remove?: () => void
+  getBoundingClientRect?: () => { width: number; height: number }
+}
+type TipDoc = {
+  body?: { appendChild?: (n: unknown) => void } | null
+  createElement?: (tag: string) => unknown
+  getElementById?: (id: string) => unknown
+}
+
+/** Viewport size, guarded for a headless/test document. */
+function viewport(): { width: number; height: number } {
+  const w = win as unknown as { innerWidth?: number; innerHeight?: number }
+  return { width: typeof w.innerWidth === 'number' ? w.innerWidth : 0, height: typeof w.innerHeight === 'number' ? w.innerHeight : 0 }
+}
+
+/** Hidden by default through INLINE styles — not through the stylesheet. */
+function tipNode(): TipNode | null {
+  if (typeof document === 'undefined') return null
+  const doc = win.document as unknown as TipDoc | null | undefined
+  if (doc === null || doc === undefined || typeof doc.createElement !== 'function') return null
+  const found = typeof doc.getElementById === 'function' ? (doc.getElementById(TIP_ID) as TipNode | null | undefined) : null
+  if (found !== null && found !== undefined && found.isConnected !== false) return found
+  const created = doc.createElement('div') as TipNode
+  created?.setAttribute?.('id', TIP_ID)
+  created?.setAttribute?.('role', 'tooltip')
+  if (created !== undefined && created !== null) {
+    created.style.cssText = 'position:fixed;display:none;pointer-events:none;z-index:1100'
+    created.isConnected = true
   }
-  return 0
+  doc.body?.appendChild?.(created)
+  return created ?? null
 }
 
 /**
- * Put the hint where it cannot be covered. Above is right for a reply at the
- * bottom of the transcript (the common case — hovers happen on the newest
- * reply, right above the composer); below is right only when the row sits within
- * one bubble of the scroller's top edge. The decision is written to a data
- * attribute so the stylesheet owns the geometry (and a missing script degrades
- * to "always above" rather than to a hidden hint).
+ * Anchor box of the element the pointer is on (or `null` when it cannot be read).
  */
-function placeTip(event?: { currentTarget?: unknown }): void {
-  const el = event?.currentTarget as
-    | { getBoundingClientRect?: () => { top: number }; setAttribute?: (k: string, v: string) => void }
-    | undefined
-  if (el?.getBoundingClientRect === undefined || el.setAttribute === undefined) return
-  try {
-    const anchorTop = el.getBoundingClientRect().top
-    const clipTop = clipTopFor(el as { parentElement?: unknown })
-    el.setAttribute('data-tip-side', anchorTop - clipTop < TIP_BLOCK_PX ? 'bottom' : 'top')
-  } catch {
-    // leave it on the stylesheet default (above)
-  }
+function anchorBox(el: unknown): { left: number; width: number; top: number; bottom: number } | null {
+  const rect = (el as { getBoundingClientRect?: () => { left: number; width: number; top: number; bottom: number } } | undefined)?.getBoundingClientRect?.()
+  if (rect === undefined || rect === null || typeof rect.top !== 'number' || typeof rect.left !== 'number') return null
+  return { left: rect.left, width: typeof rect.width === 'number' ? rect.width : 0, top: rect.top, bottom: typeof rect.bottom === 'number' ? rect.bottom : rect.top }
+}
+
+/** Show the shared bubble under `el`, clamped to the viewport. */
+function showTip(el: unknown, text: string): void {
+  const node = tipNode()
+  const box = anchorBox(el)
+  if (node === null || node === undefined || box === null) return
+  node.textContent = text
+  node.style.display = 'inline-flex'
+  const size = node.getBoundingClientRect?.() ?? { width: 0, height: 26 }
+  const vp = viewport()
+  const maxWidth = vp.width > 0 ? Math.max(80, vp.width * TIP_MAX_WIDTH_VW) : 0
+  const width = maxWidth > 0 ? Math.min(size.width, maxWidth) : size.width
+  let left = box.left + box.width / 2 - width / 2
+  if (vp.width > 0) left = Math.min(Math.max(TIP_MARGIN_PX, left), Math.max(TIP_MARGIN_PX, vp.width - width - TIP_MARGIN_PX))
+  const below = box.bottom + TIP_GAP_PX
+  const above = box.top - size.height - TIP_GAP_PX
+  // Below is the DSH default; the flip only exists for a viewport-bottom edge the
+  // composer cannot create (the node floats above it).
+  const top = vp.height > 0 && below + size.height > vp.height - TIP_MARGIN_PX ? Math.max(TIP_MARGIN_PX, above) : below
+  node.style.left = Math.round(left) + 'px'
+  node.style.top = Math.round(top) + 'px'
+}
+
+/** Hide the shared bubble (leave/scroll/click). */
+function hideTip(): void {
+  const node = tipNode()
+  if (node !== null && node !== undefined) node.style.display = 'none'
 }
 
 function tooltipText(props: Record<string, unknown> | undefined, key: string, fallback: string): string {
@@ -575,6 +607,7 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	const run = (e?: { stopPropagation?: () => void; preventDefault?: () => void }): void => {
 		e?.stopPropagation?.()
 		e?.preventDefault?.()
+		hideTip()
 		if (state === 'working') return
 		ACTION_INFLIGHT.add(key)
 		apply('working')
@@ -624,9 +657,10 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 		'span',
 		{
 			className: 'agy-tsl-wrap',
-			'data-tip': title,
-			onMouseEnter: placeTip,
-			onFocus: placeTip,
+			onMouseEnter: (e?: { currentTarget?: unknown }) => showTip(e?.currentTarget, title),
+			onFocus: (e?: { currentTarget?: unknown }) => showTip(e?.currentTarget, title),
+			onMouseLeave: () => hideTip(),
+			onBlur: () => hideTip(),
 		},
 		h(
 			'button',
@@ -760,6 +794,15 @@ export function installTranslationUi(ctx: ClientContextLike, localeNs: string): 
 			} catch {
 				// already torn down with the plugin fiber
 			}
+		}
+		// The hint node lives on <body> (outside this fiber's subtree), so drop it
+		// explicitly — and the style sheet with it.
+		try {
+			const doc = win.document as unknown as { getElementById?: (id: string) => { remove?: () => void } | null } | null | undefined
+			doc?.getElementById?.(TIP_ID)?.remove?.()
+			doc?.getElementById?.(STYLE_ID)?.remove?.()
+		} catch {
+			// best-effort teardown
 		}
 	}
 }
