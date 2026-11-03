@@ -852,6 +852,10 @@ const GLOBAL_CSS = `
 	--agy-seg-danger-bg: #dc2626;
 	--agy-seg-danger-text: #ffffff;
 	--agy-seg-danger-border: #b91c1c;
+	/* Standalone enable/disable toggle (rows without a segment group) */
+	--agy-toggle-border: #cbd5e1;
+	--agy-toggle-bg: #f8fafc;
+	--agy-toggle-on-border: #1d4ed8;
 }
 
 body[data-ds-dark-theme],
@@ -973,6 +977,10 @@ body.dark,
 	--agy-seg-danger-bg: #7f1d1d;
 	--agy-seg-danger-text: #fca5a5;
 	--agy-seg-danger-border: #ef4444;
+	/* Standalone enable/disable toggle (rows without a segment group) */
+	--agy-toggle-border: #334155;
+	--agy-toggle-bg: #0f172a;
+	--agy-toggle-on-border: #3b82f6;
 }
 
 .agy-spinner {
@@ -1297,6 +1305,33 @@ const S: Record<string, Record<string, unknown>> = {
 		fontSize: '11.5px',
 		fontWeight: 700,
 		boxShadow: '0 2px 4px rgba(37, 99, 235, 0.4)',
+	},
+	// Rows that carry ONE state button (auto-warmup / auto-translate) are not
+	// wrapped in a segment group, so the bare `segBtn*` entries left the OFF
+	// state transparent and borderless ("启用" looked like plain text). These
+	// two entries keep a real border in both states.
+	toggle: {
+		padding: '4px 10px',
+		borderRadius: '6px',
+		border: '1px solid var(--agy-toggle-border)',
+		background: 'var(--agy-toggle-bg)',
+		color: 'var(--agy-text-primary)',
+		cursor: 'pointer',
+		fontSize: '11.5px',
+		fontWeight: 600,
+		minWidth: '54px',
+	},
+	toggleOn: {
+		padding: '4px 10px',
+		borderRadius: '6px',
+		border: '1px solid var(--agy-toggle-on-border)',
+		background: 'var(--agy-seg-btn-active-bg)',
+		color: 'var(--agy-seg-btn-active-text)',
+		cursor: 'pointer',
+		fontSize: '11.5px',
+		fontWeight: 700,
+		minWidth: '54px',
+		boxShadow: '0 2px 4px rgba(37, 99, 235, 0.35)',
 	},
 	input: {
 		flex: '1',
@@ -2298,7 +2333,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 						),
 						h('button', {
 							type: 'button',
-							style: status?.autoWarmup !== false ? S.segBtnActive : S.segBtn,
+							style: status?.autoWarmup !== false ? S.toggleOn : S.toggle,
 							disabled: loadingAction === 'config:autoWarmup',
 							onClick: () => void setCfg('autoWarmup', status?.autoWarmup === false),
 						}, status?.autoWarmup !== false ? t('account.disable') : t('account.enable')),
@@ -2310,7 +2345,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 						),
 						h('button', {
 							type: 'button',
-							style: status?.autoTranslate === true ? S.segBtnActive : S.segBtn,
+							style: status?.autoTranslate === true ? S.toggleOn : S.toggle,
 							disabled: loadingAction === 'config:autoTranslate',
 							onClick: () => void setCfg('autoTranslate', status?.autoTranslate !== true),
 						}, status?.autoTranslate === true ? t('account.disable') : t('account.enable')),

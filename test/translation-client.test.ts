@@ -169,3 +169,13 @@ test('per-reply action is registered for historical turns', () => {
   assert.ok(isElement(element))
   assert.equal(element.type, 'button')
 })
+
+test('standalone enable/disable toggles keep a visible border in both states', () => {
+  // Regression: the auto-warmup / auto-translate rows carry one state button
+  // outside a segment group; the bare segBtn/segBtnActive entries left the OFF
+  // state transparent and borderless ("启用" rendered as plain text).
+  assert.match(source, /--agy-toggle-border/)
+  assert.match(source, /--agy-toggle-bg/)
+  assert.match(source, /--agy-toggle-on-border/)
+  assert.match(source, /toggleOn/)
+})
