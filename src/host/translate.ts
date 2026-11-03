@@ -92,6 +92,8 @@ export interface TranslationSessionLike {
   id?: string
   log?: readonly SessionEventLike[]
   events?: readonly SessionEventLike[]
+  snapshotEvents?: (fromSeq?: unknown, toSeqExclusive?: unknown) => readonly SessionEventLike[]
+  ownEvents?: () => readonly SessionEventLike[]
 }
 
 export interface SessionEventLike {
@@ -161,6 +163,24 @@ interface TurnAnswer {
 /** Read the event log whichever shape the host exposes. */
 export function sessionEvents(session: TranslationSessionLike | undefined): readonly SessionEventLike[] {
   if (!session) return []
+  if (typeof session.snapshotEvents === 'function') {
+    try {
+      const list = session.snapshotEvents()
+      if (Array.isArray(list) && list.length > 0) return list
+    } catch {
+      // degraded
+    }
+  }
+  if (typeof session.ownEvents === 'function') {
+    try {
+      const list = session.ownEvents()
+      if (Array.isArray(list) && list.length > 0) return list
+    } catch {
+      // degraded
+    }
+  }
+  if (Array.isArray(session.log) && session.log.length > 0) return session.log
+  if (Array.isArray(session.events) && session.events.length > 0) return session.events
   if (Array.isArray(session.log)) return session.log
   if (Array.isArray(session.events)) return session.events
   return []
@@ -229,7 +249,10 @@ function messageIdOf(ev: SessionEventLike): string | undefined {
   const d = dataOf(ev)
   const message = d.message !== null && typeof d.message === 'object' ? (d.message as Record<string, unknown>) : {}
   if (typeof message.id === 'string' && message.id !== '') return message.id
-  return typeof d.id === 'string' && d.id !== '' ? d.id : undefined
+  if (typeof d.id === 'string' && d.id !== '') return d.id
+  if (typeof d.messageId === 'string' && d.messageId !== '') return d.messageId
+  const raw = ev as unknown as Record<string, unknown>
+  return typeof raw.id === 'string' && raw.id !== '' ? raw.id : undefined
 }
 
 /**
@@ -753,6 +776,10 @@ export class TranslationService {
     }
     const located = turnOfMessage(events, messageId)
     if (located === null) {
+      const last = lastCompletedTurn(events)
+      if (last !== null) {
+        return this.translateTurn(sessionId, last, { ...opts, full: false }, signal)
+      }
       const target = this.target(opts)
       return { ...emptyResult(target.model, target.effort), error: 'message not found in this session', code: 'MESSAGE_NOT_FOUND' }
     }

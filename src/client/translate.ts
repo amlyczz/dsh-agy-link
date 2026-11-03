@@ -107,10 +107,11 @@ const CSS = `
   background: var(--dsw-alias-interactive-bg-hover-solid, rgba(127,127,127,.14));
   color: var(--dsw-alias-label-primary, #eee);
 }
-.agy-tsl-icon:disabled { opacity: .5; cursor: default; }
-.agy-tsl-icon[data-state="error"] { color: #f43f5e; }
+.agy-tsl-icon:disabled { cursor: default; }
+.agy-tsl-icon[data-state="working"] { color: var(--dsw-alias-state-business-primary, #2563eb); cursor: wait; }
+.agy-tsl-icon[data-state="done"] { color: #10b981; }
+.agy-tsl-icon[data-state="error"] { color: #ef4444; }
 .agy-tsl-icon svg { width: 15px; height: 15px; display: block; }
-.agy-tsl-icon[data-state="working"] svg { animation: agy-tsl-spin 1s linear infinite; }
 @keyframes agy-tsl-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 `
 
@@ -340,8 +341,67 @@ type ActionState = 'idle' | 'working' | 'done' | 'error'
 const GEMINI_STAR = 'M12 2 Q13.1 9.2 22 12 Q13.1 14.8 12 22 Q10.9 14.8 2 12 Q10.9 9.2 12 2 Z'
 
 function geminiGlyph(): unknown {
-	return h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true' },
+	return h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true', style: { width: '15px', height: '15px', display: 'block' } },
 		h('path', { d: GEMINI_STAR }),
+	)
+}
+
+function spinnerGlyph(): unknown {
+	return h('svg', {
+		viewBox: '0 0 24 24',
+		fill: 'none',
+		className: 'agy-tsl-spinner',
+		'aria-hidden': 'true',
+		style: {
+			width: '15px',
+			height: '15px',
+			display: 'block',
+			animation: 'agy-tsl-spin 0.85s linear infinite',
+			transformOrigin: 'center center',
+		},
+	},
+		h('circle', {
+			cx: '12',
+			cy: '12',
+			r: '9',
+			stroke: 'currentColor',
+			strokeWidth: '2.5',
+			strokeDasharray: '38 18',
+			strokeLinecap: 'round',
+			opacity: '0.85',
+		}),
+	)
+}
+
+function checkGlyph(): unknown {
+	return h('svg', {
+		viewBox: '0 0 24 24',
+		fill: 'none',
+		stroke: 'currentColor',
+		strokeWidth: '2.5',
+		strokeLinecap: 'round',
+		strokeLinejoin: 'round',
+		'aria-hidden': 'true',
+		style: { width: '15px', height: '15px', display: 'block' },
+	},
+		h('polyline', { points: '20 6 9 17 4 12' }),
+	)
+}
+
+function errorGlyph(): unknown {
+	return h('svg', {
+		viewBox: '0 0 24 24',
+		fill: 'none',
+		stroke: 'currentColor',
+		strokeWidth: '2.2',
+		strokeLinecap: 'round',
+		strokeLinejoin: 'round',
+		'aria-hidden': 'true',
+		style: { width: '15px', height: '15px', display: 'block' },
+	},
+		h('circle', { cx: '12', cy: '12', r: '10' }),
+		h('line', { x1: '12', y1: '8', x2: '12', y2: '12' }),
+		h('line', { x1: '12', y1: '16', x2: '12.01', y2: '16' }),
 	)
 }
 
@@ -368,22 +428,44 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	const sessionId = injectedSession !== '' ? injectedSession : ctx === undefined ? '' : currentSessionId(ctx)
 	const [state, setState] = useState<ActionState>('idle')
 	if (messageId === '' || sessionId === '') return null
-	const run = (): void => {
+
+	const run = (e?: { stopPropagation?: () => void; preventDefault?: () => void }): void => {
+		e?.stopPropagation?.()
+		e?.preventDefault?.()
 		if (state === 'working') return
 		setState('working')
 		void postTranslate({ sessionId, messageId, persist: true }).then((res) => {
-			setState(res?.ok === true ? 'done' : 'error')
-			setTimeout(() => setState('idle'), 2_000)
-		}).catch(() => setState('error'))
+			if (res?.ok === true) {
+				setState('done')
+				setTimeout(() => setState('idle'), 2_500)
+			} else {
+				setState('error')
+				setTimeout(() => setState('idle'), 3_000)
+			}
+		}).catch(() => {
+			setState('error')
+			setTimeout(() => setState('idle'), 3_000)
+		})
 	}
+
 	const title =
 		state === 'working'
-			? tooltipText(props, 'tsl.translating', 'Translating…')
+			? tooltipText(props, 'tsl.translating', '翻译中…')
 			: state === 'error'
-				? tooltipText(props, 'tsl.retry', 'Retry')
+				? tooltipText(props, 'tsl.retry', '重试')
 				: state === 'done'
-					? tooltipText(props, 'tsl.badge', 'Gemini translation')
-					: tooltipText(props, 'tsl.actionTip', 'Rewrite this reply in plain language with Gemini')
+					? tooltipText(props, 'tsl.done', '已生成译文')
+					: tooltipText(props, 'tsl.actionTip', '用 Gemini 把这条回复译成人话')
+
+	const glyph =
+		state === 'working'
+			? spinnerGlyph()
+			: state === 'done'
+				? checkGlyph()
+				: state === 'error'
+					? errorGlyph()
+					: geminiGlyph()
+
 	return h(
 		'button',
 		{
@@ -394,8 +476,28 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 			onClick: run,
 			title,
 			'aria-label': title,
+			style: {
+				display: 'inline-flex',
+				alignItems: 'center',
+				justifyContent: 'center',
+				width: '24px',
+				height: '24px',
+				padding: '0',
+				border: 'none',
+				borderRadius: '6px',
+				background: 'transparent',
+				color:
+					state === 'working'
+						? 'var(--dsw-alias-state-business-primary, #2563eb)'
+						: state === 'done'
+							? '#10b981'
+							: state === 'error'
+								? '#ef4444'
+								: 'var(--dsw-alias-label-tertiary, #8a8f98)',
+				cursor: state === 'working' ? 'wait' : 'pointer',
+			},
 		},
-		geminiGlyph(),
+		glyph,
 	)
 }
 

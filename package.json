@@ -36,8 +36,7 @@
     "@deepseek-ai/dsh-client-locale": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-tools": "*",
-    "react": "^18.0.0",
-    "@deepseek-ai/dsh-session": "*"
+    "react": "^18.0.0"
   },
   "peerDependenciesMeta": {
     "react": {
@@ -56,9 +55,6 @@
       "optional": true
     },
     "@deepseek-ai/dsh-tools": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-session": {
       "optional": true
     }
   },

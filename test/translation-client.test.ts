@@ -196,13 +196,11 @@ test('the turn-tail chip is gone (the action lives in the icon strip only)', () 
   assert.equal(slots.some((s) => s.options.name === 'conversation.chat.turnTail'), false)
 })
 
-test('standalone enable/disable toggles are a bordered pill in both states', () => {
-  // Regression: the auto-warmup / auto-translate rows carry one state button
-  // outside a segment group; the bare segBtn/segBtnActive entries left the OFF
-  // state transparent and borderless ("启用" rendered as plain text). The
-  // toggle is now a class-based pill with a hover state and a filled ON state.
-  assert.match(source, /\.agy-toggle\s*\{/)
-  assert.match(source, /border: 1px solid var\(--dsw-alias-border-l3/)
-  assert.match(source, /\.agy-toggle\[data-on="true"\]/)
-  assert.match(source, /\.agy-toggle:hover/)
+test('enable/disable toggles use native segGroup segmented buttons', () => {
+  // Matches the pool scheduling segmented group ([ 顺序耗尽 | 轮询均衡 ]):
+  // both On and Off states have explicit segmented buttons within a container.
+  assert.match(source, /config\.autoWarmup/)
+  assert.match(source, /config\.autoTranslate/)
+  assert.match(source, /config\.on/)
+  assert.match(source, /config\.off/)
 })

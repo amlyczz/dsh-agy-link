@@ -421,6 +421,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     id?: string
     log?: readonly { type: string; seq?: number; data?: unknown }[]
     events?: readonly { type: string; seq?: number; data?: unknown }[]
+    snapshotEvents?: (fromSeq?: unknown, toSeqExclusive?: unknown) => readonly { type: string; seq?: number; data?: unknown }[]
+    ownEvents?: () => readonly { type: string; seq?: number; data?: unknown }[]
+    append?: (type: string, data: unknown) => { seq?: number } | number
     header?: { cwd?: string }
   }
   type SessionsServiceLike = { get(id: unknown): SessionLike | undefined }
@@ -508,13 +511,27 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       const session = sessionsSvc()?.get(sessionId)
       if (session === undefined) return null
       const append = await loadAppendPluginRecord()
-      if (append === null) return null
-      try {
-        return append(session, TRANSLATION_RECORD_TYPE, record)
-      } catch (e) {
-        log('failed to persist translation record: ' + String(e))
-        return null
+      if (append !== null) {
+        try {
+          const res = append(session, TRANSLATION_RECORD_TYPE, record)
+          if (typeof res === 'number') return res
+        } catch (e) {
+          log('failed to persist translation record via appendPluginRecord: ' + String(e))
+        }
       }
+      try {
+        if (typeof session.append === 'function') {
+          const res = session.append(TRANSLATION_RECORD_TYPE, record)
+          if (typeof res === 'number') return res
+          if (res !== null && typeof res === 'object' && typeof (res as { seq?: unknown }).seq === 'number') {
+            return (res as { seq: number }).seq
+          }
+          return 0
+        }
+      } catch (e) {
+        log('failed to persist translation record via session.append: ' + String(e))
+      }
+      return null
     },
   })
 

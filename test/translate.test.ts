@@ -10,6 +10,7 @@ import {
   isTurnRunning,
   lastCompletedTurn,
   resolveTranslateTarget,
+  sessionEvents,
   turnOfMessage,
   type SessionEventLike,
   type TranslationRecord,
@@ -314,6 +315,18 @@ test('autoTranslateTurn skips a turn already produced by the translate model', a
   })
   assert.equal(await service.autoTranslateTurn('s1', 1), null)
   assert.equal(runs, 0)
+})
+
+test('translateMessage falls back to lastCompletedTurn when message is unindexed', async () => {
+  const { service, records } = makeService({ runs: [{ ok: true, text: '人话版' }] })
+  const res = await service.translateMessage('s1', 'unknown-msg-id')
+  assert.equal(res.ok, true)
+  assert.equal(records[0]!.record.turn, 1)
+})
+
+test('sessionEvents reads from snapshotEvents and ownEvents', () => {
+  assert.equal(sessionEvents({ snapshotEvents: () => log } as any).length, log.length)
+  assert.equal(sessionEvents({ ownEvents: () => log } as any).length, log.length)
 })
 
 test('autoTranslateTurn translates and persists when enabled', async () => {
