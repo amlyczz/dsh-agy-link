@@ -51,7 +51,9 @@ const win = globalThis as unknown as {
 }
 
 const base = win.location?.origin ?? ''
-const STYLE_ID = 'dsh-agy-link-tsl-css'
+// Bumped when the sheet gains rules: a stale tag under the old id can no longer
+// suppress the new rules the way an unchanged id once did.
+const STYLE_ID = 'dsh-agy-link-tsl-css-v2'
 export const TRANSLATION_KIND = 'agy-translation'
 export const TRANSLATION_EVENT_TYPE = 'plugin:agy-link/translation'
 
@@ -114,12 +116,15 @@ const CSS = `
 .agy-tsl-icon svg { width: 15px; height: 15px; display: block; }
 @keyframes agy-tsl-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 /* Own tooltip: the native title bubble never showed inside the desktop shell,
-   and DSH's Tooltip primitive is not exposed to plugin bundles, so the hint is
-   a plain absolutely-positioned span driven by :hover/:focus-within. It grows to
-   the right because the action strip hugs the left edge of the reply, where a
-   centred bubble would be clipped by the transcript scroller. */
+   and DSH's Tooltip primitive is not exposed to plugin bundles. It is drawn
+   with pseudo-elements from the data-tip attribute rather than a real node, so a missing
+   stylesheet degrades to "no hint" instead of leaking the label into the action
+   row as inline text. It grows to the right because the action strip hugs the
+   left edge of the reply, where a centred bubble would be clipped by the
+   transcript scroller. */
 .agy-tsl-wrap { position: relative; display: inline-flex; align-items: center; }
-.agy-tsl-tip {
+.agy-tsl-wrap::after {
+  content: attr(data-tip);
   position: absolute; bottom: calc(100% + 8px); left: -6px;
   transform: translateY(2px);
   padding: 5px 9px; border-radius: 7px;
@@ -127,26 +132,36 @@ const CSS = `
   color: var(--dsw-alias-label-primary, #f8fafc);
   font-size: 11.5px; line-height: 1.45; font-weight: 400; letter-spacing: .01em;
   white-space: nowrap; width: max-content; max-width: 260px;
-  pointer-events: none;
+  pointer-events: none; text-align: left;
   box-shadow: 0 6px 18px rgba(0,0,0,.26), 0 0 0 1px rgba(127,127,127,.16);
   opacity: 0; visibility: hidden; z-index: 60;
   transition: opacity .12s ease, transform .12s ease, visibility .12s;
 }
-.agy-tsl-tip::after {
-  content: ''; position: absolute; top: 100%; left: 14px;
+.agy-tsl-wrap::before {
+  content: ''; position: absolute; bottom: calc(100% + 4px); left: 8px;
   border: 4px solid transparent; border-top-color: var(--dsw-alias-bg-layer-3, #23262f);
+  pointer-events: none; opacity: 0; visibility: hidden; z-index: 60;
+  transition: opacity .12s ease, visibility .12s;
 }
-.agy-tsl-wrap:hover .agy-tsl-tip,
-.agy-tsl-wrap:focus-within .agy-tsl-tip {
-  opacity: 1; visibility: visible; transform: translateY(0);
-}
+.agy-tsl-wrap:hover::after,
+.agy-tsl-wrap:focus-within::after { opacity: 1; visibility: visible; transform: translateY(0); }
+.agy-tsl-wrap:hover::before,
+.agy-tsl-wrap:focus-within::before { opacity: 1; visibility: visible; }
 `
 
 function injectStyles(): void {
 	if (typeof document === 'undefined') return
 	const doc = win.document
 	if (doc === null || doc === undefined) return
-	if (doc.getElementById(STYLE_ID) !== null) return
+	const existing = doc.getElementById(STYLE_ID) as { textContent?: string } | null | undefined
+	if (existing !== null && existing !== undefined) {
+		// A plugin reload (the client HMR path, or a second copy of this plugin in
+		// the same document) leaves the previous sheet behind. Returning early here
+		// used to keep the OLD rules forever, so a newly added rule never applied —
+		// that is exactly how the hover hint ended up rendered as plain inline text.
+		if (existing.textContent !== CSS) existing.textContent = CSS
+		return
+	}
 	const st = doc.createElement('style')
 	st.id = STYLE_ID
 	st.textContent = CSS
@@ -555,7 +570,7 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 
 	return h(
 		'span',
-		{ className: 'agy-tsl-wrap' },
+		{ className: 'agy-tsl-wrap', 'data-tip': title },
 		h(
 			'button',
 			{
@@ -588,7 +603,6 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 			},
 			glyph,
 		),
-		h('span', { className: 'agy-tsl-tip', role: 'tooltip' }, title),
 	)
 }
 

@@ -179,16 +179,29 @@ test('per-reply action is an icon-only Gemini button in the action strip', () =>
   const glyph = button.children[0] as ElementLike
   assert.equal(glyph.type, 'svg')
   assert.equal(collectText(button).join('').trim(), '')
-  assert.equal(button.props?.title, undefined, 'no native title; the span tooltip owns the hint')
+  assert.equal(button.props?.title, undefined, 'no native title; the CSS hint owns the label')
   assert.equal(typeof button.props?.['aria-label'], 'string')
-  // The tooltip element carries the same text and is a real node.
-  const tip = element.children[1] as ElementLike
-  assert.equal(tip.type, 'span')
-  assert.equal(tip.props?.className, 'agy-tsl-tip')
-  assert.equal(tip.props?.role, 'tooltip')
-  assert.ok(collectText(tip).join('').length > 0)
+  // The hint is a `data-tip` attribute drawn by ::after — NOT a real text node.
+  // A DOM node leaked the label into the action row as inline text whenever the
+  // stylesheet was missing (which is what the stale-style-tag bug produced).
+  assert.equal(element.children.length, 1, 'the wrapper must not carry a tooltip element')
+  assert.equal(typeof element.props?.['data-tip'], 'string')
+  assert.ok(String(element.props?.['data-tip']).length > 0)
+  assert.equal(collectText(element).join('').trim(), '', 'no hint text may render without CSS')
+  assert.match(source, /content: attr\(data-tip\)/)
+  assert.match(source, /\.agy-tsl-wrap:hover::after/)
+  assert.equal(source.includes('agy-tsl-tip'), false, 'the element-based tooltip is gone')
   // No session → no button (the slot's inject face is required).
   assert.equal(action!.component({ messageId: 'm1', t: (k: string) => k }), null)
+})
+
+test('the style sheet refreshes itself when a reload left a stale tag behind', () => {
+  // Regression: the guard returned early whenever the id already existed, so the
+  // rules of an already-installed (older) sheet were never replaced and newly
+  // added rules — like the hover hint — silently never applied.
+  assert.match(source, /const existing = doc\.getElementById\(STYLE_ID\)/)
+  assert.match(source, /if \(existing\.textContent !== CSS\) existing\.textContent = CSS/)
+  assert.match(source, /STYLE_ID = ["']dsh-agy-link-tsl-css-v2["']/)
 })
 
 test('action state survives a remount and re-derives from the session record', () => {
