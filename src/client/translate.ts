@@ -337,7 +337,7 @@ type ActionState = 'idle' | 'working' | 'done' | 'error'
 
 /** Four-point Gemini spark, filled with `currentColor` so it inherits the icon
  *  tint of DSH's action strip and looks native next to copy/thumbs/link. */
-const GEMINI_STAR = 'M12 1.6c.7 3.9 2.2 6.7 4.1 8.5 1.9 1.9 4.6 3 8.3 3.9-3.7.9-6.4 2-8.3 3.9-1.9 1.8-3.4 4.6-4.1 8.5-.7-3.9-2.2-6.7-4.1-8.5C6.1 16 3.4 14.9-.3 14c3.7-.9 6.4-2 8.3-3.9C9.8 8.3 11.3 5.5 12 1.6z'
+const GEMINI_STAR = 'M12 2 Q13.1 9.2 22 12 Q13.1 14.8 12 22 Q10.9 14.8 2 12 Q10.9 9.2 12 2 Z'
 
 function geminiGlyph(): unknown {
 	return h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true' },
