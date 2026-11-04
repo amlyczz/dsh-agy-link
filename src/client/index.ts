@@ -1141,24 +1141,6 @@ html.agy-modal-open body {
 	color: var(--agy-text-primary);
 }
 
-/* TEMPORARY render-probe modes (2026-11-04). A GPU-level "panel content flashes
-   while scrolling the console" could not be reproduced off this machine, so
-   Alt+Shift+F inside the console cycles these modes for an on-machine bisect:
-   1 no panel shadow · 2 no rounded clip · 3 no hover motion · 4 composited
-   scroll body · 5 no animation/transition at all. Remove with the keydown hook
-   in AgyModalDialog once the culprit is known. */
-.agy-modal-panel[data-agy-render="1"] { box-shadow: none !important; }
-.agy-modal-panel[data-agy-render="2"] { border-radius: 0 !important; overflow: visible !important; }
-.agy-modal-panel[data-agy-render="3"] .agy-card-hover,
-.agy-modal-panel[data-agy-render="3"] .agy-btn,
-.agy-modal-panel[data-agy-render="3"] .agy-toggle { transition: none !important; }
-.agy-modal-panel[data-agy-render="3"] .agy-card-hover:hover { box-shadow: var(--agy-shadow-card) !important; border-color: var(--agy-border-card) !important; }
-.agy-modal-panel[data-agy-render="3"] .agy-btn:hover:not(:disabled) { filter: none !important; transform: none !important; }
-.agy-modal-panel[data-agy-render="3"] .agy-toggle:hover:not(:disabled) { filter: none !important; }
-.agy-modal-panel[data-agy-render="4"] .agy-modal-body { transform: translateZ(0); }
-.agy-modal-panel[data-agy-render="5"],
-.agy-modal-panel[data-agy-render="5"] * { animation: none !important; transition: none !important; }
-
 /* Native dropdowns: the closed control carries inline colours, but the popup
    list follows color-scheme, so mirror the shell theme here too. */
 select.agy-select { color-scheme: light; }
@@ -2608,21 +2590,12 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 	/** Modal dialog container rendered into document.body */
 	const AgyModalDialog = (): unknown => {
 		const t = useAgyTranslation();
-		// TEMPORARY render probe (see the [data-agy-render] block in GLOBAL_CSS):
-		// a machine-specific scroll flash cannot be bisected off-machine.
-		const [probeMode, setProbeMode] = useState(0);
 
 		useEffect(() => {
 			const onKey = (e: any) => {
 				if (e.key === 'Escape') {
 					e.stopPropagation();
 					agyModalStore.setOpen(false);
-					return;
-				}
-				if (e.altKey === true && e.shiftKey === true && String(e.key).toLowerCase() === 'f') {
-					e.preventDefault?.();
-					e.stopPropagation?.();
-					setProbeMode((mode) => (mode + 1) % 6);
 				}
 			};
 			win.addEventListener?.('keydown', onKey, true);
@@ -2660,7 +2633,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 				if (e.target === e.currentTarget) agyModalStore.setOpen(false);
 			},
 		},
-			h('div', { className: 'agy-modal-panel', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'agy-console-title', 'data-agy-render': String(probeMode) },
+			h('div', { className: 'agy-modal-panel', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'agy-console-title' },
 				h('div', {
 					className: 'agy-modal-head',
 					style: {
@@ -2676,19 +2649,6 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 						agyIcon(18),
 						h('strong', { id: 'agy-console-title', style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--agy-text-primary)' } }, t('console.title')),
-						probeMode === 0
-							? null
-							: h('span', {
-									title: 'Alt+Shift+F：切换渲染诊断档位（0 默认 / 1 无面板阴影 / 2 无圆角裁切 / 3 无悬停动效 / 4 滚动区独立合成层 / 5 关全部动画）',
-									style: {
-										fontSize: '11px',
-										fontWeight: 600,
-										padding: '1px 6px',
-										borderRadius: '5px',
-										border: '1px dashed var(--agy-border-btn)',
-										color: 'var(--agy-text-tertiary)',
-									},
-								}, `诊断 ${probeMode}/5`),
 					),
 					h('button', {
 						type: 'button',
