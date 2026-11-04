@@ -7,7 +7,7 @@ import { AccountPoolManager } from '../src/host/pool.ts'
 import { QuotaService, agyUserAgent, detectEmailFromAgyLogs, staggerJitterMs, isStale5hBucket, mergeFallbackFamilyQuota, normalizeStoredToken, pickFamilyQuota, sameCredentialGrant, sameQuotaWindow, shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../src/host/quota.ts'
 import { shouldPollAccount } from '../src/common/pool-types.ts'
 import { writeAgyTokenFile, parsePastedCode, generatePkce } from '../src/host/oauth.ts'
-import { parseCredentialDoc, writePrimaryCredential } from '../src/host/credential-slot.ts'
+import { parseCredentialDoc, writePrimaryCredential, credentialSlotMutex } from '../src/host/credential-slot.ts'
 import { detectSystemProxy } from '../src/host/wincred.ts'
 
 test('persistRefreshedToken keeps the refresh token and writes agy nested shape', () => {
@@ -1436,4 +1436,59 @@ test('authoritative REST summary cleans up stale Argon on free accounts but pres
   // Refresh pro account: authoritative summary has Argon, row must be populated
   await svc.refreshAccountQuota(pool.getAccount(proAcc.id)!, true)
   assert.equal(pool.getAccount(proAcc.id)!.quotas.argon?.weeklyFraction, 0.55, 'pro account Argon retained')
+})
+
+test('cliSlotHoldsAccount refuses when neither durable primary credential nor disk token exists', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-noselfmatch-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts().find((a) => a.systemHome)
+  assert.ok(primary)
+
+  class ServiceWithoutAuthoritativeStore extends QuotaService {
+    override async readSystemKeychainToken() {
+      // The slot holds some token (e.g. secondary account's token)
+      return { accessToken: 'ya29.slot', refreshToken: '1//SLOT' }
+    }
+  }
+
+  const svc = new ServiceWithoutAuthoritativeStore(pool, () => '', () => null, { bin: () => 'agy' }) as unknown as {
+    cliSlotHoldsAccount(a: unknown): Promise<boolean>
+  }
+
+  // Without an independent primary credential file or disk token, cliSlotHoldsAccount
+  // must return false and refuse to tautologically match the slot against itself.
+  assert.equal(await svc.cliSlotHoldsAccount(primary), false)
+})
+
+test('readCliUsageFamilies acquires credentialSlotMutex and degrades to REST on contention', async () => {
+  if (process.platform !== 'win32') return
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-mutex-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts().find((a) => a.systemHome)
+  assert.ok(primary)
+
+  class MutexAwareService extends QuotaService {
+    override async readSystemKeychainToken() {
+      return { accessToken: 'ya29.primary', refreshToken: '1//PRIMARY' }
+    }
+    override async getStoredToken() {
+      return { accessToken: 'ya29.primary', refreshToken: '1//PRIMARY' }
+    }
+  }
+
+  const svc = new MutexAwareService(pool, () => '', () => null, { bin: () => 'agy' })
+  const read = (
+    svc as unknown as { readCliUsageFamilies(a: unknown): Promise<unknown> }
+  ).readCliUsageFamilies.bind(svc)
+
+  // Hold the mutex externally (simulating a secondary account's in-flight turn)
+  const release = await credentialSlotMutex.acquire({ timeoutMs: 10_000 })
+  try {
+    // With mutex held by another turn, readCliUsageFamilies must time out on the mutex
+    // and safely return null (triggering REST fallback) instead of reading the secondary's slot
+    const result = await read(primary)
+    assert.equal(result, null, 'must degrade to REST when credential slot is busy')
+  } finally {
+    release()
+  }
 })

@@ -32,9 +32,20 @@ import { ensureIsolatedKeychain } from './runner.ts'
 export const LOW_QUOTA_5H = 0.10
 export const LOW_QUOTA_WEEKLY = 0.05
 
-export function defaultPoolDir(): string {
-  const dshState = process.env.DSH_STATE_DIR || join(homedir(), '.dsh')
-  return join(dshState, 'agy-accounts')
+export function defaultPoolDir(home = homedir()): string {
+  if (process.env.DSH_STATE_DIR) {
+    return join(process.env.DSH_STATE_DIR, 'agy-accounts')
+  }
+  // Guard against isolated sub-account environments where HOME/USERPROFILE
+  // has been redirected into `<dshState>/agy-accounts/<accountId>`.
+  const norm = home.replace(/\\/g, '/')
+  const marker = '.dsh/agy-accounts'
+  const idx = norm.indexOf(marker)
+  if (idx !== -1) {
+    const realDsh = home.slice(0, idx + '.dsh'.length)
+    return join(realDsh, 'agy-accounts')
+  }
+  return join(home, '.dsh', 'agy-accounts')
 }
 
 export class AccountPoolManager {

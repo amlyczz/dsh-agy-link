@@ -148,6 +148,7 @@ export function isolatedHomeEnv(dir: string): Record<string, string> {
     GEMINI_CLI_HOME: geminiDir,
     ANTIGRAVITY_GEMINI_DIR: geminiDir,
     ANTIGRAVITY_APP_DATA_DIR: join(geminiDir, 'antigravity-cli'),
+    DSH_STATE_DIR: process.env.DSH_STATE_DIR || join(homedir(), '.dsh'),
   }
   if (IS_WIN) {
     env.USERPROFILE = dir
