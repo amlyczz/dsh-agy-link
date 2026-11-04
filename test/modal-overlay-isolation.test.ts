@@ -34,7 +34,9 @@ function cssRule(selector: string): string {
 	assert.ok(start > 0, `CSS rule not found: ${selector}`)
 	const end = src.indexOf('}', start)
 	assert.ok(end > start, `CSS rule not closed: ${selector}`)
-	return src.slice(start, end + 1)
+	// Comments carry the reasoning and sometimes name the very property we ban
+	// (e.g. "no contain: content here"); strip them before asserting.
+	return src.slice(start, end + 1).replace(/\/\*[\s\S]*?\*\//g, '')
 }
 
 test('REGRESSION: the full-viewport modal backdrop must not use backdrop-filter', () => {
@@ -103,4 +105,43 @@ test('GUARDRAIL: no full-viewport backdrop-filter anywhere in the plugin CSS', (
 			`${rel}: full-viewport backdrop-filter must not be reintroduced (it re-samples the page every frame behind a fixed overlay)`,
 		)
 	}
+})
+
+test('REGRESSION: the modal panel carries no compositing/paint-containment hints', () => {
+	// 2026-11-04: the console STILL flashed while its body scrolled. Both hints
+	// here were added by the 0.4.72 flicker attempt and are themselves the trap:
+	// `contain: content` implies PAINT containment on an ancestor of a scrolling
+	// subtree (Chromium drops and rebuilds the backing layer mid-scroll), and a
+	// forced translateZ(0) layer over a translucent backdrop re-composites the
+	// whole panel every frame. A 640px panel needs neither.
+	const rule = cssRule('.agy-modal-panel')
+	assert.equal(/[^-]contain\s*:/.test(rule), false, '.agy-modal-panel must not use containment (paint containment + inner scroller = flicker)')
+	assert.equal(/transform\s*:/.test(rule), false, '.agy-modal-panel must not force a compositing layer')
+	assert.match(rule, /overflow\s*:\s*hidden/, 'plain overflow:hidden is what actually clips the panel')
+})
+
+test('REGRESSION: the decorative shimmer does not pin a layer', () => {
+	const rule = cssRule('.agy-shimmer-track::after')
+	assert.equal(/will-change\s*:/.test(rule), false, 'will-change pins a compositing layer for an infinite decorative loop')
+})
+
+test('REGRESSION: wheel/touch over the overlay cannot scroll the page behind it', () => {
+	// Non-passive native capture listener: React's onWheel is passive, so
+	// preventDefault() there is ignored. The console's own scroller is exempt.
+	assert.match(
+		src,
+		/addEventListener\(['"]wheel['"][^)]*passive:\s*false[^)]*capture:\s*true/,
+		'the dialog must attach its own non-passive wheel blocker',
+	)
+	assert.match(src, /target\.closest\(['"]\.agy-modal-backdrop['"]\)/, 'the blocker only acts inside the overlay')
+	assert.match(src, /target\.closest\(['"]\.agy-modal-body['"]\)/, 'the console scroller keeps native wheel scrolling')
+	assert.match(src, /addEventListener\(['"]touchmove['"][^)]*passive:\s*false/, 'touch is blocked the same way')
+})
+
+test('REGRESSION: the shell itself is locked while the console is open', () => {
+	assert.match(
+		src,
+		/html\.agy-modal-open,\s*\n\s*html\.agy-modal-open body\s*\{[^}]*overflow\s*:\s*hidden\s*!important/,
+		'locking only [data-conversation-scroll] leaves a shell-level scroller free behind the overlay',
+	)
 })

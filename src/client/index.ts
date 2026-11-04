@@ -1067,8 +1067,10 @@ body.dark,
 	position: absolute;
 	top: 0; left: 0; right: 0; bottom: 0;
 	background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.22) 50%, transparent 100%);
-	transform: translateX(-100%) translateZ(0);
-	will-change: transform;
+	transform: translateX(-100%);
+	/* No will-change: transform: it pins a compositing layer for a decorative
+	   loop even while it is idle, and inside the overlay that layer is another
+	   thing the compositor can drop mid-scroll. */
 	animation: agy-shimmer 1.8s infinite ease-in-out;
 	pointer-events: none;
 }
@@ -1095,6 +1097,15 @@ html.agy-modal-open [data-conversation-scroll] {
 	overflow: hidden !important;
 	overscroll-behavior: contain;
 }
+/* Belt for the shell itself: if the host page (or a shell wrapper) is the thing
+   that scrolls, locking only the conversation scroller leaves a scroller free
+   behind the overlay. The wheel/touch blocker in the dialog is the primary fix;
+   this makes the intent explicit for any element that follows the document. */
+html.agy-modal-open,
+html.agy-modal-open body {
+	overflow: hidden !important;
+	overscroll-behavior: none;
+}
 .agy-modal-panel {
 	position: relative;
 	width: 100%;
@@ -1109,8 +1120,13 @@ html.agy-modal-open [data-conversation-scroll] {
 	overflow: hidden;
 	color: var(--agy-text-primary);
 	font-family: var(--agy-font-family);
-	transform: translateZ(0);
-	contain: content;
+	/* NO compositing hints here (2026-11-04, "滚动还是频繁闪屏"):
+	   contain: content implies PAINT containment, and paint containment on an
+	   ancestor of a scrolling subtree is the classic Chromium flicker trap — the
+	   backing layer is dropped and rebuilt while the body scrolls, so the panel
+	   blinks over the translucent backdrop. A forced translateZ(0) layer makes
+	   it worse (big fixed layer + shadow re-composited per frame). A 640px panel
+	   needs neither hint; plain overflow: hidden already clips it. */
 }
 .agy-submodel-row {
 	display: flex;
@@ -2586,6 +2602,31 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 			return () => win.removeEventListener?.('keydown', onKey, true);
 		}, []);
 
+		// The overlay owns the pointer. Wheel/touch over ANY part of the console that
+		// is not its own scroll area must not reach the page behind it: React attaches
+		// wheel passively, so preventDefault() inside onWheel is ignored — this is a
+		// native NON-PASSIVE capture listener instead. (2026-11-04, "滚动还是频繁
+		// 闪屏": with the cursor over the header or the panel padding, the wheel used
+		// to chain to the page behind the translucent backdrop and re-composite it
+		// every frame -> visible flashing.)
+		useEffect(() => {
+			if (typeof document === 'undefined') return;
+			const block = (e: any): void => {
+				const target = e?.target as { closest?: (selector: string) => unknown } | null;
+				if (typeof target?.closest !== 'function') return;
+				if (target.closest('.agy-modal-backdrop') === null) return;
+				// The console's own scroller keeps its native scrolling.
+				if (target.closest('.agy-modal-body') !== null) return;
+				e.preventDefault?.();
+			};
+			document.addEventListener('wheel', block, { passive: false, capture: true });
+			document.addEventListener('touchmove', block, { passive: false, capture: true });
+			return () => {
+				document.removeEventListener('wheel', block, true);
+				document.removeEventListener('touchmove', block, true);
+			};
+		}, []);
+
 		return h('div', {
 			className: 'agy-modal-backdrop',
 			onClick: (e: { target: unknown; currentTarget: unknown }) => {
@@ -2626,7 +2667,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 						onClick: () => agyModalStore.setOpen(false),
 					}, uiIcon('x', 14, 'var(--agy-text-btn)')),
 				),
-				h('div', { className: 'agy-modal-body', style: { overflowY: 'auto', overscrollBehavior: 'contain', padding: '18px', flex: '1', background: 'var(--agy-bg-panel)' } },
+				h('div', { className: 'agy-modal-body', style: { overflowY: 'auto', overscrollBehavior: 'contain', padding: '18px', flex: '1', minHeight: 0, background: 'var(--agy-bg-panel)' } },
 					h(AgySettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
 				),
 			),
