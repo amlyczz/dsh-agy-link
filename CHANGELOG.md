@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.4 (2026-11-05)
+
+### English
+
+- **Fix(quota): serialize Windows CLI quota refresh and close two Windows slot-isolation holes.** (thanks @Ronnoc, #69)
+  - `readCliUsageFamilies` ran `agy -p /usage` **without** the credential-slot mutex. On Windows the OS credential store is one shared slot that secondary runs temporarily swap, so an in-flight CLI read could attribute a secondary account's quota/reset to the primary. The read now holds `credentialSlotMutex` (4 s timeout, REST fallback on contention), and forced refreshes run sequentially on Windows.
+  - `cliSlotHoldsAccount()` could tautologically match the slot against itself when no independent durable credential/disk token existed; `getStoredToken()` now takes `allowKeychainFallback` and the slot check refuses that self-match.
+  - Deduplicates the Windows credential read via `wincred.readWindowsCredentialRaw`, and makes `defaultPoolDir()`/`isolatedHomeEnv()` recover the top-level `.dsh/agy-accounts` when invoked inside an isolated account dir (prevents nested credential files / mislabeled accounts).
+
+### 中文
+
+- **修复(quota)：Windows 下串行化 CLI 额度刷新，并堵住两个槽位隔离漏洞。**（感谢 @Ronnoc，#69）
+  - `readCliUsageFamilies` 调 `agy -p /usage` 时**没有**持 `credentialSlotMutex`。Windows 的凭据存储是单槽，子账号运行会临时换槽，于是进行中的 CLI 读取可能把子账号的额度/重置时间记到主账号。现读取期间持锁（4s 超时，争用则回退 REST），Windows 的强制刷新也改为顺序执行。
+  - `cliSlotHoldsAccount()` 在缺少独立持久凭据/磁盘 token 时可能拿槽位与自己比对（恒真）；`getStoredToken()` 新增 `allowKeychainFallback`，该检查拒绝这种自匹配。
+  - 通过 `wincred.readWindowsCredentialRaw` 复用 Windows 凭据读取；`defaultPoolDir()`/`isolatedHomeEnv()` 在隔离账号目录内调用时恢复到顶层 `.dsh/agy-accounts`（避免嵌套凭据文件与账号误标）。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.5.3...v0.5.4
+
 ## 0.5.3 (2026-11-05)
 
 ### English
