@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.1 (2026-11-04)
+
+### English
+
+- **Feat(client): the translation card is a Gemini surface now, not a generic notice.** The card carries the official four-point spark filled with Google's brand gradient (`#4285F4 → #9B72CB → #D96570`), the gradient wordmark, a hairline brand border with a soft top-right bloom, and a "Translated by Gemini" attribution line. Copy and the original-text toggle move onto pill buttons, and the per-reply action glyph reuses the same gradient spark, so the affordance reads as Gemini before you hover. Every colour is an rgba overlay or a DSH token, so the card holds up in both themes, and each render mints its own gradient id so several cards can coexist.
+- **Fix(client): the reply action settles even when the panel remounts mid-flight.** The chat timeline re-creates the transcript whenever a card lands in it, so the instance that started a translation could be gone before the promise resolved — its `setState` was a no-op and the spinner never stopped. Action state is now published to every mounted instance (`setActionState` / `subscribeActionState`) and `ACTION_INFLIGHT` alone decides `working`, so the surviving instance settles to `done`; the durable-record lookup still keeps a finished card `done` across reloads and session switches.
+- **Fix(client): the hover hint can no longer leak as body text.** The tooltip node now carries the `.agy-tsl-tip` class that owns its bubble styling, and `showTip()` repairs a node left behind by an older build (class plus `position: fixed`) before showing it. A missing stylesheet now degrades to "no hint", never to a stray line under the action strip.
+- **Fix(host): a bound translation explains the reply it was given, not one it remembers.** With `translateBindConversation` the host used to send the raw source text on every turn, which left the model free to answer from an earlier turn it had seen. Each turn now sends `buildTranslationRequest()` — an explicit "current turn's reply" instruction plus the source — while the persona still goes out once per conversation. The prompt also stopped being a style contract: unpack jargon before moving on, keep conclusions and conditions, and never compress a long answer into a verdict.
+- **Docs: README rewritten for 0.5.x.** One file with Chinese and English, refreshed pt-BR / es / en standalone pages, a dedicated Console and settings section (header badge, account card, runtime note, pool scheduling, auto-warmup, auto translate, effort, model visibility), a complete [configuration reference](docs/CONFIGURATION.md), and re-captured screenshots (console, model picker, settings) with mailbox and alias redaction.
+
+### 中文
+
+- **新增(client)：翻译卡片改成 Gemini 专属外观，不再是一张通用提示条。** 卡片带官方的四点星标（用 Google 品牌渐变 `#4285F4 → #9B72CB → #D96570` 填充）、渐变字标、品牌细描边与右上柔光，底部有「Translated by Gemini」署名；复制与原文对照换成胶囊按钮，回复动作条上的图标复用同一枚渐变星标，光标移上去之前就认得出是 Gemini。所有颜色都是 rgba 叠加或 DSH 令牌，深浅主题都成立；每次渲染各自生成渐变 id，多张卡片可以共存。
+- **修复(client)：面板中途重挂载时，回复动作也能收尾。** 聊天气泡里一有新卡片落地，DSH 就会重建时间线，发起翻译的那个实例可能在 Promise 完成前就没了——它的 `setState` 是空操作，转圈永远不停。现在状态通过 `setActionState` / `subscribeActionState` 广播给所有已挂载实例，`working` 只看 `ACTION_INFLIGHT`，于是活下来的那个实例能落到 `done`；跨刷新、跨会话仍由持久化记录把已完成的卡片保持在 `done`。
+- **修复(client)：悬停提示不会再漏成正文。** 提示节点现在带上负责气泡样式的 `.agy-tsl-tip` 类，`showTip()` 还会先修复旧构建遗留的节点（补类名与 `position: fixed`）。样式表缺失时最坏只是「没有提示」，不会在动作条下面多出一行字。
+- **修复(host)：绑定会话里的翻译只讲这一轮给的回复，不去翻历史。** 开了 `translateBindConversation` 时，以前每轮只发原文，模型可能拿它记住的上一轮来答。现在每轮都发 `buildTranslationRequest()`——明确「当前这一轮 AI 回复」再加上原文，人格仍然每条会话只发一次。提示词也不再是风格契约：先解释术语再往下讲，结论与条件必须留着，别把长回答压成一句结论。
+- **文档：README 按 0.5.x 重写。** 单文件中英双语，pt-BR / es / en 三份独立页同步，新增「控制台与设置」一节（顶栏徽标、账号卡片、运行方式、号池调度、周额度预热、自动翻译、思考强度、模型显示），补上完整的[配置参考](docs/CONFIGURATION.md)，并重拍了截图（控制台、模型选择器、设置页），邮箱与别名已打码。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.5.0...v0.5.1
+
 ## 0.5.0 (2026-11-03)
 
 ### English
