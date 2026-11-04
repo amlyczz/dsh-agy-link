@@ -680,8 +680,8 @@ function renderFamilyQuotaBar(
 		const tooltipText = typeof rawFraction === 'number'
 			? `${(rawFraction * 100).toFixed(1)}% (raw: ${rawFraction})${rawReset ? ` · reset: ${rawReset}` : ''}`
 			: resetStr ? `↻ ${resetStr}` : undefined;
-		return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '4px 0' } },
-			h('span', { style: { width: '52px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 700, flexShrink: 0 } }, windowName),
+		return h('div', { className: 'agy-quota-line', style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '4px 0' } },
+			h('span', { style: { width: '64px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap' } }, windowName),
 			h('div', {
 				className: isShimmer ? 'agy-shimmer-track' : '',
 				style: S.progressBarBg,
@@ -1122,6 +1122,113 @@ html.agy-modal-open [data-conversation-scroll] {
 	border: 1px solid var(--agy-border-box);
 	margin: 4px 0;
 	color: var(--agy-text-primary);
+}
+
+/* ------------------------------------------------------------------
+   Phone web. Below 680px the console becomes a full-height sheet and
+   every inline flex row is allowed to wrap: the layout is written with
+   style attributes, and only an !important rule can beat those, so the
+   overrides here are deliberately blunt.
+   ------------------------------------------------------------------ */
+@media (max-width: 680px) {
+	.agy-modal-backdrop {
+		padding: 0 !important;
+		align-items: stretch !important;
+		justify-content: stretch !important;
+	}
+	.agy-modal-panel {
+		width: 100% !important;
+		max-width: none !important;
+		height: 100dvh !important;
+		max-height: 100dvh !important;
+		border: 0 !important;
+		border-radius: 0 !important;
+	}
+	.agy-modal-head {
+		padding: 12px 14px !important;
+		padding-top: max(12px, env(safe-area-inset-top)) !important;
+	}
+	.agy-modal-body {
+		padding: 14px 12px calc(18px + env(safe-area-inset-bottom)) !important;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	/* A flex row may wrap instead of pushing the panel sideways. */
+	.agy-console [style*="display: flex"] { flex-wrap: wrap !important; }
+	/* Label on its own line, the control underneath it. */
+	.agy-console [style*="justify-content: space-between"] {
+		flex-direction: column !important;
+		align-items: stretch !important;
+		gap: 8px !important;
+	}
+	/* Segmented controls fill the row; every segment shares the width. */
+	.agy-console [style*="agy-seg-group-border"] {
+		display: flex !important;
+		width: 100% !important;
+		box-sizing: border-box !important;
+	}
+	.agy-console [style*="agy-seg-group-border"] > button {
+		flex: 1 1 0 !important;
+		min-width: 0 !important;
+		padding-left: 6px !important;
+		padding-right: 6px !important;
+	}
+	/* Inputs shrink; buttons keep a comfortable tap area. */
+	.agy-console input { min-width: 0 !important; flex: 1 1 140px !important; }
+	.agy-console .agy-btn { min-height: 34px; }
+	/* The family label no longer reserves 140px of a 360px screen. */
+	.agy-console [style*="min-width: 140px"] { min-width: 0 !important; }
+	/* Per-model rows may wrap their value under the name. */
+	.agy-console .agy-submodel-row { flex-wrap: wrap; gap: 4px 8px; }
+
+	/* Quota line: window name and badge share the first row, the bar takes
+	   the second one — 52px of label plus a 140px badge cluster leaves no
+	   room for a bar on a 360px screen. */
+	.agy-quota-line {
+		display: grid !important;
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas: "label cluster" "bar bar";
+		align-items: center;
+		gap: 5px 8px;
+	}
+	.agy-quota-line > span:first-child {
+		grid-area: label;
+		width: auto !important;
+		white-space: nowrap;
+	}
+	.agy-quota-line > div:nth-child(2) { grid-area: bar; margin: 0 !important; }
+	.agy-quota-line > div:nth-child(3) { grid-area: cluster; min-width: 0 !important; }
+
+	/* Header actions: the primary action keeps a full row, the two
+	   secondary ones share the next. */
+	.agy-header-actions {
+		display: grid !important;
+		grid-template-columns: 1fr 1fr;
+		gap: 6px;
+		width: 100%;
+	}
+	.agy-header-actions > button:first-child { grid-column: 1 / -1; }
+	.agy-header-actions > button { width: 100%; justify-content: center; }
+
+	/* Account actions: equal-width buttons instead of one ragged line. */
+	.agy-card-actions {
+		display: grid !important;
+		grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+		gap: 6px;
+		width: 100%;
+		align-items: stretch;
+	}
+	.agy-card-actions > button { width: 100%; justify-content: center; }
+}
+
+@media (max-width: 420px) {
+	.agy-console { font-size: 12.5px; }
+	.agy-modal-head {
+		padding: 10px 12px !important;
+		padding-top: max(10px, env(safe-area-inset-top)) !important;
+	}
+	.agy-modal-body { padding: 12px 10px calc(16px + env(safe-area-inset-bottom)) !important; }
+	.agy-console [style*="justify-content: space-between"] { gap: 6px !important; }
 }
 `;
 
@@ -1949,6 +2056,7 @@ export function apply(ctx: ClientContext): void {
 						}, uiIcon('power', 10, '#64748b'), t('status.disabled')) : null,
 					),
 					h('div', {
+						className: 'agy-card-actions',
 						style: { display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 },
 					},
 						h('button', {
@@ -2227,14 +2335,14 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 			);
 		}
 
-		return h('div', { style: S.container },
+		return h('div', { className: 'agy-console', style: S.container },
 			h('div', { style: S.headerCard },
 				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
 					agyIcon(18),
 					h('span', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--agy-text-primary)' } }, 'Antigravity'),
 					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
 				),
-				h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+				h('div', { className: 'agy-header-actions', style: { display: 'flex', gap: '6px', alignItems: 'center' } },
 					!addingAccount ? h('button', {
 						type: 'button',
 						className: 'agy-btn',
@@ -2405,6 +2513,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 		},
 			h('div', { className: 'agy-modal-panel', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'agy-console-title' },
 				h('div', {
+					className: 'agy-modal-head',
 					style: {
 						display: 'flex',
 						alignItems: 'center',
@@ -2436,7 +2545,7 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 						onClick: () => agyModalStore.setOpen(false),
 					}, uiIcon('x', 14, 'var(--agy-text-btn)')),
 				),
-				h('div', { style: { overflowY: 'auto', overscrollBehavior: 'contain', padding: '18px', flex: '1', background: 'var(--agy-bg-panel)' } },
+				h('div', { className: 'agy-modal-body', style: { overflowY: 'auto', overscrollBehavior: 'contain', padding: '18px', flex: '1', background: 'var(--agy-bg-panel)' } },
 					h(AgySettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
 				),
 			),

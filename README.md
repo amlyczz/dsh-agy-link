@@ -79,6 +79,7 @@ DSH 的模型列表里通常只有 DeepSeek。装上这个插件后，`agy` 背�
 - **自动翻译**：开 / 关，默认关闭；打开后每个回合结束自动生成一张 `/tsl` 翻译卡片。
 - **默认思考强度**：`auto` / `low` / `medium` / `high`，决定会话模型下拉框的初始档位，仍可按模型覆盖。
 - **模型显示**：点选隐藏或恢复模型；隐藏只影响选择器，不影响进行中的会话。
+- **手机 Web 端**：屏幕窄于 680px 时控制台自动切成全屏面板——标签与开关分成上下两行、额度条独占一整行、按钮等宽排布，缩到 360px 也不会横向溢出或裁切。
 
 模型选择器里 Antigravity 以 `Antigravity (agy CLI)` 分组出现，例如 Gemini 3.8 Flash、Claude Sonnet 4.6 (Thinking)、Claude Opus 4.6 (Thinking)、GPT-OSS 120B (Medium)。
 
@@ -299,6 +300,7 @@ The same console opens from two places: the `AGY (n)` badge in the header, and D
 - **Auto translate**: on / off, off by default; when on, every completed turn gets a `/tsl` card automatically.
 - **Default thinking effort**: `auto` / `low` / `medium` / `high`, seeding the session model menu's initial level and still overridable per model.
 - **Model visibility**: click to hide or restore a model. Hiding only affects the picker, never a running conversation.
+- **Phone web**: below 680px the console turns into a full-height sheet — labels and their switches stack, each quota bar takes a whole row, and the buttons share equal widths. Nothing overflows or gets clipped down to 360px.
 
 In the model picker, Antigravity appears as the `Antigravity (agy CLI)` group: Gemini 3.8 Flash, Claude Sonnet 4.6 (Thinking), Claude Opus 4.6 (Thinking), GPT-OSS 120B (Medium), and so on.
 
