@@ -84,9 +84,16 @@ test('hiding a model announces itself to the picker via llm/adapters-updated', a
     const before = emitted.length
     assert.equal(await post({ key: 'defaultEffort', value: 'high' }), 200)
     assert.equal(emitted.length, before, 'unrelated config keys must not emit the picker event')
+    // The console's translation dropdowns write through this same endpoint, so
+    // both keys have to stay settable (and stay off the picker event).
+    assert.equal(await post({ key: 'translateModel', value: 'gemini-3.8-flash' }), 200)
+    assert.equal(await post({ key: 'translateEffort', value: 'medium' }), 200)
+    assert.equal(emitted.length, before, 'translation dropdown writes must not emit the picker event')
     // The write landed in the runtime-overrides file under DSH_HOME.
     const overrides = JSON.parse(readFileSync(join(dir, 'agy-link', 'runtime-overrides.json'), 'utf8')) as Record<string, unknown>
     assert.deepEqual(overrides.hiddenModels, ['gemini-3.7-flash'])
+    assert.equal(overrides.translateModel, 'gemini-3.8-flash')
+    assert.equal(overrides.translateEffort, 'medium')
   } finally {
     await ctx.fiber.dispose()
     if (previous === undefined) delete process.env.DSH_HOME

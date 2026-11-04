@@ -58,6 +58,8 @@ test('console dictionary keys exist in every shipped language', () => {
     'header.refreshQuota', 'quota.fiveHour', 'quota.weekly', 'permission.label',
     'config.defaultEffort', 'config.defaultEffortDesc',
     'effort.auto', 'effort.low', 'effort.medium', 'effort.high',
+    'config.translateModel', 'config.translateModelDesc', 'config.translateModelAuto',
+    'config.translateEffort', 'config.translateEffortDesc', 'config.translateEffortAuto',
   ];
   for (const [lang, dict] of Object.entries(languages)) {
     for (const key of required) {
@@ -73,4 +75,19 @@ test('settings panel keeps the default thinking-effort row', () => {
   assert.match(source, /config\.defaultEffort/)
   assert.match(source, /setCfg\(["']defaultEffort["'], ["']high["']\)/)
   assert.match(source, /setCfg\(["']defaultEffort["'],\s*["']['"]\)/)
+});
+
+test('settings row exposes translation model and effort as dropdowns', () => {
+  // Both writes ride the same /config endpoint as the toggles, and the selects
+  // are fed by the pure option builders: the catalog is advisory, so a
+  // configured-but-unlisted model id must stay selectable.
+  const source = readFileSync(join(root, 'dist', 'client.js'), 'utf8');
+  assert.match(source, /setCfg\(["']translateModel["']/)
+  assert.match(source, /setCfg\(["']translateEffort["']/)
+  assert.match(source, /translateModelOptions\(/)
+  assert.match(source, /translateEffortOptions\(/)
+  assert.match(source, /className: ["']agy-select["']/)
+  // The two selects sit in the auto-translate row, not in a separate section.
+  assert.match(source, /config\.autoTranslate/)
+  assert.match(source, /cfgRowRight/)
 });

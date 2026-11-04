@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-client-locale/client';
 import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount, ModelQuotaInfo } from '../common/pool-types.ts';
 import { BRAND_COLORS, BRAND_PATHS, UI_PATHS } from './brand-icons.ts';
+import { geminiCatalogModels, translateEffortOptions, translateModelOptions } from './config-options.ts';
 import { installAgyToolView } from './toolview.ts';
 import { installMermaidRendering } from './mermaid.ts';
 import { en, es, NS, ptBR, zh, type AgyLocaleKey } from './locales.ts';
@@ -1124,6 +1125,11 @@ html.agy-modal-open [data-conversation-scroll] {
 	color: var(--agy-text-primary);
 }
 
+/* Native dropdowns: the closed control carries inline colours, but the popup
+   list follows color-scheme, so mirror the shell theme here too. */
+select.agy-select { color-scheme: light; }
+body[data-ds-dark-theme] select.agy-select { color-scheme: dark; }
+
 /* ------------------------------------------------------------------
    Phone web. Below 680px the console becomes a full-height sheet and
    every inline flex row is allowed to wrap: the layout is written with
@@ -1175,6 +1181,8 @@ html.agy-modal-open [data-conversation-scroll] {
 	}
 	/* Inputs shrink; buttons keep a comfortable tap area. */
 	.agy-console input { min-width: 0 !important; flex: 1 1 140px !important; }
+	/* Settings dropdowns share their row and stretch on a phone. */
+	.agy-console .agy-select { flex: 1 1 0 !important; min-width: 0 !important; max-width: none !important; height: 34px !important; }
 	.agy-console .agy-btn { min-height: 34px; }
 	/* The family label no longer reserves 140px of a 360px screen. */
 	.agy-console [style*="min-width: 140px"] { min-width: 0 !important; }
@@ -1452,6 +1460,46 @@ const S: Record<string, Record<string, unknown>> = {
 		outline: 'none',
 	},
 	muted: { color: 'var(--agy-text-tertiary)', fontSize: '11.5px' },
+	// Right-hand control cluster of a settings row: the toggle and the dropdowns
+	// wrap as ONE unit, so a narrow panel moves them under the label instead of
+	// squeezing the description into a column of two characters.
+	cfgRowRight: {
+		display: 'flex',
+		alignItems: 'center',
+		justifyContent: 'flex-end',
+		flexWrap: 'wrap',
+		gap: '6px',
+		minWidth: 0,
+		// Keep the controls on one line: the LABEL column absorbs the shrink
+		// (its description wraps) instead of the control cluster splitting.
+		flex: '0 0 auto',
+	},
+	// Native <select> dressed in the console's own tokens. `appearance: none`
+	// plus two gradient chevrons keeps the arrow theme-aware (a background image
+	// cannot read currentColor); color-scheme is set in GLOBAL_CSS so the popup
+	// list follows the theme as well.
+	select: {
+		appearance: 'none',
+		WebkitAppearance: 'none',
+		height: '28px',
+		padding: '0 22px 0 8px',
+		borderRadius: '6px',
+		border: '1px solid var(--agy-border-btn)',
+		backgroundColor: 'var(--agy-bg-input)',
+		color: 'var(--agy-text-primary)',
+		fontFamily: 'inherit',
+		fontSize: '11.5px',
+		fontWeight: 600,
+		cursor: 'pointer',
+		minWidth: '104px',
+		maxWidth: '190px',
+		textOverflow: 'ellipsis',
+		backgroundImage:
+			'linear-gradient(45deg, transparent 50%, var(--agy-text-tertiary) 50%), linear-gradient(135deg, var(--agy-text-tertiary) 50%, transparent 50%)',
+		backgroundPosition: 'calc(100% - 13px) calc(50% + 1px), calc(100% - 9px) calc(50% + 1px)',
+		backgroundSize: '4px 4px, 4px 4px',
+		backgroundRepeat: 'no-repeat',
+	},
 	noticeBanner: {
 		display: 'flex',
 		alignItems: 'center',
@@ -2414,24 +2462,57 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 							}, t('config.off')),
 						),
 					),
-					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('div', { style: { display: 'flex', flexDirection: 'column' } },
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
+						h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
 							h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.autoTranslate')),
 							h('span', { style: S.muted }, t('config.autoTranslateDesc')),
 						),
-						h('div', { style: S.segGroup },
-							h('button', {
-								type: 'button',
-								style: status?.autoTranslate === true ? S.segBtnActive : S.segBtn,
-								disabled: loadingAction === 'config:autoTranslate',
-								onClick: () => void setCfg('autoTranslate', true),
-							}, t('config.on')),
-							h('button', {
-								type: 'button',
-								style: status?.autoTranslate !== true ? S.segBtnActive : S.segBtn,
-								disabled: loadingAction === 'config:autoTranslate',
-								onClick: () => void setCfg('autoTranslate', false),
-							}, t('config.off')),
+						h('div', { style: S.cfgRowRight },
+							h('div', { style: S.segGroup },
+								h('button', {
+									type: 'button',
+									style: status?.autoTranslate === true ? S.segBtnActive : S.segBtn,
+									disabled: loadingAction === 'config:autoTranslate',
+									onClick: () => void setCfg('autoTranslate', true),
+								}, t('config.on')),
+								h('button', {
+									type: 'button',
+									style: status?.autoTranslate !== true ? S.segBtnActive : S.segBtn,
+									disabled: loadingAction === 'config:autoTranslate',
+									onClick: () => void setCfg('autoTranslate', false),
+								}, t('config.off')),
+							),
+							// Which model explains the reply. The empty value keeps the host
+							// fallback chain (gemini-3.8-flash → newest gemini-*-flash →
+							// session default), so the dropdown never pins a slug silently.
+							h('select', {
+								className: 'agy-select',
+								'aria-label': t('config.translateModel'),
+								title: t('config.translateModelDesc'),
+								style: S.select,
+								value: status?.translateModel ?? '',
+								disabled: loadingAction === 'config:translateModel',
+								onChange: (e: { target?: { value?: string } }) => void setCfg('translateModel', e?.target?.value ?? ''),
+							}, translateModelOptions(status?.translateModel ?? '', geminiCatalogModels(catalogModels), t('config.translateModelAuto')).map((option) =>
+								h('option', { key: option.value, value: option.value }, option.label),
+							)),
+							// How hard that model thinks. Empty = follow the
+							// default-effort row directly below.
+							h('select', {
+								className: 'agy-select',
+								'aria-label': t('config.translateEffort'),
+								title: t('config.translateEffortDesc'),
+								// Levels are 3 characters wide at most: no need to reserve 104px.
+								style: { ...S.select, minWidth: '78px', maxWidth: '110px' },
+								value: status?.translateEffort ?? '',
+								disabled: loadingAction === 'config:translateEffort',
+								onChange: (e: { target?: { value?: string } }) => void setCfg('translateEffort', e?.target?.value ?? ''),
+							}, translateEffortOptions(status?.translateEffort ?? '', {
+								auto: t('config.translateEffortAuto'),
+								low: t('effort.low'),
+								medium: t('effort.medium'),
+								high: t('effort.high'),
+							}).map((option) => h('option', { key: option.value, value: option.value }, option.label))),
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },

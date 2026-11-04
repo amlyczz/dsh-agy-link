@@ -104,7 +104,7 @@
 | 🖼 **图片多模态** | 支持多模态图片传入，自动落盘本地媒体目录并通过 `--add-dir` 安全授权给 agy 查看 |
 | 🤝 **`agy_ask` 辅助工具** | 允许任意 DSH 模型把单次任务委托给 Antigravity 模型（AskAntigravity 协作模式） |
 | 🧠 **思考强度自适应学习** | 模型若拒绝 `--effort`，自动无 effort 原样重放并记录至本地，后续自动收回档位声明，杜绝重复报错 |
-| 🗣 **`/tsl` 大白话翻译** | Gemini 专属卡片锚定在回复下方，会话 1:1 独立绑定复用，支持 `/tsl` 命令、自动翻译开关及回复快捷按钮「译成人话」 |
+| 🗣 **`/tsl` 大白话翻译** | DSH 原生卡片锚定在回复下方，会话 1:1 独立绑定复用；支持 `/tsl` 命令、自动翻译开关（设置页同一行可选**翻译模型**与**思考档**下拉框）及回复快捷按钮「译成人话」 |
 | ⌨️ **`/agy` 快捷命令族** | `status` / `pool` / `auth` / `models` / `mode` / `effort` / `workspace` / `goal` / `session` / `enable-account` / `disable-account` / `clear` / `doctor` / `help` |
 
 ---
@@ -191,11 +191,11 @@ dsh plugin --profile web add dsh-agy-link
 /tsl auto on|off|status    # 针对当前会话开启、关闭或查看自动翻译状态
 ```
 
-- **Gemini 品牌化翻译卡片**：翻译结果持久化存储于 `plugin:agy-link/translation` 会话记录中，渲染为锚定在被翻译回复正下方的专属卡片；刷新页面或切换会话后不丢失，原文支持一键展开折叠，且卡片内容不进入模型可见历史。
+- **DSH 原生翻译卡片**：翻译结果持久化存储于 `plugin:agy-link/translation` 会话记录中，渲染为锚定在被翻译回复正下方的原生卡片（只靠一枚单色星标 + 「Gemini 译文」标签标明出处）；刷新页面或切换会话后不丢失，原文支持一键展开折叠，且卡片内容不进入模型可见历史。
 - **快捷动作**：每条回复下方均提供「译成人话」快捷操作按钮，历史任一轮次均可按需一键翻译。
 - **会话 1:1 独立绑定 (`translateBindConversation`)**：每个 DSH 会话对应一条独立的 agy 翻译会话（`<sessionKey>#tsl`）。首次调用注入翻译员身份、工作区与日志路径；后续翻译复用该会话，每轮仅发送指令行与原文，显著降低 Token 开销。
 - **共享号池与自愈容错**：翻译调用走插件辅助通道，共享主账号池与冷却机制，账号额度耗尽自动故障转移至下一个可用账号；遇到空返回（`EMPTY_RESPONSE`）自动退避重试。
-- **严格遵循用户授权**：自动翻译默认关闭（`autoTranslate: false`），可在「设置 → Antigravity」中全局开启，或在会话中通过 `/tsl auto on` 动态开启。
+- **严格遵循用户授权**：自动翻译默认关闭（`autoTranslate: false`），可在「设置 → Antigravity」中全局开启，或在会话中通过 `/tsl auto on` 动态开启。同一行右侧的两个下拉框可分别改**翻译模型**（默认自动挑 Gemini Flash）与**翻译思考档**（默认跟随「默认思考强度」），改完即写配置、下一轮翻译生效。
 
 ---
 
@@ -336,7 +336,7 @@ Have multiple Google Antigravity / Gemini accounts? **dsh-agy-link makes multi-a
 | 🖼 **Multimodal Images** | Stages images to local storage and passes safe absolute paths via `--add-dir` |
 | 🤝 **`agy_ask` Delegation** | Allows other DSH models to delegate subtasks to Antigravity models |
 | 🧠 **Effort Learning Mechanism** | Automatically learns model effort refusals, replays without `--effort`, and hides unsupported options |
-| 🗣 **`/tsl` Plain-Language Translation** | Gemini rewrites the agent's final answer in plain language and the card is pinned under that reply (persisted in session, labelled "Gemini translation", original text preserved); `/tsl auto on` translates every new turn |
+| 🗣 **`/tsl` Plain-Language Translation** | Gemini rewrites the agent's final answer in plain language and the card is pinned under that reply (persisted in session, labelled "Gemini translation", original text preserved); `/tsl auto on` translates every new turn; the settings row carries **translation model** and **thinking effort** dropdowns |
 | ⌨️ **`/agy` Commands** | Full command suite: `status`, `pool`, `auth`, `models`, `mode`, `effort`, `workspace`, `goal`, `session`, `enable-account`, `disable-account`, `clear`, `doctor`, `help` |
 
 ---

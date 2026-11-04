@@ -96,6 +96,8 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `translateMaxTokens` | `—` | `4096` | Output token cap |
 | `translateTimeoutMs` | `—` | `120000` | Per-translation timeout |
 | `translateRetries` | `—` | `2` | Retries on retryable failures (account stall, empty answer) |
+
+`translateModel` and `translateEffort` are also editable in **DSH Settings → Antigravity**, on the auto-translate row (two dropdowns next to the on/off control). Leaving them on their default option hands the choice back to the fallback chain above.
 | `translateSkipSameModel` | `—` | `true` | Skip translation when the reply already came from the translate model |
 | `translateBindConversation` | `—` | `true` | One agy conversation per DSH session, persona sent once |
 | `translateMinIntervalMs` | `—` | `3000` | Minimum spacing between automatic translations |
