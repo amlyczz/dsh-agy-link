@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.2 (2026-11-04)
+
+### English
+
+- **Fix(client/translate): the translation card is a native DSH surface.** It read as a foreign banner inside a transcript: a blue→purple→pink gradient fill, a gradient border with a top-right bloom, a gradient wordmark and a "Translated by Gemini" footer stacked on a second header row - all in saturated brand colour. It now follows the host's own tool-card recipe: a 0.5px hairline (`--dsw-alias-border-l1`), the markdown code-block fill, a 12px radius and a code-block-banner header. Identity is reduced to one monochrome spark plus the localized 「Gemini 译文」 label (the spark takes the DSH accent token); model/effort ride the header as caption meta; copy / show-original / collapse share one flat action group that wraps as a unit, so a narrow panel truncates the meta instead of splitting the buttons.
+- **Feat(client/settings): pick the translation model and effort from the Auto-translate row.** Both were config-file/env-only, so changing how the translation call runs meant editing settings and restarting. Two native dropdowns now sit on the right of that row and write through the existing `POST /config`; the empty value still means "let the host decide". Layout measured rather than guessed: at the 640px panel the toggle plus both selects stay on ONE line (label absorbs the shrink) and the description wraps; below 680px the selects stretch to share the line.
+- **Fix(client): the console can no longer flash while scrolling.** The 0.4.72 flicker fix added two compositing hints while chasing that symptom - `contain: content` on the panel and `transform: translateZ(0)`. Both are themselves Chromium traps here: paint containment on an ancestor of a scrolling subtree makes the compositor drop and rebuild the backing layer mid-scroll, and a forced layer over a translucent fixed backdrop re-composites the whole panel per frame. A 640px panel needs neither; plain `overflow: hidden` already clips it, and the decorative shimmer loses its `will-change`. Two isolation holes are closed too: wheel/touch over any part of the overlay that is not its own scroller (header, padding, the dim itself) no longer leaks to the transcript behind, and the same applies while the console is open on phone-width. Reported flash: **gone** on the reporter's machine.
+- A temporary Alt+Shift+F render probe used to bisect that flash was removed before this release.
+
+### 中文
+
+- **修复(client/translate)：译文卡片改成 DSH 原生表面。** 之前它在会话里像个"外来的横幅"：蓝→紫→粉渐变底、带左上光晕的渐变边框、渐变字标，再加一行"Translated by Gemini"页脚压在第二个标题行上，全是高饱和品牌色。现在照抄宿主自己的工具卡片配方：`--dsw-alias-border-l1` 发丝线、markdown 代码块底色、12px 圆角、代码块横幅式表头。身份只剩一枚单色星形 + 本地化的「Gemini 译文」标签（星形取 DSH accent 令牌）；模型/档位降级为表头 caption 元信息；复制 / 看原文 / 折叠合并成一组扁平操作，按整体换行——面板窄时先截断元信息，而不是把按钮拆开。
+- **新增(client/settings)：在"自动翻译"那一行直接选翻译模型与档位。** 这两个原本只能改配置文件/环境变量，改一次就要重启。现在该行右侧是两个原生下拉（走既有的 `POST /config`），空值仍表示"交给宿主决定"。布局是按实测定的：640px 面板下开关 + 两个下拉保持**一行**（靠标签列收缩吸收），描述换行；680px 以下下拉按行均分。
+- **修复(client)：控制台滚动时不再闪屏。** 0.4.72 的防闪补丁为了追同一个症状加了两个合成提示——面板上的 `contain: content` 与 `transform: translateZ(0)`——它们在这里本身就是 Chromium 的坑：滚动子树祖先上的 paint containment 会让合成器在滚动中途丢弃并重建 backing layer；而半透明固定背板上的强制图层会每帧重合成整个面板。640px 面板两者都不需要，`overflow: hidden` 本来就裁得干净，装饰光晕也去掉了 `will-change`。同时补上两个隔离漏洞：覆盖层内任何**非自身滚动区**（表头、内边距、遮罩本体）上的滚轮/触摸不再漏给后面的会话；手机宽度下控制台打开时同理。报告者的闪屏：**已消失**。
+- 发布前移除了用于二分定位该闪屏的临时 Alt+Shift+F 渲染探针。
+
+### Full Changelog
+
+https://github.com/amlyczz/dsh-agy-link/compare/v0.5.1...v0.5.2
+
 ## 0.5.1 (2026-11-04)
 
 ### English
