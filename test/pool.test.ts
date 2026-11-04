@@ -740,14 +740,14 @@ test('getPoolData exposes systemProxy when defaultProxy is provided or system pr
 test('defaultPoolDir recovers when home directory is inside an isolated account path', () => {
   assert.equal(
     defaultPoolDir('C:\\Users\\kybco\\.dsh\\agy-accounts\\acc_1793341113485_51ytc'),
-    join('C:\\Users\\kybco\\.dsh', 'agy-accounts'),
+    join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
   )
   assert.equal(
-    defaultPoolDir('C:/Users/kybco/.dsh/agy-accounts/acc_1793341113485_51ytc'),
-    join('C:/Users/kybco/.dsh', 'agy-accounts'),
+    defaultPoolDir('/home/user/.dsh/agy-accounts/acc_1793341113485_51ytc'),
+    join('/home/user', '.dsh', 'agy-accounts'),
   )
   assert.equal(
     defaultPoolDir('C:\\Users\\kybco'),
-    join('C:\\Users\\kybco\\.dsh', 'agy-accounts'),
+    join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
   )
 })

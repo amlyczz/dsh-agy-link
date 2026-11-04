@@ -39,11 +39,11 @@ export function defaultPoolDir(home = homedir()): string {
   // Guard against isolated sub-account environments where HOME/USERPROFILE
   // has been redirected into `<dshState>/agy-accounts/<accountId>`.
   const norm = home.replace(/\\/g, '/')
-  const marker = '.dsh/agy-accounts'
+  const marker = '/.dsh/agy-accounts/'
   const idx = norm.indexOf(marker)
   if (idx !== -1) {
-    const realDsh = home.slice(0, idx + '.dsh'.length)
-    return join(realDsh, 'agy-accounts')
+    const realHome = home.slice(0, idx)
+    return join(realHome, '.dsh', 'agy-accounts')
   }
   return join(home, '.dsh', 'agy-accounts')
 }
