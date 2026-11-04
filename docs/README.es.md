@@ -1,67 +1,83 @@
 # dsh-agy-link — Español
 
-Integra modelos de Google Antigravity en DeepSeek Harness (DSH) mediante el CLI oficial y sin modificar `agy`. El plugin ofrece streaming, thinking, actividad de herramientas, uso de tokens, login OAuth desde la interfaz y monitor de cuota.
+Integra Google Antigravity en DeepSeek Harness (DSH). El plugin controla el CLI oficial y sin modificar `agy` y añade pool de cuentas, seguimiento oficial de cuotas por bucket, streaming nativo con tarjetas de herramientas y reescritura en lenguaje llano con `/tsl`.
+
+<p align="center">
+  <img src="./assets/console.png" alt="Consola de Antigravity: pool de cuentas, barras de cuota oficiales y estado del proxy" width="760">
+</p>
+
+<p align="center">
+  <img src="./assets/model-picker.png" alt="Modelos de Antigravity en el selector de modelos de DSH" width="300">
+  &nbsp;&nbsp;
+  <img src="./assets/settings.png" alt="Ajustes de Antigravity integrados en la página de plugins de DSH" width="520">
+</p>
+
+## Descripción general
+
+Cada turno lanza el proceso oficial `agy`, analiza su flujo de eventos NDJSON y lo traduce a texto, razonamiento, tarjetas de herramientas y medición de tokens nativos de DSH. La rotación de cuentas, la consulta de cuotas y los reintentos ocurren dentro del plugin; DSH solo ve una llamada normal al modelo.
+
+- Varias cuentas de Google se consumen en orden, así una conversación sobrevive al agotamiento de una cuota.
+- Las cuotas provienen del endpoint oficial: ventana de 5 horas, ventana semanal y el pool Argon de pago se muestran por separado.
+- El razonamiento, los comandos de terminal y las ediciones de archivos se renderizan como tarjetas nativas de DSH.
+- `/tsl` reescribe cualquier respuesta en lenguaje llano cuando un modelo escribe demasiado formal.
 
 ## Requisitos
 
 | Requisito | Verificación |
 | --- | --- |
 | DSH | `dsh --version` |
-| Node.js >= 24 | `node --version` |
+| Node.js ≥ 24 | `node --version` |
 | Google Antigravity CLI | `agy --version` |
-| Conectividad con Google | proxy/VPN/TUN cuando sea necesario |
+| Conectividad con Google | proxy / VPN / TUN cuando sea necesario |
 
-En regiones donde Google no sea accesible directamente, habilite TUN/proxy del sistema. Si la terminal no hereda el proxy, expórtelo antes de iniciar DSH:
+Donde Google no sea accesible directamente, active el proxy del sistema o el modo TUN. Si la terminal no hereda el proxy, expórtelo antes de iniciar DSH:
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 ALL_PROXY=socks5://127.0.0.1:7890
 ```
 
-Sustituya el puerto por el de su proxy local. También puede configurar un proxy HTTP(S) o SOCKS por cuenta desde el panel Antigravity de DSH.
+Sustituya el puerto por el de su proxy local. También puede configurar un proxy dedicado por cuenta desde la consola.
 
 ## Instalación e inicio rápido
 
 ```bash
-# Instale el plugin en el profile web
 dsh plugin --profile web add dsh-agy-link
-
-# Inicie DSH Web
 dsh web
 ```
 
-En DSH, haga clic en la insignia `AGY (n)` y seleccione **Add Account** para completar el login Google en el navegador. También puede ejecutar `/agy auth` para iniciar el login de la cuenta principal. Después seleccione un modelo Antigravity en `/model` y empiece a conversar. Use `/agy status` para comprobar el estado.
+En DSH, haga clic en la insignia `AGY (n)` y elija "Add account" para completar el login de Google en el navegador; no hay que copiar ningún código de autorización. También puede ejecutar `/agy auth` para la cuenta principal. Después seleccione un modelo de Antigravity en `/model` y empiece a conversar. `/agy status` informa del estado actual.
 
-## Funciones
+## Funciones principales
 
-- Pool de cuentas con entornos HOME y credenciales aislados.
-- Failover secuencial cuando una cuenta recibe HTTP 429 o agota su cuota.
-- Cuotas oficiales de 5 horas y 7 días con barras y cuenta regresiva.
-- Streaming de texto, thinking y actividad de herramientas en tarjetas nativas de DSH.
-- Sesiones DSH vinculadas a conversaciones `agy` mediante `--conversation`.
-- Modelos Gemini, Claude y GPT-OSS elegibles desde el provider `antigravity`.
-- Imágenes multimodales guardadas localmente y autorizadas a `agy` con `--add-dir`.
-- Herramienta `agy_ask` para delegar una tarea puntual a un modelo Antigravity.
-
-## Configuración
-
-| Clave | Variable de entorno | Predeterminado | Descripción |
-| --- | --- | --- | --- |
-| `enabled` | `DSH_AGY_ENABLED` | `true` | Activa/desactiva el plugin |
-| `agyBin` | `DSH_AGY_BIN` | detección automática | Ruta al ejecutable `agy` |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip`, `plan` o `accept-edits` (ya no se cambia en el panel; config/env siguen pudiendo sobrescribirlo) |
-| `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | predeterminado de agy | Slug del modelo predeterminado |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | `low`, `medium`, `high` o `auto`; la fila del panel fija el valor inicial del menú de modelos de la sesión, que puede sobrescribirlo por modelo |
-| `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Timeout del watchdog en ms |
-| `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Presupuesto de inactividad (minutos) mientras un paso de herramienta sigue abierto; `0` = mantener `timeoutMs` |
-| `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | cwd de la sesión | Raíz del workspace |
+- **Pool de cuentas**: HOME y credenciales OAuth aislados por cuenta; failover secuencial ante 429 o agotamiento; rotación que prioriza la cuota que caduca antes; enfriamiento por familia de modelos; cambio manual; proxy por cuenta; concesiones de credenciales en paralelo.
+- **Cuotas oficiales**: 5 horas móviles, 7 días semanales y el pool semanal Argon, con cuenta atrás de reinicio y detalle por modelo.
+- **Consola y ajustes**: la insignia `AGY (n)` de la cabecera y Ajustes → Plugins → Antigravity abren la misma consola. Dentro: tarjeta de cuenta (proxy, activar, precalentar, eliminar), nota de ejecución (permiso fijo en `skip`), planificación del pool (agotamiento secuencial / round robin), precalentamiento semanal de 7 días, traducción automática, esfuerzo de razonamiento por defecto y visibilidad de modelos. El selector lista los modelos bajo `Antigravity (agy CLI)`: Gemini 3.8 Flash, Claude Sonnet 4.6 (Thinking), Claude Opus 4.6 (Thinking), GPT-OSS 120B (Medium).
+- **Integración nativa**: proveedor `antigravity` en `/model` con las familias Gemini, Claude, GPT-OSS y Argon; streaming de texto, razonamiento y actividad de herramientas; tarjetas de terminal y diff, con las meta-herramientas MCP desenvueltas; diagramas mermaid; continuidad de sesión con `--conversation`; reenvío de goal y plan; medición completa de tokens con contexto de 1M; imágenes multimodales; delegación con `agy_ask`.
+- **Aprendizaje de effort**: un modelo que rechaza `--effort` se reintenta una vez sin la opción y se recuerda en `~/.dsh/agy-link/effort-unsupported.json`; una incompatibilidad nunca hace fallar un turno.
+- **Traducción `/tsl`**: comando, modo automático opcional y una acción por respuesta; el resultado se guarda como tarjeta bajo la respuesta, conserva el original y nunca entra en el historial visible para el modelo; usa el mismo pool con failover.
 
 ## Comandos `/agy`
 
-`status`, `auth`, `models`, `mode`, `effort`, `workspace`, `clear`, `doctor` y `help`.
+`status`, `pool` / `accounts`, `auth` / `auth-code`, `add-account` / `remove-account`, `enable-account` / `disable-account`, `refresh-quota` / `clear-cooldown`, `models`, `mode`, `effort`, `dispatch` / `dispatch-retries` / `parallel` / `max-concurrent`, `workspace`, `goal`, `session`, `clear`, `doctor`.
 
-## Seguridad y términos
+## Uso de `/tsl`
 
-El plugin invoca solamente el binario `agy` oficial y sin modificar instalado localmente. Úselo conforme a los Términos de Servicio de Google Antigravity. Mantenga literales los comandos, variables, IDs de modelo y rutas al adaptar esta documentación.
+```
+/tsl                       # traduce el último turno completado
+/tsl 3                     # traduce el turno 3
+/tsl --full                # incluye la narración intermedia
+/tsl --text 任意文本…       # traduce texto arbitrario (sin tarjeta)
+/tsl --model claude-sonnet-5-5 --effort medium
+/tsl auto on|off|status    # modo automático por sesión
+```
+
+## Configuración
+
+Claves habituales: `enabled`, `agyBin`, `permissionMode` (por defecto `skip`), `defaultModel`, `defaultEffort` (por defecto `high`), `hiddenModels`, `timeoutMs`, `workspaceRoot`, `proxyUrl`, `suppressAgyAutoUpdate`, `autoWarmup`, `autoTranslate`, `translateModel`, `translateEffort`. La lista completa de claves, variables de entorno y valores por defecto está en [CONFIGURATION.md](./CONFIGURATION.md).
+
+## Seguridad y condiciones
+
+El plugin solo invoca el binario oficial y sin modificar `agy` instalado localmente. Su uso está sujeto a las condiciones del servicio de Google Antigravity.
 
 ## Licencia
 
