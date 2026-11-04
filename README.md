@@ -71,7 +71,7 @@
 - 🔑 **GUI 内浏览器免粘贴登录 (In-GUI Zero-Paste OAuth)**：点击「➕ 添加账号」自动调起系统浏览器，本地回环监听自动捕获授权凭证，**全程无需手动复制粘贴授权码**。
 - 🎨 **多主题高对比度自适应 (Light & Dark Themes)**：原生适配 DSH 浅色/深色主题，告别发暗发灰与看不清文字，UI 视觉清晰锐利。
 - 📱 **手机 Web 端响应式自适应 (Mobile Web)**：控制台在屏幕宽度小于 680px 时自动变为全屏抽屉面板（`100dvh`），标签与开关控件折行重排，配额条独占单行，操作按钮等宽网格分布，并在多尺寸设备（360×800、390×844、768×1024）实测无横向溢出。
-- 🗣 **Gemini 品牌化大白话翻译 (`/tsl`)**：卡片采用 Google Gemini 视觉规范（四点渐变星标、品牌柔光与 `Translated by Gemini` 署名）；每个 DSH 会话绑定独立翻译会话（`<sessionId>#tsl`），仅首轮注入人格，后续仅传指令行，共享主号池与故障转移。
+- 🗣 **DSH 原生大白话翻译卡片 (`/tsl`)**：卡片沿用 DSH 自己的观感（0.5px 细描边、markdown 代码块底色、12px 圆角、横幅表头），只用一枚单色 Gemini 星标 + 「Gemini 译文」标签标明出处，深浅主题全由 DSH 令牌决定，不再是一块品牌渐变横幅；每个 DSH 会话绑定独立翻译会话（`<sessionId>#tsl`），仅首轮注入人格，后续仅传指令行，共享主号池与故障转移。
 - 🧠 **思考强度自适应学习 (Effort Learning)**：当模型拒绝 `--effort` 参数时，自动无 effort 原样重放确保轮次完成，持久化记录至本地文件并自动收回该机型的档位声明，避免后续重复报错。
 - 🌐 **独立账号网络代理 (Per-Account Proxy)**：支持为每个账号独立绑定 HTTP(S) / SOCKS 代理，避免多账号同 IP 引起风控；未显式配置时自动探测系统代理（macOS `scutil` / Windows 注册表 / Linux gsettings）。
 - ⚡ **分模型族独立冷却 (Family-Scoped Cooldown)**：Gemini、Claude、GPT-OSS 与 Argon 的速率限制独立计算，某个模型族受限不影响其他模型族正常调用。
@@ -303,7 +303,7 @@ Have multiple Google Antigravity / Gemini accounts? **dsh-agy-link makes multi-a
 - 🔑 **In-GUI Zero-Paste OAuth**: One-click "Add Account" opens your browser and automatically captures OAuth tokens via local loopback — **no copying and pasting of authorization codes required**.
 - 🎨 **Theme-Adaptive High-Contrast UI**: Seamlessly adapts to Light and Dark DSH themes with crystal clear typography and crisp contrast.
 - 📱 **Mobile Web Responsiveness**: Below 680px width, the console modal adapts to a full-height sheet drawer (`100dvh`) with stacked labels, full-width quota bars, and equal-width button grids, tested on 360×800, 390×844, and 768×1024 viewports.
-- 🗣 **Gemini-Branded Translation Card (`/tsl`)**: Plain-language explanations rendered in Google Gemini brand visual styling (four-point spark glyph, brand gradient, hairline border bloom, and attribution signature); binds 1:1 agy translation conversation per session (`<sessionId>#tsl`).
+- 🗣 **DSH-Native Translation Card (`/tsl`)**: Plain-language explanations rendered as a native DSH card (0.5px hairline border, markdown code-block fill, 12px radius, banner header) differentiated only by a monochrome spark and a "Gemini 译文" label; light and dark themes come straight from DSH tokens instead of a brand gradient. Binds 1:1 agy translation conversation per session (`<sessionId>#tsl`).
 - 🧠 **Effort Learning Mechanism**: Automatically learns when a model rejects `--effort`, replays the turn without effort, records the slug in `~/.dsh/agy-link/effort-unsupported.json`, and withdraws the level declarations to prevent repeated errors.
 - 🌐 **Per-Account Proxy**: Configure dedicated HTTP(S) / SOCKS proxy for each individual account to isolate IP addresses; when unset, the system proxy is auto-detected (macOS `scutil` / Windows registry / Linux gsettings).
 - ⚡ **Family-Scoped Cooldowns**: Gemini, Claude, GPT-OSS, and Argon rate limits are calculated independently, preventing one exhausted model from blocking others.
@@ -420,7 +420,9 @@ rewrite back.
 
 - The result is stored as a durable `plugin:agy-link/translation` session
   record and rendered as a **"Gemini translation" card pinned directly under the
-  reply it translates** — it survives reloads, renders with Google Gemini's brand gradient and spark icon, and never enters the model-visible history.
+  reply it translates** — it survives reloads, reads like any other DSH card (one
+  tinted spark plus a "Gemini 译文" label are the only Gemini signals), and never
+  enters the model-visible history.
 - Every reply also gets a hover action **"译成人话"** so historical turns can be
   translated on demand.
 - Binds 1:1 agy translation conversation (`<sessionId>#tsl`): persona sent once, per-turn calls transmit only the request line.

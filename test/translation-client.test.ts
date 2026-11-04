@@ -228,7 +228,7 @@ test('definition projects the record into a node anchored at the reply', () => {
   assert.equal(definition.buildViewNode({ key: 'k1', id: '60', state: { ...state, text: '  ' } }), null)
 })
 
-test('card renders a labelled Gemini block and its markdown body', () => {
+test('card is a native DSH surface: banner header, one Gemini label, no brand gradient', () => {
   const { slots } = mount()
   const card = slots.find((s) => s.options.key === 'agy-translation')
   assert.ok(card, 'conversation.chat.node key agy-translation must be registered')
@@ -238,33 +238,61 @@ test('card renders a labelled Gemini block and its markdown body', () => {
   }) as ElementLike
   assert.ok(isElement(element))
   assert.equal(element.props?.['data-agy-translation'], 'gemini')
-  // Gemini brand identity: the official four-point spark filled with the brand
-  // gradient, the gradient wordmark, and a plain suffix tag.
-  const head = element.children[0] as ElementLike
+  // Head + body only: the old attribution footer (and the extra "show original"
+  // row) are gone, so the card cannot grow a second stacked banner.
+  // (React keeps conditional `null` children in the array — count real nodes.)
+  const rendered = element.children.filter((child) => child !== null && child !== undefined)
+  assert.equal(rendered.length, 2, 'card is header + body; no footer row')
+
+  const head = rendered[0] as ElementLike
+  assert.equal(head.props?.['className'], 'agy-tsl-head')
   const badge = head.children[0] as ElementLike
+  assert.equal(badge.props?.['className'], 'agy-tsl-badge')
+  // Gemini identity is ONE monochrome spark — no per-render gradient defs, no
+  // gradient wordmark, no pill tag. The spark inherits the DSH accent token.
   const mark = badge.children[0] as ElementLike
   assert.equal(mark.type, 'svg')
   assert.equal(mark.props?.['className'], 'agy-tsl-mark')
-  const gradient = (mark.children[0] as ElementLike).children[0] as ElementLike
-  assert.equal(gradient.type, 'linearGradient')
-  assert.deepEqual(
-    gradient.children.map((stop) => (stop as ElementLike).props?.['stop-color']),
-    ['#4285F4', '#9B72CB', '#D96570'],
-  )
-  assert.match(String((mark.children[1] as ElementLike).props?.fill), /^url\(#agy-tsl-grad-\d+\)$/)
-  const brand = badge.children[1] as ElementLike
-  assert.equal(brand.props?.['className'], 'agy-tsl-brand')
-  assert.equal(collectText(brand).join(''), 'Gemini')
-  assert.equal((badge.children[2] as ElementLike).props?.['className'], 'agy-tsl-tag')
-  const text = collectText(element).join(' ')
-  assert.match(text, /Gemini translation/)
+  assert.equal(mark.children.length, 1, 'no <defs>/<linearGradient> inside the mark')
+  const path = mark.children[0] as ElementLike
+  assert.equal(path.type, 'path')
+  assert.equal(path.props?.fill, 'currentColor')
+  const label = badge.children[1] as ElementLike
+  assert.equal(label.props?.['className'], 'agy-tsl-label')
+  assert.equal(collectText(label).join(''), 'Gemini translation')
+
+  // Model/effort/account ride the header as caption meta, not as a second line.
+  const meta = head.children[1] as ElementLike
+  assert.equal(meta.props?.['className'], 'agy-tsl-meta')
+  assert.equal(collectText(meta).join(''), 'gemini-3.8-flash · high')
+
+  // One flat action group in the header: original toggle, copy, collapse. The
+  // group is a single flex unit, so a narrow panel truncates the meta instead of
+  // splitting the buttons across lines.
+  const actions = head.children[2] as ElementLike
+  assert.equal(actions.props?.['className'], 'agy-tsl-actions')
+  const buttons = (actions.children as ElementLike[]).filter((child) => child?.props?.['className'] === 'agy-tsl-btn')
+  assert.deepEqual(buttons.map((b) => collectText(b).join('')), ['Show original', 'Copy', 'Collapse'])
+  assert.equal((buttons[0]!.props as Record<string, unknown>)['data-active'], 'false')
+
+  const body = element.children[1] as ElementLike
+  assert.equal(body.props?.['className'], 'agy-tsl-body')
+  const text = collectText(body).join(' ')
   assert.match(text, /结论/)
   assert.match(text, /a\.ts/)
-  // Attribution footer: spark + "translated by Gemini" note.
-  const foot = element.children[element.children.length - 1] as ElementLike
-  assert.equal(foot.props?.['className'], 'agy-tsl-foot')
-  assert.equal((foot.children[0] as ElementLike).type, 'svg')
-  assert.match(collectText(foot).join(' '), /Translated by Gemini/)
+
+  // The stylesheet is DSH-token driven and carries no brand gradient at all.
+  // (Slice the card region: the console sheet legitimately uses gradients for
+  // quota bars, so the whole bundle is the wrong scope.)
+  const cardCss = source.slice(source.indexOf('.agy-tsl-card {'), source.indexOf('.agy-tsl-icon {'))
+  assert.ok(cardCss.length > 0, 'card sheet found in the bundle')
+  assert.equal(/linear-gradient|radial-gradient/.test(cardCss), false, 'no brand gradient in the card sheet')
+  assert.equal(source.includes('agy-tsl-brand'), false, 'the gradient wordmark class is gone')
+  assert.equal(source.includes('agy-tsl-foot'), false, 'the attribution footer is gone')
+  assert.match(cardCss, /\.agy-tsl-card \{[^}]*var\(--dsw-alias-markdown-code-block/)
+  assert.match(cardCss, /\.agy-tsl-body \{[^}]*--dsw-font-markdown-base-font-size/)
+  assert.match(cardCss, /body\[data-ds-dark-theme\] \.agy-tsl-card/)
+  assert.match(cardCss, /\.agy-tsl-actions \{[^}]*margin-left: auto/)
 })
 
 test('per-reply action is an icon-only Gemini button in the action strip', () => {

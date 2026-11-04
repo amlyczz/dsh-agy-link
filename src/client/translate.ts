@@ -60,79 +60,102 @@ export const TRANSLATION_KIND = 'agy-translation'
 export const TRANSLATION_EVENT_TYPE = 'plugin:agy-link/translation'
 
 const CSS = `
-/* Gemini-brand card. Mirrors gemini.google.com: the four-point spark, the
-   blue→purple→pink brand gradient as a hairline, airy rounded surfaces and the
-   gradient wordmark. Every colour is an rgba overlay (or a DSH token) so the
-   card reads on both the dark and the light theme. */
+/* Card surface. It has to read as a HOST component, not a plugin banner: the
+   recipe is DSH's own tool card (the console's agy-tv-card) — a hairline l1
+   stroke, the markdown code-block fill, a 12px radius and a banner header.
+   Nothing here is brand-themed. The only Gemini signal is one monochrome spark
+   plus the "Gemini 译文" label; every colour is a DSH token, so light and dark
+   come from the host theme instead of from this sheet. */
 .agy-tsl-card {
-  position: relative;
-  margin: 10px 0 4px 0;
-  border-radius: 16px;
-  border: 1px solid transparent;
-  background:
-    linear-gradient(165deg, rgba(66,133,244,.10), rgba(155,114,203,.13) 55%, rgba(217,101,112,.09)) padding-box,
-    linear-gradient(120deg, #4285F4 0%, #9B72CB 52%, #D96570 100%) border-box;
-  box-shadow: 0 12px 30px -24px rgba(66,133,244,.9);
+  --agy-tsl-hairline: var(--dsw-alias-border-l1, rgba(127,127,127,.2));
+  --agy-tsl-surface: var(--dsw-alias-markdown-code-block, rgba(127,127,127,.06));
+  --agy-tsl-banner: var(--dsw-alias-markdown-code-block-banner, rgba(127,127,127,.04));
+  margin: 12px 0 4px 0;
+  border: 0.5px solid var(--agy-tsl-hairline);
+  border-radius: var(--dsw-radius-md, 12px);
+  background: var(--agy-tsl-surface);
   overflow: hidden;
 }
-/* One soft brand bloom in the top-right, exactly like the Gemini surfaces. */
-.agy-tsl-card::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(120% 100% at 100% 0%, rgba(155,114,203,.18), rgba(155,114,203,0) 62%);
+/* Explicit dark-theme fallbacks: DSH already flips every token, these only keep
+   the card legible if a token is ever renamed or missing. */
+body[data-ds-dark-theme] .agy-tsl-card,
+body.dark .agy-tsl-card,
+[data-theme="dark"] .agy-tsl-card {
+  --agy-tsl-hairline: var(--dsw-alias-border-l1, rgba(255,255,255,.10));
+  --agy-tsl-surface: var(--dsw-alias-markdown-code-block, rgba(255,255,255,.04));
+  --agy-tsl-banner: var(--dsw-alias-markdown-code-block-banner, rgba(255,255,255,.03));
 }
 .agy-tsl-head {
-  position: relative; z-index: 1;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 8px 12px; font-size: 12px; color: var(--dsw-alias-label-secondary, #aaa);
-  border-bottom: 1px solid rgba(127,127,127,.14);
-}
-.agy-tsl-badge { display: inline-flex; align-items: center; gap: 6px; }
-.agy-tsl-mark { width: 16px; height: 16px; flex: 0 0 auto; display: block; }
-.agy-tsl-brand {
-  font-size: 13px; font-weight: 600; letter-spacing: .005em;
-  background: linear-gradient(90deg, #4285F4 0%, #9B72CB 55%, #D96570 100%);
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent; color: transparent;
-}
-.agy-tsl-tag {
-  font-size: 11px; line-height: 16px; padding: 0 7px; border-radius: 999px;
-  color: var(--dsw-alias-label-secondary, #a8b0bd); background: rgba(127,127,127,.14);
-}
-.agy-tsl-meta { font-size: 11.5px; opacity: .8; font-variant-numeric: tabular-nums; }
-.agy-tsl-spacer { flex: 1 1 auto; }
-.agy-tsl-btn {
-  background: transparent; border: 1px solid transparent; color: var(--dsw-alias-label-secondary, #aaa);
-  border-radius: 999px; cursor: pointer; font-size: 12px; padding: 2px 9px;
-  transition: background .15s ease, color .15s ease;
-}
-.agy-tsl-btn:hover { background: rgba(127,127,127,.16); color: var(--dsw-alias-label-primary, #eee); }
-.agy-tsl-body {
-  position: relative; z-index: 1;
-  padding: 10px 14px 12px 14px; font-size: 13.5px; line-height: 1.7;
-  color: var(--dsw-alias-label-primary, #eee);
-}
-.agy-tsl-body p { margin: 0 0 7px 0; }
-.agy-tsl-body p:last-child { margin-bottom: 0; }
-.agy-tsl-body ul, .agy-tsl-body ol { margin: 0 0 7px 0; padding-left: 20px; }
-.agy-tsl-body li { margin: 2px 0; }
-.agy-tsl-body h4, .agy-tsl-body h5 { margin: 8px 0 5px 0; font-size: 13.5px; }
-.agy-tsl-body code { background: rgba(127,127,127,.18); border-radius: 4px; padding: 1px 4px; font-size: 12.5px; }
-.agy-tsl-body pre { background: rgba(127,127,127,.14); border-radius: 10px; padding: 8px 10px; overflow-x: auto; margin: 0 0 7px 0; }
-.agy-tsl-body pre code { background: transparent; padding: 0; }
-.agy-tsl-original {
-  position: relative; z-index: 1;
-  margin: 0; padding: 8px 12px; border-top: 1px dashed rgba(127,127,127,.24);
-  font-size: 12.5px; color: var(--dsw-alias-label-secondary, #aaa); white-space: pre-wrap; max-height: 260px; overflow: auto;
-}
-/* Gemini attribution line: the spark plus the plain "translated by" note. */
-.agy-tsl-foot {
-  position: relative; z-index: 1;
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px 8px 12px; font-size: 11.5px;
+  min-height: 32px; padding: 4px 8px 4px 12px;
+  background: var(--agy-tsl-banner);
+  border-bottom: 0.5px solid var(--agy-tsl-hairline);
+  font-size: 12px; line-height: 20px;
   color: var(--dsw-alias-label-tertiary, #8a8f98);
-  border-top: 1px solid rgba(127,127,127,.12);
 }
-.agy-tsl-foot svg { width: 12px; height: 12px; }
+.agy-tsl-badge { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/* Monochrome spark: identity by shape, accent by token — no gradient <defs>. */
+.agy-tsl-mark { display: block; width: 14px; height: 14px; flex: 0 0 auto; color: inherit; }
+.agy-tsl-badge > .agy-tsl-mark { color: var(--dsw-alias-state-business-primary, #4176e6); }
+.agy-tsl-label {
+  font-size: 12px; font-weight: 500; white-space: nowrap;
+  color: var(--dsw-alias-label-secondary, #4a4c55);
+}
+.agy-tsl-meta {
+  flex: 1 1 auto; min-width: 0; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-caption, #8a8f98);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Actions wrap as ONE unit, so a narrow panel truncates the meta instead of
+   splitting "copy" from "collapse" across two lines. */
+.agy-tsl-actions {
+  display: inline-flex; align-items: center; gap: 2px;
+  flex: 0 0 auto; margin-left: auto;
+}
+/* Flat text buttons, same treatment as the console/tool-card copy button. */
+.agy-tsl-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin: 0; padding: 2px 6px; border: 0; border-radius: var(--dsw-radius-xs, 4px);
+  background: transparent; color: var(--dsw-alias-label-tertiary, #8a8f98);
+  font: inherit; font-size: 11.5px; line-height: 16px; cursor: pointer;
+  transition: background-color .1s ease, color .1s ease;
+}
+.agy-tsl-btn:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12));
+  color: var(--dsw-alias-label-primary, #1a1c21);
+}
+.agy-tsl-btn[data-active="true"] { color: var(--dsw-alias-label-primary, #1a1c21); }
+.agy-tsl-body {
+  padding: 10px 14px 12px 14px;
+  font-size: var(--dsw-font-markdown-base-font-size, 14px);
+  line-height: var(--dsw-font-markdown-base-line-height, 24px);
+  color: var(--dsw-alias-label-primary, #1a1c21);
+  overflow-wrap: break-word;
+}
+.agy-tsl-body p { margin: 0 0 8px 0; }
+.agy-tsl-body p:last-child { margin-bottom: 0; }
+.agy-tsl-body ul, .agy-tsl-body ol { margin: 0 0 8px 0; padding-left: 22px; }
+.agy-tsl-body li { margin: 2px 0; }
+.agy-tsl-body h4, .agy-tsl-body h5 { margin: 12px 0 6px 0; font-size: 14px; line-height: 22px; }
+.agy-tsl-body code {
+  font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: .9em; padding: 1px 4px; border-radius: var(--dsw-radius-xs, 4px);
+  background: var(--dsw-alias-markdown-inline-code, rgba(127,127,127,.16));
+}
+.agy-tsl-body pre {
+  margin: 0 0 8px 0; padding: 10px 12px; overflow-x: auto;
+  border: 0.5px solid var(--agy-tsl-hairline);
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: var(--agy-tsl-banner);
+}
+.agy-tsl-body pre code { background: transparent; padding: 0; font-size: 12.5px; }
+.agy-tsl-original {
+  margin: 0; padding: 10px 14px;
+  border-top: 0.5px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.28));
+  font-size: 12.5px; line-height: 1.6;
+  color: var(--dsw-alias-label-secondary, #4a4c55);
+  white-space: pre-wrap; max-height: 260px; overflow: auto;
+}
 /* Icon-only action that sits in the same strip as copy / thumbs / link, with
    the same neutral tint so it reads as part of that group. */
 .agy-tsl-icon {
@@ -142,13 +165,13 @@ const CSS = `
   cursor: pointer; transition: background .15s ease, color .15s ease;
 }
 .agy-tsl-icon:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-solid, rgba(127,127,127,.14));
-  color: var(--dsw-alias-label-primary, #eee);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.14));
+  color: var(--dsw-alias-label-primary, #1a1c21);
 }
 .agy-tsl-icon:disabled { cursor: default; }
 .agy-tsl-icon[data-state="working"] { color: var(--dsw-alias-state-business-primary, #2563eb); cursor: wait; }
-.agy-tsl-icon[data-state="done"] { color: #10b981; }
-.agy-tsl-icon[data-state="error"] { color: #ef4444; }
+.agy-tsl-icon[data-state="done"] { color: var(--dsw-alias-state-success-primary, #22c55e); }
+.agy-tsl-icon[data-state="error"] { color: var(--dsw-alias-state-error-primary, #ef4444); }
 .agy-tsl-icon svg { width: 15px; height: 15px; display: block; }
 @keyframes agy-tsl-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 /* Own tooltip: the native title bubble never showed inside the desktop shell,
@@ -359,36 +382,24 @@ interface TranslationCardData {
 }
 
 /**
- * The Gemini four-point spark, filled with the brand gradient (#4285F4 →
- * #9B72CB → #D96570) — the mark Google uses on gemini.google.com. The gradient
- * id is unique per render so several cards can coexist.
+ * The Gemini four-point spark. Drawn monochrome (`currentColor`) on purpose:
+ * the card belongs to DSH's design system, so the brand shows up as one tinted
+ * glyph in the header instead of a gradient-filled widget. Without <defs> there
+ * is no per-render gradient id either, so several cards can coexist untouched.
  */
-let markSeq = 0
 function geminiMark(): unknown {
-	const id = 'agy-tsl-grad-' + (++markSeq)
 	return h(
 		'svg',
 		{ viewBox: '0 0 24 24', className: 'agy-tsl-mark', 'aria-hidden': 'true', focusable: 'false' },
-		h(
-			'defs',
-			null,
-			h(
-				'linearGradient',
-				{ id, x1: '0', y1: '24', x2: '24', y2: '0', gradientUnits: 'userSpaceOnUse' },
-				h('stop', { offset: '0%', 'stop-color': '#4285F4' }),
-				h('stop', { offset: '50%', 'stop-color': '#9B72CB' }),
-				h('stop', { offset: '100%', 'stop-color': '#D96570' }),
-			),
-		),
-		h('path', { d: BRAND_PATHS.gemini, fill: 'url(#' + id + ')' }),
+		h('path', { d: BRAND_PATHS.gemini, fill: 'currentColor' }),
 	)
 }
 
-/** "Gemini 译文" → "译文": the wordmark carries "Gemini", so only the suffix is shown. */
-function badgeSuffix(label: string): string {
-	return label.replace(/^\s*Gemini[\s·:：-]*/iu, '').trim()
-}
-
+/**
+ * One native-looking card: banner header (spark + "Gemini 译文", model/effort as
+ * caption meta, and the three flat actions) over DSH-markdown body text. Every
+ * colour is a DSH token — the host theme decides light or dark.
+ */
 const TranslationCard = (props?: Record<string, unknown>): unknown => {
 	const node = (props?.node ?? {}) as { data?: TranslationCardData }
 	const data = node.data ?? {}
@@ -418,39 +429,44 @@ const TranslationCard = (props?: Record<string, unknown>): unknown => {
 			setTimeout(() => setCopied(false), 1500)
 		}).catch(() => undefined)
 	}
+	const action = (key: string, label: string, onClick: () => void, active?: boolean): unknown =>
+		h(
+			'button',
+			{
+				key,
+				type: 'button',
+				className: 'agy-tsl-btn',
+				...(active === undefined ? null : { 'data-active': active ? 'true' : 'false' }),
+				onClick,
+			},
+			label,
+		)
+	const badge = t('tsl.badge', 'Gemini translation')
 	return h(
 		'div',
-		{ className: 'agy-tsl-card', 'data-agy-translation': 'gemini', 'aria-label': t('tsl.badge', 'Gemini translation') },
+		{ className: 'agy-tsl-card', 'data-agy-translation': 'gemini', 'aria-label': badge },
 		h(
 			'div',
 			{ className: 'agy-tsl-head' },
-			h('span', { className: 'agy-tsl-badge' },
-				geminiMark(),
-				h('span', { className: 'agy-tsl-brand' }, 'Gemini'),
-				badgeSuffix(t('tsl.badge', 'Gemini translation')) === ''
+			h('span', { className: 'agy-tsl-badge' }, geminiMark(), h('span', { className: 'agy-tsl-label' }, badge)),
+			meta.length === 0 ? null : h('span', { className: 'agy-tsl-meta', title: meta.join(' · ') }, meta.join(' · ')),
+			h(
+				'span',
+				{ className: 'agy-tsl-actions' },
+				original === ''
 					? null
-					: h('span', { className: 'agy-tsl-tag' }, badgeSuffix(t('tsl.badge', 'Gemini translation'))),
+					: action(
+							'original',
+							showOriginal ? t('tsl.hideOriginal', 'Hide original') : t('tsl.showOriginal', 'Show original'),
+							() => setShowOriginal(!showOriginal),
+							showOriginal,
+						),
+				action('copy', copied ? t('tsl.copied', 'Copied') : t('tsl.copy', 'Copy'), copy),
+				action('collapse', open ? t('tsl.collapse', 'Collapse') : t('tsl.expand', 'Expand'), () => setOpen(!open)),
 			),
-			h('span', { className: 'agy-tsl-meta' }, meta.join(' · ')),
-			h('span', { className: 'agy-tsl-spacer' }),
-			h('button', { type: 'button', className: 'agy-tsl-btn', onClick: copy }, copied ? t('tsl.copied', 'Copied') : t('tsl.copy', 'Copy')),
-			h('button', { type: 'button', className: 'agy-tsl-btn', onClick: () => setOpen(!open) }, open ? t('tsl.collapse', '收起') : t('tsl.expand', '展开')),
 		),
 		open ? h('div', { className: 'agy-tsl-body' }, renderMarkdown(text) as never) : null,
-		original !== ''
-			? h(
-					'div',
-					{ className: 'agy-tsl-head', style: { borderBottom: 'none', paddingTop: '0', paddingBottom: '6px' } },
-					h('button', { type: 'button', className: 'agy-tsl-btn', onClick: () => setShowOriginal(!showOriginal) }, showOriginal ? t('tsl.hideOriginal', 'Hide original') : t('tsl.showOriginal', 'Show original')),
-			  )
-			: null,
 		showOriginal && original !== '' ? h('pre', { className: 'agy-tsl-original' }, original) : null,
-		h(
-			'div',
-			{ className: 'agy-tsl-foot' },
-			geminiMark(),
-			h('span', null, t('tsl.byGemini', 'Translated by Gemini')),
-		),
 	)
 }
 
@@ -461,8 +477,9 @@ const TranslationCard = (props?: Record<string, unknown>): unknown => {
 type ActionState = 'idle' | 'working' | 'done' | 'error'
 
 function geminiGlyph(): unknown {
-	// The strip icon is the same official spark as the card, filled with the
-	// brand gradient so the affordance reads as Gemini even before hovering.
+	// The strip icon is the same spark, but it inherits the strip's own tint like
+	// every other action (copy / thumbs / link): hovering or settling changes the
+	// colour, so the affordance stays in the same visual family.
 	return geminiMark()
 }
 
@@ -808,9 +825,9 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 						state === 'working'
 							? 'var(--dsw-alias-state-business-primary, #2563eb)'
 							: state === 'done'
-								? '#10b981'
+								? 'var(--dsw-alias-state-success-primary, #22c55e)'
 								: state === 'error'
-									? '#ef4444'
+									? 'var(--dsw-alias-state-error-primary, #ef4444)'
 									: 'var(--dsw-alias-label-tertiary, #8a8f98)',
 					cursor: state === 'working' ? 'wait' : 'pointer',
 				},
