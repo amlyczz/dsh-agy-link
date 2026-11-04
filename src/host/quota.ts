@@ -24,8 +24,8 @@ import { shouldMarkAuthRequired } from '../common/types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { AGY_ENDPOINTS, refreshTokens } from './oauth.ts'
 import { agyFetch } from './net.ts'
-import { detectSystemProxy } from './wincred.ts'
-import { parseCredentialDoc, credentialFingerprint, readPrimaryCredential, writePrimaryCredential } from './credential-slot.ts'
+import { detectSystemProxy, readWindowsCredentialRaw } from './wincred.ts'
+import { parseCredentialDoc, credentialFingerprint, readPrimaryCredential, writePrimaryCredential, credentialSlotMutex } from './credential-slot.ts'
 import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
 import { isolatedHomeEnv, proxyEnvFor } from './runner.ts'
 
@@ -474,43 +474,7 @@ export async function readMacKeychainToken(): Promise<StoredToken | null> {
 export async function readWindowsCredentialToken(): Promise<StoredToken | null> {
   if (process.platform !== 'win32') return null
   try {
-    const script = [
-      "$sig = @'",
-      'using System;',
-      'using System.Runtime.InteropServices;',
-      'public class AgyCred {',
-      '  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]',
-      '  public static extern bool CredRead(string target, int type, int flags, out IntPtr credential);',
-      '  [DllImport("advapi32.dll", SetLastError=true)]',
-      '  public static extern void CredFree(IntPtr cred);',
-      '  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]',
-      '  public struct CREDENTIAL {',
-      '    public int Flags; public int Type; public IntPtr TargetName;',
-      '    public IntPtr Comment; public long LastWritten; public int CredentialBlobSize;',
-      '    public IntPtr CredentialBlob; public int Persist; public int AttributeCount;',
-      '    public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName;',
-      '  }',
-      '  public static byte[] Read(string target) {',
-      '    IntPtr p;',
-      '    if (!CredRead(target, 1, 0, out p)) return null;',
-      '    CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));',
-      '    byte[] b = new byte[c.CredentialBlobSize];',
-      '    Marshal.Copy(c.CredentialBlob, b, 0, c.CredentialBlobSize);',
-      '    CredFree(p);',
-      '    return b;',
-      '  }',
-      '}',
-      "'@",
-      'Add-Type -TypeDefinition $sig -ErrorAction Stop',
-      "$b = [AgyCred]::Read('gemini:antigravity')",
-      'if ($b -eq $null) { exit 1 }',
-      '[Console]::Out.Write([System.Text.Encoding]::UTF8.GetString($b))',
-    ].join('\n')
-    const raw = (await execFileT(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
-      8000,
-    )).trim()
+    const raw = readWindowsCredentialRaw('gemini:antigravity')
     if (!raw) return null
     return parseGoKeyringPayload(raw)
   } catch {
@@ -575,24 +539,47 @@ export class QuotaService {
     if (account.dir && !account.systemHome) {
       return null
     }
-    // The owner itself still needs proof: while a secondary runs, the slot is
-    // temporarily handed that account's credential, and a CLI read then would
-    // return the secondary's numbers under the primary's row.
-    if (!(await this.cliSlotHoldsAccount(account))) {
-      return null
+
+    // On Windows, the OS credential store (gemini:antigravity) is a single shared slot.
+    // Secondary runs temporarily swap this slot under credentialSlotMutex. To prevent
+    // reading a secondary's numbers or having the slot swapped mid-flight while
+    // `agy -p /usage` is running, serialize under credentialSlotMutex.
+    let releaseMutex: (() => void) | null = null
+    if (process.platform === 'win32') {
+      try {
+        releaseMutex = await credentialSlotMutex.acquire({
+          timeoutMs: 4_000,
+          pollMs: 500,
+          shouldProceed: () => true,
+        })
+      } catch {
+        // Mutex contention (e.g. secondary account turn active) — fall back to safe REST path immediately
+        return null
+      }
     }
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      ...(account.dir ? isolatedHomeEnv(account.dir) : {}),
-      ...proxyEnvFor(this.proxyFor(account)),
+
+    try {
+      // The owner itself still needs proof: while a secondary runs, the slot is
+      // temporarily handed that account's credential, and a CLI read then would
+      // return the secondary's numbers under the primary's row.
+      if (!(await this.cliSlotHoldsAccount(account))) {
+        return null
+      }
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...(account.dir ? isolatedHomeEnv(account.dir) : {}),
+        ...proxyEnvFor(this.proxyFor(account)),
+      }
+      const groups = await readAgyUsage({
+        bin,
+        env,
+        timeoutMs: 20_000,
+        preemptAutoUpdate: this.cliDeps.preemptAutoUpdate?.(),
+      })
+      return groups === null ? null : usageGroupsToFamilies(groups)
+    } finally {
+      releaseMutex?.()
     }
-    const groups = await readAgyUsage({
-      bin,
-      env,
-      timeoutMs: 20_000,
-      preemptAutoUpdate: this.cliDeps.preemptAutoUpdate?.(),
-    })
-    return groups === null ? null : usageGroupsToFamilies(groups)
   }
 
   /**
@@ -606,7 +593,9 @@ export class QuotaService {
   private async cliSlotHoldsAccount(account: ManagedAccount): Promise<boolean> {
     const slot = await this.readSystemKeychainToken()
     if (slot === null) return false
-    return sameCredentialGrant(slot, await this.getStoredToken(account))
+    const stored = await this.getStoredToken(account, false)
+    if (stored === null) return false
+    return sameCredentialGrant(slot, stored)
   }
 
   /** Dedicated account proxy wins, then the global config proxy, then detected system proxy. */
@@ -644,7 +633,7 @@ export class QuotaService {
    * WRONG account's numbers). Isolated pool accounts only ever read their
    * own directory's file; the Keychain is one shared slot they must not see.
    */
-  async getStoredToken(account: ManagedAccount): Promise<StoredToken | null> {
+  async getStoredToken(account: ManagedAccount, allowKeychainFallback = true): Promise<StoredToken | null> {
     const disk = (() => {
       const file = this.getTokenFilePath(account)
       if (!existsSync(file)) return null
@@ -676,9 +665,11 @@ export class QuotaService {
       }
       // main keeps this read async (execFileSync used to freeze the event loop
       // on every poll) — the durable-store check above stays synchronous.
-      const keychainToken = await this.readSystemKeychainToken()
-      if (keychainToken && (keychainToken.accessToken || keychainToken.refreshToken)) {
-        return keychainToken
+      if (allowKeychainFallback) {
+        const keychainToken = await this.readSystemKeychainToken()
+        if (keychainToken && (keychainToken.accessToken || keychainToken.refreshToken)) {
+          return keychainToken
+        }
       }
     }
 
@@ -1409,6 +1400,12 @@ export class QuotaService {
         if (i < accounts.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, staggerJitterMs()))
         }
+      }
+      return
+    }
+    if (process.platform === 'win32') {
+      for (const acc of accounts) {
+        await this.refreshAccountQuota(acc, force).catch(() => null)
       }
       return
     }

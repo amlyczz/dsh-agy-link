@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, utimes
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { modelFamilyOf, needsAuthReverify, shouldPollAccount } from '../src/common/pool-types.ts'
-import { AccountPoolManager } from '../src/host/pool.ts'
+import { AccountPoolManager, defaultPoolDir } from '../src/host/pool.ts'
 
 test('modelFamilyOf correctly categorizes models', () => {
   assert.equal(modelFamilyOf('gemini-3.7-flash'), 'google')
@@ -737,4 +737,17 @@ test('getPoolData exposes systemProxy when defaultProxy is provided or system pr
   assert.equal(poolData.systemProxy, 'http://127.0.0.1:17891')
 })
 
-
+test('defaultPoolDir recovers when home directory is inside an isolated account path', () => {
+  assert.equal(
+    defaultPoolDir('C:\\Users\\kybco\\.dsh\\agy-accounts\\acc_1793341113485_51ytc'),
+    join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
+  )
+  assert.equal(
+    defaultPoolDir('/home/user/.dsh/agy-accounts/acc_1793341113485_51ytc'),
+    join('/home/user', '.dsh', 'agy-accounts'),
+  )
+  assert.equal(
+    defaultPoolDir('C:\\Users\\kybco'),
+    join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
+  )
+})
