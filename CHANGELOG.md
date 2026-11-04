@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.3 (2026-11-05)
+
+### English
+
+- **Fix(models): a missing Google per-model quota breakdown no longer hides Gemini 4 Argon for Google AI Ultra (issue #68).**
+  - `accountHasArgon()` treated *"a `google` quota group exists but has no `models` list"* as an authoritative negative, so the discovered-catalog fallback below it was unreachable. Ultra folds Argon into the shared Gemini bucket and omits the per-model list entirely, so Ultra accounts never saw `Gemini 4 Argon` in `/model`. A negative is now only authoritative when the Google group DOES enumerate its models (a free/standard account listing them without Argon); a missing list is treated as unknown and the per-account discovered catalog decides. Adds Ultra + free-breakdown regression tests.
+
+### 中文
+
+- **修复(models)：Google 配额缺少逐模型明细时不再把 Gemini 4 Argon 从 Google AI Ultra 账号隐藏（issue #68）。**
+  - `accountHasArgon()` 把「存在 `google` 配额组但没有 `models` 列表」当成权威否定，导致后面的已发现目录回退永远不可达。Ultra 会把 Argon 折进共享的 Gemini 桶并完全不发逐模型列表，因此 Ultra 账号在 `/model` 里始终看不到 `Gemini 4 Argon`。现在只有 Google 组**确实枚举了模型**时（免费/标准账号列出模型但不含 Argon）才判为否定；缺少列表视为未知，由该账号的已发现目录决定。补充 Ultra 与免费账号逐模型明细的回归测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.5.2...v0.5.3
+
 ## 0.5.2 (2026-11-04)
 
 ### English

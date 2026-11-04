@@ -250,7 +250,9 @@ test('accountHasArgon detects Argon access across quota, pool, and discovered ca
     createdAt: Date.now(),
     cooldowns: {},
     quotas: {
-      google: { remainingFraction: 1 },
+      // Free tier reports an explicit per-model breakdown; that omission of
+      // Argon is what makes "no Argon" authoritative.
+      google: { remainingFraction: 1, models: [{ modelId: 'gemini-3.8-flash', remainingFraction: 1 }] },
     },
   }
   assert.equal(accountHasArgon(freeAcc), false)
@@ -269,6 +271,27 @@ test('accountHasArgon detects Argon access across quota, pool, and discovered ca
     accountHasArgon(freeAcc, null, discoveredCatalogWithArgon),
     false,
     'free account must NEVER claim argon even if a discovered catalog contains argon',
+  )
+
+  // 4c. REGRESSION (issue #68): a Google AI Ultra account has a google quota
+  // group but NO per-model breakdown — the backend folds Argon into the shared
+  // Gemini bucket. Missing detail is UNKNOWN, not negative, so the discovered
+  // per-account catalog must decide instead of early-returning false.
+  const ultraAcc = {
+    id: 'acc_ultra',
+    alias: 'Ultra',
+    dir: '/tmp/ultra',
+    enabled: true,
+    createdAt: Date.now(),
+    cooldowns: {},
+    quotas: {
+      google: { remainingFraction: 0.96, weeklyFraction: 0.68, description: 'Models within this group: Gemini Flash, Gemini Pro' },
+    },
+  }
+  assert.equal(
+    accountHasArgon(ultraAcc, null, discoveredCatalogWithArgon),
+    true,
+    'Ultra must see Argon via its discovered catalog even without a per-model breakdown',
   )
 
   // 5. Blank/un-polled account: defaults to false

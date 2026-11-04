@@ -51,10 +51,12 @@ export function accountHasArgon(
   // 3. Per-model quotas reported an argon model
   if (acc.quotas?.google?.models?.some((m) => isArgonModel(m.modelId))) return true
 
-  // 4. Authoritative negative quota rule: if the account has polled Google quota
-  // and none of the Argon indicators above matched, it is definitively a standard/free
-  // account without Argon access. We must NOT fall back to catalog discovery in this case.
-  if (acc.quotas?.google !== undefined) {
+  // 4. Authoritative negative only when the Google group reported a PER-MODEL
+  // breakdown: a free/standard account enumerates its models, and none of them
+  // is Argon. A Google AI Ultra account folds Argon into the shared Gemini
+  // bucket and omits that breakdown entirely (issue #68) — a missing list is
+  // UNKNOWN, not negative, so it must fall through to catalog discovery.
+  if (Array.isArray(acc.quotas?.google?.models)) {
     return false
   }
 
