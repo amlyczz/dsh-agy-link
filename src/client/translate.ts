@@ -11,6 +11,8 @@
 //   * `conversation.chat.assistant-actions` — the per-reply "译成人话" button
 //     that requests a translation for one historical message.
 
+import { BRAND_PATHS } from './brand-icons.ts'
+
 type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown
 	useState: <S>(initial: S | (() => S)) => [S, (next: S | ((prev: S) => S)) => void]
@@ -58,45 +60,79 @@ export const TRANSLATION_KIND = 'agy-translation'
 export const TRANSLATION_EVENT_TYPE = 'plugin:agy-link/translation'
 
 const CSS = `
+/* Gemini-brand card. Mirrors gemini.google.com: the four-point spark, the
+   blue→purple→pink brand gradient as a hairline, airy rounded surfaces and the
+   gradient wordmark. Every colour is an rgba overlay (or a DSH token) so the
+   card reads on both the dark and the light theme. */
 .agy-tsl-card {
-  margin: 8px 0 2px 0;
-  border-radius: 10px;
-  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.28));
-  border-left: 3px solid #8b5cf6;
-  background: linear-gradient(180deg, rgba(99,102,241,.09), rgba(139,92,246,.04));
+  position: relative;
+  margin: 10px 0 4px 0;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(165deg, rgba(66,133,244,.10), rgba(155,114,203,.13) 55%, rgba(217,101,112,.09)) padding-box,
+    linear-gradient(120deg, #4285F4 0%, #9B72CB 52%, #D96570 100%) border-box;
+  box-shadow: 0 12px 30px -24px rgba(66,133,244,.9);
   overflow: hidden;
 }
+/* One soft brand bloom in the top-right, exactly like the Gemini surfaces. */
+.agy-tsl-card::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(120% 100% at 100% 0%, rgba(155,114,203,.18), rgba(155,114,203,0) 62%);
+}
 .agy-tsl-head {
+  position: relative; z-index: 1;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 7px 10px; font-size: 12px; color: var(--dsw-alias-label-secondary, #aaa);
-  border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.18));
+  padding: 8px 12px; font-size: 12px; color: var(--dsw-alias-label-secondary, #aaa);
+  border-bottom: 1px solid rgba(127,127,127,.14);
 }
-.agy-tsl-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-weight: 700; font-size: 12px; color: #a78bfa;
-  background: rgba(139,92,246,.14); border: 1px solid rgba(139,92,246,.35);
-  padding: 2px 8px; border-radius: 999px;
+.agy-tsl-badge { display: inline-flex; align-items: center; gap: 6px; }
+.agy-tsl-mark { width: 16px; height: 16px; flex: 0 0 auto; display: block; }
+.agy-tsl-brand {
+  font-size: 13px; font-weight: 600; letter-spacing: .005em;
+  background: linear-gradient(90deg, #4285F4 0%, #9B72CB 55%, #D96570 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
 }
-.agy-tsl-meta { opacity: .85; font-variant-numeric: tabular-nums; }
+.agy-tsl-tag {
+  font-size: 11px; line-height: 16px; padding: 0 7px; border-radius: 999px;
+  color: var(--dsw-alias-label-secondary, #a8b0bd); background: rgba(127,127,127,.14);
+}
+.agy-tsl-meta { font-size: 11.5px; opacity: .8; font-variant-numeric: tabular-nums; }
 .agy-tsl-spacer { flex: 1 1 auto; }
 .agy-tsl-btn {
   background: transparent; border: 1px solid transparent; color: var(--dsw-alias-label-secondary, #aaa);
-  border-radius: 6px; cursor: pointer; font-size: 12px; padding: 2px 7px;
+  border-radius: 999px; cursor: pointer; font-size: 12px; padding: 2px 9px;
+  transition: background .15s ease, color .15s ease;
 }
-.agy-tsl-btn:hover { background: var(--dsw-alias-interactive-bg-hover-solid, rgba(127,127,127,.16)); color: var(--dsw-alias-label-primary, #eee); }
-.agy-tsl-body { padding: 9px 12px; font-size: 13.5px; line-height: 1.65; color: var(--dsw-alias-label-primary, #eee); }
+.agy-tsl-btn:hover { background: rgba(127,127,127,.16); color: var(--dsw-alias-label-primary, #eee); }
+.agy-tsl-body {
+  position: relative; z-index: 1;
+  padding: 10px 14px 12px 14px; font-size: 13.5px; line-height: 1.7;
+  color: var(--dsw-alias-label-primary, #eee);
+}
 .agy-tsl-body p { margin: 0 0 7px 0; }
 .agy-tsl-body p:last-child { margin-bottom: 0; }
 .agy-tsl-body ul, .agy-tsl-body ol { margin: 0 0 7px 0; padding-left: 20px; }
 .agy-tsl-body li { margin: 2px 0; }
 .agy-tsl-body h4, .agy-tsl-body h5 { margin: 8px 0 5px 0; font-size: 13.5px; }
 .agy-tsl-body code { background: rgba(127,127,127,.18); border-radius: 4px; padding: 1px 4px; font-size: 12.5px; }
-.agy-tsl-body pre { background: rgba(127,127,127,.14); border-radius: 8px; padding: 8px 10px; overflow-x: auto; margin: 0 0 7px 0; }
+.agy-tsl-body pre { background: rgba(127,127,127,.14); border-radius: 10px; padding: 8px 10px; overflow-x: auto; margin: 0 0 7px 0; }
 .agy-tsl-body pre code { background: transparent; padding: 0; }
 .agy-tsl-original {
-  margin: 0; padding: 8px 12px; border-top: 1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,.28));
+  position: relative; z-index: 1;
+  margin: 0; padding: 8px 12px; border-top: 1px dashed rgba(127,127,127,.24);
   font-size: 12.5px; color: var(--dsw-alias-label-secondary, #aaa); white-space: pre-wrap; max-height: 260px; overflow: auto;
 }
+/* Gemini attribution line: the spark plus the plain "translated by" note. */
+.agy-tsl-foot {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px 8px 12px; font-size: 11.5px;
+  color: var(--dsw-alias-label-tertiary, #8a8f98);
+  border-top: 1px solid rgba(127,127,127,.12);
+}
+.agy-tsl-foot svg { width: 12px; height: 12px; }
 /* Icon-only action that sits in the same strip as copy / thumbs / link, with
    the same neutral tint so it reads as part of that group. */
 .agy-tsl-icon {
@@ -322,6 +358,37 @@ interface TranslationCardData {
 	createdAt?: number
 }
 
+/**
+ * The Gemini four-point spark, filled with the brand gradient (#4285F4 →
+ * #9B72CB → #D96570) — the mark Google uses on gemini.google.com. The gradient
+ * id is unique per render so several cards can coexist.
+ */
+let markSeq = 0
+function geminiMark(): unknown {
+	const id = 'agy-tsl-grad-' + (++markSeq)
+	return h(
+		'svg',
+		{ viewBox: '0 0 24 24', className: 'agy-tsl-mark', 'aria-hidden': 'true', focusable: 'false' },
+		h(
+			'defs',
+			null,
+			h(
+				'linearGradient',
+				{ id, x1: '0', y1: '24', x2: '24', y2: '0', gradientUnits: 'userSpaceOnUse' },
+				h('stop', { offset: '0%', 'stop-color': '#4285F4' }),
+				h('stop', { offset: '50%', 'stop-color': '#9B72CB' }),
+				h('stop', { offset: '100%', 'stop-color': '#D96570' }),
+			),
+		),
+		h('path', { d: BRAND_PATHS.gemini, fill: 'url(#' + id + ')' }),
+	)
+}
+
+/** "Gemini 译文" → "译文": the wordmark carries "Gemini", so only the suffix is shown. */
+function badgeSuffix(label: string): string {
+	return label.replace(/^\s*Gemini[\s·:：-]*/iu, '').trim()
+}
+
 const TranslationCard = (props?: Record<string, unknown>): unknown => {
 	const node = (props?.node ?? {}) as { data?: TranslationCardData }
 	const data = node.data ?? {}
@@ -357,7 +424,13 @@ const TranslationCard = (props?: Record<string, unknown>): unknown => {
 		h(
 			'div',
 			{ className: 'agy-tsl-head' },
-			h('span', { className: 'agy-tsl-badge' }, '✨ ' + t('tsl.badge', 'Gemini translation')),
+			h('span', { className: 'agy-tsl-badge' },
+				geminiMark(),
+				h('span', { className: 'agy-tsl-brand' }, 'Gemini'),
+				badgeSuffix(t('tsl.badge', 'Gemini translation')) === ''
+					? null
+					: h('span', { className: 'agy-tsl-tag' }, badgeSuffix(t('tsl.badge', 'Gemini translation'))),
+			),
 			h('span', { className: 'agy-tsl-meta' }, meta.join(' · ')),
 			h('span', { className: 'agy-tsl-spacer' }),
 			h('button', { type: 'button', className: 'agy-tsl-btn', onClick: copy }, copied ? t('tsl.copied', 'Copied') : t('tsl.copy', 'Copy')),
@@ -372,6 +445,12 @@ const TranslationCard = (props?: Record<string, unknown>): unknown => {
 			  )
 			: null,
 		showOriginal && original !== '' ? h('pre', { className: 'agy-tsl-original' }, original) : null,
+		h(
+			'div',
+			{ className: 'agy-tsl-foot' },
+			geminiMark(),
+			h('span', null, t('tsl.byGemini', 'Translated by Gemini')),
+		),
 	)
 }
 
@@ -381,14 +460,10 @@ const TranslationCard = (props?: Record<string, unknown>): unknown => {
 
 type ActionState = 'idle' | 'working' | 'done' | 'error'
 
-/** Four-point Gemini spark, filled with `currentColor` so it inherits the icon
- *  tint of DSH's action strip and looks native next to copy/thumbs/link. */
-const GEMINI_STAR = 'M12 2 Q13.1 9.2 22 12 Q13.1 14.8 12 22 Q10.9 14.8 2 12 Q10.9 9.2 12 2 Z'
-
 function geminiGlyph(): unknown {
-	return h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true', style: { width: '15px', height: '15px', display: 'block' } },
-		h('path', { d: GEMINI_STAR }),
-	)
+	// The strip icon is the same official spark as the card, filled with the
+	// brand gradient so the affordance reads as Gemini even before hovering.
+	return geminiMark()
 }
 
 function spinnerGlyph(): unknown {
@@ -471,7 +546,7 @@ type TipNode = {
   textContent?: string
   isConnected?: boolean
   hidden?: boolean
-  style: { cssText?: string; display?: string; left?: string; top?: string }
+  style: { cssText?: string; display?: string; position?: string; left?: string; top?: string }
   setAttribute?: (k: string, v: string) => void
   remove?: () => void
   getBoundingClientRect?: () => { width: number; height: number }
@@ -498,6 +573,10 @@ function tipNode(): TipNode | null {
   const created = doc.createElement('div') as TipNode
   created?.setAttribute?.('id', TIP_ID)
   created?.setAttribute?.('role', 'tooltip')
+  // The bubble look (background/padding/13px/radius) lives in `.agy-tsl-tip`.
+  // Without this class the node renders as bare body text — the exact symptom
+  // that made the hover label show up as a plain line under the action strip.
+  created?.setAttribute?.('class', 'agy-tsl-tip')
   if (created !== undefined && created !== null) {
     created.style.cssText = 'position:fixed;display:none;pointer-events:none;z-index:1100'
     created.isConnected = true
@@ -521,6 +600,11 @@ function showTip(el: unknown, text: string): void {
   const box = anchorBox(el)
   if (node === null || node === undefined || box === null) return
   node.textContent = text
+  // Repair a node left behind by an older build: it may carry no bubble class and
+  // no inline `position:fixed`, in which case the label joins the document flow
+  // and shows up as plain text instead of a floating hint.
+  node.setAttribute?.('class', 'agy-tsl-tip')
+  node.style.position = 'fixed'
   node.style.display = 'inline-flex'
   const size = node.getBoundingClientRect?.() ?? { width: 0, height: 26 }
   const vp = viewport()
@@ -556,12 +640,55 @@ function tooltipText(props: Record<string, unknown> | undefined, key: string, fa
 
 /**
  * Per-reply action state, kept outside React so it survives a remount: the chat
- * timeline virtualises nodes and DSH re-creates the whole panel when the window
- * regains focus, which used to reset the button to `idle` mid-flight. The map is
- * the in-page truth; the host's durable record is the truth across page loads.
+ * timeline virtualises nodes, and DSH re-creates the whole panel whenever a new
+ * card lands in the transcript. The map is the in-page truth; the host's durable
+ * record is the truth across page loads.
+ *
+ * The bug this shape fixes: a remount that happens *while* a translation is in
+ * flight re-initialises to `working`, and the promise that finishes belongs to
+ * the unmounted instance — whose `setState` is a no-op. The spinner then never
+ * stopped even though the card had rendered. Publishing to every mounted
+ * instance is what lets the survivor settle to `done`.
  */
 const ACTION_STATE = new Map<string, ActionState>()
 const ACTION_INFLIGHT = new Set<string>()
+const ACTION_LISTENERS = new Map<string, Set<(next: ActionState) => void>>()
+
+function actionKey(sessionId: string, messageId: string): string {
+	return sessionId + '\u0000' + messageId
+}
+
+/** Current state of one action; `working` whenever a request is in flight. */
+export function actionStateOf(key: string): ActionState {
+	return ACTION_INFLIGHT.has(key) ? 'working' : ACTION_STATE.get(key) ?? 'idle'
+}
+
+/** Publish a state to every mounted instance of this action. */
+export function setActionState(key: string, next: ActionState): void {
+	ACTION_STATE.set(key, next)
+	if (next === 'working') ACTION_INFLIGHT.add(key)
+	else ACTION_INFLIGHT.delete(key)
+	const listeners = ACTION_LISTENERS.get(key)
+	if (listeners === undefined) return
+	for (const listener of [...listeners]) {
+		try {
+			listener(next)
+		} catch {
+			// a dead listener must not stop the others
+		}
+	}
+}
+
+/** Subscribe one mounted action instance; the returned function unsubscribes. */
+export function subscribeActionState(key: string, listener: (next: ActionState) => void): () => void {
+	const listeners = ACTION_LISTENERS.get(key) ?? new Set<(next: ActionState) => void>()
+	listeners.add(listener)
+	ACTION_LISTENERS.set(key, listeners)
+	return () => {
+		listeners.delete(listener)
+		if (listeners.size === 0) ACTION_LISTENERS.delete(key)
+	}
+}
 
 /**
  * Icon-only "translate with Gemini" action rendered into the assistant action
@@ -573,10 +700,12 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	const injectedSession = typeof props?.sessionId === 'string' ? props.sessionId : ''
 	const ctx = props?.ctx as ClientContextLike | undefined
 	const sessionId = injectedSession !== '' ? injectedSession : ctx === undefined ? '' : currentSessionId(ctx)
-	const key = sessionId + '\u0000' + messageId
-	const [state, setState] = useState<ActionState>(() =>
-		ACTION_INFLIGHT.has(key) ? 'working' : ACTION_STATE.get(key) ?? 'idle',
-	)
+	const key = actionKey(sessionId, messageId)
+	const [state, setState] = useState<ActionState>(() => actionStateOf(key))
+
+	// Live updates: whoever owns the in-flight request, every mounted instance —
+	// including the survivor of a remount — settles to the same state.
+	useEffect(() => subscribeActionState(key, (next) => setState(next)), [key])
 
 	// A remount must not lose a finished translation: ask the session whether a
 	// durable record already exists for this reply.
@@ -588,9 +717,7 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 			const next: ActionState | null =
 				res.state === 'ready' ? 'done' : res.state === 'busy' ? 'working' : null
 			if (next === null) return
-			ACTION_STATE.set(key, next)
-			if (next === 'working') ACTION_INFLIGHT.add(key)
-			setState((prev) => (prev === next ? prev : next))
+			setActionState(key, next)
 		})
 		return () => {
 			alive = false
@@ -600,8 +727,7 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	if (messageId === '' || sessionId === '') return null
 
 	const apply = (next: ActionState): void => {
-		ACTION_STATE.set(key, next)
-		setState(next)
+		setActionState(key, next)
 	}
 
 	const run = (e?: { stopPropagation?: () => void; preventDefault?: () => void }): void => {
@@ -609,11 +735,9 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 		e?.preventDefault?.()
 		hideTip()
 		if (state === 'working') return
-		ACTION_INFLIGHT.add(key)
 		apply('working')
 		void postTranslate({ sessionId, messageId, persist: true })
 			.then((res) => {
-				ACTION_INFLIGHT.delete(key)
 				if (res?.ok === true) {
 					// Stay "done": the card is now in the session and this state is
 					// re-derived from it on every remount, so reverting to idle would
@@ -627,7 +751,6 @@ const TranslateAction = (props?: Record<string, unknown>): unknown => {
 				}, 3_000)
 			})
 			.catch(() => {
-				ACTION_INFLIGHT.delete(key)
 				apply('error')
 				setTimeout(() => {
 					if (!ACTION_INFLIGHT.has(key)) apply('idle')

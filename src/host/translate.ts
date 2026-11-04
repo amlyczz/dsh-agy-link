@@ -140,9 +140,11 @@ export function buildTranslationSetup(input: TranslationSetupInput): string {
   lines.push(
     '',
     '规则：',
-    '1. 说' + lang + '的大白话、短句，别用行话和缩写；别写标题、别分点列条目；别改原意、别加原文没有的内容。',
-    '2. 只输出讲解本身，不要前言、不要复述我发的内容、不要问我问题。',
-    '3. 默认直接翻译我发的这段文字；需要上下文时可以读上面的摘要或日志文件。',
+    '1. 只讲「当前这一轮」的 AI 回复：我每次发来的是这一轮的原文，别去翻历史里的其它回答来顶替它。',
+    '2. 说' + lang + '的大白话，像当面给同事解释：口语、短句、按原文顺序讲；不要标题，不要分点罗列，不要写成报告。',
+    '3. 遇到术语、缩写、报错、函数名，先用日常说法讲清，再往下说；必要时补一句它大概是干什么的。',
+    '4. 结论、条件、谁做了什么都要留着；别为了短把细节吞掉，也别替它下原文没有的结论。',
+    '5. 只输出讲解本身，不要前言、不要复述我发的内容、不要反问我。',
   )
   return lines.join('\n')
 }
@@ -473,17 +475,46 @@ export function buildTranslationPrompt(text: string, targetLanguage: string, max
   // stop it from drifting: plain words, keep the meaning, invent nothing, and
   // answer with the explanation alone. A long source gets one budget hint — the
   // 80/20 cut — instead of a format mandate.
+  // Deliberately short, but explicit about three things the old one-liner let the
+  // model drift on: WHICH reply it is explaining (the current turn's answer, not
+  // some other turn it found in the history), how plain the register must be
+  // (spoken, jargon unpacked), and that brevity is not an excuse to drop the
+  // conditions and conclusions that made the answer useful.
   const long = text.length > Math.min(2_000, Math.floor(limit / 4))
   const lines = [
-    '用' + lang + '把下面这段内容通俗易懂地讲一遍，就像跟同事随口解释一样：用大白话、短句，别用行话和缩写，别写标题或分点列表，别改原意、别加原文没有的内容。',
-    ...(long ? ['原文有点长，挑重点讲清楚就行，没提到的细节不用硬补。'] : []),
-    '只输出这段讲解本身。',
+    '把下面这段「当前这一轮 AI 回复」的原文，用' + lang + '通俗易懂地讲一遍，就像当面跟同事解释：',
+    '说大白话、短句，按原文的顺序讲；别用行话和缩写，遇到术语先换成日常说法（必要时补一句它是干什么的）；别写标题或分点列表，别写成报告。',
+    '结论、条件、谁做了什么都要留着，别为了短把细节吞掉；别改原意，别加原文没有的内容，别替它下结论。',
+    ...(long ? ['原文有点长，挑重点讲清楚就行，按它自己的顺序讲，别压成几句结论。'] : []),
+    '只输出这段讲解本身，不要复述我发的内容，不要提问。',
     '',
     '<content>',
     text,
     '</content>',
   ]
   return lines.join('\n')
+}
+
+/**
+ * Per-turn request for a BOUND translation conversation.
+ *
+ * The persona (`buildTranslationSetup`) goes out once, when that conversation is
+ * created; every later turn receives only this line plus the source. Keeping the
+ * request on every turn is what pins the model to the reply it is looking at now
+ * instead of translating something it remembers from an earlier turn.
+ */
+export function buildTranslationRequest(text: string, targetLanguage: string, maxChars: number): string {
+  const lang = targetLanguage.trim() === '' ? '中文（简体）' : targetLanguage.trim()
+  const long = text.length > Math.min(2_000, Math.floor(Math.max(MIN_TEXT_LIMIT, Math.round(maxChars)) / 4))
+  return [
+    '把「当前这一轮 AI 回复」的下面这段原文，用' + lang + '通俗易懂地讲一遍：说大白话、短句，按原文顺序，术语先换成日常说法，别写成报告，别为了短丢信息，别加原文没有的内容。',
+    ...(long ? ['原文有点长，挑重点讲清楚就行，别压成几句结论。'] : []),
+    '只输出讲解本身。',
+    '',
+    '<content>',
+    text,
+    '</content>',
+  ].join('\n')
 }
 
 /**
@@ -739,9 +770,9 @@ export class TranslationService {
           // Self-contained prompt: used verbatim when the run is NOT bound to a
           // translation conversation (older host, or the knob turned off).
           prompt: buildTranslationPrompt(chunk, language, cfg.translateMaxChars),
-          // Bound path: the raw text alone, plus the persona that is sent only
-          // when that conversation is created.
-          text: chunk,
+          // Bound path: the per-turn request line + source, plus the persona that
+          // is sent only when that conversation is created.
+          text: buildTranslationRequest(chunk, language, cfg.translateMaxChars),
           setup: sessionId === undefined ? undefined : this.setupFor(sessionId, language, setupEvents),
           ...(sessionId === undefined ? {} : { sessionId }),
           model: target.model,

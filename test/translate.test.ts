@@ -4,6 +4,7 @@ import {
   TranslationService,
   allTextOfTurn,
   buildTranslationPrompt,
+  buildTranslationRequest,
   chunkText,
   completedTurns,
   finalAnswerOfTurn,
@@ -83,6 +84,24 @@ test('prompt stays a one-liner: plain words, no format mandate, source fenced', 
   assert.doesNotMatch(long, /输出 Markdown/)
   // Instructions stay far shorter than the material they carry.
   assert.ok(p.split('\n')[0]!.length < 200, 'the instruction is one short line')
+})
+
+test('prompt pins the model to THIS turn and to spoken register', () => {
+  // The reader complained the output was compact but not plain enough, so the
+  // instruction now names the reply it must explain and spells out the register.
+  const p = buildTranslationPrompt('原文内容', '中文（简体）', 4000)
+  assert.match(p, /当前这一轮 AI 回复/)
+  assert.match(p, /按原文的顺序讲/)
+  assert.match(p, /别为了短把细节吞掉/)
+  // A bound conversation hears the persona once; the per-turn request must carry
+  // the same pinning, or the model happily re-translates an earlier answer.
+  const b = buildTranslationRequest('原文内容', '中文（简体）', 4000)
+  assert.match(b, /当前这一轮 AI 回复/)
+  assert.match(b, /通俗易懂/)
+  assert.match(b, /<content>\n原文内容\n<\/content>/)
+  assert.match(b, /只输出讲解本身/)
+  assert.doesNotMatch(b, /^\d\. /m)
+  assert.match(buildTranslationRequest('x'.repeat(9_000), '中文（简体）', 8_000), /挑重点讲清楚/)
 })
 
 test('chunkText never exceeds the cap and keeps every paragraph', () => {
@@ -252,24 +271,28 @@ test('exhausted quota maps to NO_ACCOUNT', async () => {
   assert.match(res.error ?? '', /quota/i)
 })
 
-test('the bound translation conversation gets a persona once and the text after', async () => {
+test('the bound translation conversation gets a persona once and a per-turn request after', async () => {
   // One agy conversation per DSH session: the setup carries WHO agy is, which
   // session it serves, that session's workspace, where its history lives and how
-  // to read it, plus a bounded digest — and the raw text always rides along so
-  // the adapter can use the same call to seed and translate.
+  // to read it, plus a bounded digest. Every later turn then sends the per-turn
+  // request line wrapped around the source — NOT the bare source — because a
+  // bound conversation has no instruction left after its first turn, and the bare
+  // text let the model wander off to an earlier reply.
   const { service, calls } = makeService({ runs: [{ ok: true, text: '人话版' }] })
   const res = await service.translate({ text: '一段黑话', sessionId: 's1' })
   assert.equal(res.ok, true)
   const call = calls[0]!
-  assert.equal(call.text, '一段黑话', 'the raw text is passed through for the bound path')
+  assert.match(call.text!, /当前这一轮 AI 回复/, 'the request names the reply it must explain')
+  assert.match(call.text!, /<content>\n一段黑话\n<\/content>/, 'the source rides inside the request')
   const setup = call.setup ?? ''
   assert.match(setup, /人话翻译器/)
   assert.match(setup, /DSH 会话 id：s1/)
+  assert.match(setup, /只把需要翻译的原文发给你/)
   assert.match(setup, /\/work\/project/, 'agy is told the session workspace')
   assert.match(setup, /session\.v4\.jsonl\.zstd/, 'and where the raw session log is')
   assert.match(setup, /zstd -dc/, 'and how to read it')
   assert.match(setup, /<digest>[\s\S]*用户：/, 'with a digest of the asks so the first reply has context')
-  assert.match(setup, /只把需要翻译的原文发给你/)
+  assert.match(setup, /只讲「当前这一轮」的 AI 回复/, 'the persona pins the current turn too')
   // The self-contained prompt still exists for hosts that do NOT bind.
   assert.match(call.prompt, /通俗易懂/)
   assert.match(call.prompt, /<content>\n一段黑话\n<\/content>/)

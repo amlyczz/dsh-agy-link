@@ -31,7 +31,11 @@ function collectText(node: unknown, out: string[] = []): string[] {
   return out
 }
 
-function loadPlugin(): { plugin: { apply: (ctx: unknown) => void; inject: string[] }; dom: { bodyChildren: Array<Record<string, unknown>> } } {
+function loadPlugin(fetchImpl?: (url: string, init?: unknown) => Promise<unknown>): {
+  plugin: { apply: (ctx: unknown) => void; inject: string[] }
+  dom: { bodyChildren: Array<Record<string, unknown>> }
+  stateLog: Array<{ calls: unknown[] }>
+} {
   let loaded: { factory: (require: (id: string) => unknown) => unknown } | undefined
   // Minimal DOM: the tooltip placement is real code, so the test drives it with a
   // fake document/window instead of asserting on a source regex.
@@ -47,6 +51,7 @@ function loadPlugin(): { plugin: { apply: (ctx: unknown) => void; inject: string
   }
   type NodeAny = NodeLike & { dataset: Record<string, string>; className: string }
   const bodyChildren: NodeLike[] = []
+  const stateLog: Array<{ calls: unknown[] }> = []
   const tipSize = { width: 200, height: 26 }
   const fakeDocument = {
     body: { appendChild: (n: NodeLike) => { bodyChildren.push(n) } },
@@ -85,8 +90,10 @@ function loadPlugin(): { plugin: { apply: (ctx: unknown) => void; inject: string
         document: fakeDocument,
         innerWidth: 1200,
         innerHeight: 800,
+        ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
       },
       document: fakeDocument,
+      ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
       MutationObserver: class { observe(): void {} disconnect(): void {} takeRecords(): unknown[] { return [] } },
       requestAnimationFrame: (cb: (t: number) => void) => { cb(0); return 0 },
       cancelAnimationFrame: () => {},
@@ -110,9 +117,25 @@ function loadPlugin(): { plugin: { apply: (ctx: unknown) => void; inject: string
     },
     useState<S>(initial: S | (() => S)): [S, (next: S | ((prev: S) => S)) => void] {
       const value = typeof initial === 'function' ? (initial as () => S)() : initial
-      return [value, () => undefined]
+      const record = { current: value as unknown, calls: [] as unknown[] }
+      stateLog.push({ calls: record.calls })
+      const setter = (next: S | ((prev: S) => S)): void => {
+        const resolved = typeof next === 'function' ? (next as (prev: S) => S)(record.current as S) : next
+        record.current = resolved as unknown
+        record.calls.push(resolved)
+      }
+      return [value, setter]
     },
-    useEffect(): void {},
+    // Effects run once per render for this stub; a remount is modelled by calling
+    // the component again, so subscriptions accumulate exactly like React's would
+    // until the (ignored) cleanup.
+    useEffect(setup: () => (() => void) | void): void {
+      try {
+        setup()
+      } catch {
+        // a failing effect must not break the render under test
+      }
+    },
     useRef<S>(initial: S): { current: S } {
       return { current: initial }
     },
@@ -125,7 +148,7 @@ function loadPlugin(): { plugin: { apply: (ctx: unknown) => void; inject: string
     if (id === 'react-dom') return {}
     throw new Error('unexpected browser dependency: ' + id)
   }) as { apply: (ctx: unknown) => void; inject: string[] }
-  return { plugin, dom: { bodyChildren: bodyChildren as unknown as Array<Record<string, unknown>> } }
+  return { plugin, dom: { bodyChildren: bodyChildren as unknown as Array<Record<string, unknown>> }, stateLog }
 }
 
 interface Definition {
@@ -141,7 +164,7 @@ interface Definition {
   }) => { anchorSeq?: number; kind?: string; location?: unknown; data?: Record<string, unknown> } | null
 }
 
-function mount() {
+function mount(fetchImpl?: (url: string, init?: unknown) => Promise<unknown>) {
   const definitions: Definition[] = []
   const slots: Array<{ options: Record<string, unknown>; component: (props?: Record<string, unknown>) => unknown }> = []
   const cleanup: Array<() => void> = []
@@ -173,9 +196,9 @@ function mount() {
       },
     },
   }
-  const { plugin, dom } = loadPlugin()
+  const { plugin, dom, stateLog } = loadPlugin(fetchImpl)
   plugin.apply(ctx)
-  return { definitions, slots, dom }
+  return { definitions, slots, dom, stateLog }
 }
 
 test('client registers the translation conversation definition', () => {
@@ -215,10 +238,33 @@ test('card renders a labelled Gemini block and its markdown body', () => {
   }) as ElementLike
   assert.ok(isElement(element))
   assert.equal(element.props?.['data-agy-translation'], 'gemini')
+  // Gemini brand identity: the official four-point spark filled with the brand
+  // gradient, the gradient wordmark, and a plain suffix tag.
+  const head = element.children[0] as ElementLike
+  const badge = head.children[0] as ElementLike
+  const mark = badge.children[0] as ElementLike
+  assert.equal(mark.type, 'svg')
+  assert.equal(mark.props?.['className'], 'agy-tsl-mark')
+  const gradient = (mark.children[0] as ElementLike).children[0] as ElementLike
+  assert.equal(gradient.type, 'linearGradient')
+  assert.deepEqual(
+    gradient.children.map((stop) => (stop as ElementLike).props?.['stop-color']),
+    ['#4285F4', '#9B72CB', '#D96570'],
+  )
+  assert.match(String((mark.children[1] as ElementLike).props?.fill), /^url\(#agy-tsl-grad-\d+\)$/)
+  const brand = badge.children[1] as ElementLike
+  assert.equal(brand.props?.['className'], 'agy-tsl-brand')
+  assert.equal(collectText(brand).join(''), 'Gemini')
+  assert.equal((badge.children[2] as ElementLike).props?.['className'], 'agy-tsl-tag')
   const text = collectText(element).join(' ')
   assert.match(text, /Gemini translation/)
   assert.match(text, /结论/)
   assert.match(text, /a\.ts/)
+  // Attribution footer: spark + "translated by Gemini" note.
+  const foot = element.children[element.children.length - 1] as ElementLike
+  assert.equal(foot.props?.['className'], 'agy-tsl-foot')
+  assert.equal((foot.children[0] as ElementLike).type, 'svg')
+  assert.match(collectText(foot).join(' '), /Translated by Gemini/)
 })
 
 test('per-reply action is an icon-only Gemini button in the action strip', () => {
@@ -278,6 +324,11 @@ test('the hint is ONE body-level node, placed below the anchor, clamped, then hi
   assert.equal(dom.bodyChildren.length, 1, 'hovering creates the shared node once')
   const node = dom.bodyChildren[0]! as { style: Record<string, string>; textContent?: string; attrs: Record<string, string> }
   assert.equal(node.attrs.role, 'tooltip')
+  // The bubble styling (background/padding/13px/radius) lives on `.agy-tsl-tip`.
+  // Regression: the node was created without that class, so the CSS never applied
+  // and the label rendered as bare body text under the action strip.
+  assert.equal(node.attrs.class, 'agy-tsl-tip')
+  assert.equal(node.style.position, 'fixed', 'fixed positioning is re-asserted on every show')
   assert.equal(node.style.display, 'inline-flex', 'shown on hover')
   assert.equal(node.textContent, 'T:tsl.actionTip', 'the localized label rides the node, not the row')
   // BELOW the anchor: bottom(124) + 6px gap; horizontally centred (600+12-100).
@@ -333,6 +384,40 @@ test('action state survives a remount and re-derives from the session record', (
   assert.match(source, /ACTION_INFLIGHT = /)
   assert.match(source, /agy-link\/translate\/state/)
   assert.match(source, /state === ["']ready["'] \? ["']done["']/)
+})
+
+test('a panel remount mid-flight still settles to done (no forever spinner)', async () => {
+  // Regression: persisting the card inserts a node, DSH re-creates the panel, and
+  // the instance that owned the in-flight POST unmounts — its setState is a no-op,
+  // so the freshly mounted instance kept its inherited `working` state forever.
+  // Publishing to every mounted instance is what settles the survivor.
+  let release: ((value: unknown) => void) | undefined
+  const pending = new Promise((resolve) => {
+    release = resolve
+  })
+  const { slots, stateLog } = mount(() => pending)
+  const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
+  assert.ok(action)
+  const first = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => k }) as ElementLike
+  const firstButton = first.children[0] as ElementLike
+  const onClick = firstButton.props?.['onClick'] as (e: unknown) => void
+  onClick({ stopPropagation() {}, preventDefault() {} })
+
+  // The card lands → the panel remounts while the request is still open.
+  const before = stateLog.length
+  const second = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => k }) as ElementLike
+  const secondButton = second.children[0] as ElementLike
+  assert.equal(secondButton.props?.['data-state'], 'working', 'the remount inherits the in-flight state')
+  const survivors = stateLog.slice(before)
+
+  release!({ ok: true, status: 200, json: async () => ({ ok: true }) })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  const settled = survivors.flatMap((entry) => entry.calls)
+  assert.ok(
+    settled.includes('done'),
+    'the surviving instance must settle to done, got ' + JSON.stringify(settled),
+  )
 })
 
 test('every list-slot registration carries a row id (id is the row identity)', () => {
