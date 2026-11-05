@@ -1550,13 +1550,46 @@ export function apply(ctx: ClientContext): void {
 	// locale is declared in inject — cordis guarantees ctx.locale (issue #24).
 	const locale = ctx.locale;
 	ctx.effect(() => {
-		const disposePtBR = locale.addLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
-		const disposeEs = locale.addLanguage({ id: 'es', label: 'Español', fallback: 'en' });
+		const safeAddLanguage = (lang: { id: string; label: string; fallback: string }) => {
+			try {
+				const snapshotLocales = typeof locale?.getSnapshot === 'function' ? locale.getSnapshot()?.locales : undefined;
+				const list = Array.isArray(snapshotLocales)
+					? snapshotLocales
+					: typeof (locale as any)?.localeList === 'function'
+						? (locale as any).localeList()
+						: [];
+				if (Array.isArray(list) && list.some((l: { id?: string }) => l?.id?.toLowerCase() === lang.id.toLowerCase())) {
+					return () => {};
+				}
+				return locale.addLanguage(lang);
+			} catch (err: unknown) {
+				const message = String((err as any)?.message || err);
+				if (/already registered/i.test(message)) {
+					return () => {};
+				}
+				throw err;
+			}
+		};
+
+		const safeRegister = (ns: string, langOrDicts: string | Record<string, Record<string, string>>, dict?: Record<string, string>) => {
+			try {
+				return locale.register(ns, langOrDicts as any, dict as any);
+			} catch (err: unknown) {
+				const message = String((err as any)?.message || err);
+				if (/already has locale/i.test(message)) {
+					return () => {};
+				}
+				throw err;
+			}
+		};
+
+		const disposePtBR = safeAddLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
+		const disposeEs = safeAddLanguage({ id: 'es', label: 'Español', fallback: 'en' });
 		// Untyped single-locale form: 'agy-link' is not in the host LocaleNamespaceMap merge table.
-		const disposeZh = locale.register(NS, 'zh', zh);
-		const disposeEn = locale.register(NS, 'en', en);
-		const disposePtBRDictionary = locale.register(NS, 'pt-BR', ptBR);
-		const disposeEsDictionary = locale.register(NS, 'es', es);
+		const disposeZh = safeRegister(NS, 'zh', zh);
+		const disposeEn = safeRegister(NS, 'en', en);
+		const disposePtBRDictionary = safeRegister(NS, 'pt-BR', ptBR);
+		const disposeEsDictionary = safeRegister(NS, 'es', es);
 		return () => { disposeEsDictionary(); disposePtBRDictionary(); disposeEn(); disposeZh(); disposeEs(); disposePtBR(); };
 	}, 'agy-link: locale dictionaries');
 	const useAgyTranslation = () => {

@@ -323,3 +323,59 @@ test('REGRESSION: re-rendering session headers during status sync does not thras
 })
 
 
+test('REGRESSION: locale and dictionary registration is idempotent across re-sync and pre-existing catalogs', () => {
+  const plugin = loadClient()
+  const catalog = new Map([
+    ['zh', { id: 'zh' }],
+    ['en', { id: 'en' }],
+    ['pt-BR', { id: 'pt-BR' }], // simulate pre-existing pt-BR
+  ])
+  const dictionaries = new Map<string, Record<string, string>>([
+    ['agy-link/zh', { 'section.label': 'Antigravity' }],
+  ])
+  const cleanup: (() => void)[] = []
+  const locale = {
+    localeList() {
+      return Array.from(catalog.values())
+    },
+    addLanguage(language: { id: string; label: string; fallback: string }) {
+      if (catalog.has(language.id)) {
+        throw new Error(`locale "${language.id}" is already registered`)
+      }
+      catalog.set(language.id, language)
+      return () => { catalog.delete(language.id) }
+    },
+    register(namespace: string, languageOrDictionaries: string | Record<string, Record<string, string>>, dictionary?: Record<string, string>) {
+      const pairs = typeof languageOrDictionaries === 'string' ? [[languageOrDictionaries, dictionary!]] as const : Object.entries(languageOrDictionaries)
+      for (const [language, entries] of pairs) {
+        const key = `${namespace}/${language}`
+        if (dictionaries.has(key)) {
+          throw new Error(`locale namespace "${namespace}" already has locale "${language}"`)
+        }
+        dictionaries.set(key, entries)
+      }
+      return () => { for (const [language] of pairs) dictionaries.delete(`${namespace}/${language}`) }
+    },
+    bind(namespace: string) {
+      return (key: string) => dictionaries.get(`${namespace}/en`)?.[key] ?? key
+    },
+    subscribe() { return () => {} },
+  }
+  const ctx = {
+    locale,
+    effect(callback: () => (() => void)) { cleanup.push(callback()) },
+    slots: {
+      inject(_name: string, callback: () => (() => void)) { cleanup.push(callback()) },
+      register() { return () => {} },
+    },
+  }
+
+  // Must not throw even when pt-BR and agy-link/zh already exist in the catalog
+  assert.doesNotThrow(() => plugin.apply(ctx))
+  // Re-applying (simulating module reload / retry) must also not throw
+  assert.doesNotThrow(() => plugin.apply(ctx))
+  // Disposing cleanups must succeed without errors
+  for (const dispose of cleanup) {
+    if (typeof dispose === 'function') dispose()
+  }
+})
