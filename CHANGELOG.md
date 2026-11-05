@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.7 (2026-11-05)
+
+### English
+
+- **Fix(adapter): a generic agy CLI failure no longer blacklists a model as effort-unsupported.** (thanks @skyzzq, #73)
+  - `parseEffortUnsupported()` had a fallback branch that learned ANY `invalid model selection … --effort` echo. agy echoes the whole invocation on unrelated failures (`…): quota exhausted`, `rate limit exceeded`, TLS/auth jitter), so one quota blip permanently recorded the model in `effort-unsupported.json`; DSH core then threw `model … does not support reasoning effort` on every later turn. The fallback now requires the error text itself to say effort is unsupported; adds regression cases for quota/rate-limit echoes.
+
+### 中文
+
+- **修复(adapter)：agy 的普通 CLI 失败不再把模型误记为「不支持 effort」。**（感谢 @skyzzq，#73）
+  - `parseEffortUnsupported()` 的回退分支会对任何包含 `invalid model selection … --effort` 的报错做学习。agy 在额度耗尽/限流/TLS 抖动时会回显整条调用（`…): quota exhausted`、`rate limit exceeded`），于是一次抖动就把模型永久写进 `effort-unsupported.json`，随后 DSH 核心对之后每一轮都抛 `model … does not support reasoning effort`。现回退分支要求错误文本自身明确说明 effort 不受支持；补充额度/限流回显的回归用例。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.5.6...v0.5.7
+
 ## 0.5.6 (2026-11-05)
 
 ### English
