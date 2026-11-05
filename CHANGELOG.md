@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.6 (2026-11-05)
+
+### English
+
+- **Fix(host): a proxy blip is classified NETWORK, not AUTH (issue #71).**
+  - `runLogText` reached only the narrow `looksLikeAuthVerificationJitter` set. agy 1.4.12 logs a two-second proxy flap as `keyringAuth: token validation failed due to network error (token may still be valid)`, which only the wide `looksLikeNetworkError` matches — so `transportFailure` was false and a healthy account was quarantined as `AUTH`. The decision now lives in a pure, tested `isTransportFailure({…})` seam that feeds the same evidence (raw error, auth text, stderr, stdout head, run log) to both matchers; the exact 1.4.12 log is a regression test.
+
+- **Perf(client): stop re-sweeping expanded think rows and avoid forced layout.** (thanks @Ronnoc, #72)
+  - `scanThinkingRows()` now queries `div[data-variant="think"]:not([data-agy-expanded="true"])`, so already-handled turns are filtered by the selector engine instead of re-walked on every mutation. `tryExpandThinkRow()` checks `aria-expanded`/`data-expanded`/hidden-display before reading `body.clientHeight`, removing a forced synchronous layout from the critical path in long conversations.
+
+### 中文
+
+- **修复(host)：代理抖动判为 NETWORK 而非 AUTH（issue #71）。**
+  - `runLogText` 只喂给了窄匹配 `looksLikeAuthVerificationJitter`。agy 1.4.12 会把两秒的代理抖动记成 `keyringAuth: token validation failed due to network error (token may still be valid)`，而只有宽匹配 `looksLikeNetworkError` 认这句 → `transportFailure` 为 false，健康账号被当作 `AUTH` 隔离。现把判断收敛到纯函数、可测试的 `isTransportFailure({…})`（原始错误、auth 文本、stderr、stdout 头部、运行日志统一输入两个匹配器），并把真实 1.4.12 日志作为回归用例。
+
+- **性能(client)：不再重复扫描已展开的思考行，且避免强制重排。**（感谢 @Ronnoc，#72）
+  - `scanThinkingRows()` 改为查询 `div[data-variant="think"]:not([data-agy-expanded="true"])`，已处理的轮次由选择器引擎过滤；`tryExpandThinkRow()` 先查 `aria-expanded`/`data-expanded`/隐藏样式，再读 `body.clientHeight`，把强制同步布局移出长会话关键路径。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.5.5...v0.5.6
+
 ## 0.5.5 (2026-11-05)
 
 ### English
