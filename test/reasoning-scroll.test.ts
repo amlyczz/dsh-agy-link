@@ -194,3 +194,16 @@ test('manual user toggle permanently marks the turn so scanner never reverses it
 	tryExpandThinkRow(remounted.root as unknown as HTMLElement);
 	assert.equal(remounted.toggle.clickCount, 0, 'scanner must not undo user manual collapse');
 });
+
+test('tryExpandThinkRow recognizes aria-expanded="true" without clicking or reading clientHeight', () => {
+	clearHandledTurnsForTest();
+	setScrollActiveForTest(false);
+
+	const { root, toggle, body } = makeThinkRow('msg_5', 'Some thought prose already expanded by host.');
+	toggle.setAttribute('aria-expanded', 'true');
+	body.clientHeight = 0; // Even if clientHeight measurement is 0, attribute check avoids forced reflow
+
+	tryExpandThinkRow(root as unknown as HTMLElement);
+	assert.equal(toggle.clickCount, 0, 'must not click if aria-expanded is already true');
+	assert.equal(root.dataset.agyExpanded, 'true', 'marks root as expanded');
+});

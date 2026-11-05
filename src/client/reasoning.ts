@@ -133,7 +133,16 @@ export function tryExpandThinkRow(root: HTMLElement): void {
 	if (isInteractionLocked()) return;
 
 	// Already expanded if body is visible with height.
-	if (body.clientHeight > 8) {
+	// Already expanded if disclosure control reflects expanded state, or body is visible with height.
+	// Check non-layout DOM attributes (aria-expanded, data-expanded) before reading geometric
+	// clientHeight to avoid forced synchronous layout (Layout Thrashing).
+	const isExpanded =
+		toggle.getAttribute('aria-expanded') === 'true' ||
+		toggle.dataset.expanded === 'true' ||
+		root.dataset.expanded === 'true' ||
+		(!body.hidden && body.style.display !== 'none' && body.clientHeight > 8);
+
+	if (isExpanded) {
 		handledTurns.add(turnKey);
 		root.dataset.agyExpanded = 'true';
 		return;
@@ -152,7 +161,9 @@ export function tryExpandThinkRow(root: HTMLElement): void {
 export function scanThinkingRows(): void {
 	if (typeof document === 'undefined') return;
 	if (isInteractionLocked()) return;
-	const rows = document.querySelectorAll<HTMLElement>('div[data-variant="think"]');
+	// Only query thinking rows that haven't been marked as expanded yet.
+	// In long conversations, this drops repeated full-document sweeps from O(N) to O(1).
+	const rows = document.querySelectorAll<HTMLElement>('div[data-variant="think"]:not([data-agy-expanded="true"])');
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		if (row) tryExpandThinkRow(row);
