@@ -875,6 +875,9 @@ test('parseEffortUnsupported reads the real agy refusal text', () => {
   assert.equal(parseEffortUnsupported(''), null)
   // A model refusal WITHOUT any --effort mention is not ours to act on.
   assert.equal(parseEffortUnsupported('invalid model selection (--model "nope")'), null)
+  // A command echo that contains --effort but fails for an unrelated reason (quota, auth, rate limit) must NOT be learned as an effort refusal.
+  assert.equal(parseEffortUnsupported('invalid model selection (--model "gemini-3.8-flash" --effort "high"): quota exhausted'), null)
+  assert.equal(parseEffortUnsupported('invalid model selection (--model "gemini-3.8-flash" --effort "high"): rate limit exceeded'), null)
 })
 
 test('buildDigest bounds output and keeps newest turns', () => {

@@ -371,7 +371,7 @@ export function parseEffortUnsupported(text: string): string | null {
   if (text === '' || !/--effort/i.test(text)) return null
   const named = text.match(/--effort(?:\s+"?[A-Za-z0-9._-]+"?)?\s+is not supported for model\s+"?([A-Za-z0-9._:\/-]+)"?/i)
   if (named !== null && named[1] !== undefined && named[1] !== '') return named[1]
-  if (/invalid model selection/i.test(text)) {
+  if (/invalid model selection/i.test(text) && /--effort[^\n:]*(?:is not supported|not supported|unsupported)/i.test(text)) {
     const model = text.match(/--model\s+"?([A-Za-z0-9._:\/-]+)"?/i)
     if (model !== null && model[1] !== undefined && model[1] !== '') return model[1]
   }
