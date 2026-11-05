@@ -558,7 +558,8 @@ function installSettingsNavIcon(ctx: ClientContext, resolveLabel: () => string):
 	tag.dataset.plugin = 'dsh-agy-link';
 	tag.dataset.pluginCss = 'dsh-agy-link/settings-nav-icon';
 	tag.textContent = navIconCss(agyNavLogoUrl());
-	document.head.appendChild(tag);
+	const head = document.head ?? document.documentElement;
+	if (head) head.appendChild(tag);
 	let disposed = false;
 	let scheduled = false;
 	const sync = () => {
@@ -583,21 +584,37 @@ function installSettingsNavIcon(ctx: ClientContext, resolveLabel: () => string):
 		queueMicrotask(sync);
 	};
 	sync();
-	const observer = new MutationObserver(schedule);
-	// attributeFilter is load-bearing: sync() writes NAV_ICON_MARKER, and an
-	// unfiltered subtree observer re-fires on its own writes (measured 5
-	// self-induced passes per host mutation). characterData is deliberately
-	// NOT observed — label text changes arrive as childList of the row, and
-	// watching every text node made the host's streaming output drive full
-	// nav sweeps.
-	observer.observe(document.body, {
-		childList: true,
-		subtree: true,
-		attributeFilter: [NAV_ICON_MARKER],
-	});
+	let observer: MutationObserver | null = null;
+	const setupObserver = () => {
+		if (disposed || !document.body) return;
+		try {
+			observer = new MutationObserver(schedule);
+			// attributeFilter is load-bearing: sync() writes NAV_ICON_MARKER, and an
+			// unfiltered subtree observer re-fires on its own writes (measured 5
+			// self-induced passes per host mutation). characterData is deliberately
+			// NOT observed — label text changes arrive as childList of the row, and
+			// watching every text node made the host's streaming output drive full
+			// nav sweeps.
+			observer.observe(document.body, {
+				childList: true,
+				subtree: true,
+				attributeFilter: [NAV_ICON_MARKER],
+			});
+		} catch (err) {
+			console.warn('[dsh-agy-link] nav icon observer setup failed:', err);
+		}
+	};
+	if (document.readyState === 'loading') {
+		window.addEventListener('DOMContentLoaded', setupObserver, { once: true });
+	} else {
+		setupObserver();
+	}
 	return () => {
 		disposed = true;
-		observer.disconnect();
+		if (observer !== null) {
+			observer.disconnect();
+			observer = null;
+		}
 		for (const row of Array.from(document.querySelectorAll(`[${NAV_ICON_MARKER}]`))) {
 			row.removeAttribute(NAV_ICON_MARKER);
 		}
@@ -1550,13 +1567,46 @@ export function apply(ctx: ClientContext): void {
 	// locale is declared in inject — cordis guarantees ctx.locale (issue #24).
 	const locale = ctx.locale;
 	ctx.effect(() => {
-		const disposePtBR = locale.addLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
-		const disposeEs = locale.addLanguage({ id: 'es', label: 'Español', fallback: 'en' });
+		const safeAddLanguage = (lang: { id: string; label: string; fallback: string }) => {
+			try {
+				const snapshotLocales = typeof locale?.getSnapshot === 'function' ? locale.getSnapshot()?.locales : undefined;
+				const list = Array.isArray(snapshotLocales)
+					? snapshotLocales
+					: typeof (locale as any)?.localeList === 'function'
+						? (locale as any).localeList()
+						: [];
+				if (Array.isArray(list) && list.some((l: { id?: string }) => l?.id?.toLowerCase() === lang.id.toLowerCase())) {
+					return () => {};
+				}
+				return locale.addLanguage(lang);
+			} catch (err: unknown) {
+				const message = String((err as any)?.message || err);
+				if (/already registered/i.test(message)) {
+					return () => {};
+				}
+				throw err;
+			}
+		};
+
+		const safeRegister = (ns: string, langOrDicts: string | Record<string, Record<string, string>>, dict?: Record<string, string>) => {
+			try {
+				return locale.register(ns, langOrDicts as any, dict as any);
+			} catch (err: unknown) {
+				const message = String((err as any)?.message || err);
+				if (/already has locale/i.test(message)) {
+					return () => {};
+				}
+				throw err;
+			}
+		};
+
+		const disposePtBR = safeAddLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
+		const disposeEs = safeAddLanguage({ id: 'es', label: 'Español', fallback: 'en' });
 		// Untyped single-locale form: 'agy-link' is not in the host LocaleNamespaceMap merge table.
-		const disposeZh = locale.register(NS, 'zh', zh);
-		const disposeEn = locale.register(NS, 'en', en);
-		const disposePtBRDictionary = locale.register(NS, 'pt-BR', ptBR);
-		const disposeEsDictionary = locale.register(NS, 'es', es);
+		const disposeZh = safeRegister(NS, 'zh', zh);
+		const disposeEn = safeRegister(NS, 'en', en);
+		const disposePtBRDictionary = safeRegister(NS, 'pt-BR', ptBR);
+		const disposeEsDictionary = safeRegister(NS, 'es', es);
 		return () => { disposeEsDictionary(); disposePtBRDictionary(); disposeEn(); disposeZh(); disposeEs(); disposePtBR(); };
 	}, 'agy-link: locale dictionaries');
 	const useAgyTranslation = () => {
@@ -2857,7 +2907,11 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 	// the browser conversation UI keys tool cards by wire name; registering
 	// `tool.call.toolview` for `agy_tool` makes every mirrored agy step render
 	// as a terminal / diff / read / search card instead of a generic text row.
-	installAgyToolView(ctx);
+	try {
+		installAgyToolView(ctx);
+	} catch (err) {
+		console.warn('[dsh-agy-link] agy tool view registration failed:', err);
+	}
 
 	// Auto-expand reasoning blocks containing full model thought prose.
 	// Installed through ctx.effect so a plugin reload DISCONNECTS the old
