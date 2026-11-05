@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.5 (2026-11-05)
+
+### English
+
+- **Fix(client): locale/dictionary registration is idempotent — retry & re-sync no longer trap the plugin in FAILED.** (thanks @Ronnoc, #70)
+  - DSH's `locale.addLanguage`/`locale.register` throw when an entry already exists (`locale "pt-BR" is already registered`). The apply effect registered `pt-BR`/`es` and four `agy-link` dictionaries unconditionally, so re-applying the module (inventory page retry / fiber reconciliation) threw and marked the entry `FAILED`. Registration now checks the existing catalog and tolerates only the documented `already registered` / `already has locale` errors (anything else still rethrows); disposing never removes host-owned entries. Also hardens the settings nav-icon observer against a missing `<body>`/DOMContentLoaded timing, and isolates toolview slot registration failures.
+
+### 中文
+
+- **修复(client)：locale/词典注册幂等——重试与重新同步不再把插件卡进 FAILED。**（感谢 @Ronnoc，#70）
+  - DSH 的 `locale.addLanguage`/`locale.register` 在条目已存在时会抛错（`locale "pt-BR" is already registered`）。apply effect 无条件注册 `pt-BR`/`es` 与四份 `agy-link` 词典，插件重载/条目重试时会抛异常并把条目置为 `FAILED`。现注册前检查现有目录，仅容忍 `already registered`/`already has locale` 两类错误（其它仍抛出）；dispose 不会删除宿主已有的条目。同时加固设置导航图标的 observer（body/DOMContentLoaded 时机）并把 toolview 槽位注册失败隔离。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.5.4...v0.5.5
+
 ## 0.5.4 (2026-11-05)
 
 ### English
