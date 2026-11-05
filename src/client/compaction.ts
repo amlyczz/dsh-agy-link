@@ -194,7 +194,16 @@ export function scanAndEnhanceCompactionCards(root: ParentNode = document): void
 
     const beforeTokens = parseInt(card.dataset.before || '0', 10);
     const afterTokens = parseInt(card.dataset.after || '0', 10);
-    const summary = card.dataset.summary ? decodeURIComponent(card.dataset.summary) : '';
+    // The marker is percent-encoded; a mangled value (host renderer, copy-paste)
+    // must degrade to "no digest" instead of throwing and aborting the scan.
+    let summary = ''
+    if (card.dataset.summary) {
+      try {
+        summary = decodeURIComponent(card.dataset.summary)
+      } catch {
+        summary = ''
+      }
+    };
 
     const summaryLabel = formatCompactionSummary(beforeTokens, afterTokens);
     const reductionLabel = calcTokenReduction(beforeTokens, afterTokens);

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0 (2026-11-05)
+
+### English
+
+- **Feat(client): DeepSeek-parity context-compaction card with token-delta metrics.** (thanks @Ronnoc, #74)
+  - Compaction was invisible: ADR-013 cleared stale bindings and re-seeded agy with a digest, but the conversation showed nothing. `renderCompactionMarker()` now emits a markdown-safe marker at the first compacted turn carrying `beforeTokens/afterTokens/items` plus a percent-encoded digest, and `scanAndEnhanceCompactionCards()` upgrades it to a native-style collapsible card (`上下文已压缩 · 128.5k → 14.2k tokens (-89%)`). Token accounting is persisted per session (`lastInputTokens`) so the "before" figure is the real pre-compaction occupancy. In plain markdown/headless it degrades to a blockquote.
+  - Hardening on merge: the digest is only decoded behind a `try/catch` (a mangled percent-encoding now degrades to "no digest" instead of aborting the marker scan), and the digest text reaches the DOM via `textContent` only.
+
+### 中文
+
+- **新增(client)：对齐 DeepSeek 原生的「上下文已压缩」卡片，附 token 变化指标。**（感谢 @Ronnoc，#74）
+  - 此前压缩过程不可见：ADR-013 会清理旧绑定并用摘要重播种 agy，但会话里没有任何提示。`renderCompactionMarker()` 现在在首个压缩回合注入 markdown 安全的标记（含压缩前/后 token、条目数、百分号编码的摘要），`scanAndEnhanceCompactionCards()` 将其升级为原生风格可折叠卡片（`上下文已压缩 · 128.5k → 14.2k tokens (-89%)`）。会话内持久化 `lastInputTokens` 使「压缩前」是真实占用值；纯 markdown/无头环境降级为引用块。
+  - 合并时加固：摘要解码置于 `try/catch`（畸形百分号编码降级为「无摘要」而非中断扫描），摘要正文仅通过 `textContent` 进入 DOM。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.5.7...v0.6.0
+
 ## 0.5.7 (2026-11-05)
 
 ### English

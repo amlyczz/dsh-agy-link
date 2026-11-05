@@ -187,6 +187,33 @@ test('client scanAndEnhanceCompactionCards transforms marker into interactive na
   }
 })
 
+test('client compaction card tolerates a malformed data-summary without throwing', () => {
+  const root = makeTestEl('div')
+  const card = makeTestEl('div', 'agy-compaction-card')
+  card.setAttribute('data-before', '1000')
+  card.setAttribute('data-after', '400')
+  card.setAttribute('data-items', '2')
+  // A host renderer / copy-paste can mangle the percent-encoding; a throw here
+  // would abort the whole marker scan for the message.
+  card.setAttribute('data-summary', '%E0%A4%A')
+  root.appendChild(card)
+
+  const origDoc = (globalThis as unknown as { document?: unknown }).document
+  ;(globalThis as unknown as { document: unknown }).document = {
+    createElement(tag: string) {
+      return makeTestEl(tag)
+    },
+    documentElement: { lang: 'zh-CN' },
+  }
+  try {
+    assert.doesNotThrow(() => scanAndEnhanceCompactionCards(root as unknown as ParentNode))
+    assert.equal(card.getAttribute('data-agy-compaction-rendered'), 'true')
+    assert.equal(card.children.length, 1, 'card still renders, just without a digest')
+  } finally {
+    ;(globalThis as unknown as { document: unknown }).document = origDoc
+  }
+})
+
 test('EventMapper prepends compaction card chunk when compactionNotice is set', async () => {
   const { EventMapper } = await import('../src/host/mapper.ts')
   const mapper = new EventMapper({
