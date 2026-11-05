@@ -321,6 +321,36 @@ export function looksLikeNetworkError(message: string): boolean {
 }
 
 /**
+ * Decide AUTH vs NETWORK for one failed agy run.
+ *
+ * Both the wide transport regex and the narrow keyring-jitter regex must see
+ * the SAME evidence. The run log used to reach only the narrow one, so a proxy
+ * blip that agy 1.4.12 logs as "keyringAuth: token validation failed due to
+ * network error" was classified AUTH and quarantined a healthy account
+ * (issue #71). Exported so the decision stays a pure, testable seam.
+ */
+export function isTransportFailure(input: {
+  rawErrText: string
+  authFailureText?: string
+  stderrTail?: string
+  stdoutHead?: string
+  runLogText?: string
+}): boolean {
+  const runLogText = input.runLogText ?? ''
+  if (looksLikeAuthVerificationJitter(runLogText)) return true
+  const text = [
+    input.rawErrText,
+    input.authFailureText ?? '',
+    input.stderrTail ?? '',
+    (input.stdoutHead ?? '').slice(0, 4000),
+    runLogText,
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return looksLikeNetworkError(text)
+}
+
+/**
  * Backoff schedule for CONSECUTIVE transport (NETWORK) failures.
  *
  * DSH's generic backoff starts at 2s and doubles, which spends the whole retry

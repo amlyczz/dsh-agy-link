@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, isAuthoritativeAuthError, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, looksLikeHardRateLimit, looksLikeNetworkError, looksLikeRateLimit, networkRetryDelayMs, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, isAuthoritativeAuthError, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, looksLikeHardRateLimit, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { conversationsDirFor, diffConversations, snapshotConversations } from './discovery.ts'
@@ -2451,9 +2451,17 @@ export class AgyAdapter extends LlmAdapter {
       // the network was down (2026-10-16 quarantine incident).
       const runLogText = readAgyRunLogText(runLogHome, runLogsBefore)
       const keyringJitter = looksLikeAuthVerificationJitter(runLogText)
-      const transportFailure = keyringJitter || looksLikeNetworkError(
-        [rawErrText, parser.stats.authFailureText ?? '', outcome.stderrTail, outcome.stdout.slice(0, 4000)].filter(Boolean).join(' '),
-      )
+      // One pure decision seam (issue #71): the wide transport regex used to
+      // miss the run log, so a proxy blip that agy logs as "token validation
+      // failed due to network error" was classified AUTH and quarantined a
+      // healthy account.
+      const transportFailure = isTransportFailure({
+        rawErrText,
+        authFailureText: parser.stats.authFailureText ?? '',
+        stderrTail: outcome.stderrTail,
+        stdoutHead: outcome.stdout,
+        runLogText,
+      })
       // A timeout that never produced a single stdout event is an account-level
       // black hole (unreachable Google / wedged credential), not a long tool:
       // the retry must try a different account rather than the same dead one.

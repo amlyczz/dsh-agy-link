@@ -3,7 +3,7 @@
 // accounts must self-heal via the background re-verification cadence.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shouldMarkAuthRequired, looksLikeNetworkError, isAuthoritativeAuthError } from '../src/common/types.ts'
+import { shouldMarkAuthRequired, looksLikeNetworkError, looksLikeAuthVerificationJitter, isTransportFailure, isAuthoritativeAuthError } from '../src/common/types.ts'
 import { AUTH_REVERIFY_DELAY_MS, needsAuthReverify, type ManagedAccount } from '../src/common/pool-types.ts'
 
 const NETWORK_BLIP = 'Post "https://oauth2.googleapis.com/token": dial tcp 172.217.113.4:443: i/o timeout'
@@ -51,4 +51,30 @@ test('needsAuthReverify: flagged accounts re-enter the poll once the flag is sta
     'stale flag → re-verify',
   )
   assert.equal(AUTH_REVERIFY_DELAY_MS, 10 * 60_000)
+})
+
+test('isTransportFailure: a proxy blip logged in the agy run log is NETWORK, not AUTH (issue #71)', () => {
+  // Verbatim shape from agy 1.4.12 while the system proxy flapped: the token
+  // was still valid, agy failed to validate it over the network, then gave up.
+  const agyLog = [
+    'keyringAuth: loaded token, expiry=2026-11-05 00:03:38 expired=false',
+    'token refresh failed due to network error: Post "https://oauth2.googleapis.com/token": EOF',
+    'keyringAuth: token validation failed due to network error (token may still be valid): Post "…/token": EOF',
+    'Print mode: silent auth failed',
+  ].join('\n')
+  const banner = 'agy is not signed in — run /agy auth (or run agy once in a terminal) to login'
+
+  // The two regexes disagree on this log, which is exactly why the run log must
+  // reach BOTH: the wide net matches, the narrow jitter set does not.
+  assert.equal(looksLikeAuthVerificationJitter(agyLog), false)
+  assert.equal(looksLikeNetworkError(banner), false)
+
+  assert.equal(isTransportFailure({ rawErrText: banner, runLogText: agyLog }), true, 'proxy blip must be retried as NETWORK')
+  // A genuine sign-out with no transport evidence stays AUTH-side.
+  assert.equal(isTransportFailure({ rawErrText: banner, runLogText: 'keyringAuth: no token found' }), false)
+  // The narrow keyring-jitter path still short-circuits when it does match.
+  assert.equal(
+    isTransportFailure({ rawErrText: banner, runLogText: 'keyringAuth: timed out after 30s' }),
+    true,
+  )
 })
