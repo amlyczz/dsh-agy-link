@@ -179,6 +179,10 @@ export class RunRecording {
     this.lastStepUsageRaw = raw
   }
 
+  get lastUsage(): RawUsage | null {
+    return this.lastStepUsageRaw
+  }
+
   /** The usage to report for the result envelope: last per-call step sample. */
   finalUsage(resultRaw: RawUsage): RawUsage {
     return this.lastStepUsageRaw ?? resultRaw

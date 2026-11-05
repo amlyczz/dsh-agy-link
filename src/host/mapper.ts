@@ -20,6 +20,7 @@ import type { AgyEvent, RawUsage } from '../common/types.ts'
 import { mirrorCallId } from './recording.ts'
 import { buildMirrorRunCode, MIRROR_TOOL_NAME, WRAPPER_TOOL_NAME, toolStepBrief, unwrapMcpTool } from './mirror-tool.ts'
 import { type GoalContext, buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock } from './dsh-goal.ts'
+import { type CompactionNotice, renderCompactionMarker } from '../common/compaction.ts'
 
 export const toToolCallId: (id: string) => ToolCallId =
   (dshLlm as { ToolCallId?: (id: string) => ToolCallId; CallId?: (id: string) => ToolCallId }).ToolCallId ??
@@ -141,6 +142,8 @@ export interface EventMapperOptions {
   supportsGoalUpdate?: boolean
   /** Whether the host provides the `exit_plan_mode` tool for DSH plan mode. */
   supportsPlanExit?: boolean
+  /** Compaction notice to emit at the beginning of the turn if history was compacted. */
+  compactionNotice?: CompactionNotice
 }
 
 /** Rewrite local image paths and file:// URLs to point to the local media route. */
@@ -179,6 +182,7 @@ export class EventMapper {
   private finished = false
   private totalTextOutput = ''
   private readonly toolCallStates = new Map<string, ToolCallState>()
+  private emittedCompactionNotice = false
 
   constructor(private readonly opts: EventMapperOptions) {
     this.sawTextStep = opts.initialSawText === true
@@ -284,10 +288,23 @@ export class EventMapper {
       }
     }
   }
+  private *emitCompactionNoticeIfPending(): Generator<StreamChunk> {
+    if (this.opts.compactionNotice && !this.emittedCompactionNotice) {
+      this.emittedCompactionNotice = true
+      yield* this.ensureBlock('text')
+      const marker = renderCompactionMarker(this.opts.compactionNotice)
+      const d = this.appendDelta(marker)
+      if (d) yield d
+      const close = this.closeOpen()
+      if (close) yield close
+    }
+  }
+
   *map(ev: AgyEvent, absIndex: number): Generator<StreamChunk> {
     if (this.finished) return
     if (ev.kind === 'init') return
     if (ev.kind === 'garbage') return
+    yield* this.emitCompactionNoticeIfPending()
     yield* this.flushBannerOnlyThoughts()
     if (ev.kind === 'step') {
       if (ev.usage) this.opts.usage?.noteStepUsage(ev.usage)

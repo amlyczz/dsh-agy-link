@@ -1639,10 +1639,13 @@ test('compaction detection clears stale binding and re-seeds with digest (ADR-01
   assert.equal(store.get('sess-compact')?.lastMessageCount, 5)
 
   // Turn 2: DSH compacts history down to 2 messages (compacted summary + new user prompt)
-  await runTurn(adapter, [
+  const { chunks } = await runTurn(adapter, [
     msg('assistant', '[compacted summary of m1-m3]'),
     msg('user', 'new question after compaction'),
   ], { sessionId: 'sess-compact' as never })
+
+  const cardChunk = chunks.find((c) => c.type === 'text-delta' && (c as { text?: string }).text?.includes('agy-compaction-card'))
+  assert.ok(cardChunk !== undefined, 'Turn 2 must emit compaction card marker')
 
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   const prompt = argv[argv.indexOf('-p') + 1] ?? ''

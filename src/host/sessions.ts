@@ -27,6 +27,8 @@ export interface SessionBinding {
    * instead of the newest user message.
    */
   interrupted?: boolean
+  /** Last measured per-call context input tokens for this session. */
+  lastInputTokens?: number
 }
 
 /** Keep the binding file small; the oldest ids are dropped first. */

@@ -27,6 +27,7 @@ import { SENT_IMAGE_IDS_MAX, type SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
 import { getGitHeadContent, unwrapMcpTool } from './mirror-tool.ts'
 import { detectGoalContext, isGoalToolContinuation, isPlanToolContinuation, isPlanMode, type GoalContext } from './dsh-goal.ts'
+import type { CompactionNotice } from '../common/compaction.ts'
 
 type ForeignSource = { source?: { kind?: string; provider?: string; callId?: string; replayState?: unknown } }
 
@@ -1594,7 +1595,29 @@ export class AgyAdapter extends LlmAdapter {
       (binding.lastMessageCount > 10 && messages.length < Math.floor(binding.lastMessageCount * 0.8)) ||
       (binding.lastMessageCount <= 10 && messages.length < binding.lastMessageCount - 2)
     )
+    let compactionNotice: CompactionNotice | undefined = undefined
     if (persistBinding && binding !== undefined && isCompacted) {
+      const beforeTokens = typeof binding.lastInputTokens === 'number' && binding.lastInputTokens > 0
+        ? binding.lastInputTokens
+        : Math.round(binding.lastMessageCount * 750)
+      const items = Math.max(1, binding.lastMessageCount - messages.length)
+      let extractedSummary: string | undefined = undefined
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i]
+        if (!msg) continue
+        const txt = textOf(msg)
+        const m = /<compacted-summary>([\s\S]*?)<\/compacted-summary>/i.exec(txt)
+        if (m && m[1]) {
+          extractedSummary = m[1].trim()
+          break
+        }
+      }
+      compactionNotice = {
+        beforeTokens,
+        afterTokens: 0,
+        items,
+        ...(extractedSummary ? { summary: extractedSummary } : {}),
+      }
       if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
       binding = undefined
     } else if (binding !== undefined && messages.length < binding.lastMessageCount) {
@@ -1789,6 +1812,9 @@ export class AgyAdapter extends LlmAdapter {
       }
     } else if (prompt.trim() === '') {
       throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
+    }
+    if (compactionNotice && compactionNotice.afterTokens <= 0) {
+      compactionNotice.afterTokens = Math.max(100, Math.round(prompt.length / 3.5))
     }
     // Intentionally no prompt-side "recovery boundary" injection: keyword
     // matching on user text (missing/not found/enoent) false-positives and
@@ -2588,12 +2614,17 @@ export class AgyAdapter extends LlmAdapter {
         if (persistBinding && sessionAccountKey !== '' && !superseded) {
           const finalId = binding !== undefined ? binding.conversationId : conversationId
           if (finalId) {
+            const finalUsage = rec.lastUsage ?? rec.finalUsage({})
+            const inputTokens = typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
+              ? finalUsage.input_tokens
+              : binding?.lastInputTokens
             this.deps.store.set(sessionAccountKey, {
               conversationId: finalId,
               lastMessageCount: messages.length,
               updatedAt: Date.now(),
               model: activeModel,
               sentImageIds: mergeSentImageIds(binding?.sentImageIds, newlySentImageIds),
+              ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
             })
           }
         }
@@ -2690,6 +2721,10 @@ export class AgyAdapter extends LlmAdapter {
           // (issue #35 root cause ②: "aborted 分支永远存不下来").
           const finalId = binding !== undefined ? binding.conversationId : conversationId
           if (finalId) {
+            const finalUsage = rec.lastUsage ?? rec.finalUsage({})
+            const inputTokens = typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
+              ? finalUsage.input_tokens
+              : binding?.lastInputTokens
             this.deps.store.set(sessionAccountKey, {
               conversationId: finalId,
               lastMessageCount: messages.length,
@@ -2702,6 +2737,7 @@ export class AgyAdapter extends LlmAdapter {
               // user text or images".
               sentImageIds: mergeSentImageIds(binding?.sentImageIds, []),
               ...((interruptedTurn || binding?.interrupted === true) ? { interrupted: true } : {}),
+              ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
             })
           }
         }
@@ -2730,7 +2766,7 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* this.driveSpan(rec, 0, !isAux && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
+    yield* this.driveSpan(rec, 0, !isAux && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice)
   }
 
   /**
@@ -2749,6 +2785,7 @@ export class AgyAdapter extends LlmAdapter {
     supportsGoalUpdate?: boolean,
     supportsPlanExit?: boolean,
     signal?: AbortSignal,
+    compactionNotice?: CompactionNotice,
   ): AsyncIterable<StreamChunk> {
     if (signal?.aborted) {
       rec.requestAbort?.()
@@ -2766,7 +2803,7 @@ export class AgyAdapter extends LlmAdapter {
     this.deps.runs.remember(rec)
     this.deps.runs.pin(rec.runId)
     try {
-      yield* this.driveSpanBody(rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal)
+      yield* this.driveSpanBody(rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice)
     } finally {
       this.deps.runs.unpin(rec.runId)
       this.deps.runs.remember(rec)
@@ -2783,6 +2820,7 @@ export class AgyAdapter extends LlmAdapter {
     supportsGoalUpdate?: boolean,
     supportsPlanExit?: boolean,
     signal?: AbortSignal,
+    compactionNotice?: CompactionNotice,
   ): AsyncIterable<StreamChunk> {
     const queue = new ChunkQueue()
     let abortedLocally = false
@@ -2817,6 +2855,7 @@ export class AgyAdapter extends LlmAdapter {
         goalContext,
         supportsGoalUpdate,
         supportsPlanExit,
+        compactionNotice: from === 0 ? compactionNotice : undefined,
       })
       let i = from
       const pendingThoughtSteps = new Map<number, string>()
