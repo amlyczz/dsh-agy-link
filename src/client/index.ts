@@ -558,7 +558,8 @@ function installSettingsNavIcon(ctx: ClientContext, resolveLabel: () => string):
 	tag.dataset.plugin = 'dsh-agy-link';
 	tag.dataset.pluginCss = 'dsh-agy-link/settings-nav-icon';
 	tag.textContent = navIconCss(agyNavLogoUrl());
-	document.head.appendChild(tag);
+	const head = document.head ?? document.documentElement;
+	if (head) head.appendChild(tag);
 	let disposed = false;
 	let scheduled = false;
 	const sync = () => {
@@ -583,21 +584,37 @@ function installSettingsNavIcon(ctx: ClientContext, resolveLabel: () => string):
 		queueMicrotask(sync);
 	};
 	sync();
-	const observer = new MutationObserver(schedule);
-	// attributeFilter is load-bearing: sync() writes NAV_ICON_MARKER, and an
-	// unfiltered subtree observer re-fires on its own writes (measured 5
-	// self-induced passes per host mutation). characterData is deliberately
-	// NOT observed — label text changes arrive as childList of the row, and
-	// watching every text node made the host's streaming output drive full
-	// nav sweeps.
-	observer.observe(document.body, {
-		childList: true,
-		subtree: true,
-		attributeFilter: [NAV_ICON_MARKER],
-	});
+	let observer: MutationObserver | null = null;
+	const setupObserver = () => {
+		if (disposed || !document.body) return;
+		try {
+			observer = new MutationObserver(schedule);
+			// attributeFilter is load-bearing: sync() writes NAV_ICON_MARKER, and an
+			// unfiltered subtree observer re-fires on its own writes (measured 5
+			// self-induced passes per host mutation). characterData is deliberately
+			// NOT observed — label text changes arrive as childList of the row, and
+			// watching every text node made the host's streaming output drive full
+			// nav sweeps.
+			observer.observe(document.body, {
+				childList: true,
+				subtree: true,
+				attributeFilter: [NAV_ICON_MARKER],
+			});
+		} catch (err) {
+			console.warn('[dsh-agy-link] nav icon observer setup failed:', err);
+		}
+	};
+	if (document.readyState === 'loading') {
+		window.addEventListener('DOMContentLoaded', setupObserver, { once: true });
+	} else {
+		setupObserver();
+	}
 	return () => {
 		disposed = true;
-		observer.disconnect();
+		if (observer !== null) {
+			observer.disconnect();
+			observer = null;
+		}
 		for (const row of Array.from(document.querySelectorAll(`[${NAV_ICON_MARKER}]`))) {
 			row.removeAttribute(NAV_ICON_MARKER);
 		}
@@ -2890,7 +2907,11 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 	// the browser conversation UI keys tool cards by wire name; registering
 	// `tool.call.toolview` for `agy_tool` makes every mirrored agy step render
 	// as a terminal / diff / read / search card instead of a generic text row.
-	installAgyToolView(ctx);
+	try {
+		installAgyToolView(ctx);
+	} catch (err) {
+		console.warn('[dsh-agy-link] agy tool view registration failed:', err);
+	}
 
 	// Auto-expand reasoning blocks containing full model thought prose.
 	// Installed through ctx.effect so a plugin reload DISCONNECTS the old

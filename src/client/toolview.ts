@@ -1313,7 +1313,8 @@ export function installAgyToolView(ctx: {
 		register(opts: { name: string; key?: string; id: string; order?: number; label?: string | (() => string); locale?: string }, C: (p: unknown) => unknown): () => void;
 	};
 }): void {
-	ctx.slots.inject('tool.call.toolview', () => {
+	try {
+		ctx.slots?.inject?.('tool.call.toolview', () => {
 		const d1 = ctx.slots.register(
 			// locale: NS seats `t` so mirror cards localize titles/buttons like
 			// the run_code view does (they used to hard-code 中文 + English).
@@ -1329,7 +1330,10 @@ export function installAgyToolView(ctx: {
 			AgyRunCodeToolView as (p: unknown) => unknown,
 		);
 		return () => { d2(); d1(); };
-	});
+		});
+	} catch (err) {
+		console.warn('[dsh-agy-link] agy tool view slot registration failed:', err);
+	}
 }
 
 // ---- Official CSS Styles --------------------------------------------------
