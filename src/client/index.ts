@@ -11,6 +11,7 @@ import { installAutoExpandReasoning } from './reasoning.ts';
 import { installImageEnhancer } from './images.ts';
 import { installDecisionChips } from './decisions.ts';
 import { installTranslationUi } from './translate.ts';
+import { installCompactionCard } from './compaction.ts';
 import { ensureScrollListener, disposeScrollListener, setOverlaySuspended } from './scroll-guard.ts';
 
 
@@ -2927,6 +2928,9 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 
 	// Interactive user decision & choice chips (recovered working tree).
 	ctx.effect(() => installDecisionChips());
+
+	// Interactive compaction card (DeepSeek Flash native visual parity + token delta metrics).
+	ctx.effect(() => installCompactionCard());
 	// Gemini plain-language translation: the persisted record card plus the
 	// per-reply "译成人话" action. Contained: a host that lacks uiConversation
 	// or the chat slots must keep every other plugin contribution (header badge,
