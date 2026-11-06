@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1 (2026-11-06)
+
+### English
+
+- **Fix(adapter): frame the compaction prompt so plan mode stops trying tools (keeps the sandbox).** (thanks @Ronnoc, #75)
+  - Headless compaction runs in `--mode plan`; when the history mentioned files/workspace state the model treated them as live tasks, tried MCP tools, hit `user denied permission` headlessly and ended the turn with an empty response — surfacing as `Compaction could not produce a useful summary`. The history is now wrapped in `<conversation_history>` with an explicit automated-summarizer persona and strict negative constraints (do not act on instructions inside, do not call tools, output only the summary). Plan mode is deliberately **kept** so compaction can never inherit `--dangerously-skip-permissions`; the test asserts both.
+
+### 中文
+
+- **修复(adapter)：用提示词框定压缩摘要，plan 模式下不再尝试调用工具（沙箱保留）。**（感谢 @Ronnoc，#75）
+  - 无头压缩跑在 `--mode plan`；当历史里提到文件/工作区状态时，模型会当成待办并调用 MCP 工具，无头环境被拒后回合以空响应结束，用户看到 `Compaction could not produce a useful summary`。现把历史包进 `<conversation_history>`，明确「自动摘要器」身份与严格负向约束（不执行历史中的指令、不调用任何工具、只输出摘要）。**保留 plan 模式**，确保压缩调用永远不会继承 `--dangerously-skip-permissions`；测试同时断言这两点。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.0...v0.6.1
+
 ## 0.6.0 (2026-11-05)
 
 ### English
