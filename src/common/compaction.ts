@@ -41,11 +41,11 @@ export function formatCompactionSummary(before: number, after: number): string {
 /**
  * Render standard compaction marker for the stream.
  * In raw markdown (and DSH markdown which escapes raw HTML), this surfaces as an elegant blockquote:
- * > [✂️ **上下文已压缩** · 128.5k → 14.2k tokens (-89%)](#agy-compaction?before=128500&after=14200&items=18&summary=...)
+ * > [✂️ **上下文已压缩** · 128.5k → 14.2k tokens (-89%)](#agy-compaction-card?before=128500&after=14200&items=18&summary=...)
  * In browser DSH, the client enhancer transforms it into the interactive native Compaction Card.
  */
 export function renderCompactionMarker(notice: CompactionNotice): string {
   const summaryText = formatCompactionSummary(notice.beforeTokens, notice.afterTokens)
   const encodedSummary = notice.summary ? encodeURIComponent(notice.summary) : ''
-  return `> [✂️ **上下文已压缩** · ${summaryText}](#agy-compaction?before=${notice.beforeTokens}&after=${notice.afterTokens}&items=${notice.items}&summary=${encodedSummary})\n\n`
+  return `> [✂️ **上下文已压缩** · ${summaryText}](#agy-compaction-card?before=${notice.beforeTokens}&after=${notice.afterTokens}&items=${notice.items}&summary=${encodedSummary})\n\n`
 }

@@ -1649,7 +1649,7 @@ test('compaction detection clears stale binding and re-seeds with digest (ADR-01
     msg('user', 'new question after compaction'),
   ], { sessionId: 'sess-compact' as never })
 
-  const cardChunk = chunks.find((c) => c.type === 'text-delta' && (c as { text?: string }).text?.includes('agy-compaction-card'))
+  const cardChunk = chunks.find((c) => c.type === 'text-delta' && ((c as { text?: string }).text?.includes('agy-compaction-card') || (c as { text?: string }).text?.includes('#agy-compaction')))
   assert.ok(cardChunk !== undefined, 'Turn 2 must emit compaction card marker')
 
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]

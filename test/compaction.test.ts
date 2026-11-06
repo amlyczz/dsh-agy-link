@@ -42,7 +42,7 @@ test('renderCompactionMarker builds structured markdown link marker', () => {
   })
 
   assert.ok(marker.startsWith('> ['))
-  assert.ok(marker.includes('#agy-compaction?'))
+  assert.ok(marker.includes('#agy-compaction-card?'))
   assert.ok(marker.includes('before=128500'))
   assert.ok(marker.includes('after=14200'))
   assert.ok(marker.includes('items=18'))
@@ -383,7 +383,7 @@ test('EventMapper prepends compaction card chunk when compactionNotice is set', 
 
   const textDeltas = chunks.filter((c) => c.type === 'text-delta') as Array<{ type: 'text-delta'; text?: string }>
   const fullText = textDeltas.map((d) => d.text ?? '').join('')
-  assert.ok(fullText.includes('#agy-compaction?'))
+  assert.ok(fullText.includes('#agy-compaction-card?'))
   assert.ok(fullText.includes('128.5k → 14.2k tokens (-89%)'))
   assert.ok(fullText.includes('Retained%20database%20config%20and%20auth%20setup.'))
   assert.ok(fullText.includes('Hello world'))
