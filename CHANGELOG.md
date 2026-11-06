@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.3 (2026-11-06)
+
+### English
+
+- **Fix(compaction): the compaction card now actually renders in DSH, reports real token deltas, and no longer duplicates across accounts.** (thanks @Ronnoc, #79)
+  - DSH's markdown renderer uses `allowDangerousHtml: false`, so the previous raw `<div class="agy-compaction-card">` marker was escaped into visible text. The marker is now a standard blockquote **link** (`> [✂️ 上下文已压缩 · 128.5k → 14.2k tokens (-89%)](#agy-compaction-card?…)`) that the client enhancer upgrades to the native card — and legacy raw/escaped markers still upgrade.
+  - Token accounting summed only `input_tokens` (the uncached delta), so cards fired at tiny counts like `4.6k → 205`; `calcPromptTokens()` now adds `cache_read_tokens` + `cache_write_tokens` for the real prompt size.
+  - Multi-account compaction cleared only the active account's binding, so rotating steps re-triggered duplicate cards; compaction now invalidates every binding for the session across accounts and debounces repeated notices.
+  - Hardening on merge: marker query values now percent-encode `( ) ' !` too, so a digest containing parentheses can't terminate the markdown link early.
+
+### 中文
+
+- **修复(compaction)：压缩卡片现在能在 DSH 里真正渲染、显示真实 token 变化，且不再跨账号重复。**（感谢 @Ronnoc，#79）
+  - DSH 的 markdown 渲染器 `allowDangerousHtml: false`，旧的原始 `<div class="agy-compaction-card">` 标记会被转义成可见文本。现改为标准引用块**链接**（`> [✂️ 上下文已压缩 · 128.5k → 14.2k tokens (-89%)](#agy-compaction-card?…)`），由客户端增强器升级为原生卡片；旧的原始/转义标记仍可升级。
+  - token 记账只加 `input_tokens`（未缓存增量），导致卡片在 `4.6k → 205` 这种小值就触发；`calcPromptTokens()` 现加上 `cache_read_tokens` + `cache_write_tokens` 得到真实 prompt 规模。
+  - 多账号下压缩只清当前账号的绑定，切换账号的后续步骤会重复触发卡片；现按会话清空所有账号的绑定并对重复提示去抖。
+  - 合并时加固：标记的查询值额外百分号编码 `( ) ' !`，避免含括号的摘要把 markdown 链接提前截断。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.2...v0.6.3
+
 ## 0.6.2 (2026-11-06)
 
 ### English

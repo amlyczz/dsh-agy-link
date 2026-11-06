@@ -44,8 +44,15 @@ export function formatCompactionSummary(before: number, after: number): string {
  * > [✂️ **上下文已压缩** · 128.5k → 14.2k tokens (-89%)](#agy-compaction-card?before=128500&after=14200&items=18&summary=...)
  * In browser DSH, the client enhancer transforms it into the interactive native Compaction Card.
  */
+/** Percent-encode a value for use inside a markdown link destination.
+ *  encodeURIComponent leaves ( ) ' ! alone, but a raw ')' in a query value would
+ *  terminate the `](...)` link early and break the marker. */
+function encodeForMarkdownUrl(value: string): string {
+  return encodeURIComponent(value).replace(/[()'!]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+}
+
 export function renderCompactionMarker(notice: CompactionNotice): string {
   const summaryText = formatCompactionSummary(notice.beforeTokens, notice.afterTokens)
-  const encodedSummary = notice.summary ? encodeURIComponent(notice.summary) : ''
+  const encodedSummary = notice.summary ? encodeForMarkdownUrl(notice.summary) : ''
   return `> [✂️ **上下文已压缩** · ${summaryText}](#agy-compaction-card?before=${notice.beforeTokens}&after=${notice.afterTokens}&items=${notice.items}&summary=${encodedSummary})\n\n`
 }

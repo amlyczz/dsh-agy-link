@@ -388,3 +388,17 @@ test('EventMapper prepends compaction card chunk when compactionNotice is set', 
   assert.ok(fullText.includes('Retained%20database%20config%20and%20auth%20setup.'))
   assert.ok(fullText.includes('Hello world'))
 })
+
+test('renderCompactionMarker encodes parentheses/quotes so the markdown link is not truncated', () => {
+  const summary = 'decision (A) retains [x] & "quoted" paths'
+  const marker = renderCompactionMarker({ beforeTokens: 1000, afterTokens: 400, items: 3, summary })
+  const start = marker.indexOf('](')
+  assert.ok(start >= 0, 'marker is a markdown link')
+  // The link destination ends at the LAST ')' — any raw ')' inside would truncate it early.
+  const dest = marker.slice(start + 2, marker.lastIndexOf(')'))
+  assert.ok(!/[()]/.test(dest), 'no raw parentheses inside the link destination')
+  assert.ok(!/[\s"]/.test(dest), 'no raw whitespace/quote inside the link destination')
+  // Still round-trips to the original summary through the enhancer's parser.
+  const q = new URLSearchParams(dest.slice(dest.indexOf('?') + 1))
+  assert.equal(decodeURIComponent(q.get('summary') ?? ''), summary)
+})
