@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.2 (2026-11-06)
+
+### English
+
+- **Fix(quota): Argon is weekly-only when the backend folds it into the Gemini bucket, and `/agy clear-cooldown` can now lift a quota bench (issue #77).** (thanks @hjwsm1989, #78)
+  - The model-level fallback filed Argon's **weekly** `quotaInfo` under `remainingFraction` (the 5-hour slot), so the 10% 5h floor benched accounts whose weekly quota was still above the 5% weekly floor — the `5% < weekly ≤ 10%` dead band. Argon without a backend 5-hour window is now written to `weeklyFraction/weeklyResetTime` only (an existing mis-filled row is healed on the next poll).
+  - The "no account can serve" error now reports the real reason via `pool.explainIneligibility()` (`disabled` / `auth` / `cooldown` / `quota`) and suggests a remedy that works; `/agy clear-cooldown` also lifts the proactive low-quota bench for the cached snapshot (`quotaGateClearedAt`), re-arming as soon as a poll writes fresher data.
+  - Retired Argon groups release their cooldown again: the dedicated-group decision uses the summary alone, not the synthesized model row that made the `else` branch unreachable.
+
+### 中文
+
+- **修复(quota)：后端把 Argon 折进 Gemini 桶时按「仅周额度」处理，且 `/agy clear-cooldown` 现在能解除配额停摆（issue #77）。**（感谢 @hjwsm1989，#78）
+  - 模型级回退把 Argon 的**周** `quotaInfo` 写进 `remainingFraction`（5 小时槽），于是 10% 的 5h 下限会误伤周额度仍高于 5% 下限的账号（`5% < weekly ≤ 10%` 死区）。现在没有后端 5 小时窗口的 Argon 只写 `weeklyFraction/weeklyResetTime`，并在下次轮询时修复已被误填的行。
+  - 「无可用账号」错误改用 `pool.explainIneligibility()` 报告真实原因（`disabled`/`auth`/`cooldown`/`quota`）并给出有效建议；`/agy clear-cooldown` 会同时解除针对当前缓存快照的主动低配额停摆（`quotaGateClearedAt`），一旦轮询写入更新数据即自动重新生效。
+  - 退役的 Argon 组重新能释放冷却：专用组判定只看 summary，不再被模型回退合成出来的行挡住。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.1...v0.6.2
+
 ## 0.6.1 (2026-11-06)
 
 ### English
