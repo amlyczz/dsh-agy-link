@@ -46,7 +46,7 @@ const HELP = [
   '- `/agy enable-account <id>` — enable an account slot',
   '- `/agy disable-account <id>` — disable an account slot (skips in rotation)',
   '- `/agy refresh-quota` — query Google backend for fresh quota %',
-  '- `/agy clear-cooldown` — reset cooldown timers across all accounts',
+  '- `/agy clear-cooldown` — reset cooldown timers (and any active low-quota bench)',
   '- `/agy remove-account <id>` — delete an account slot',
   '- `/agy auth` — Google login for the primary account (opens the browser)',
   '- `/agy auth-code <code>` — finish login by pasting the code (fallback)',
@@ -160,8 +160,11 @@ async function handle(deps: CommandDeps, raw: string, invocation?: CommandInvoca
       if (sub === 'clear-cooldown') {
         const pool = deps.pool?.()
         if (!pool) return err('Account pool not available')
-        pool.clearCooldown(arg || undefined)
-        return ok('Cleared cooldown timers.')
+        // includeQuotaBench: also lift the proactive low-quota rotation for the
+        // cached snapshot. Without it this command only touched 429 timers, so
+        // it could never clear the "quota-exhausted" block the error mentioned.
+        pool.clearCooldown(arg || undefined, undefined, true)
+        return ok('Cleared cooldown timers and any active low-quota bench (until the next quota refresh).')
       }
       if (sub === 'remove-account') {
         if (!arg) return err('usage: /agy remove-account <id>')

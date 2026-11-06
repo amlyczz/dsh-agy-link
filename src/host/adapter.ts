@@ -1493,16 +1493,21 @@ export class AgyAdapter extends LlmAdapter {
         }
       }
       if (!account) {
-        // Distinguish WHY nothing is available: "in cooldown" for a spent
-        // quota, a signed-out login, or a disabled account. The old text named
-        // a cooldown even when every account was quota-exhausted (whose reset
-        // time lives in quotas, not cooldowns, so the ETA was silently
-        // dropped) — leaving the user with no idea when the turn can run again.
+        // Distinguish WHY nothing is available. "in cooldown" used to absorb
+        // every ineligible account, including the ones benched by the proactive
+        // low-quota rotation — which `/agy clear-cooldown` could not touch, so
+        // the reported remedy never worked. Ask the pool for the real reason.
         const pool = this.deps.pool
         const allAccounts = pool.getAccounts()
         const accounts = allAccounts.filter((a) => a.enabled)
         const disabled = allAccounts.length - accounts.length
-        const cooling = accounts.filter((a) => pool.isAccountEligible(a, family) === false && !a.authRequired).length
+        const reasons = accounts.map((a) =>
+          typeof pool.explainIneligibility === 'function'
+            ? pool.explainIneligibility(a, family)
+            : (pool.isAccountEligible(a, family) ? null : 'cooldown'),
+        )
+        const cooling = reasons.filter((r) => r === 'cooldown').length
+        const quotaBlocked = reasons.filter((r) => r === 'quota').length
         const signedOut = accounts.filter((a) => a.authRequired === true).length
         const countdown = pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
         // A reset that is seconds away is not worth failing a turn over: wait
@@ -1521,6 +1526,7 @@ export class AgyAdapter extends LlmAdapter {
           } else {
             const details: string[] = []
             if (cooling > 0) details.push(`${cooling} in cooldown`)
+            if (quotaBlocked > 0) details.push(`${quotaBlocked} quota-exhausted`)
             if (signedOut > 0) details.push(`${signedOut} signed out`)
             if (disabled > 0) details.push(`${disabled} disabled`)
             const detailStr = details.length > 0 ? ` (${details.join(', ')})` : ''
@@ -1529,7 +1535,10 @@ export class AgyAdapter extends LlmAdapter {
           const waitStr = countdown !== null && countdown > 0
             ? ` (earliest reset in ${Math.ceil(countdown / 1000)}s)`
             : ''
-          throw new LlmError(`All Antigravity accounts are unavailable: ${why}${waitStr}. Add an account, wait for reset, or run /agy clear-cooldown.`, Err.AGY_ERROR)
+          const hint = quotaBlocked > 0 && cooling === 0
+            ? 'Add an account, wait for the quota reset, or run /agy clear-cooldown to override the current quota snapshot.'
+            : 'Add an account, wait for reset, or run /agy clear-cooldown.'
+          throw new LlmError(`All Antigravity accounts are unavailable: ${why}${waitStr}. ${hint}`, Err.AGY_ERROR)
         }
       }
     }

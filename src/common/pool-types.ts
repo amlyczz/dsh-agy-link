@@ -88,6 +88,13 @@ export interface ManagedAccount {
   /** Cached real-time quota statistics per model family. */
   quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>
   /**
+   * Per-family `updatedAt` of the quota snapshot an explicit user action
+   * (`/agy clear-cooldown`) overrode. Proactive low-quota benching is ignored
+   * while the cached row is no newer than this stamp, so the override can
+   * never outlive the data it was meant to fix: the next poll re-arms it.
+   */
+  quotaGateClearedAt?: Partial<Record<ModelFamily, number>>
+  /**
    * Families this account has itself reported a dedicated quota group for.
    *
    * Only used to tell "the bucket went away" (Pro -> Ultra folds Argon into the

@@ -32,6 +32,9 @@ import { ensureIsolatedKeychain } from './runner.ts'
 export const LOW_QUOTA_5H = 0.10
 export const LOW_QUOTA_WEEKLY = 0.05
 
+/** Why a pool account cannot serve a family right now (diagnostics only). */
+export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota'
+
 export function defaultPoolDir(home = homedir()): string {
   if (process.env.DSH_STATE_DIR) {
     return join(process.env.DSH_STATE_DIR, 'agy-accounts')
@@ -116,6 +119,14 @@ export class AccountPoolManager {
             if (acc.cooldowns === undefined || acc.cooldowns === null) acc.cooldowns = {}
             if (acc.quotas === undefined || acc.quotas === null) acc.quotas = {}
             if (acc.enabled === undefined) acc.enabled = true
+            // A hand-edited record may have written a non-object here; the
+            // eligibility checks index into it per family.
+            if (
+              acc.quotaGateClearedAt !== undefined
+              && (typeof acc.quotaGateClearedAt !== 'object' || acc.quotaGateClearedAt === null)
+            ) {
+              acc.quotaGateClearedAt = undefined
+            }
             for (const [fam, cd] of Object.entries(acc.cooldowns)) {
               if (cd && cd.reason === 'agy run aborted by caller') {
                 delete acc.cooldowns[fam as ModelFamily]
@@ -658,34 +669,65 @@ export class AccountPoolManager {
   }
 
   /**
-   * Check whether an account is eligible to serve requests for the given family.
+   * True when a family's cached quota snapshot benches the account.
+   *
+   * A user-visible `clearCooldown(..., includeQuotaBench = true)` records the
+   * `updatedAt` of the snapshot it overrode; the gate stays off only while the
+   * cached row is no newer than that stamp, so a fresh poll always re-arms it.
    */
-  isAccountEligible(acc: ManagedAccount, family: ModelFamily, now = Date.now()): boolean {
-    if (!acc.enabled || acc.authRequired) return false
-    const cd = acc.cooldowns?.[family]
-    if (cd && cd.cooldownUntil > now) return false
+  private isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
+    const quota = acc.quotas?.[family]
+    if (!quota) return false
+    const clearedAt = acc.quotaGateClearedAt?.[family]
+    if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) return false
     // If 5h quota remaining is at/below the proactive rotation threshold and
     // reset time is in future (or missing), treat as in cooldown
-    const quota = acc.quotas?.[family]
-    if (quota && typeof quota.remainingFraction === 'number' && quota.remainingFraction <= LOW_QUOTA_5H) {
+    if (typeof quota.remainingFraction === 'number' && quota.remainingFraction <= LOW_QUOTA_5H) {
       if (quota.resetTime) {
         const resetMs = Date.parse(quota.resetTime)
-        if (Number.isNaN(resetMs) || resetMs > now) return false
+        if (Number.isNaN(resetMs) || resetMs > now) return true
       } else {
-        return false
+        return true
       }
     }
     // If weekly quota remaining is at/below the rotation threshold and weekly
     // reset time is in future (or missing), treat as in cooldown
-    if (quota && typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= LOW_QUOTA_WEEKLY) {
+    if (typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= LOW_QUOTA_WEEKLY) {
       if (quota.weeklyResetTime) {
         const resetMs = Date.parse(quota.weeklyResetTime)
-        if (Number.isNaN(resetMs) || resetMs > now) return false
+        if (Number.isNaN(resetMs) || resetMs > now) return true
       } else {
-        return false
+        return true
       }
     }
-    return true
+    return false
+  }
+
+  /**
+   * Why this account cannot serve `family` right now, or null when it can.
+   *
+   * Exists so callers can report the ACTUAL blocker: quota rotation used to be
+   * folded into "in cooldown", which pointed users at `/agy clear-cooldown` for
+   * a state that command did not touch.
+   */
+  explainIneligibility(
+    acc: ManagedAccount,
+    family: ModelFamily,
+    now = Date.now(),
+  ): AccountIneligibilityReason | null {
+    if (!acc.enabled) return 'disabled'
+    if (acc.authRequired) return 'auth'
+    const cd = acc.cooldowns?.[family]
+    if (cd && cd.cooldownUntil > now) return 'cooldown'
+    if (this.isQuotaBenched(acc, family, now)) return 'quota'
+    return null
+  }
+
+  /**
+   * Check whether an account is eligible to serve requests for the given family.
+   */
+  isAccountEligible(acc: ManagedAccount, family: ModelFamily, now = Date.now()): boolean {
+    return this.explainIneligibility(acc, family, now) === null
   }
 
   /**
@@ -826,7 +868,11 @@ export class AccountPoolManager {
       const isExhaustedWeekly = typeof info.weeklyFraction === 'number' && info.weeklyFraction <= LOW_QUOTA_WEEKLY &&
         (!info.weeklyResetTime || Number.isNaN(Date.parse(info.weeklyResetTime)) || Date.parse(info.weeklyResetTime) > now)
       if (isExhausted5h || isExhaustedWeekly) {
-        if (this.data.activeAccountIds?.[famKey] === id || this.data.lastActiveAccountId === id) {
+        // A snapshot the user already overrode must not rotate the pool: the
+        // override is only meant to bridge the gap until fresher data arrives.
+        const clearedAt = acc.quotaGateClearedAt?.[famKey]
+        const gateCleared = clearedAt !== undefined && (info.updatedAt ?? 0) <= clearedAt
+        if (!gateCleared && (this.data.activeAccountIds?.[famKey] === id || this.data.lastActiveAccountId === id)) {
           this.advanceAccount(id, famKey)
         }
       }
@@ -935,19 +981,37 @@ export class AccountPoolManager {
     this.persist()
   }
 
-  clearCooldown(id?: string, family?: ModelFamily): void {
-    if (id) {
-      const acc = this.getAccount(id)
-      if (!acc) return
+  /**
+   * Reset cooldown timers.
+   *
+   * `includeQuotaBench` (set by the user-facing `/agy clear-cooldown` command
+   * and its HTTP twin) ALSO lifts the proactive low-quota rotation for the
+   * cached snapshot. The override records that snapshot's `updatedAt`, so the
+   * safety gate re-arms as soon as a poll produces fresher data. Internal
+   * callers (orphan release, CLI quota cleanup) leave it off: they only mean to
+   * drop a 429 timer.
+   */
+  clearCooldown(id?: string, family?: ModelFamily, includeQuotaBench = false): void {
+    const now = Date.now()
+    const clearOne = (acc: ManagedAccount): void => {
       acc.cooldowns ??= {}
       if (family) delete acc.cooldowns[family]
       else acc.cooldowns = {}
-    } else {
-      for (const acc of this.data.accounts) {
-        acc.cooldowns ??= {}
-        if (family) delete acc.cooldowns[family]
-        else acc.cooldowns = {}
+      if (!includeQuotaBench) return
+      const families = family ? [family] : (Object.keys(acc.quotas ?? {}) as ModelFamily[])
+      if (families.length === 0) return
+      acc.quotaGateClearedAt ??= {}
+      for (const fam of families) {
+        const updatedAt = acc.quotas?.[fam]?.updatedAt
+        acc.quotaGateClearedAt[fam] = Math.max(now, updatedAt ?? 0)
       }
+    }
+    if (id) {
+      const acc = this.getAccount(id)
+      if (!acc) return
+      clearOne(acc)
+    } else {
+      for (const acc of this.data.accounts) clearOne(acc)
     }
     this.persist()
   }
@@ -1043,6 +1107,10 @@ export class AccountPoolManager {
       if (cd && cd.cooldownUntil > now) bump(cd.cooldownUntil)
       const quota = acc.quotas?.[family]
       if (quota === undefined) continue
+      // An overridden snapshot has no enforceable reset yet: the gate is off
+      // until a poll writes fresher data.
+      const clearedAt = acc.quotaGateClearedAt?.[family]
+      if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) continue
       const drained5h = typeof quota.remainingFraction === 'number' && quota.remainingFraction <= LOW_QUOTA_5H
         && typeof quota.resetTime === 'string' && Date.parse(quota.resetTime) > now
       const drainedWeekly = typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= LOW_QUOTA_WEEKLY

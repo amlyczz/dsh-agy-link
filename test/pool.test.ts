@@ -419,6 +419,57 @@ test('proactive rotation benches a 4% account before it dies (2026-10-17 inciden
   assert.equal(pool.selectAccount('google')?.id, accB.id)
 })
 
+test('explainIneligibility separates quota rotation from cooldown, and clear-cooldown can lift it', () => {
+  // Regression: every ineligible account used to be reported as "in cooldown",
+  // and the advertised remedy `/agy clear-cooldown` only deleted cooldowns — so
+  // a quota-benched account produced the same error forever.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-quota-bench-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.getAccounts()[0]!
+  const reset = new Date(Date.now() + 2 * 3600_000).toISOString()
+
+  pool.updateAccountQuotas(acc.id, {
+    google: {
+      remainingFraction: 0.093,
+      resetTime: reset,
+      weeklyFraction: 0.5,
+      weeklyResetTime: reset,
+      updatedAt: Date.now(),
+    },
+  })
+
+  const benched = pool.getAccount(acc.id)!
+  assert.equal(pool.explainIneligibility(benched, 'google'), 'quota', 'a low-quota bench is not a cooldown')
+  assert.equal(pool.isAccountEligible(benched, 'google'), false)
+  const countdown = pool.getEarliestAvailableCountdown('google')
+  assert.ok(countdown !== null && countdown > 1.9 * 3600_000 && countdown <= 2 * 3600_000)
+
+  // A real 429 is a different reason, so the adapter can word its hint correctly.
+  pool.recordFailure(acc.id, 'anthropic', '429 Rate Limit', reset)
+  assert.equal(pool.explainIneligibility(pool.getAccount(acc.id)!, 'anthropic'), 'cooldown')
+
+  // The user-facing clear also lifts the low-quota bench for the cached snapshot.
+  pool.clearCooldown(acc.id, 'google', true)
+  assert.equal(pool.isAccountEligible(pool.getAccount(acc.id)!, 'google'), true)
+  assert.equal(pool.getEarliestAvailableCountdown('google'), null)
+
+  // It only bridges the snapshot it overrode: fresh data re-arms the gate.
+  pool.updateAccountQuotas(acc.id, {
+    google: {
+      remainingFraction: 0.093,
+      resetTime: reset,
+      weeklyFraction: 0.5,
+      weeklyResetTime: reset,
+      updatedAt: Date.now() + 1,
+    },
+  })
+  assert.equal(pool.isAccountEligible(pool.getAccount(acc.id)!, 'google'), false)
+
+  // Internal callers (orphan release, CLI quota cleanup) must not disable the gate.
+  pool.clearCooldown(acc.id, 'google')
+  assert.equal(pool.isAccountEligible(pool.getAccount(acc.id)!, 'google'), false)
+})
+
 test('lastActiveAccountId is cleared when the active account is deleted, disabled or requires auth', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-cleanup-active-'))
   const pool = new AccountPoolManager(dir)

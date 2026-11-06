@@ -1227,7 +1227,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : undefined
         const family = typeof body.family === 'string' ? body.family : undefined
-        pool.clearCooldown(id, family as never)
+        pool.clearCooldown(id, family as never, true)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()
     }})
