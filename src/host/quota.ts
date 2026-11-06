@@ -1262,14 +1262,27 @@ export class QuotaService {
         const isStale = stale5hFamilies.has(fam)
         // Fallback for family fraction if summary was unavailable.
         if (!familyQuotas[fam]) {
-          familyQuotas[fam] = pickFamilyQuota(
-            account.quotas[fam],
-            { remainingFraction: remaining, resetTime, updatedAt: now },
-            summaryGroups.length > 0,
-          )
-          if (fam === 'argon' && familyQuotas[fam]!.weeklyFraction === undefined) {
-            familyQuotas[fam]!.weeklyFraction = remaining
-            familyQuotas[fam]!.weeklyResetTime = resetTime
+          if (fam === 'argon') {
+            // Argon is WEEKLY-ONLY whenever the backend does not publish a
+            // dedicated Argon group (a Pro -> Ultra plan folds it into the
+            // shared Gemini bucket). The per-model quotaInfo then carries the
+            // WEEKLY window, so it must never be filed under the 5-hour row:
+            // the 10% 5h floor would otherwise bench an account whose weekly
+            // quota is still above the 5% weekly floor.
+            familyQuotas.argon = {
+              ...(account.quotas.argon ?? {}),
+              remainingFraction: undefined,
+              resetTime: undefined,
+              weeklyFraction: remaining,
+              weeklyResetTime: resetTime,
+              updatedAt: now,
+            }
+          } else {
+            familyQuotas[fam] = pickFamilyQuota(
+              account.quotas[fam],
+              { remainingFraction: remaining, resetTime, updatedAt: now },
+              summaryGroups.length > 0,
+            )
           }
         } else {
           // Window-aware merge. `quotaInfo` carries no window label, so the
@@ -1281,9 +1294,14 @@ export class QuotaService {
           //   • neither / no summary resets → unmatchable: keep the old
           //     conservative "lowest binding constraint" tighten on the 5h row.
           const familyQuota = familyQuotas[fam]!
+          // Argon never carries a 5-hour window unless the backend reported one
+          // explicitly; when `resetTime` is absent the model-level reading is
+          // the WEEKLY window and must not tighten the 5-hour row.
+          const weeklyOnlyArgon = fam === 'argon' && familyQuota.resetTime === undefined
           const modelIsWeekly =
-            sameQuotaWindow(resetTime, familyQuota.weeklyResetTime) &&
-            !sameQuotaWindow(resetTime, familyQuota.resetTime)
+            weeklyOnlyArgon ||
+            (sameQuotaWindow(resetTime, familyQuota.weeklyResetTime) &&
+              !sameQuotaWindow(resetTime, familyQuota.resetTime))
           if (modelIsWeekly) {
             const curWeekly = familyQuota.weeklyFraction ?? 1
             if (remaining < curWeekly) {
@@ -1321,19 +1339,29 @@ export class QuotaService {
     // Track whether this account reports a dedicated Argon bucket, so a retired one
     // can be told apart from one that never existed (see shouldReleaseOrphanedCooldown).
     if (summaryGroups.length > 0) {
-      if (summaryHasArgonGroup(summaryGroups) || familyQuotas.argon) {
+      const argonGroupPresent = summaryHasArgonGroup(summaryGroups)
+      if (argonGroupPresent) {
         this.pool.noteDedicatedGroup(account.id, 'argon')
       } else {
-        this.pool.clearQuotaFamily(account.id, 'argon')
+        // The backend stopped reporting a dedicated Argon group. A synthesized
+        // `argon` row may still exist because the model-level fallback projects
+        // the shared Gemini bucket onto it — that row is NOT evidence that the
+        // group is present. Checking `familyQuotas.argon` here made this branch
+        // unreachable in exactly the Pro -> Ultra fold it was written for, so a
+        // cooldown taken against the retired pool was never released.
+        const groupSeenBefore = this.pool.hasDedicatedGroup(account.id, 'argon')
+        if (familyQuotas.argon === undefined) {
+          this.pool.clearQuotaFamily(account.id, 'argon')
+        }
         if (shouldReleaseOrphanedCooldown({
           summaryAuthoritative: true,
           groupPresent: false,
-          groupSeenBefore: this.pool.hasDedicatedGroup(account.id, 'argon'),
+          groupSeenBefore,
           hasCooldown: account.cooldowns?.argon !== undefined,
         })) {
-          this.pool.forgetDedicatedGroup(account.id, 'argon')
           this.pool.clearCooldown(account.id, 'argon')
         }
+        this.pool.forgetDedicatedGroup(account.id, 'argon')
       }
     }
 

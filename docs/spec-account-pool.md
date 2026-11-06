@@ -226,4 +226,4 @@ All host routes are namespaced under `/plugins/agy-link/`:
 - `/agy add-account [alias]`: Start terminal-guided OAuth login for a new account slot.
 - `/agy refresh-quota [id]`: Fetch fresh quota percentages from Google backend.
 - `/agy remove-account <id>`: Delete an account slot.
-- `/agy clear-cooldown [id]`: Manually reset cooldown timers for accounts.
+- `/agy clear-cooldown [id]`: Manually reset cooldown timers for accounts. It also lifts the proactive low-quota bench for the cached quota snapshot; the bench re-arms as soon as a quota refresh writes newer data.

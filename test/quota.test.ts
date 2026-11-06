@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -1134,6 +1134,152 @@ test('Argon model quota populates weeklyFraction when summary has no weekly argo
   assert.ok(quotas.argon, 'argon family should be discovered from models')
   assert.equal(quotas.argon?.weeklyFraction, 0.85, 'Argon weeklyFraction should be populated from model quota')
   assert.equal(quotas.argon?.weeklyResetTime, '2026-10-25T12:00:00Z')
+})
+
+test('Argon model quota must never fill the 5-hour slot when the summary has no argon group', async () => {
+  // Regression: when the plan folds Argon into the shared Gemini bucket, the
+  // per-model quotaInfo carries the WEEKLY window. The old fallback filed that
+  // number under `remainingFraction` (the 5-hour slot), so the 10% 5h floor
+  // benched an account whose weekly quota was still above the 5% weekly floor:
+  //   "no account can serve argon right now (1 in cooldown)"
+  // `/agy clear-cooldown` could not clear it because no cooldown existed.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-argonweekly-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('argon-weekly-user')
+
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.argonweekly', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+
+  const weeklyReset = new Date(Date.now() + 2 * 3600_000).toISOString()
+  const fiveHourReset = new Date(Date.now() + 3 * 3600_000).toISOString()
+
+  // Seed the WRONG row a previous poll produced, so the test proves the fix
+  // also heals existing installs instead of only never writing it again.
+  pool.updateAccountQuotas(acc.id, {
+    argon: {
+      remainingFraction: 0.093,
+      resetTime: weeklyReset,
+      weeklyFraction: 0.093,
+      weeklyResetTime: weeklyReset,
+      updatedAt: 1,
+    },
+  })
+
+  class WeeklyArgonService extends QuotaService {
+    override async fetchUserInfo() {
+      return { email: 'argonweekly@example.com' }
+    }
+    override async fetchQuotaSummary() {
+      return {
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            buckets: [
+              { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.093, resetTime: weeklyReset },
+              { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.924, resetTime: fiveHourReset },
+            ],
+          },
+        ],
+      } as never
+    }
+    override async fetchUserQuota() {
+      return null
+    }
+    override async fetchAvailableModels() {
+      return {
+        models: {
+          'gemini-4-argon-high': {
+            displayName: 'Gemini 4 Argon (High)',
+            quotaInfo: { remainingFraction: 0.093, resetTime: weeklyReset },
+          },
+        },
+      } as never
+    }
+  }
+
+  const svc = new WeeklyArgonService(pool)
+  const quotas = await svc.refreshAccountQuota(pool.getAccount(acc.id)!, true)
+  assert.ok(quotas?.argon)
+  assert.equal(quotas.argon.remainingFraction, undefined, 'weekly reading must not be filed under the 5-hour slot')
+  assert.equal(quotas.argon.resetTime, undefined, 'a 5-hour reset must not be invented')
+  assert.equal(quotas.argon.weeklyFraction, 0.093)
+  assert.equal(quotas.argon.weeklyResetTime, weeklyReset)
+
+  const stored = pool.getAccount(acc.id)!
+  assert.equal(
+    pool.isAccountEligible(stored, 'argon'),
+    true,
+    'weekly 9.3% is above the 5% weekly floor, so Argon must stay serviceable',
+  )
+})
+
+test('a retired Argon group releases its cooldown even when argon models synthesize a row', async () => {
+  // Regression: the orphan-release branch was gated on
+  // `summaryHasArgonGroup(...) || familyQuotas.argon`, but the model-level
+  // fallback creates `familyQuotas.argon` for any account that lists argon
+  // models — so the branch was unreachable in exactly the Pro -> Ultra fold it
+  // was written for, and a cooldown taken against the retired pool survived.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-argonorphan-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('argon-orphan-user')
+
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.argonorphan', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+
+  const weeklyReset = new Date(Date.now() + 2 * 3600_000).toISOString()
+  pool.noteDedicatedGroup(acc.id, 'argon')
+  pool.recordFailure(acc.id, 'argon', '429 Rate Limit', weeklyReset)
+
+  class FoldedArgonService extends QuotaService {
+    override async fetchUserInfo() {
+      return { email: 'argonorphan@example.com' }
+    }
+    override async fetchQuotaSummary() {
+      // No dedicated Argon group: the plan folded it into the Gemini bucket.
+      return {
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            buckets: [
+              { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.4, resetTime: weeklyReset },
+              { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.8, resetTime: weeklyReset },
+            ],
+          },
+        ],
+      } as never
+    }
+    override async fetchUserQuota() {
+      return null
+    }
+    override async fetchAvailableModels() {
+      return {
+        models: {
+          'gemini-4-argon-high': {
+            displayName: 'Gemini 4 Argon (High)',
+            quotaInfo: { remainingFraction: 0.4, resetTime: weeklyReset },
+          },
+        },
+      } as never
+    }
+  }
+
+  const svc = new FoldedArgonService(pool)
+  await svc.refreshAccountQuota(pool.getAccount(acc.id)!, true)
+
+  const stored = pool.getAccount(acc.id)!
+  assert.equal(stored.cooldowns.argon, undefined, 'the retired pool’s 429 cooldown must be released')
+  assert.equal(pool.hasDedicatedGroup(acc.id, 'argon'), false, 'the family is no longer dedicated')
+  assert.ok(stored.quotas.argon, 'the synthesized weekly projection may stay for the UI')
 })
 
 
