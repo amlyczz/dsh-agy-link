@@ -682,19 +682,21 @@ test('translation calls ride the aux channel: plan mode, explicit effort, no ses
   assert.notEqual(finish.reason.kind, 'error')
 })
 
-test('compaction prompt flattens the whole history', async () => {
-  const { adapter } = makeAdapter()
+test('compaction prompt flattens the whole history, stays in plan mode, and never inherits skip permissions', async () => {
+  const { adapter } = makeAdapter({ permissionMode: 'skip' })
   process.env.FAKE_AGY_MODE = 'ok'
   const argsFile = join(workDir, 'args4.json')
   process.env.FAKE_AGY_ARGS_FILE = argsFile
   await collect(adapter.stream(opts([msg('user', 'u1'), msg('assistant', 'a1'), msg('user', 'u2')], { purpose: 'compaction' })))
   const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
   const prompt = argv[argv.indexOf('-p') + 1] ?? ''
-  assert.ok(prompt.includes('compaction'))
+  assert.ok(prompt.includes('conversation_history'))
   assert.ok(prompt.includes('u1'))
   assert.ok(prompt.includes('a1'))
+  assert.ok(prompt.includes('Do NOT call any tools'))
   assert.ok(argv.includes('--mode'))
-  assert.equal(argv[argv.indexOf('--mode') + 1], 'plan')
+  assert.equal(argv[argv.indexOf('--mode') + 1], 'plan', 'compaction call must stay in plan mode')
+  assert.equal(argv.includes('--dangerously-skip-permissions'), false, 'compaction call must never inherit skip permissions')
 })
 
 test('unknown reasoning effort on known model is rejected', async () => {
