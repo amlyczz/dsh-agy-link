@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, isAuthoritativeAuthError, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, looksLikeHardRateLimit, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { type RawUsage, Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, isAuthoritativeAuthError, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, looksLikeHardRateLimit, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { conversationsDirFor, diffConversations, snapshotConversations } from './discovery.ts'
@@ -738,7 +738,18 @@ async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: number):
   return run.isSettled
 }
 
+export function calcPromptTokens(usage: RawUsage | null | undefined): number | undefined {
+  if (!usage) return undefined
+  const input = typeof usage.input_tokens === 'number' && usage.input_tokens > 0 ? usage.input_tokens : 0
+  const cacheRead = typeof usage.cache_read_tokens === 'number' && usage.cache_read_tokens > 0 ? usage.cache_read_tokens : 0
+  const cacheWrite = typeof usage.cache_write_tokens === 'number' && usage.cache_write_tokens > 0 ? usage.cache_write_tokens : 0
+  const totalPrompt = input + cacheRead + cacheWrite
+  return totalPrompt > 0 ? totalPrompt : undefined
+}
+
 export class AgyAdapter extends LlmAdapter {
+  private readonly recentlyCompactedSessions = new Map<string, number>()
+
   /**
    * Models agy has refused `--effort` for (issue #67). Seeded from the host's
    * persisted list on first use, then grown by each refusal. Effort support is
@@ -1600,7 +1611,9 @@ export class AgyAdapter extends LlmAdapter {
     // conversation binding so a clean agy session is started and seeded with the compacted summary.
     // Minor fluctuations (e.g. 1-2 messages removed by telemetry filtering / DSH message store pruning)
     // should NOT invalidate the binding, but simply update the watermark.
-    const isCompacted = binding !== undefined && (
+    const lastCompactedAt = sessionKey ? this.recentlyCompactedSessions.get(sessionKey) : undefined
+    const now = Date.now()
+    const isCompacted = binding !== undefined && (!lastCompactedAt || now - lastCompactedAt > 60_000) && (
       (messages.length <= 4 && binding.lastMessageCount >= 5) ||
       (binding.lastMessageCount > 10 && messages.length < Math.floor(binding.lastMessageCount * 0.8)) ||
       (binding.lastMessageCount <= 10 && messages.length < binding.lastMessageCount - 2)
@@ -1628,7 +1641,21 @@ export class AgyAdapter extends LlmAdapter {
         items,
         ...(extractedSummary ? { summary: extractedSummary } : {}),
       }
-      if (sessionAccountKey !== '') this.deps.store.delete(sessionAccountKey)
+      if (sessionKey) {
+        this.recentlyCompactedSessions.set(sessionKey, now)
+        if (this.recentlyCompactedSessions.size > 200) {
+          for (const [k, t] of this.recentlyCompactedSessions) {
+            if (now - t > 120_000) this.recentlyCompactedSessions.delete(k)
+          }
+        }
+        for (const k of Object.keys(this.deps.store.all())) {
+          if (k === sessionKey || k.startsWith(sessionKey + ':')) {
+            this.deps.store.delete(k)
+          }
+        }
+      } else if (sessionAccountKey !== '') {
+        this.deps.store.delete(sessionAccountKey)
+      }
       binding = undefined
     } else if (binding !== undefined && messages.length < binding.lastMessageCount) {
       binding.lastMessageCount = messages.length
@@ -2640,9 +2667,12 @@ export class AgyAdapter extends LlmAdapter {
           const finalId = binding !== undefined ? binding.conversationId : conversationId
           if (finalId) {
             const finalUsage = rec.lastUsage ?? rec.finalUsage({})
-            const inputTokens = typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
-              ? finalUsage.input_tokens
-              : binding?.lastInputTokens
+            const promptTokens = calcPromptTokens(finalUsage)
+            const inputTokens = promptTokens ?? (
+              typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
+                ? finalUsage.input_tokens
+                : binding?.lastInputTokens
+            )
             this.deps.store.set(sessionAccountKey, {
               conversationId: finalId,
               lastMessageCount: messages.length,
@@ -2747,9 +2777,12 @@ export class AgyAdapter extends LlmAdapter {
           const finalId = binding !== undefined ? binding.conversationId : conversationId
           if (finalId) {
             const finalUsage = rec.lastUsage ?? rec.finalUsage({})
-            const inputTokens = typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
-              ? finalUsage.input_tokens
-              : binding?.lastInputTokens
+            const promptTokens = calcPromptTokens(finalUsage)
+            const inputTokens = promptTokens ?? (
+              typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
+                ? finalUsage.input_tokens
+                : binding?.lastInputTokens
+            )
             this.deps.store.set(sessionAccountKey, {
               conversationId: finalId,
               lastMessageCount: messages.length,
