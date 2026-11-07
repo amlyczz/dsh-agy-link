@@ -117,7 +117,7 @@ test('mcp bridge: internal agy_tool is never bridged (listing or execution)', as
       { name: 'agy_tool', description: 'internal mirror transport', parameters: {} },
     ],
     execute: async (input) => {
-      executed.push(input.name)
+      executed.push(String(input.name))
       return { content: [{ type: 'text', text: 'ok' }] }
     },
   }

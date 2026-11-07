@@ -90,11 +90,11 @@ test('a bridged call carries the agent of the spawning session', async () => {
     schemas: () => [
       { name: 'agent_teams_status', description: 'status', parameters: { type: 'object', properties: {} } },
     ],
-    execute: async (input: { name: string; agent?: unknown; signal: AbortSignal }) => {
+    execute: async (input: { calls?: unknown[]; name?: string; agent?: unknown; signal: AbortSignal }) => {
       // DSH tools read `exec.signal`; a call without one throws inside the tool.
       assert.ok(input.signal instanceof AbortSignal, 'bridged calls must carry an abort signal')
       assert.equal(input.signal.aborted, false)
-      received.push({ name: input.name, agent: input.agent })
+      received.push({ name: String(input.name), agent: input.agent })
       if (input.agent === undefined) throw new Error('agent_teams tools require a calling agent (exec.agent was undefined)')
       return { content: [{ type: 'text', text: 'ok:' + String((input.agent as { id?: string }).id) }] }
     },
@@ -132,53 +132,65 @@ test('a bridged call carries the agent of the spawning session', async () => {
   }
 })
 
-test('a PTC bridge call is a nested dispatch; a native call is not', async () => {
-  const parents: Array<symbol | undefined> = []
-  const echo = { name: 'echo', description: 'echo', parameters: { type: 'object', properties: {} } }
+test('a bridged call sends the DSH 0.2.2 batch shape and unwraps its result', async () => {
+  const inputs: Array<{
+    calls: Array<{ type: string; id: string; name: string; arguments: string }>
+    callId?: string
+    name?: string
+    arguments?: unknown
+    signal: AbortSignal
+  }> = []
   const tools = {
-    schemas: (scope?: unknown) => {
-      // DSH exposes its reserved run_code transport only outside native mode;
-      // that is the same signal the bridge uses to detect a PTC surface.
-      const list = [echo]
-      return (scope as { id?: string } | undefined)?.id === 'ptc'
-        ? [...list, { name: 'run_code', description: 'PTC transport', parameters: { type: 'object', properties: {} } }]
-        : list
-    },
-    execute: async (input: { name: string; parent?: symbol; signal: AbortSignal }) => {
-      assert.ok(input.signal instanceof AbortSignal)
-      parents.push(input.parent)
-      return { content: [{ type: 'text', text: input.parent === undefined ? 'native' : 'nested' }] }
+    schemas: () => [{ name: 'echo', description: 'echo', parameters: { type: 'object', properties: {} } }],
+    execute: async (input: {
+      calls: Array<{ type: string; id: string; name: string; arguments: string }>
+      callId?: string
+      name?: string
+      arguments?: unknown
+      signal: AbortSignal
+    }) => {
+      // DSH 0.2.2 reads `calls` only. A payload without it dies inside
+      // executeToolBatch as `Cannot read properties of undefined (reading 'map')`,
+      // surfaced to agy as `ToolBatchExecutionError: Tool batch execution failed`.
+      assert.ok(Array.isArray(input.calls), 'bridged calls must use the batch shape')
+      assert.ok(input.signal instanceof AbortSignal, 'bridged calls must carry an abort signal')
+      inputs.push(input)
+      return {
+        results: input.calls.map((call) => ({
+          callId: call.id,
+          result: { content: [{ type: 'text', text: 'batch:' + call.name + ':' + call.arguments }] },
+        })),
+        additionalContexts: [],
+        concluded: false,
+      }
     },
   }
   const bridge = await startMcpBridge({
     bridgeScript: BRIDGE_SCRIPT,
     tools: () => tools,
     allowlist: () => 'echo',
-    resolveAgent: (sessionId) => (sessionId === 'session-ptc' ? { id: 'ptc' } : undefined),
+    resolveAgent: (sessionId) => (sessionId === 'session-42' ? { id: 'agent-42' } : undefined),
   })
   try {
-    const call = async (headers: Record<string, string>) => {
-      const res = await fetch(bridge.url + '/call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token, ...headers },
-        body: JSON.stringify({ dshName: 'echo', arguments: {} }),
-      })
-      return (await res.json()) as { ok: boolean; text?: string; error?: string }
-    }
+    const res = await fetch(bridge.url + '/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token, 'X-DSH-Session': 'session-42' },
+      body: JSON.stringify({ dshName: 'echo', arguments: { q: 1 } }),
+    })
+    const body = (await res.json()) as { ok: boolean; text?: string; error?: string }
+    assert.equal(body.ok, true, String(body.error))
+    assert.equal(body.text, 'batch:echo:{"q":1}', 'the settled batch result is unwrapped, not JSON-dumped')
 
-    const first = await call({ 'X-DSH-Session': 'session-ptc' })
-    const second = await call({ 'X-DSH-Session': 'session-ptc' })
-    assert.equal(first.ok, true)
-    assert.equal(first.text, 'nested')
-    assert.equal(second.text, 'nested')
-    assert.equal(typeof parents.at(-2), 'symbol', 'a PTC call must carry a parent token')
-    assert.equal(typeof parents.at(-1), 'symbol')
-    assert.notEqual(parents.at(-2), parents.at(-1), 'each dispatch gets a fresh token')
-
-    const native = await call({})
-    assert.equal(native.ok, true)
-    assert.equal(native.text, 'native')
-    assert.equal(parents.at(-1), undefined, 'native calls must not look like PTC dispatch')
+    const last = inputs.at(-1)
+    assert.ok(last !== undefined)
+    assert.equal(last.calls.length, 1)
+    const first = last.calls[0]
+    assert.ok(first !== undefined)
+    assert.equal(first.name, 'echo')
+    assert.equal(first.id, last.callId, 'the batch id and the 0.2.1 callId stay correlated')
+    // Legacy fields keep a 0.2.1 host working with the same bridge build.
+    assert.equal(last.name, 'echo')
+    assert.deepEqual(last.arguments, { q: 1 })
   } finally {
     await bridge.close()
   }
@@ -195,7 +207,7 @@ test('both DSH session key forms resolve without rewriting a bare id', async () 
     schemas: () => [
       { name: 'agent_teams_status', description: 'status', parameters: { type: 'object', properties: {} } },
     ],
-    execute: async (input: { name: string; agent?: unknown; signal: AbortSignal }) => {
+    execute: async (input: { calls?: unknown[]; name?: string; agent?: unknown; signal: AbortSignal }) => {
       assert.ok(input.signal instanceof AbortSignal, 'bridged calls must carry an abort signal')
       // Mirror the real tools: no caller -> the tool itself rejects the call.
       if (input.agent === undefined) throw new Error('agent_teams tools require a calling agent (exec.agent was undefined)')
