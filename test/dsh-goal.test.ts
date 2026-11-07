@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import {
   detectGoalContext,
+  resolveGoalContext,
   isPlanMode,
   isGoalToolContinuation,
   isPlanToolContinuation,
@@ -320,4 +321,127 @@ test('buildPlanExitToolCallBlock produces valid exit_plan_mode chunk sequence', 
 
   const parsedArgs = JSON.parse(block.arguments)
   assert.match(parsedArgs.plan, /# Implementation Plan/)
+})
+
+// ---------------------------------------------------------------------------
+// Regression: 2026-11-07 `400 Duplicate 'call_id'` incident.
+//
+// agy-link re-synthesized `update_goal(complete)` on every turn of a session
+// whose goal had already completed (revision 2), with the deterministic id
+// `agytc-bridge-goal-<goalId>-<revision>`. Nine turns produced nine identical
+// tool_call ids; after the model was switched to the `crs` HTTP route the whole
+// transcript was rejected with `400 Duplicate 'call_id'`.
+// ---------------------------------------------------------------------------
+
+const STALE_GOAL_ID = 'goal-a88ea83e-5f52-4791-9395-0da953433e13'
+
+function goalRoundMessage(goalId: string, revision: number, round = 1): Message {
+  return {
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text: `<goal_round>\nObjective: "重新验证剩余路径"\nRound: ${round}/4\n\nContinue working...\n</goal_round>`,
+      },
+    ],
+    source: { kind: 'goal', goalId, revision, round },
+  } as unknown as Message
+}
+
+function goalToolResultMessage(callId: string, text: string): Message {
+  return { role: 'tool', toolCallId: callId, content: text } as unknown as Message
+}
+
+function humanMessage(text: string): Message {
+  return { role: 'user', content: [{ type: 'text', text }] } as unknown as Message
+}
+
+function harnessReminder(text: string): Message {
+  return {
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: { kind: 'time-context' },
+  } as unknown as Message
+}
+
+test('detectGoalContext ignores a completed goal round once a new human turn has started', () => {
+  const messages: Message[] = [
+    goalRoundMessage(STALE_GOAL_ID, 2),
+    goalToolResultMessage(
+      `agytc-bridge-goal-${STALE_GOAL_ID}-2`,
+      'Error: cannot complete goal "goal-a88ea83e-..." from phase "complete"; expected active or paused or blocked',
+    ),
+    humanMessage('继续看另一个问题：这条日志是什么意思？'),
+  ]
+
+  // The goal markers belong to an earlier turn; a later human message must not
+  // resurrect that goal (the incident re-emitted update_goal here).
+  assert.equal(detectGoalContext(messages), null)
+})
+
+test('detectGoalContext still detects the trailing goal round through harness reminders', () => {
+  const messages: Message[] = [
+    goalRoundMessage(STALE_GOAL_ID, 2),
+    harnessReminder('Time sampled while preparing turn 4, step 1: 2026-11-07T11:00:00+08:00'),
+  ]
+
+  const ctx = detectGoalContext(messages)
+  assert.ok(ctx, 'trailing goal round must still be detected')
+  assert.equal(ctx.goalId, STALE_GOAL_ID)
+  assert.equal(ctx.revision, 2)
+})
+
+test('resolveGoalContext never completes when the live goal service reports no active goal', () => {
+  const messages: Message[] = [
+    goalRoundMessage(STALE_GOAL_ID, 2),
+    goalToolResultMessage(`agytc-bridge-goal-${STALE_GOAL_ID}-2`, 'Error: goal already complete'),
+    humanMessage('这个报错怎么处理？'),
+  ]
+
+  // live === null: the host says the goal is complete/paused/blocked, so even a
+  // stale goal marker in history must not produce a completion call.
+  assert.equal(resolveGoalContext(messages, null), null)
+})
+
+test('resolveGoalContext prefers the live goal id/revision over stale history', () => {
+  const messages: Message[] = [
+    goalRoundMessage(STALE_GOAL_ID, 2),
+    harnessReminder('Time sampled while preparing turn 5, step 1'),
+  ]
+
+  const ctx = resolveGoalContext(messages, { goalId: 'goal-live', revision: 7 })
+  assert.ok(ctx)
+  assert.equal(ctx.goalId, 'goal-live')
+  assert.equal(ctx.revision, 7)
+})
+
+test('resolveGoalContext does not auto-complete an armed goal from a direct human turn', () => {
+  const messages: Message[] = [humanMessage('先暂停一下，解释这个设计')]
+
+  // live says active+armed, but this request is a human turn, not a goal round.
+  assert.equal(resolveGoalContext(messages, { goalId: 'goal-live', revision: 3 }), null)
+})
+
+test('resolveGoalContext falls back to history when the live goal service is unavailable', () => {
+  const messages: Message[] = [goalRoundMessage(STALE_GOAL_ID, 2)]
+
+  const ctx = resolveGoalContext(messages, undefined)
+  assert.ok(ctx, 'history fallback keeps older hosts working')
+  assert.equal(ctx.goalId, STALE_GOAL_ID)
+  assert.equal(ctx.revision, 2)
+})
+
+test('buildGoalCompleteToolCallBlock mints unique tool_call ids for repeated emissions', () => {
+  const fn = (): { id: string; block: { id: string; arguments: string } } => {
+    const chunks = buildGoalCompleteToolCallBlock({ goalId: 'goal-dup', revision: 2 }, 0)
+    return chunks[1] as unknown as { id: string; block: { id: string; arguments: string } }
+  }
+  const first = fn()
+  const second = fn()
+
+  const firstId = first.block.id
+  const secondId = second.block.id
+  assert.notEqual(firstId, secondId, 'the same goal+revision must not reuse a call id')
+  assert.ok(firstId.startsWith('agytc-bridge-goal-'), 'continuation detection relies on the prefix')
+  assert.equal(JSON.parse(first.block.arguments).action, 'complete')
 })

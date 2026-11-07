@@ -305,18 +305,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         if (agent && goals) {
           const g = goals.get(agent)
           // Only volunteer a completion target for a goal the driver would
-          // actually keep driving: active AND armed. A paused or blocked goal
-          // is under direct human control — synthesizing update_goal(complete)
-          // for it would override the user's explicit pause.
+          // actually keep driving: active AND armed. A paused/blocked/completed
+          // goal, or a disarmed one, is under human control — synthesizing
+          // update_goal(complete) for it would override the user and produced
+          // duplicate call ids in the transcript (2026-11-07 incident).
           if (g?.id && g.phase === 'active' && (g.activation === undefined || g.activation === 'armed')) {
             return {
               goalId: g.id,
               revision: typeof g.revision === 'number' ? g.revision : 1,
             }
           }
+          // The live view is authoritative: there is no active, armed goal.
+          return null
         }
       } catch {
-        // Fallback to inspecting session log below
+        // Fall back to inspecting the session log below.
       }
 
       type SessionWithEvents = {
@@ -328,19 +331,33 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       const sessions = (ctx.get('sessions') as { get(id: unknown): SessionWithEvents | undefined } | undefined)
         ?? (ctx as unknown as { sessions?: { get(id: unknown): SessionWithEvents | undefined } }).sessions
       const session = sessions?.get(sessionId)
-      const evs = session?.snapshotEvents?.() ?? session?.ownEvents?.() ?? session?.log ?? session?.events
-      if (!evs) return null
+      // `undefined` = the goal service is unavailable and the log cannot tell;
+      // the caller may then fall back to message-history detection.
+      if (!session) return undefined
+      const evs = session.snapshotEvents?.() ?? session.ownEvents?.() ?? session.log ?? session.events
+      if (!evs) return undefined
+      // Resolve the phase from the newest phase-defining operation. `edit` keeps
+      // the phase, so keep walking back for it.
       for (let i = evs.length - 1; i >= 0; i--) {
         const ev = evs[i]
-        if (ev?.type === 'goal/change' && ev.data && typeof ev.data === 'object') {
-          const d = ev.data as { operation?: string; goal?: { id?: string; revision?: number }; cleared?: { id?: string } }
-          if (d.operation === 'clear') return null
-          if (d.goal?.id) {
-            return {
-              goalId: d.goal.id,
-              revision: typeof d.goal.revision === 'number' ? d.goal.revision : 1,
-            }
-          }
+        if (ev?.type !== 'goal/change' || !ev.data || typeof ev.data !== 'object') continue
+        const d = ev.data as { operation?: string; goal?: { id?: string; revision?: number }; cleared?: { id?: string } }
+        switch (d.operation) {
+          case 'clear':
+            return null
+          case 'pause':
+          case 'block':
+          case 'complete':
+            return null
+          case 'create':
+          case 'resume':
+            return d.goal?.id
+              ? { goalId: d.goal.id, revision: typeof d.goal.revision === 'number' ? d.goal.revision : 1 }
+              : null
+          case 'edit':
+            continue
+          default:
+            return null
         }
       }
       return null

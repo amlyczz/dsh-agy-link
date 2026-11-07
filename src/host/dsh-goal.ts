@@ -63,8 +63,53 @@ function parseGoalRoundText(text: string): { goalId?: string; revision?: number;
 }
 
 /**
+ * Harness-injected user-role source kinds. They are metadata, not instructions,
+ * and must stay transparent to the trailing-span scans.
+ */
+const HARNESS_USER_SOURCE_KINDS = new Set([
+  'time-context',
+  'skill-catalog',
+  'runtime-context',
+  'model-selection',
+  'system-reminder',
+  'dsh-session-title-llm',
+  'tool-goal',
+  'synthetic',
+])
+
+/** Whether this user-role message was injected by the harness, not typed by a human. */
+function isHarnessInjectedMessage(m: Message): boolean {
+  const src = (m as unknown as { source?: { kind?: string; form?: string } }).source
+  if (!src || typeof src !== 'object') return false
+  if (typeof src.kind === 'string' && HARNESS_USER_SOURCE_KINDS.has(src.kind)) return true
+  return src.kind === 'plugin' && src.form === 'snapshot'
+}
+
+/**
+ * A genuine human instruction (the current turn's task). Goal-round prompts
+ * (`source.kind === 'goal'`) and harness metadata are not human instructions.
+ */
+function isGenuineUserMessage(m: Message): boolean {
+  if (m.role !== 'user') return false
+  const src = (m as unknown as { source?: { kind?: string } }).source
+  if (src && typeof src === 'object' && src.kind === 'goal') return false
+  if (isHarnessInjectedMessage(m)) return false
+  const text = extractText(m)
+  if (text.trim() === '') return false
+  return !isHarnessInjectedUserText(text)
+}
+
+/**
  * Detect whether the incoming request is part of a DSH <goal_round> continuation.
  * Extracts goalId, revision, round, and objective if available.
+ *
+ * The scan stops at the newest genuine human message: goal markers BEFORE it
+ * belong to an earlier (possibly already completed) goal and must not leak into
+ * this turn's request. Without that stop every later turn in a session that had
+ * ever run a goal re-synthesized `update_goal(complete)` for the stale goal —
+ * with a deterministic call id, so the transcript accumulated identical
+ * `tool_call` ids and HTTP providers rejected it with
+ * `400 Duplicate 'call_id'` (2026-11-07 incident).
  */
 export function detectGoalContext(messages: readonly Message[]): GoalContext | null {
   let goalId: string | undefined
@@ -96,6 +141,8 @@ export function detectGoalContext(messages: readonly Message[]): GoalContext | n
         if (!objective && parsed.objective) objective = parsed.objective
       }
     }
+    // A new human instruction ends the current turn's goal span.
+    if (isGenuineUserMessage(m)) break
   }
 
   if (isGoal) {
@@ -108,6 +155,35 @@ export function detectGoalContext(messages: readonly Message[]): GoalContext | n
     }
   }
   return null
+}
+
+/** Live, authoritative goal reference from the host's goal service. */
+export interface LiveGoalRef {
+  goalId: string
+  revision: number
+}
+
+/**
+ * Resolve the goal context that a turn may complete.
+ *
+ * - `live === null`: the host's goal service says there is no active, armed
+ *   goal — never synthesize a completion (this is what prevents stale history
+ *   from marking an already-completed goal again).
+ * - `live === undefined`: the live goal service is unavailable; fall back to
+ *   history detection for that host.
+ * - Otherwise the live view supplies the authoritative id/revision, and a
+ *   completion is only emitted for a goal round — a direct human turn must not
+ *   silently complete an armed goal.
+ */
+export function resolveGoalContext(
+  messages: readonly Message[],
+  live: LiveGoalRef | null | undefined,
+): GoalContext | null {
+  const round = detectGoalContext(messages)
+  if (live === null) return null
+  if (live === undefined) return round
+  if (round === null) return null
+  return { goalId: live.goalId, revision: live.revision }
 }
 
 /**
@@ -192,6 +268,20 @@ export function isPlanToolContinuation(messages: readonly Message[]): boolean {
   return false
 }
 
+// Monotonic per-process counter used together with Date.now() to keep every
+// synthetic completion id unique. A deterministic `goalId-revision` id meant a
+// second emission (repeated turn, retry, forked transcript) produced a
+// duplicate tool_call id in one request, which providers reject with
+// `400 Duplicate 'call_id'` (2026-11-07 incident). The `agytc-bridge-goal-`
+// prefix is part of the continuation protocol; only the suffix changes.
+let goalCallSeq = 0
+
+/** Mint a unique id for one synthetic goal-completion tool call. */
+function nextGoalCallId(goalId: string, revision: number): ToolCallId {
+  goalCallSeq += 1
+  return toToolCallId(`agytc-bridge-goal-${goalId}-${revision}-${Date.now().toString(36)}-${goalCallSeq.toString(36)}`)
+}
+
 /**
  * Build the synthetic `update_goal` tool-call chunk that marks the goal complete on DSH.
  */
@@ -205,7 +295,7 @@ export function buildGoalCompleteToolCallBlock(goalContext: GoalContext, blockId
       index: blockIdx,
       block: {
         type: 'tool-call',
-        id: toToolCallId(`agytc-bridge-goal-${goalId}-${revision}`),
+        id: nextGoalCallId(goalId, revision),
         name: 'update_goal',
         arguments: JSON.stringify({
           goal_id: goalId,
