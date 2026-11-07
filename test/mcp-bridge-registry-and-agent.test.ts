@@ -196,6 +196,51 @@ test('a bridged call sends the DSH 0.2.2 batch shape and unwraps its result', as
   }
 })
 
+test('a PTC-scoped bridged call still carries the 0.2.1 nested-dispatch parent token', async () => {
+  const parents: Array<symbol | undefined> = []
+  const echo = { name: 'echo', description: 'echo', parameters: { type: 'object', properties: {} } }
+  const tools = {
+    schemas: (scope?: unknown) => {
+      // A non-native scope exposes the reserved run_code transport; that is the
+      // same signal the bridge has always used to recognise a PTC surface.
+      const list = [echo]
+      return (scope as { id?: string } | undefined)?.id === 'ptc'
+        ? [...list, { name: 'run_code', description: 'PTC transport', parameters: { type: 'object', properties: {} } }]
+        : list
+    },
+    execute: async (input: {
+      calls: Array<{ type: string; id: string; name: string; arguments: string }>
+      parent?: symbol
+      signal: AbortSignal
+    }) => {
+      parents.push(input.parent)
+      return { results: input.calls.map((call) => ({ callId: call.id, result: { content: [{ type: 'text', text: 'ok' }] } })) }
+    },
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    tools: () => tools,
+    allowlist: () => 'echo',
+    resolveAgent: (sessionId) => (sessionId === 'session-ptc' ? { id: 'ptc' } : undefined),
+  })
+  try {
+    const call = async (session?: string) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token }
+      if (session) headers['X-DSH-Session'] = session
+      const res = await fetch(bridge.url + '/call', { method: 'POST', headers, body: JSON.stringify({ dshName: 'echo', arguments: {} }) })
+      return (await res.json()) as { ok: boolean; error?: string }
+    }
+    const ptc = await call('session-ptc')
+    assert.equal(ptc.ok, true, String(ptc.error))
+    assert.equal(typeof parents.at(-1), 'symbol', 'PTC dispatches keep the 0.2.1 nested parent token')
+    const native = await call()
+    assert.equal(native.ok, true, String(native.error))
+    assert.equal(parents.at(-1), undefined, 'native calls must not carry a parent token')
+  } finally {
+    await bridge.close()
+  }
+})
+
 test('both DSH session key forms resolve without rewriting a bare id', async () => {
   const lookups: string[] = []
   const seen: Array<unknown> = []

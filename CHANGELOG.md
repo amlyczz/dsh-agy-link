@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.5 (2026-11-07)
+
+### English
+
+- **Fix(mcp-bridge): bridged calls work again on DSH 0.2.2 — send the batch shape and unwrap its result (issue #84).** (thanks @hjwsm1989, #85)
+  - DSH 0.2.2 changed `tools.execute()` from a single call to a batch (`{ calls, signal, agent }`), so the 0.2.1-shaped payload made `executeToolBatch()` read `input.calls` as `undefined` and **every** bridged call died with `ToolBatchExecutionError` before dispatch (whole reverse-MCP surface, including `agent_teams_*`, unusable). The bridge now sends both shapes — 0.2.1 ignores `calls`, 0.2.2 ignores the extra fields — and `settledToolResult()` unwraps `results[0].result` (matched by call id) while passing a 0.2.1 single result through untouched.
+  - Hardening on merge: the PTC nested-dispatch `parent` token from #66 is restored, but only for a PTC surface (`run_code` visible), so 0.2.1 PTC keeps working while native calls never carry it (0.2.2 gates PTC on the execution source).
+
+### 中文
+
+- **修复(mcp-bridge)：DSH 0.2.2 下桥接调用恢复可用——发送批量形状并解包结果（issue #84）。**（感谢 @hjwsm1989，#85）
+  - DSH 0.2.2 把 `tools.execute()` 从单次调用改成批量（`{ calls, signal, agent }`），旧的 0.2.1 形状让 `executeToolBatch()` 读到 `undefined` 的 `input.calls`，于是**所有**桥接调用在派发前就 `ToolBatchExecutionError`（整套反向 MCP 面，含 `agent_teams_*`，全部不可用）。现同时发送两种形状（0.2.1 忽略 `calls`，0.2.2 忽略多余字段），并用 `settledToolResult()` 按 call id 解包 `results[0].result`，0.2.1 的单结果原样透传。
+  - 合并时加固：恢复 #66 的 PTC 嵌套派发 `parent` 令牌，但**仅在检测到 PTC 面**（可见 `run_code`）时携带，使 0.2.1 的 PTC 继续可用，而 native 调用永不携带（0.2.2 以执行源判定 PTC）。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.4...v0.6.5
+
 ## 0.6.4 (2026-11-07)
 
 ### English

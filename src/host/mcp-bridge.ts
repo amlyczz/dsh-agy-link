@@ -60,6 +60,12 @@ export interface ToolsServiceLike {
     arguments?: unknown
     agent?: unknown
     /**
+     * DSH 0.2.1 PTC nested-dispatch token (#66). 0.2.2 gates PTC on the
+     * execution source instead, so native calls never set it; a PTC scope keeps
+     * it so a 0.2.1 host still treats the bridged call as a nested dispatch.
+     */
+    parent?: symbol
+    /**
      * Caller-owned cancellation, required by DSH's `ToolExecutionInput`. Tools
      * read `exec.signal` before/while they settle, so a call without one throws
      * `Cannot read properties of undefined (reading 'aborted')`.
@@ -272,11 +278,13 @@ export function startMcpBridge(opts: {
           res.once('close', () => {
             if (!res.writableEnded) controller.abort()
           })
-          // PTC mode rejects model-direct tool calls; that gate rides on the
-          // execution source in 0.2.2, not on a per-call parent token, so a PTC
-          // deployment still rejects a bridged call by design. Native mode —
-          // what this bridge targets — needs nothing extra.
+          // PTC mode rejects model-direct tool calls. 0.2.1 gates that on a
+          // per-call `parent` token, 0.2.2 on the execution source, so keep the
+          // token only for a PTC surface: native calls must not carry it (a
+          // pre-execute hook treats any parent as a PTC dispatch and then looks
+          // for a session-log start that a native call does not have).
           const callId = 'agy-mcp-' + callSeq
+          const isPtc = svc.schemas(agent).some((tool) => tool.name === 'run_code')
           const result = await svc.execute({
             calls: [{
               type: 'tool-call',
@@ -292,6 +300,7 @@ export function startMcpBridge(opts: {
             callId,
             name: dshName,
             arguments: parsed.arguments ?? {},
+            ...(isPtc ? { parent: Symbol(callId) } : {}),
           })
           audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
           sendJson(res, 200, { ok: true, text: resultText(settledToolResult(result, callId)) })
