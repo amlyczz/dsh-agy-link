@@ -43,16 +43,22 @@ export interface ToolsServiceLike {
    * scope has no `run_code` tool, while a PTC scope exposes it.
    */
   schemas(scope?: unknown): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+  /**
+   * DSH 0.2.2+ settles a whole *batch* (`{ calls, signal, agent }`); 0.2.1 took
+   * a single call (`{ callId, name, arguments, ... }`). The bridge sends a
+   * payload carrying both shapes — each version ignores the fields it does not
+   * read — so an upgrade or downgrade cannot silently break the bridge again.
+   * (0.2.1 -> 0.2.2 did: the missing `calls` array made every bridged call die
+   * inside `executeToolBatch` with `ToolBatchExecutionError`.)
+   */
   execute(input: {
-    callId: string
-    name: string
-    arguments: unknown
+    /** DSH 0.2.2+ batch shape; `arguments` is the raw model JSON text. */
+    calls: Array<{ type: 'tool-call'; id: string; name: string; arguments: string }>
+    /** DSH 0.2.1 single-call shape; ignored by 0.2.2+. */
+    callId?: string
+    name?: string
+    arguments?: unknown
     agent?: unknown
-    /**
-     * Present only for a nested (PTC `run_code`) dispatch. DSH uses this token
-     * to reject direct model calls in PTC; native calls must leave it unset.
-     */
-    parent?: symbol
     /**
      * Caller-owned cancellation, required by DSH's `ToolExecutionInput`. Tools
      * read `exec.signal` before/while they settle, so a call without one throws
@@ -117,6 +123,20 @@ function resultText(result: unknown): string {
   } catch {
     return String(result)
   }
+}
+
+/**
+ * Project one settled call out of a DSH 0.2.2 `ToolBatchResult`
+ * (`{ results: [{ callId, result }] }`). A 0.2.1 single `ToolExecutionResult`
+ * (no `results` array) passes through untouched, so the same bridge serves both
+ * API shapes.
+ */
+function settledToolResult(result: unknown, callId: string): unknown {
+  const results = (result as { results?: unknown } | null | undefined)?.results
+  if (!Array.isArray(results) || results.length === 0) return result
+  const settled = results.find((entry) => (entry as { callId?: unknown } | null)?.callId === callId) ?? results[0]
+  const inner = (settled as { result?: unknown } | undefined)?.result
+  return inner ?? settled
 }
 
 /**
@@ -252,23 +272,29 @@ export function startMcpBridge(opts: {
           res.once('close', () => {
             if (!res.writableEnded) controller.abort()
           })
-          // PTC mode rejects model-direct tool calls. `run_code` is the only
-          // non-native tool DSH exposes; when it is visible, mark this bridged
-          // call as a nested dispatch so the scheduler does not collapse it.
-          // Native mode must not carry a parent token: pre-execute hooks treat
-          // any parent as a PTC dispatch and look for a matching session-log
-          // start, which a native call does not have.
-          const isPtc = svc.schemas(agent).some((tool) => tool.name === 'run_code')
+          // PTC mode rejects model-direct tool calls; that gate rides on the
+          // execution source in 0.2.2, not on a per-call parent token, so a PTC
+          // deployment still rejects a bridged call by design. Native mode —
+          // what this bridge targets — needs nothing extra.
+          const callId = 'agy-mcp-' + callSeq
           const result = await svc.execute({
-            callId: 'agy-mcp-' + callSeq,
-            name: dshName,
-            arguments: parsed.arguments ?? {},
+            calls: [{
+              type: 'tool-call',
+              id: callId,
+              name: dshName,
+              // The batch API expects the raw model JSON text; it parses it and
+              // keeps malformed input for tool-owned diagnostics.
+              arguments: JSON.stringify(parsed.arguments ?? {}),
+            }],
             signal: controller.signal,
             ...(agent === undefined ? {} : { agent }),
-            ...(isPtc ? { parent: Symbol('agy-mcp-' + callSeq) } : {}),
+            // DSH 0.2.1 compatibility (ignored by 0.2.2+).
+            callId,
+            name: dshName,
+            arguments: parsed.arguments ?? {},
           })
           audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
-          sendJson(res, 200, { ok: true, text: resultText(result) })
+          sendJson(res, 200, { ok: true, text: resultText(settledToolResult(result, callId)) })
         } catch (e) {
           audit('failed: ' + String(e).slice(0, 200))
           sendJson(res, 200, { ok: false, error: String(e) })
