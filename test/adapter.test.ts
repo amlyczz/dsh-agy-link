@@ -2449,3 +2449,69 @@ test('a NUL byte in history cannot fail the turn with a spawn TypeError', async 
     else process.env.FAKE_AGY_ARGS_FILE = prevArgs
   }
 })
+
+test('stale completed goal: a later human turn no longer re-emits update_goal', async () => {
+  // 2026-11-07: after goal-a88ea83e completed, every agy turn still ended with
+  // the same synthetic update_goal call id; switching to an HTTP provider then
+  // failed with `400 Duplicate 'call_id'`. The live goal view says "none".
+  process.env.FAKE_AGY_MODE = 'ok'
+  const { adapter } = makeAdapter({}, { sessionGoal: () => null })
+  const messages: Message[] = [
+    {
+      role: 'user',
+      content: [{ type: 'text', text: '<goal_round>\nObjective: "X"\nRound: 1/4\n</goal_round>' }],
+      source: { kind: 'goal', goalId: 'goal-stale', revision: 2, round: 1 },
+    } as unknown as Message,
+    {
+      role: 'tool',
+      toolCallId: 'agytc-bridge-goal-goal-stale-2',
+      content: 'Error: cannot complete goal "goal-stale" from phase "complete"',
+    } as unknown as Message,
+    msg('user', '现在回答另一个问题'),
+  ]
+
+  const chunks = await collect(
+    adapter.stream(
+      opts(messages, {
+        sessionId: 'sess-stale-goal' as never,
+        tools: [{ name: 'update_goal' }] as never,
+      }),
+    ),
+  )
+  const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(finish.type, 'finish')
+  assert.equal(finish.reason.kind, 'stop')
+  const synthetic = chunks.find(
+    (c) => c.type === 'block-end' && (c as { block?: { name?: string } }).block?.name === 'update_goal',
+  )
+  assert.equal(synthetic, undefined, 'must not synthesize update_goal for an inactive goal')
+})
+
+test('goal round with a live active goal emits update_goal with the live revision', async () => {
+  process.env.FAKE_AGY_MODE = 'ok'
+  const { adapter } = makeAdapter({}, { sessionGoal: () => ({ goalId: 'goal-live', revision: 5 }) })
+  const messages: Message[] = [
+    {
+      role: 'user',
+      content: [{ type: 'text', text: '<goal_round>\nObjective: "Y"\nRound: 2/4\n</goal_round>' }],
+      source: { kind: 'goal', goalId: 'goal-live', revision: 1, round: 2 },
+    } as unknown as Message,
+  ]
+
+  const chunks = await collect(
+    adapter.stream(
+      opts(messages, {
+        sessionId: 'sess-live-goal' as never,
+        tools: [{ name: 'update_goal' }] as never,
+      }),
+    ),
+  )
+  const end = chunks.find(
+    (c) => c.type === 'block-end' && (c as { block?: { name?: string } }).block?.name === 'update_goal',
+  ) as unknown as { block: { id: string; arguments: string } } | undefined
+  assert.ok(end, 'active goal round must still complete the goal')
+  const args = JSON.parse(end.block.arguments)
+  assert.equal(args.goal_id, 'goal-live')
+  assert.equal(args.revision, 5, 'live revision wins over the stale one in history')
+  assert.equal(args.action, 'complete')
+})

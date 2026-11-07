@@ -26,7 +26,7 @@ import { stateDir } from '../common/config.ts'
 import { SENT_IMAGE_IDS_MAX, type SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
 import { getGitHeadContent, unwrapMcpTool } from './mirror-tool.ts'
-import { detectGoalContext, isGoalToolContinuation, isPlanToolContinuation, isPlanMode, type GoalContext } from './dsh-goal.ts'
+import { isGoalToolContinuation, isPlanToolContinuation, isPlanMode, resolveGoalContext, type GoalContext } from './dsh-goal.ts'
 import type { CompactionNotice } from '../common/compaction.ts'
 
 type ForeignSource = { source?: { kind?: string; provider?: string; callId?: string; replayState?: unknown } }
@@ -535,9 +535,11 @@ export interface AgyAdapterDeps {
    */
   sessionCwd?: (sessionId: string) => string | undefined
   /**
-   * Resolve active goal info (goalId, revision) from session history if not present on messages.
+   * Resolve the live goal info (goalId, revision) for this session.
+   * `null` means "authoritatively no active, armed goal"; `undefined` means the
+   * live goal service is unavailable and history detection may be used instead.
    */
-  sessionGoal?: (sessionId: string) => { goalId: string; revision: number } | null
+  sessionGoal?: (sessionId: string) => { goalId: string; revision: number } | null | undefined
   /** Last-run telemetry surfaced by /agy status. Process completion and tool failures are distinct. */
   onRun?: (info: {
     processOk: boolean
@@ -1290,18 +1292,14 @@ export class AgyAdapter extends LlmAdapter {
       return
     }
 
-    let goalContext = detectGoalContext(options.messages)
-    if ((!goalContext || !goalContext.goalId || goalContext.revision === undefined) && sessionKey && this.deps.sessionGoal) {
-      const sg = this.deps.sessionGoal(sessionKey)
-      if (sg) {
-        if (!goalContext) {
-          goalContext = { goalId: sg.goalId, revision: sg.revision }
-        } else {
-          if (!goalContext.goalId) goalContext.goalId = sg.goalId
-          if (goalContext.revision === undefined) goalContext.revision = sg.revision
-        }
-      }
-    }
+    // Goal completion is synthesized only for an active, armed goal round.
+    // The live goal view is authoritative; history detection is a fallback for
+    // hosts without it. Do not resurrect a completed goal from old history:
+    // that re-emitted `update_goal` with the same deterministic call id on every
+    // later turn and ended in `400 Duplicate 'call_id'` on HTTP providers
+    // (2026-11-07 incident).
+    const liveGoal = sessionKey !== '' && this.deps.sessionGoal ? this.deps.sessionGoal(sessionKey) : undefined
+    const goalContext = resolveGoalContext(options.messages, liveGoal)
     const supportsGoalUpdate = Boolean(options.tools?.some((t) => t.name === 'update_goal'))
     const supportsPlanExit = Boolean(options.tools?.some((t) => t.name === 'exit_plan_mode')) && isPlanMode(options.messages)
 
