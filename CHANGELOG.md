@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.6 (2026-11-08)
+
+### English
+
+- **Docs: document the DSH 0.2.2 boot failure seen on 0.4.99 and the upgrade path (issue #86).**
+  - Users still on 0.4.99 (and earlier) can hit `web boot: 1 entry did not activate` with `locale "es" is already registered` after upgrading to DSH 0.2.2-rc.1: that client called `locale.addLanguage` unconditionally, and the host may have registered `es`/`pt-BR` first. Idempotent registration landed in **0.5.5** (#70/`31c99c1`), so the fix is an upgrade to ≥ 0.5.5; both FAQs now say so, in 中文 and English, together with the disable-plugin workaround.
+
+### 中文
+
+- **文档：记录 0.4.99 在 DSH 0.2.2 下的启动失败与升级路径（issue #86）。**
+  - 仍在使用 0.4.99（及更早）的用户升级到 DSH 0.2.2-rc.1 后可能遇到 `web boot: 1 entry did not activate` 与 `locale "es" is already registered`：旧客户端无条件调用 `locale.addLanguage`，而宿主可能已先注册 `es`/`pt-BR`。幂等注册已在 **0.5.5**（#70/`31c99c1`）落地，升级到 ≥ 0.5.5 即可；中英 FAQ 均已补充该说明与「临时禁用插件」的兜底。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.5...v0.6.6
+
 ## 0.6.5 (2026-11-07)
 
 ### English

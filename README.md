@@ -212,6 +212,12 @@ dsh plugin --profile web add dsh-agy-link
 
 ## ❓ 常见问题排查 (FAQ)
 
+### 升级到 DSH 0.2.2 后桌面端启动失败（`web boot: 1 entry did not activate` / `locale "es" is already registered`）？
+**答：这是 0.4.99 及更早版本的兼容性问题，已在 0.5.5 修复（#70 / `31c99c1`），当前 0.6.x 不受影响。**
+- **原因**：0.4.99 的客户端会无条件调用 `locale.addLanguage({ id: 'es' | 'pt-BR' })`。DSH 0.2.2 的宿主 locale 插件可能已先注册这些语言，于是抛出 `locale "es" is already registered`，插件前端条目激活失败并导致整个 web boot 失败（桌面端进不了聊天界面）。
+- **处理**：把 `dsh-agy-link` 升级到 **≥ 0.5.5**（推荐当前 0.6.x）。新版注册前会检查宿主语言目录，仅容忍「已注册 / 已有词典」，卸载时也只清理自己拥有的注册项；宿主已注册 `es`/`pt-BR`（含 `ES`/`pt-br` 大小写变体）都可正常共存。
+- **临时恢复**：若暂时无法升级，禁用该插件即可进入聊天界面。
+
 ### Windows 平台开始对话时为什么会短暂闪一下黑色命令行窗口（黑框）？
 **答：这是 Windows 系统的控制台分配机制，完全良性，不会影响对话和模型功能。**
 - **原因分析**：DSH 是基于 Electron 的图形桌面应用（GUI 进程），每次发起对话时，插件需要调用底层命令校验并同步当前账号在 Windows 凭据管理器（Credential Manager）中的 OAuth Token，随后启动 `agy.exe` 控制台子进程建立流式通信。在 Windows 11 下，系统默认终端若被设为「Windows 终端 (Windows Terminal)」，Windows Terminal 会拦截后台控制台子进程的句柄分配并闪现弹窗（这是 Windows Terminal 已知的 OpenConsole 委托拦截机制）。
@@ -453,6 +459,12 @@ you explicitly accept unattended tool execution.
 ---
 
 ## ❓ FAQ & Troubleshooting
+
+### Desktop app fails to boot after upgrading to DSH 0.2.2 (`web boot: 1 entry did not activate` / `locale "es" is already registered`)?
+**A: That is a 0.4.99-and-earlier compatibility bug, fixed in 0.5.5 (#70 / `31c99c1`); current 0.6.x is unaffected.**
+- **Cause**: the 0.4.99 client called `locale.addLanguage({ id: 'es' | 'pt-BR' })` unconditionally. DSH 0.2.2's host locale plugin may have registered those languages first, so the call threw `locale "es" is already registered`; the plugin's client entry failed to activate and took the whole web boot down (the desktop app could not reach the chat UI).
+- **Fix**: upgrade `dsh-agy-link` to **≥ 0.5.5** (0.6.x recommended). Registration now inspects the host catalog, tolerates only "already registered / already has locale", and disposing removes only entries the plugin owns; host-registered `es`/`pt-BR` (including `ES`/`pt-br` case variants) coexist fine.
+- **Workaround**: if you cannot upgrade yet, disable the plugin to reach the chat UI.
 
 ### Why does a black command prompt / terminal window briefly flash when starting a conversation on Windows?
 **A: This is a cosmetic behavior of the Windows Console subsystem and is completely harmless.**
