@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.4 (2026-11-07)
+
+### English
+
+- **Fix(goal): a completed goal is no longer re-completed on every later turn, and synthetic call ids are unique (issue #80).** (thanks @hjwsm1989, #82)
+  - `detectGoalContext()` scanned the whole history, so markers from an already completed goal still matched a brand-new human turn; the adapter then emitted a synthetic `update_goal(complete)` whose call id was deterministic (`…-<goalId>-<revision>`). Nine identical `tool_call` ids piled up in the transcript — harmless on the agy route (it never serializes the transcript) but an immediate, permanent `400 Duplicate 'call_id'` after switching to an HTTP provider.
+  - The scan now stops at the newest genuine human message; a new `resolveGoalContext(messages, live)` makes the live goal view authoritative (`live === null` → never synthesize a completion; `undefined` → history fallback for older hosts); and each emission mints a unique id (`…-<time36>-<seq36>`). The `sessionGoal()` log fallback no longer returns a completed/blocked goal.
+
+- **Fix(client): compact the account modal and align the quota progress bars.** (thanks @Ronnoc, #81)
+  - 4+ accounts now fit without truncating the fourth card (`max-height: min(88vh, 880px)`, tighter card padding/margins); the left window-label column is a fixed 64px so every progress bar starts/ends on the same X; status badges are `nowrap`/`flexShrink: 0` so `冷却中` no longer wraps character-by-character.
+
+### 中文
+
+- **修复(goal)：已完成的目标不再在后续每轮重复完成，合成 call id 也保证唯一（issue #80）。**（感谢 @hjwsm1989，#82）
+  - `detectGoalContext()` 扫描整段历史，已完成目标的标记仍会匹配到新的用户轮次，适配器因此反复发出 `update_goal(complete)`，call id 又是确定值（`…-<goalId>-<revision>`）；九条相同 `tool_call` id 堆积后在 agy 路由上无感，但切到 HTTP provider 就会永久 `400 Duplicate 'call_id'`。
+  - 现在扫描在最近一条真实用户消息处停止；新增 `resolveGoalContext(messages, live)` 让实时 goal 视图权威（`null` → 绝不合成完成；`undefined` → 旧宿主走历史回退）；每次发号都唯一（`…-<time36>-<seq36>`）；`sessionGoal()` 的日志回退也不再返回已完成/阻塞的目标。
+
+- **修复(client)：压缩账号弹窗、对齐额度进度条。**（感谢 @Ronnoc，#81）
+  - 4 个以上账号不再截断第 4 张卡片（`max-height: min(88vh, 880px)`、更紧凑的卡片内外边距）；左侧窗口标签列固定 64px，所有进度条起止 X 对齐；状态徽章 `nowrap`+`flexShrink: 0`，`冷却中` 不再逐字换行。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.3...v0.6.4
+
 ## 0.6.3 (2026-11-06)
 
 ### English
