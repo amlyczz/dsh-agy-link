@@ -97,6 +97,29 @@ const IMAGE_CSS = `
   border-color: var(--dsw-alias-border-l3, rgba(127, 127, 127, 0.35));
 }
 
+.agy-file-link {
+  color: var(--dsw-alias-brand, #3b82f6);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.agy-file-link:hover {
+  opacity: 0.8;
+}
+
+code[data-agy-link-enhanced="true"] {
+  color: var(--dsw-alias-brand, #3b82f6);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+code[data-agy-link-enhanced="true"]:hover {
+  opacity: 0.8;
+}
+
 /* Lightbox Modal */
 .agy-lightbox-backdrop {
   position: fixed;
@@ -410,16 +433,79 @@ export function isImageFile(pathOrUrl: string): boolean {
   return /\.(png|jpe?g|webp|gif|svg|bmp|ico|avif)$/i.test(clean);
 }
 
-/** Get React props of a DOM element */
-function getReactProps(el: HTMLElement): Record<string, unknown> | null {
-  const key = Object.keys(el).find((k) => k.startsWith('__reactProps'));
-  if (!key) return null;
-  return (el as unknown as Record<string, unknown>)[key] as Record<string, unknown> | null;
+/** Get React props or fiber markdown text of a DOM element */
+function getMarkdownSource(el: HTMLElement): string {
+  const propsKey = Object.keys(el).find((k) => k.startsWith('__reactProps'));
+  if (propsKey) {
+    const props = (el as unknown as Record<string, unknown>)[propsKey] as Record<string, unknown> | null;
+    if (typeof props?.['text'] === 'string') return props['text'] as string;
+  }
+  const fiberKey = Object.keys(el).find((k) => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+  if (fiberKey) {
+    let curr = (el as unknown as Record<string, unknown>)[fiberKey] as Record<string, unknown> | null;
+    let depth = 0;
+    while (curr && depth < 6) {
+      const memoized = curr['memoizedProps'] as Record<string, unknown> | undefined;
+      if (typeof memoized?.['text'] === 'string') return memoized['text'] as string;
+      const pending = curr['pendingProps'] as Record<string, unknown> | undefined;
+      if (typeof pending?.['text'] === 'string') return pending['text'] as string;
+      curr = (curr['return'] as Record<string, unknown> | null) ?? null;
+      depth++;
+    }
+  }
+  return '';
 }
 
 /**
  * Scan DOM for imageAlt spans and enhance them with live rendered images
  */
+
+async function openFileOnHost(cleanPath: string): Promise<boolean> {
+  try {
+    const origin = getOrigin();
+    const res = await (globalThis.fetch ?? fetch)(`${origin}/plugins/agy-link/open-file?path=${encodeURIComponent(cleanPath)}`, {
+      method: 'POST',
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function enhanceDocumentLink(el: HTMLElement, rawPath: string): void {
+  if (el.dataset.agyLinkEnhanced === 'true') return;
+  el.dataset.agyLinkEnhanced = 'true';
+  el.style.cursor = 'pointer';
+  let rawClean = decodeURIComponent(rawPath);
+  if (/^file:\/\//i.test(rawClean)) {
+    rawClean = rawClean.replace(/^file:\/\/(?:localhost)?/i, '');
+    if (/^\/+[A-Za-z]:/i.test(rawClean)) {
+      rawClean = rawClean.replace(/^\/+/, '');
+    }
+  }
+  const cleanPath = (rawClean.split('#')[0] ?? '').trim();
+  const lineMatch = /#L(\d+)/i.exec(rawClean);
+  const lineSuffix = lineMatch ? ` (第 ${lineMatch[1]} 行)` : '';
+  el.title = `点击打开文件: ${cleanPath}${lineSuffix}`;
+  el.onclick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const prevTitle = el.title;
+    el.title = '正在打开文件...';
+    const opened = await openFileOnHost(rawClean);
+    if (opened) {
+      el.title = '已打开文件！';
+      setTimeout(() => { el.title = prevTitle; }, 2000);
+      return;
+    }
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(cleanPath);
+      el.title = '打开失败，已复制路径到剪贴板！';
+      setTimeout(() => { el.title = prevTitle; }, 2000);
+    }
+  };
+}
+
 export function scanAndEnhanceImages(): void {
   if (typeof document === 'undefined') return;
   if (isInteractionLocked()) return;
@@ -447,8 +533,7 @@ export function scanAndEnhanceImages(): void {
     if (altSpans.length === 0) continue;
 
     // Check React props for original markdown text
-    const props = getReactProps(container);
-    const mdText = typeof props?.text === 'string' ? props.text : '';
+    const mdText = getMarkdownSource(container);
     if (!mdText) continue;
 
     // Extract all image markdown definitions: ![alt](target)
@@ -512,14 +597,96 @@ export function scanAndEnhanceImages(): void {
     }
   }
 
-  // 3. Scan for <a> links to file:// images
+  // 3. Scan markdown containers for historical document links rendered as text or <a>
+  const docLinkRegex = /(?<!\!)\[([^\]\n]+)\]\((file:\/\/(?:localhost)?(?:\/*[A-Za-z]:[^\s)]+|\/?\/[^\s)]+))\)/g;
+  for (let i = 0; i < markdownContainers.length; i++) {
+    const container = markdownContainers[i];
+    if (!container) continue;
+
+    const mdText = getMarkdownSource(container);
+    if (!mdText) continue;
+
+    let match: RegExpExecArray | null;
+    docLinkRegex.lastIndex = 0;
+    while ((match = docLinkRegex.exec(mdText)) !== null) {
+      const linkTitle = (match[1] ?? '').trim();
+      const cleanTitle = linkTitle.replace(/^`+|`+$/g, '').trim();
+      const linkTarget = match[2] ?? '';
+      if (!cleanTitle || !linkTarget || isImageFile(linkTarget)) continue;
+
+      // 3a. Check if rendered as an <a> tag
+      const existingAnchors = container.querySelectorAll<HTMLAnchorElement>('a');
+      let matchedAnchor: HTMLAnchorElement | null = null;
+      for (let k = 0; k < existingAnchors.length; k++) {
+        const a = existingAnchors[k];
+        if (!a) continue;
+        const aText = (a.textContent ?? '').trim();
+        if (aText === cleanTitle || aText === linkTitle) {
+          matchedAnchor = a;
+          break;
+        }
+      }
+      if (matchedAnchor) {
+        enhanceDocumentLink(matchedAnchor, linkTarget);
+        continue;
+      }
+
+      // 3b. Check if rendered as an inline <code> tag (common for backticked markdown links)
+      const existingCodes = container.querySelectorAll<HTMLElement>('code');
+      let matchedCode: HTMLElement | null = null;
+      for (let k = 0; k < existingCodes.length; k++) {
+        const c = existingCodes[k];
+        if (!c || c.closest('.agy-file-link, button, a, pre')) continue;
+        if ((c.textContent ?? '').trim() === cleanTitle) {
+          matchedCode = c;
+          break;
+        }
+      }
+      if (matchedCode) {
+        enhanceDocumentLink(matchedCode, linkTarget);
+        continue;
+      }
+
+      // 3c. If DSH rendered plain text (<Fragment>), enhance the matching text node
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+      let textNode: Node | null;
+      while ((textNode = walker.nextNode())) {
+        if (textNode.parentElement?.closest('.agy-file-link, .agy-image-card, button, a, pre, code')) continue;
+        const val = textNode.nodeValue ?? '';
+        const targetTitle = val.includes(cleanTitle) ? cleanTitle : val.includes(linkTitle) ? linkTitle : '';
+        if (targetTitle !== '') {
+          const idx = val.indexOf(targetTitle);
+          const before = val.slice(0, idx);
+          const after = val.slice(idx + targetTitle.length);
+          const btn = document.createElement('span');
+          btn.className = 'agy-file-link';
+          btn.textContent = targetTitle;
+          enhanceDocumentLink(btn, linkTarget);
+
+          const parent = textNode.parentNode;
+          if (parent) {
+            if (before) parent.insertBefore(document.createTextNode(before), textNode);
+            parent.insertBefore(btn, textNode);
+            if (after) parent.insertBefore(document.createTextNode(after), textNode);
+            parent.removeChild(textNode);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // 4. Scan for any raw <a> links to file://
   const links = document.querySelectorAll<HTMLAnchorElement>('a[href^="file://"]');
   for (let i = 0; i < links.length; i++) {
     const link = links[i];
     if (!link || link.dataset.agyLinkEnhanced === 'true') continue;
 
     const href = link.href ?? '';
-    if (!isImageFile(href)) continue;
+    if (!isImageFile(href)) {
+      enhanceDocumentLink(link, href);
+      continue;
+    }
 
     link.dataset.agyLinkEnhanced = 'true';
     const mediaUrl = buildMediaUrl(href);
@@ -531,7 +698,6 @@ export function scanAndEnhanceImages(): void {
       openLightbox(mediaUrl, linkText, href);
     };
 
-    // Add a visual preview indicator
     if (!link.querySelector('.agy-image-link-icon')) {
       const badge = document.createElement('span');
       badge.className = 'agy-image-link-chip agy-image-link-icon';
@@ -540,6 +706,7 @@ export function scanAndEnhanceImages(): void {
     }
   }
 }
+
 
 let imageEnhancerDispose: (() => void) | null = null;
 let imageScanTimer: ReturnType<typeof setTimeout> | null = null;

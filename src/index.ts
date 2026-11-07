@@ -36,7 +36,7 @@ import { defaultMediaDir, sweepDir, type ImageRefLike } from './host/media.ts'
 import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type McpBridge, type ToolsServiceLike } from './host/mcp-bridge.ts'
 import { readJsonBody } from './host/read-json-body.ts'
 import { fileURLToPath } from 'node:url'
-import { handleMediaRequest, handleAssetRequest, type HttpRequestLike, type HttpResponseLike } from './host/media-route.ts'
+import { handleMediaRequest, handleAssetRequest, handleOpenFileRequest, type HttpRequestLike, type HttpResponseLike } from './host/media-route.ts'
 
 export const name = 'dsh-agy-link'
 // webServer and tools are optional: the plugin loads headless too.
@@ -1445,6 +1445,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           sendJson(res as RawRes, 500, { error: 'qr generation failed' })
         }
       })()
+    }})
+
+    // /plugins/agy-link/open-file?path=...
+    reg({ kind: 'exact', path: '/plugins/agy-link/open-file', handler: (req, res) => {
+      handleOpenFileRequest(req as HttpRequestLike, res as HttpResponseLike, { workspaceRoot: getConfig().workspaceRoot })
     }})
 
     // /plugins/agy-link/media?path=...

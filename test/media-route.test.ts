@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLocalMediaPath, handleMediaRequest, handleAssetRequest } from '../src/host/media-route.ts';
+import { resolveLocalMediaPath, handleMediaRequest, handleAssetRequest, handleOpenFileRequest } from '../src/host/media-route.ts';
 import { existsSync, writeFileSync, mkdirSync, rmSync, symlinkSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,12 @@ test('media-route: resolveLocalMediaPath handles Windows paths, file://, and rel
     const resolvedUrl = resolveLocalMediaPath(fileUrl);
     assert.ok(resolvedUrl !== null, 'file:/// URL should resolve');
     assert.equal(resolvedUrl, resolvedDirect);
+
+    // 2b. file://localhost/ URL
+    const localhostUrl = 'file://localhost/' + (isWin ? sampleFile.replace(/\\/g, '/') : sampleFile);
+    const resolvedLocalhost = resolveLocalMediaPath(localhostUrl);
+    assert.ok(resolvedLocalhost !== null, 'file://localhost/ URL should resolve');
+    assert.equal(resolvedLocalhost, resolvedDirect);
 
     // 3. Relative path with workspaceRoot
     const resolvedRel = resolveLocalMediaPath('test-image.png', tempDir);
@@ -133,5 +139,85 @@ test('media-route: handleAssetRequest refuses a symlink that escapes the asset d
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
     try { rmSync(outside, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('media-route: handleOpenFileRequest opens existing file and reports 404 on missing', () => {
+  const tempDir = join(tmpdir(), 'agy-open-file-test-' + Date.now());
+  mkdirSync(tempDir, { recursive: true });
+  const sampleDoc = join(tempDir, 'notes.md');
+  writeFileSync(sampleDoc, '# Hello World');
+
+  try {
+    let status = 0;
+    let headers: Record<string, unknown> = {};
+    let body = '';
+    const res = {
+      writeHead(s: number, h: Record<string, unknown>) { status = s; headers = h; },
+      end(b: string) { body = b; },
+    };
+
+    // 1. Existing file with line fragment
+    handleOpenFileRequest(
+      { url: '/plugins/agy-link/open-file?path=' + encodeURIComponent(sampleDoc + '#L20') },
+      res as never,
+    );
+    assert.equal(status, 200);
+    const parsed = JSON.parse(body);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.line, '20');
+
+    // 1b. Existing file with file://localhost/ URI and relative workspace resolution
+    let statusRel = 0;
+    let bodyRel = '';
+    const resRel = {
+      writeHead(s: number) { statusRel = s; },
+      end(b: string) { bodyRel = b; },
+    };
+    handleOpenFileRequest(
+      { url: '/plugins/agy-link/open-file?path=' + encodeURIComponent('notes.md') },
+      resRel as never,
+      { workspaceRoot: tempDir },
+    );
+    assert.equal(statusRel, 200);
+    assert.equal(JSON.parse(bodyRel).ok, true);
+
+    // 2. Missing file returns 404
+    let status404 = 0;
+    const res404 = {
+      writeHead(s: number) { status404 = s; },
+      end() {},
+    };
+    handleOpenFileRequest(
+      { url: '/plugins/agy-link/open-file?path=' + encodeURIComponent('missing-file.ts') },
+      res404 as never,
+    );
+    assert.equal(status404, 404);
+
+    // 3. Missing path parameter returns 400
+    let status400 = 0;
+    const res400 = {
+      writeHead(s: number) { status400 = s; },
+      end() {},
+    };
+    handleOpenFileRequest(
+      { url: '/plugins/agy-link/open-file' },
+      res400 as never,
+    );
+    assert.equal(status400, 400);
+
+    // 4. OPTIONS preflight returns 204
+    let statusOptions = 0;
+    const resOptions = {
+      writeHead(s: number) { statusOptions = s; },
+      end() {},
+    };
+    handleOpenFileRequest(
+      { method: 'OPTIONS', url: '/plugins/agy-link/open-file' },
+      resOptions as never,
+    );
+    assert.equal(statusOptions, 204);
+  } finally {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 });

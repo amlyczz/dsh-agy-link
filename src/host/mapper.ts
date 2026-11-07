@@ -146,16 +146,23 @@ export interface EventMapperOptions {
   compactionNotice?: CompactionNotice
 }
 
-/** Rewrite local image paths and file:// URLs to point to the local media route. */
+/** Rewrite local image paths to media route, and normalize document file:// links. */
 export function rewriteImageMarkdown(text: string, mediaBaseUrl?: string): string {
-  if (!mediaBaseUrl || !text) return text
-  return text.replace(
-    /!\[(.*?)\]\((file:\/\/\/[^\s)]+|file:\/\/[^\s)]+|[A-Za-z]:[\\/][^\s)]+|\/home\/[^\s)]+|\/mnt\/[a-zA-Z]\/[^\s)]+|\\\\wsl\.localhost\\[^\s)]+)\)/g,
-    (_match, alt, target) => {
-      const cleanTarget = target.trim()
-      const mediaUrl = `${mediaBaseUrl}?path=${encodeURIComponent(cleanTarget)}`
-      return `![${alt}](${mediaUrl})`
-    },
+  if (!text) return text
+  let out = text
+  if (mediaBaseUrl) {
+    out = out.replace(
+      /!\[(.*?)\]\((file:\/\/\/[^\s)]+|file:\/\/[^\s)]+|[A-Za-z]:[\\/][^\s)]+|\/home\/[^\s)]+|\/mnt\/[a-zA-Z]\/[^\s)]+|\\\\wsl\.localhost\\[^\s)]+)\)/g,
+      (_match, alt, target) => {
+        const cleanTarget = target.trim()
+        const mediaUrl = `${mediaBaseUrl}?path=${encodeURIComponent(cleanTarget)}`
+        return `![${alt}](${mediaUrl})`
+      },
+    )
+  }
+  return out.replace(
+    /(?<!\!)\[([^\]]+)\]\(file:\/\/(?:localhost)?(?:\/*([A-Za-z]:[^\s)]+)|\/?(\/[^\s)]+))\)/g,
+    (_m, title, winPath, posixPath) => `[${title}](${winPath ?? posixPath})`,
   )
 }
 
@@ -183,6 +190,7 @@ export class EventMapper {
   private totalTextOutput = ''
   private readonly toolCallStates = new Map<string, ToolCallState>()
   private emittedCompactionNotice = false
+  private streamTextBuffer = ''
 
   constructor(private readonly opts: EventMapperOptions) {
     this.sawTextStep = opts.initialSawText === true
@@ -193,8 +201,20 @@ export class EventMapper {
     return this.finished
   }
 
+  private *flushStreamTextBuffer(): Generator<StreamChunk> {
+    if (this.streamTextBuffer !== '') {
+      const flushed = rewriteImageMarkdown(this.streamTextBuffer, this.opts.mediaBaseUrl)
+      this.streamTextBuffer = ''
+      const d = this.appendDelta(flushed)
+      if (d) yield d
+    }
+  }
+
   private *ensureBlock(type: 'text' | 'reasoning'): Generator<StreamChunk> {
     if (this.openType === type) return
+    if (this.openType === 'text') {
+      yield* this.flushStreamTextBuffer()
+    }
     const close = this.closeOpen()
     if (close) yield close
     this.openType = type
@@ -204,9 +224,17 @@ export class EventMapper {
 
   private closeOpen(): StreamChunk | null {
     if (this.openType === null) return null
+    if (this.streamTextBuffer !== '') {
+      this.openAcc += this.streamTextBuffer
+      this.streamTextBuffer = ''
+    }
+    const text =
+      this.openType === 'text'
+        ? rewriteImageMarkdown(this.openAcc, this.opts.mediaBaseUrl)
+        : this.openAcc
     const block =
       this.openType === 'text'
-        ? { type: 'text' as const, text: this.openAcc }
+        ? { type: 'text' as const, text }
         : { type: 'reasoning' as const, text: this.openAcc }
     const chunk: StreamChunk = { type: 'block-end', index: this.blockIdx, block: block }
     this.blockIdx++
@@ -323,6 +351,7 @@ export class EventMapper {
         }
         const deferred = hasRealThought && stepTextEmitted && !this.thinkingAnnounced.has(ev.stepKey)
         if (ev.text === '' && !ev.fragment) {
+          yield* this.flushStreamTextBuffer()
           // DONE tail carrying usage with no text: the step is already
           // complete — flush the deferred annotation now.
           if (deferred) {
@@ -346,14 +375,26 @@ export class EventMapper {
         this.sawTextStep = true
         yield* this.ensureBlock('text')
         let d: StreamChunk | null
-        const processedText = this.opts.mediaBaseUrl ? rewriteImageMarkdown(ev.text, this.opts.mediaBaseUrl) : ev.text
         if (ev.fragment === true) {
-          // Sequential fragment (text_delta): append in arrival order.
+          // Sequential fragment (text_delta): buffer incomplete markdown link at tail so
+          // document links split across stream deltas rewrite atomically.
+          const combined = this.streamTextBuffer + ev.text
+          const partialLinkRegex = /(?:!?\[[^\]\n]*|!?\[[^\]\n]+\]\([^)\n]*)$/
+          const m = partialLinkRegex.exec(combined)
+          let toEmit = combined
+          if (m && (combined.length - m.index) < 500) {
+            toEmit = combined.slice(0, m.index)
+            this.streamTextBuffer = combined.slice(m.index)
+          } else {
+            this.streamTextBuffer = ''
+          }
+          const processedText = rewriteImageMarkdown(toEmit, this.opts.mediaBaseUrl)
           const acc = (this.emittedByKey.get(ev.stepKey) ?? '') + processedText
           this.emittedByKey.set(ev.stepKey, acc)
           d = this.appendDelta(processedText)
         } else {
           // Cumulative snapshot: emit only the grown suffix.
+          const processedText = rewriteImageMarkdown(ev.text, this.opts.mediaBaseUrl)
           const prev = this.emittedByKey.get(ev.stepKey) ?? ''
           const delta = suffixDelta(prev, processedText)
           this.emittedByKey.set(ev.stepKey, processedText)
@@ -444,6 +485,7 @@ export class EventMapper {
         // In Code Mode: addressed to run_code wrapping tools['agy_tool']({ run, step }).
         // In Native Mode: addressed to agy_tool directly with { run, step, tool, input }.
         // The callId still encodes the (run, eventIndex) cursor for continuation detection.
+        yield* this.flushStreamTextBuffer()
         const close = this.closeOpen()
         if (close) yield close
         const idx = this.blockIdx
@@ -510,7 +552,8 @@ export class EventMapper {
       if (ev.response === '') return
       if (!this.sawTextStep) {
         yield* this.ensureBlock('text')
-        const d = this.appendDelta(ev.response)
+        const processed = rewriteImageMarkdown(ev.response, this.opts.mediaBaseUrl)
+        const d = this.appendDelta(processed)
         if (d) yield d
       }
       if (ev.error !== undefined && ev.error !== '') {
@@ -520,9 +563,11 @@ export class EventMapper {
       }
     } else if (!this.sawTextStep && ev.response !== '') {
       yield* this.ensureBlock('text')
-      const d = this.appendDelta(ev.response)
+      const processed = rewriteImageMarkdown(ev.response, this.opts.mediaBaseUrl)
+      const d = this.appendDelta(processed)
       if (d) yield d
     }
+    yield* this.flushStreamTextBuffer()
     yield* this.flushBannerOnlyThoughts()
     const close = this.closeOpen()
     if (close) yield close
@@ -583,6 +628,7 @@ export class EventMapper {
     retryAfterMs?: number,
   ): Generator<StreamChunk> {
     if (this.finished) return
+    yield* this.flushStreamTextBuffer()
     const close = this.closeOpen()
     if (close) yield close
     const tracked = this.opts.usage?.finalUsage({})

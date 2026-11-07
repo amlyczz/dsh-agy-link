@@ -642,6 +642,24 @@ test('rewriteImageMarkdown rewrites file://, Windows, and WSL paths to mediaBase
 
   // Pass-through when no mediaBaseUrl
   assert.equal(rewriteImageMarkdown(input1, undefined), input1)
+
+  // Normalizes document file links with and without mediaBaseUrl
+  const docInput = 'See [notes](file:///C:/Users/test/notes.md#L10) and [posix](file:///workspace/app.ts)'
+  assert.equal(
+    rewriteImageMarkdown(docInput, baseUrl),
+    'See [notes](C:/Users/test/notes.md#L10) and [posix](/workspace/app.ts)',
+  )
+  assert.equal(
+    rewriteImageMarkdown(docInput, undefined),
+    'See [notes](C:/Users/test/notes.md#L10) and [posix](/workspace/app.ts)',
+  )
+
+  // Normalizes file://localhost/, multiple leading slashes, and two-slash file://
+  const variants = '[a](file://localhost/C:/a.ts) [b](file:////C:/b.ts) [c](file://C:/c.ts) [d](file://localhost/workspace/d.ts)'
+  assert.equal(
+    rewriteImageMarkdown(variants),
+    '[a](C:/a.ts) [b](C:/b.ts) [c](C:/c.ts) [d](/workspace/d.ts)',
+  )
 })
 
 test('EventMapper with mediaBaseUrl streams rewritten image markdown in text steps', () => {
@@ -800,4 +818,56 @@ test('parseMirrorCallId supports both canonical and hash-disambiguated call IDs'
   })
 })
 
+test('EventMapper streams document file:// links rewritten even across fragmented chunks', () => {
+  const mapper = new EventMapper({ runId: 'r1', cutOnTool: false })
+  const chunks: StreamChunk[] = []
+  const stepKey = '1'
+  const frags = [
+    'See the implementation in [mapper',
+    '.test.ts',
+    '](file:',
+    '///C:/Users/test/test',
+    '/mapper.test.ts',
+    '#L10) and continue.'
+  ]
+  let idx = 0
+  for (const f of frags) {
+    for (const ch of mapper.map({
+      kind: 'step',
+      stepKey,
+      stepKind: 'text',
+      state: 'ACTIVE',
+      fragment: true,
+      text: f,
+      raw: {},
+    }, idx++)) {
+      chunks.push(ch)
+    }
+  }
+  // DONE tail
+  for (const ch of mapper.map({
+    kind: 'step',
+    stepKey,
+    stepKind: 'text',
+    state: 'DONE',
+    text: '',
+    raw: {},
+  }, idx++)) {
+    chunks.push(ch)
+  }
+  for (const ch of mapper.map({ kind: 'result', conversationId: 'c1', ok: true, response: '', usage: { input_tokens: 1, output_tokens: 1 }, raw: {} }, idx++)) {
+    chunks.push(ch)
+  }
 
+  const textDeltas = chunks.filter(c => c.type === 'text-delta').map(c => (c as any).text).join('')
+  assert.equal(
+    textDeltas,
+    'See the implementation in [mapper.test.ts](C:/Users/test/test/mapper.test.ts#L10) and continue.'
+  )
+  const blockEnd = chunks.find(c => c.type === 'block-end' && (c as any).block.type === 'text')
+  assert.ok(blockEnd)
+  assert.equal(
+    (blockEnd as any).block.text,
+    'See the implementation in [mapper.test.ts](C:/Users/test/test/mapper.test.ts#L10) and continue.'
+  )
+})

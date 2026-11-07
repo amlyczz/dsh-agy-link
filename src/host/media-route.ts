@@ -2,7 +2,8 @@
 // Serves local images referenced by Antigravity (file://, absolute paths, WSL paths, staged media)
 // and static plugin assets (e.g. mermaid.min.js) safely to DSH Desktop and Web clients.
 import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
-import { extname, join, resolve, sep } from 'node:path';
+import { extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { spawn } from 'node:child_process';
 
 const MIME_MAP: Record<string, string> = {
   '.png': 'image/png',
@@ -39,24 +40,27 @@ export function resolveLocalMediaPath(rawPath: string, workspaceRoot?: string): 
   if (!rawPath || typeof rawPath !== 'string') return null;
   let p = rawPath.trim();
 
-  // Strip file:// prefix. decodeURIComponent throws on a malformed escape (e.g.
-  // a double-encoded query decodes to a literal 'file:///%E0%A4%A'); treat that
-  // as "not a usable path" instead of letting a URIError escape the route.
-  if (p.startsWith('file:///')) {
-    const decoded = safeDecodeUri(p.slice(8));
+  // Strip file:// prefix (supporting file:///, file://localhost/, or file://).
+  // decodeURIComponent throws on a malformed escape (e.g. a double-encoded query
+  // decodes to a literal 'file:///%E0%A4%A'); treat that as "not a usable path"
+  // instead of letting a URIError escape the route.
+  if (/^file:\/\//i.test(p)) {
+    p = p.replace(/^file:\/\/(?:localhost)?/i, '');
+    const decoded = safeDecodeUri(p);
     if (decoded === null) return null;
     p = decoded;
-    // On Windows, file:///D:/foo -> D:/foo
-    if (IS_WIN && !/^[A-Za-z]:/.test(p) && /^\/[A-Za-z]:/.test(p)) {
-      p = p.slice(1);
+    if (IS_WIN) {
+      if (p.startsWith('/wsl.localhost/')) {
+        p = '\\\\' + p.slice(1).replace(/\//g, '\\');
+      } else if (p.startsWith('wsl.localhost/')) {
+        p = '\\\\' + p.replace(/\//g, '\\');
+      } else if (/^\/+[A-Za-z]:/i.test(p)) {
+        p = p.replace(/^\/+/, '');
+      }
     }
-  } else if (p.startsWith('file://')) {
-    const decoded = safeDecodeUri(p.slice(7));
-    if (decoded === null) return null;
-    p = decoded;
-    if (IS_WIN && p.startsWith('wsl.localhost/')) {
-      p = '\\\\' + p.replace(/\//g, '\\');
-    }
+  } else {
+    const decoded = safeDecodeUri(p);
+    if (decoded !== null) p = decoded;
   }
 
   // Windows-specific WSL path mapping
@@ -241,5 +245,114 @@ export function handleAssetRequest(
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('asset read error: ' + String(err));
+  }
+}
+
+/**
+ * Handle /plugins/agy-link/open-file?path=...
+ * Opens local files directly with the host's default program or editor.
+ */
+export function handleOpenFileRequest(
+  req: HttpRequestLike,
+  res: HttpResponseLike,
+  opts?: { workspaceRoot?: string },
+): void {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
+
+  const reqUrl = req.url ?? '';
+  let targetPath = '';
+  try {
+    const u = new URL(reqUrl, 'http://localhost');
+    targetPath = u.searchParams.get('path') ?? '';
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: 'invalid url' }));
+    return;
+  }
+
+  if (!targetPath) {
+    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: 'missing path' }));
+    return;
+  }
+
+  const lineMatch = /#L(\d+)/i.exec(targetPath);
+  const line = lineMatch?.[1];
+  let clean = targetPath.replace(/#.*$/, '').trim();
+
+  if (/^file:\/\//i.test(clean)) {
+    clean = clean.replace(/^file:\/\/(?:localhost)?/i, '');
+    const decoded = safeDecodeUri(clean);
+    if (decoded !== null) clean = decoded;
+    if (IS_WIN) {
+      if (clean.startsWith('/wsl.localhost/')) {
+        clean = '\\\\' + clean.slice(1).replace(/\//g, '\\');
+      } else if (clean.startsWith('wsl.localhost/')) {
+        clean = '\\\\' + clean.replace(/\//g, '\\');
+      } else if (/^\/+[A-Za-z]:/i.test(clean)) {
+        clean = clean.replace(/^\/+/, '');
+      }
+    }
+  } else {
+    const decoded = safeDecodeUri(clean);
+    if (decoded !== null) clean = decoded;
+  }
+
+  if (IS_WIN && !clean.startsWith('\\\\')) {
+    clean = clean.replace(/\//g, '\\');
+  }
+
+  // If path is relative, attempt resolving against workspaceRoot or cwd
+  if (!isAbsolute(clean) && !clean.startsWith('\\\\')) {
+    if (opts?.workspaceRoot && existsSync(resolve(opts.workspaceRoot, clean))) {
+      clean = resolve(opts.workspaceRoot, clean);
+    } else if (existsSync(resolve(clean))) {
+      clean = resolve(clean);
+    }
+  }
+
+  if (!existsSync(clean)) {
+    res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: `file not found: ${clean}` }));
+    return;
+  }
+
+  try {
+    if (IS_WIN) {
+      const child = spawn('cmd.exe', ['/c', 'start', '', clean], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    } else if (process.platform === 'darwin') {
+      const child = spawn('open', [clean], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    } else {
+      const child = spawn('xdg-open', [clean], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ ok: true, path: clean, line }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: String(err) }));
   }
 }
