@@ -379,3 +379,58 @@ test('WarmupService runScheduledWarmup respects autoWarmup flag', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+
+test('WarmupService triggers initial probe for floating 7-day cold start accounts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'warmup-floating-'))
+  try {
+    const store = new WarmupHistoryStore(join(dir, 'history.json'))
+    const service = new WarmupService(
+      { getAccounts: () => [] } as unknown as AccountPoolManager,
+      {} as unknown as QuotaService,
+      () => '',
+      () => null,
+      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
+      () => undefined,
+      store,
+    )
+    const probed: string[] = []
+    service.warmupModelDirectly = async (_account, model) => {
+      probed.push(model)
+      return { ok: true, status: 200, durationMs: 1 }
+    }
+    const now = Date.now()
+    // Google returns floating \`now + 7 days\` for accounts with 0 usage this cycle
+    const floatingAccount: ManagedAccount = {
+      id: 'acc-cold',
+      alias: 'Cold',
+      dir: '',
+      enabled: true,
+      createdAt: now - 86400 * 1000 * 5, // added 5 days ago
+      cooldowns: {},
+      quotas: {
+        google: {
+          remainingFraction: 1,
+          weeklyFraction: 1,
+          weeklyResetTime: new Date(now + 7 * 86400 * 1000).toISOString(),
+        },
+      },
+    }
+
+    // 1. First automatic scan identifies the floating 7-day window and anchors it
+    const res1 = await service.warmupAccount(floatingAccount, { force: false })
+    assert.equal(res1.length, 1)
+    assert.equal(res1[0]?.success, true)
+    assert.equal(res1[0]?.model, 'gemini-3.8-flash')
+    assert.deepEqual(probed, ['gemini-3.8-flash'])
+
+    // 2. Subsequent scan within cooldown skips
+    probed.length = 0
+    const res2 = await service.warmupAccount(floatingAccount, { force: false })
+    assert.equal(res2.length, 1)
+    assert.equal(res2[0]?.skipped, true)
+    assert.deepEqual(probed, [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

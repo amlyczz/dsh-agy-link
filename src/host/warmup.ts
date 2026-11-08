@@ -168,6 +168,17 @@ export class WarmupHistoryStore {
     return now - last < cooldownMs
   }
 
+  hasRecentWeeklyWarmup(identity: string, family: string, cooldownMs = SIX_DAYS_MS, now = Date.now()): boolean {
+    this.load()
+    const prefix = `${identity}:${family}:weekly:`
+    for (const [key, ts] of this.history.entries()) {
+      if (key.startsWith(prefix) && !key.endsWith(':failed')) {
+        if (now - ts < cooldownMs) return true
+      }
+    }
+    return false
+  }
+
   record(key: string, now = Date.now()): void {
     this.history.set(key, now)
     this.save()
@@ -505,12 +516,25 @@ export class WarmupService {
           if (now >= resetTs - 60_000) {
             historyKey = `${identity}:${fam}:weekly:${resetTs}`
             shouldWarm = options.force || !this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
+          } else if (resetTs - now >= SIX_DAYS_MS) {
+            // Cold-start / floating 7-day window: Google upstream generates a floating
+            // `now + 7d` timestamp for accounts that haven't consumed tokens in the
+            // current cycle. Fire an initial probe to anchor the 7-day timer unless
+            // already probed recently.
+            historyKey = `${identity}:${fam}:weekly:initial`
+            shouldWarm = options.force || !this.history.hasRecentWeeklyWarmup(identity, fam, SIX_DAYS_MS, now)
+          } else if (options.force) {
+            historyKey = `${identity}:${fam}:weekly:forced:${Math.floor(now / SIX_DAYS_MS)}`
+            shouldWarm = true
           }
+        } else {
+          historyKey = `${identity}:${fam}:weekly:initial`
+          shouldWarm = options.force || !this.history.hasRecentWeeklyWarmup(identity, fam, SIX_DAYS_MS, now)
         }
       } else {
         // Cold start: weekly reset time is uninitialized upstream
         historyKey = `${identity}:${fam}:weekly:initial`
-        shouldWarm = options.force || !this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
+        shouldWarm = options.force || !this.history.hasRecentWeeklyWarmup(identity, fam, SIX_DAYS_MS, now)
       }
 
       const failureKey = `${historyKey}:failed`
