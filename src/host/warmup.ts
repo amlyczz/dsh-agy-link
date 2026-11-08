@@ -39,8 +39,8 @@ export function toCanonicalWarmupModel(model: string): string {
   // (Antigravity-Manager #3715). `gemini-3-flash` is the legacy alias of 3.8.
   if (clean === 'gemini-3-flash') return 'gemini-3.8-flash-tiered'
   if (/^gemini-3\.\d+-flash$/.test(clean)) return clean + '-tiered'
-  if (clean.includes('argon')) {
-    return 'gemini-4-argon'
+  if (clean === 'gemini-4-argon' || clean === 'argon') {
+    return 'gemini-4-argon-low'
   }
   return model.trim()
 }
@@ -49,17 +49,35 @@ export function toCanonicalWarmupModel(model: string): string {
 export function pickWarmupModelForFamily(
   family: ModelFamily,
   monitoredModels: readonly string[] = [],
+  account?: ManagedAccount,
 ): string {
+  if (family === 'argon') {
+    if (account?.quotas?.argon?.models?.length) {
+      const m = account.quotas.argon.models.find((x) => x.modelId.includes('argon-low'))
+        ?? account.quotas.argon.models.find((x) => x.modelId.includes('argon'))
+      if (m) return m.modelId
+    }
+    return 'gemini-4-argon-low'
+  }
   if (family === 'anthropic') {
+    const accountModels = account?.quotas?.anthropic?.models?.map((m) => m.modelId) ?? []
+    if (accountModels.length > 0) {
+      const preferred = monitoredModels.find((m) => accountModels.includes(m))
+      if (preferred) return preferred
+
+      const sonnet = accountModels.find((m) => m.includes('sonnet') && (m.includes('low') || m.includes('medium')))
+        ?? accountModels.find((m) => m.includes('sonnet'))
+      if (sonnet) return sonnet
+
+      const anyClaude = accountModels.find((m) => m.toLowerCase().includes('claude'))
+      if (anyClaude) return anyClaude
+    }
     const found = monitoredModels.find((m) => m.toLowerCase().includes('claude'))
     return found ?? 'claude-sonnet-4-6'
   }
   if (family === 'openai') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('gpt'))
     return found ?? 'gpt-oss-120b-medium'
-  }
-  if (family === 'argon') {
-    return 'gemini-4-argon'
   }
   // google / default
   const found = monitoredModels.find((m) => m.toLowerCase().includes('gemini') && !m.toLowerCase().includes('argon'))
@@ -527,14 +545,14 @@ export class WarmupService {
         shouldWarm = false
       }
       if (shouldWarm) {
-        const model = pickWarmupModelForFamily(fam, monitored)
+        const model = pickWarmupModelForFamily(fam, monitored, account)
         modelsToPing.push({ family: fam, model, historyKey, failureKey })
       }
     }
 
     // Fallback if no weekly targets hit but user forced a warmup
     if (modelsToPing.length === 0 && options.force) {
-      const fallbackModel = pickWarmupModelForFamily('google', monitored)
+      const fallbackModel = pickWarmupModelForFamily('google', monitored, account)
       modelsToPing.push({
         family: 'google',
         model: fallbackModel,
