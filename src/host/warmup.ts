@@ -39,8 +39,8 @@ export function toCanonicalWarmupModel(model: string): string {
   // (Antigravity-Manager #3715). `gemini-3-flash` is the legacy alias of 3.8.
   if (clean === 'gemini-3-flash') return 'gemini-3.8-flash-tiered'
   if (/^gemini-3\.\d+-flash$/.test(clean)) return clean + '-tiered'
-  if (clean.includes('argon')) {
-    return 'gemini-4-argon'
+  if (clean === 'gemini-4-argon' || clean === 'argon') {
+    return 'gemini-4-argon-low'
   }
   return model.trim()
 }
@@ -49,17 +49,35 @@ export function toCanonicalWarmupModel(model: string): string {
 export function pickWarmupModelForFamily(
   family: ModelFamily,
   monitoredModels: readonly string[] = [],
+  account?: ManagedAccount,
 ): string {
+  if (family === 'argon') {
+    if (account?.quotas?.argon?.models?.length) {
+      const m = account.quotas.argon.models.find((x) => x.modelId.includes('argon-low'))
+        ?? account.quotas.argon.models.find((x) => x.modelId.includes('argon'))
+      if (m) return m.modelId
+    }
+    return 'gemini-4-argon-low'
+  }
   if (family === 'anthropic') {
+    const accountModels = account?.quotas?.anthropic?.models?.map((m) => m.modelId) ?? []
+    if (accountModels.length > 0) {
+      const preferred = monitoredModels.find((m) => accountModels.includes(m))
+      if (preferred) return preferred
+
+      const sonnet = accountModels.find((m) => m.includes('sonnet') && (m.includes('low') || m.includes('medium')))
+        ?? accountModels.find((m) => m.includes('sonnet'))
+      if (sonnet) return sonnet
+
+      const anyClaude = accountModels.find((m) => m.toLowerCase().includes('claude'))
+      if (anyClaude) return anyClaude
+    }
     const found = monitoredModels.find((m) => m.toLowerCase().includes('claude'))
     return found ?? 'claude-sonnet-4-6'
   }
   if (family === 'openai') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('gpt'))
     return found ?? 'gpt-oss-120b-medium'
-  }
-  if (family === 'argon') {
-    return 'gemini-4-argon'
   }
   // google / default
   const found = monitoredModels.find((m) => m.toLowerCase().includes('gemini') && !m.toLowerCase().includes('argon'))
@@ -496,21 +514,30 @@ export class WarmupService {
       if (weeklyFrac === undefined || weeklyFrac < 0.999) continue
 
       let shouldWarm = false
-      let historyKey = ''
+      const historyKey = `${identity}:${fam}:weekly`
+      const hasRecentWarmup = this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
 
-      if (q.weeklyResetTime) {
-        const resetTs = Date.parse(q.weeklyResetTime)
-        if (!isNaN(resetTs)) {
-          // Reached weekly reset instant (with 60s buffer)
-          if (now >= resetTs - 60_000) {
-            historyKey = `${identity}:${fam}:weekly:${resetTs}`
-            shouldWarm = options.force || !this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
+      if (options.force) {
+        shouldWarm = true
+      } else if (!hasRecentWarmup) {
+        if (!q.weeklyResetTime) {
+          // Cold start: weekly reset time uninitialized
+          shouldWarm = true
+        } else {
+          const resetTs = Date.parse(q.weeklyResetTime)
+          if (isNaN(resetTs)) {
+            shouldWarm = true
+          } else {
+            // Either:
+            // 1. Time has reached/passed the scheduled reset instant (with 60s buffer)
+            // 2. Or Google has already reset the window upstream and is presenting a
+            //    floating / fresh ~7-day window (resetTs - now >= 6 days) waiting for activity
+            const remainingMs = resetTs - now
+            if (now >= resetTs - 60_000 || remainingMs >= SIX_DAYS_MS) {
+              shouldWarm = true
+            }
           }
         }
-      } else {
-        // Cold start: weekly reset time is uninitialized upstream
-        historyKey = `${identity}:${fam}:weekly:initial`
-        shouldWarm = options.force || !this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
       }
 
       const failureKey = `${historyKey}:failed`
@@ -518,14 +545,14 @@ export class WarmupService {
         shouldWarm = false
       }
       if (shouldWarm) {
-        const model = pickWarmupModelForFamily(fam, monitored)
+        const model = pickWarmupModelForFamily(fam, monitored, account)
         modelsToPing.push({ family: fam, model, historyKey, failureKey })
       }
     }
 
     // Fallback if no weekly targets hit but user forced a warmup
     if (modelsToPing.length === 0 && options.force) {
-      const fallbackModel = pickWarmupModelForFamily('google', monitored)
+      const fallbackModel = pickWarmupModelForFamily('google', monitored, account)
       modelsToPing.push({
         family: 'google',
         model: fallbackModel,

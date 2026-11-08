@@ -24,7 +24,8 @@ test('toCanonicalWarmupModel maps bare models to official physical entities', ()
   assert.equal(toCanonicalWarmupModel('gemini-3.8-flash'), 'gemini-3.8-flash-tiered')
   assert.equal(toCanonicalWarmupModel('gemini-3.7-flash'), 'gemini-3.7-flash-tiered')
   assert.equal(toCanonicalWarmupModel('gemini-3-flash'), 'gemini-3.8-flash-tiered')
-  assert.equal(toCanonicalWarmupModel('gemini-4-argon'), 'gemini-4-argon')
+  assert.equal(toCanonicalWarmupModel('gemini-4-argon'), 'gemini-4-argon-low')
+  assert.equal(toCanonicalWarmupModel('gemini-4-argon-low'), 'gemini-4-argon-low')
   assert.equal(toCanonicalWarmupModel('claude-sonnet-4-6'), 'claude-sonnet-4-6')
   assert.equal(toCanonicalWarmupModel('gpt-oss-120b-medium'), 'gpt-oss-120b-medium')
   assert.equal(toCanonicalWarmupModel('custom-model-id'), 'custom-model-id')
@@ -44,7 +45,7 @@ test('pickWarmupModelForFamily selects appropriate models honoring monitored pre
   assert.equal(pickWarmupModelForFamily('google', ['gemini-3.7-flash']), 'gemini-3.7-flash')
 
   // Argon family
-  assert.equal(pickWarmupModelForFamily('argon'), 'gemini-4-argon')
+  assert.equal(pickWarmupModelForFamily('argon'), 'gemini-4-argon-low')
 
   // Anthropic family
   assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-4-6')
@@ -378,4 +379,119 @@ test('WarmupService runScheduledWarmup respects autoWarmup flag', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('WarmupService triggers probe for floating/post-reset ~7-day window and skips mid-cycle countdown', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'warmup-post-reset-'))
+  try {
+    const store = new WarmupHistoryStore(join(dir, 'history.json'))
+    const service = new WarmupService(
+      { getAccounts: () => [] } as unknown as AccountPoolManager,
+      {} as unknown as QuotaService,
+      () => '',
+      () => null,
+      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
+      () => undefined,
+      store,
+    )
+    const probed: string[] = []
+    service.warmupModelDirectly = async (_account, model) => {
+      probed.push(model)
+      return { ok: true, status: 200, durationMs: 1 }
+    }
+    const now = Date.now()
+
+    // 1. Post-reset / floating 7-day account: weekly quota is 100%, Google presents ~7-day window
+    const postResetAccount: ManagedAccount = {
+      id: 'acc-post-reset',
+      alias: 'Post-Reset Account',
+      dir: '',
+      enabled: true,
+      createdAt: now - 86400 * 1000 * 10, // used 10 days ago
+      cooldowns: {},
+      quotas: {
+        google: {
+          remainingFraction: 1,
+          weeklyFraction: 1,
+          weeklyResetTime: new Date(now + 7 * 86400 * 1000).toISOString(),
+        },
+      },
+    }
+
+    const res1 = await service.warmupAccount(postResetAccount, { force: false })
+    assert.equal(res1.length, 1)
+    assert.equal(res1[0]?.success, true)
+    assert.equal(res1[0]?.model, 'gemini-3.8-flash')
+    assert.deepEqual(probed, ['gemini-3.8-flash'])
+
+    // 2. Subsequent scan within 6-day cooldown skips
+    probed.length = 0
+    const res2 = await service.warmupAccount(postResetAccount, { force: false })
+    assert.equal(res2.length, 1)
+    assert.equal(res2[0]?.skipped, true)
+    assert.deepEqual(probed, [])
+
+    // 3. Mid-cycle account (e.g. 4 days remaining): active countdown, must NOT be probed
+    const midCycleAccount: ManagedAccount = {
+      id: 'acc-mid-cycle',
+      alias: 'Mid-Cycle Account',
+      dir: '',
+      enabled: true,
+      createdAt: now - 86400 * 1000 * 15,
+      cooldowns: {},
+      quotas: {
+        google: {
+          remainingFraction: 1,
+          weeklyFraction: 1,
+          weeklyResetTime: new Date(now + 4 * 86400 * 1000).toISOString(),
+        },
+      },
+    }
+
+    const res3 = await service.warmupAccount(midCycleAccount, { force: false })
+    assert.equal(res3.length, 1)
+    assert.equal(res3[0]?.skipped, true)
+    assert.deepEqual(probed, [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pickWarmupModelForFamily dynamically resolves per-account available Claude and Argon models', () => {
+  // Account with Claude 5.5 models (e.g. Account 4)
+  const accWithClaude55 = {
+    id: 'acc-4',
+    quotas: {
+      anthropic: {
+        models: [
+          { modelId: 'claude-opus-5-5-medium', displayName: 'Claude Opus 5.5 (Medium)' },
+          { modelId: 'claude-sonnet-5-5-medium', displayName: 'Claude Sonnet 5.5 (Medium)' },
+        ],
+      },
+      argon: {
+        models: [
+          { modelId: 'gemini-4-argon-medium', displayName: 'Gemini 4 Argon (Medium)' },
+          { modelId: 'gemini-4-argon-low', displayName: 'Gemini 4 Argon (Low)' },
+        ],
+      },
+    },
+  } as unknown as ManagedAccount
+
+  assert.equal(pickWarmupModelForFamily('anthropic', [], accWithClaude55), 'claude-sonnet-5-5-medium')
+  assert.equal(pickWarmupModelForFamily('argon', [], accWithClaude55), 'gemini-4-argon-low')
+
+  // Account with Claude 4.6 models (e.g. Account 3)
+  const accWithClaude46 = {
+    id: 'acc-3',
+    quotas: {
+      anthropic: {
+        models: [
+          { modelId: 'claude-opus-4-6-thinking', displayName: 'Claude Opus 4.6 (Thinking)' },
+          { modelId: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6 (Thinking)' },
+        ],
+      },
+    },
+  } as unknown as ManagedAccount
+
+  assert.equal(pickWarmupModelForFamily('anthropic', [], accWithClaude46), 'claude-sonnet-4-6')
 })
