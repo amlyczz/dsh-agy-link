@@ -25,7 +25,7 @@ test('toCanonicalWarmupModel maps bare models to official physical entities', ()
   assert.equal(toCanonicalWarmupModel('gemini-3.7-flash'), 'gemini-3.7-flash-tiered')
   assert.equal(toCanonicalWarmupModel('gemini-3-flash'), 'gemini-3.8-flash-tiered')
   assert.equal(toCanonicalWarmupModel('gemini-4-argon'), 'gemini-4-argon')
-  assert.equal(toCanonicalWarmupModel('claude-sonnet-4-6'), 'claude-sonnet-5-5-medium')
+  assert.equal(toCanonicalWarmupModel('claude-sonnet-4-6'), 'claude-sonnet-4-6')
   assert.equal(toCanonicalWarmupModel('gpt-oss-120b-medium'), 'gpt-oss-120b-medium')
   assert.equal(toCanonicalWarmupModel('custom-model-id'), 'custom-model-id')
 })
@@ -47,7 +47,7 @@ test('pickWarmupModelForFamily selects appropriate models honoring monitored pre
   assert.equal(pickWarmupModelForFamily('argon'), 'gemini-4-argon')
 
   // Anthropic family
-  assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-5-5-medium')
+  assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-4-6')
   assert.equal(pickWarmupModelForFamily('anthropic', ['claude-opus-4-6-thinking']), 'claude-opus-4-6-thinking')
 
   // OpenAI family

@@ -39,9 +39,6 @@ export function toCanonicalWarmupModel(model: string): string {
   // (Antigravity-Manager #3715). `gemini-3-flash` is the legacy alias of 3.8.
   if (clean === 'gemini-3-flash') return 'gemini-3.8-flash-tiered'
   if (/^gemini-3\.\d+-flash$/.test(clean)) return clean + '-tiered'
-  if (clean === 'claude-sonnet-4-6' || clean === 'claude-sonnet-4.6') {
-    return 'claude-sonnet-5-5-medium'
-  }
   if (clean.includes('argon')) {
     return 'gemini-4-argon'
   }
@@ -55,7 +52,7 @@ export function pickWarmupModelForFamily(
 ): string {
   if (family === 'anthropic') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('claude'))
-    return found ?? 'claude-sonnet-5-5-medium'
+    return found ?? 'claude-sonnet-4-6'
   }
   if (family === 'openai') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('gpt'))
@@ -480,7 +477,7 @@ export class WarmupService {
         skipReason: 'No warmup models configured',
       }]
     }
-    const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-5-5-medium']
+    const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-4-6']
     const quotas = account.quotas ?? {}
     const families = Object.keys(quotas) as ModelFamily[]
     const modelsToPing: Array<{ family: ModelFamily; model: string; historyKey: string; failureKey: string }> = []
