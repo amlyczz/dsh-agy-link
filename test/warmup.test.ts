@@ -25,7 +25,7 @@ test('toCanonicalWarmupModel maps bare models to official physical entities', ()
   assert.equal(toCanonicalWarmupModel('gemini-3.7-flash'), 'gemini-3.7-flash-tiered')
   assert.equal(toCanonicalWarmupModel('gemini-3-flash'), 'gemini-3.8-flash-tiered')
   assert.equal(toCanonicalWarmupModel('gemini-4-argon'), 'gemini-4-argon')
-  assert.equal(toCanonicalWarmupModel('claude-sonnet-4-6'), 'claude-sonnet-4-6')
+  assert.equal(toCanonicalWarmupModel('claude-sonnet-4-6'), 'claude-sonnet-5-5-medium')
   assert.equal(toCanonicalWarmupModel('gpt-oss-120b-medium'), 'gpt-oss-120b-medium')
   assert.equal(toCanonicalWarmupModel('custom-model-id'), 'custom-model-id')
 })
@@ -47,7 +47,7 @@ test('pickWarmupModelForFamily selects appropriate models honoring monitored pre
   assert.equal(pickWarmupModelForFamily('argon'), 'gemini-4-argon')
 
   // Anthropic family
-  assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-4-6')
+  assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-5-5-medium')
   assert.equal(pickWarmupModelForFamily('anthropic', ['claude-opus-4-6-thinking']), 'claude-opus-4-6-thinking')
 
   // OpenAI family
@@ -375,6 +375,82 @@ test('WarmupService runScheduledWarmup respects autoWarmup flag', async () => {
     autoWarmupEnabled = true
     const resEnabled = await service.runScheduledWarmup()
     assert.deepEqual(resEnabled, [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('WarmupService triggers probe for floating/post-reset ~7-day window and skips mid-cycle countdown', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'warmup-post-reset-'))
+  try {
+    const store = new WarmupHistoryStore(join(dir, 'history.json'))
+    const service = new WarmupService(
+      { getAccounts: () => [] } as unknown as AccountPoolManager,
+      {} as unknown as QuotaService,
+      () => '',
+      () => null,
+      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
+      () => undefined,
+      store,
+    )
+    const probed: string[] = []
+    service.warmupModelDirectly = async (_account, model) => {
+      probed.push(model)
+      return { ok: true, status: 200, durationMs: 1 }
+    }
+    const now = Date.now()
+
+    // 1. Post-reset / floating 7-day account: weekly quota is 100%, Google presents ~7-day window
+    const postResetAccount: ManagedAccount = {
+      id: 'acc-post-reset',
+      alias: 'Post-Reset Account',
+      dir: '',
+      enabled: true,
+      createdAt: now - 86400 * 1000 * 10, // used 10 days ago
+      cooldowns: {},
+      quotas: {
+        google: {
+          remainingFraction: 1,
+          weeklyFraction: 1,
+          weeklyResetTime: new Date(now + 7 * 86400 * 1000).toISOString(),
+        },
+      },
+    }
+
+    const res1 = await service.warmupAccount(postResetAccount, { force: false })
+    assert.equal(res1.length, 1)
+    assert.equal(res1[0]?.success, true)
+    assert.equal(res1[0]?.model, 'gemini-3.8-flash')
+    assert.deepEqual(probed, ['gemini-3.8-flash'])
+
+    // 2. Subsequent scan within 6-day cooldown skips
+    probed.length = 0
+    const res2 = await service.warmupAccount(postResetAccount, { force: false })
+    assert.equal(res2.length, 1)
+    assert.equal(res2[0]?.skipped, true)
+    assert.deepEqual(probed, [])
+
+    // 3. Mid-cycle account (e.g. 4 days remaining): active countdown, must NOT be probed
+    const midCycleAccount: ManagedAccount = {
+      id: 'acc-mid-cycle',
+      alias: 'Mid-Cycle Account',
+      dir: '',
+      enabled: true,
+      createdAt: now - 86400 * 1000 * 15,
+      cooldowns: {},
+      quotas: {
+        google: {
+          remainingFraction: 1,
+          weeklyFraction: 1,
+          weeklyResetTime: new Date(now + 4 * 86400 * 1000).toISOString(),
+        },
+      },
+    }
+
+    const res3 = await service.warmupAccount(midCycleAccount, { force: false })
+    assert.equal(res3.length, 1)
+    assert.equal(res3[0]?.skipped, true)
+    assert.deepEqual(probed, [])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

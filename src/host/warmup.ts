@@ -39,6 +39,9 @@ export function toCanonicalWarmupModel(model: string): string {
   // (Antigravity-Manager #3715). `gemini-3-flash` is the legacy alias of 3.8.
   if (clean === 'gemini-3-flash') return 'gemini-3.8-flash-tiered'
   if (/^gemini-3\.\d+-flash$/.test(clean)) return clean + '-tiered'
+  if (clean === 'claude-sonnet-4-6' || clean === 'claude-sonnet-4.6') {
+    return 'claude-sonnet-5-5-medium'
+  }
   if (clean.includes('argon')) {
     return 'gemini-4-argon'
   }
@@ -52,7 +55,7 @@ export function pickWarmupModelForFamily(
 ): string {
   if (family === 'anthropic') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('claude'))
-    return found ?? 'claude-sonnet-4-6'
+    return found ?? 'claude-sonnet-5-5-medium'
   }
   if (family === 'openai') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('gpt'))
@@ -496,21 +499,30 @@ export class WarmupService {
       if (weeklyFrac === undefined || weeklyFrac < 0.999) continue
 
       let shouldWarm = false
-      let historyKey = ''
+      const historyKey = `${identity}:${fam}:weekly`
+      const hasRecentWarmup = this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
 
-      if (q.weeklyResetTime) {
-        const resetTs = Date.parse(q.weeklyResetTime)
-        if (!isNaN(resetTs)) {
-          // Reached weekly reset instant (with 60s buffer)
-          if (now >= resetTs - 60_000) {
-            historyKey = `${identity}:${fam}:weekly:${resetTs}`
-            shouldWarm = options.force || !this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
+      if (options.force) {
+        shouldWarm = true
+      } else if (!hasRecentWarmup) {
+        if (!q.weeklyResetTime) {
+          // Cold start: weekly reset time uninitialized
+          shouldWarm = true
+        } else {
+          const resetTs = Date.parse(q.weeklyResetTime)
+          if (isNaN(resetTs)) {
+            shouldWarm = true
+          } else {
+            // Either:
+            // 1. Time has reached/passed the scheduled reset instant (with 60s buffer)
+            // 2. Or Google has already reset the window upstream and is presenting a
+            //    floating / fresh ~7-day window (resetTs - now >= 6 days) waiting for activity
+            const remainingMs = resetTs - now
+            if (now >= resetTs - 60_000 || remainingMs >= SIX_DAYS_MS) {
+              shouldWarm = true
+            }
           }
         }
-      } else {
-        // Cold start: weekly reset time is uninitialized upstream
-        historyKey = `${identity}:${fam}:weekly:initial`
-        shouldWarm = options.force || !this.history.checkCooldown(historyKey, SIX_DAYS_MS, now)
       }
 
       const failureKey = `${historyKey}:failed`
