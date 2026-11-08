@@ -480,7 +480,7 @@ export class WarmupService {
         skipReason: 'No warmup models configured',
       }]
     }
-    const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-4-6']
+    const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-5-5-medium']
     const quotas = account.quotas ?? {}
     const families = Object.keys(quotas) as ModelFamily[]
     const modelsToPing: Array<{ family: ModelFamily; model: string; historyKey: string; failureKey: string }> = []
