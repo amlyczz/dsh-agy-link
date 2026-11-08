@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.8 (2026-11-08)
+
+### English
+
+- **Fix(warmup): the 7-day warmup no longer freezes on a floating post-reset window, and probes use models each account actually has.** (thanks @Ronnoc, #88)
+  - After an upstream weekly reset (or for an account with zero usage), Google returns a floating `resetTime = now + 7 days` with no `description`. The old trigger only fired at `now >= resetTs - 60s`, so those accounts were never probed and the weekly timer floated at "7d 0h" forever. A probe now also fires when `remainingMs >= 6 days`, and the cooldown key is deterministic (`identity:family:weekly`) so a floating reset can no longer invalidate it.
+  - Argon is exposed with effort tiers; probing the bare `gemini-4-argon` got a 404. It maps to `gemini-4-argon-low`, and when the account's quota row lists Argon models the low tier is picked from it.
+  - Accounts differ in which Claude generation they can use (legacy `claude-sonnet-4-6` vs migrated `claude-sonnet-5-5-*`). The probe model is now chosen per account from `quotas.anthropic.models` (monitored pick → any Sonnet low/medium → any Sonnet → any Claude), instead of a global `claude-sonnet-4-6`.
+
+### 中文
+
+- **修复(warmup)：7 天预热不再卡在「重置后的浮动窗口」，且探测模型按账号实际可用选择。**（感谢 @Ronnoc，#88）
+  - 上游周额度重置后（或本周期零使用），Google 返回浮动的 `resetTime = now + 7 天` 且无 `description`；旧逻辑只在 `now >= resetTs - 60s` 时触发，于是这些账号永远不被探活，周计时器一直显示浮动「7d 0h」。现在 `remainingMs >= 6 天` 也会触发，且冷却键固定为 `identity:family:weekly`，浮动 reset 不会再让它失效。
+  - Argon 上游按思考档位暴露模型，直接探测 `gemini-4-argon` 会 404；现映射到 `gemini-4-argon-low`，并优先从该账号的配额模型列表里取 low 档。
+  - 不同账号可用的 Claude 代际不同（旧账号 `claude-sonnet-4-6`，迁移账号 `claude-sonnet-5-5-*`）；探测模型改为按 `quotas.anthropic.models` **逐账号**选择（monitored 命中 → 任意 Sonnet low/medium → 任意 Sonnet → 任意 Claude），不再全局写死 `claude-sonnet-4-6`。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.7...v0.6.8
+
 ## 0.6.7 (2026-11-08)
 
 ### English
