@@ -162,6 +162,8 @@ dsh plugin --profile web add dsh-agy-link
 | `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | 在 `/model` 选择器中隐藏的模型 slug 列表（黑名单语义，新模型默认可见；建议直接在设置面板"模型显示"中点选管理） |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | 单轮活跃看门狗超时（毫秒） |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | 存在未完成工具步骤（ACTIVE）时的空闲预算（分钟）；`0` = 不抬高预算，卡死的工具按 `timeoutMs` 快速失败 |
+| `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | 上报给 DSH 的模型上下文窗口（token）。agy 的模型列表不上报窗口，所以统一用该值；若你的模型实际是 256K（如部分 Claude/Gemini 配置），设为 `262144` 即可让「上下文已用 %」正确 |
+| `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | 单次输出 token 上限（上报给 DSH） |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | 会话 cwd | agy 工作区根目录（默认跟随当前会话工作区） |
 | `proxyUrl` | `DSH_AGY_PROXY_URL` | 空字符串 | 全局代理 URL；若在控制台中单独配置了代理，优先使用账号独立代理 |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | Windows `true`，其他平台 `false` | 每次 spawn 前刷新 agy 的更新检查时间戳，阻断 `--bg-updater` 子进程链（Windows 闪窗根因）。关闭后 agy 恢复自动更新检查 |
@@ -393,6 +395,8 @@ dsh plugin --profile web add dsh-agy-link
 | `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | Model slugs hidden from the `/model` picker (deny-list, newly discovered models stay visible; manage them via the "Model visibility" row in the settings panel) |
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Activity watchdog timeout in milliseconds |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget while a tool step is ACTIVE (minutes); `0` keeps the normal `timeoutMs` budget so wedged tools fail fast |
+| `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | Model context window (tokens) reported to DSH. agy's model list carries no window, so this single value is used for every model; if yours is really 256K, set `262144` and the "context used %" becomes correct |
+| `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | Output token cap reported to DSH |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | session cwd | Working directory root |
 | `proxyUrl` | `DSH_AGY_PROXY_URL` | empty string | Global proxy URL; per-account proxies configured in console take precedence |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refreshes agy's update-check timestamp before every spawn so its `--bg-updater` child chain (the Windows console-flash root cause) never starts. `false` restores agy's own auto-update checks |

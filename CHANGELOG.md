@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.7 (2026-11-08)
+
+### English
+
+- **Fix(config): the model context window and output cap are set via env, so a 256K model stops showing as 1M (issue #83).**
+  - `contextWindowDefault` / `maxTokensDefault` drive DSH's per-model `context.contextWindow` — and therefore the "context used %" tooltip — but agy's model list carries no window, and neither key was exposed through an env var or the settings UI. A user whose model is really 262 144 tokens could only see the 1 048 576 default.
+  - `DSH_AGY_CONTEXT_WINDOW` and `DSH_AGY_MAX_TOKENS` now override them (positive integers only; invalid values fall back), with README rows in 中文 and English.
+
+### 中文
+
+- **修复(config)：模型上下文窗口与输出上限可用环境变量设置，256K 模型不再显示成 1M（issue #83）。**
+  - `contextWindowDefault` / `maxTokensDefault` 决定上报给 DSH 的每模型 `context.contextWindow`（也就是「上下文已用 %」浮层），但 agy 的模型列表不上报窗口，且这两个键此前既没有环境变量也没有设置面板入口——真实窗口是 262144 的用户只能看到 1048576 的默认值。
+  - 现支持 `DSH_AGY_CONTEXT_WINDOW` / `DSH_AGY_MAX_TOKENS`（仅接受正整数，非法值回落），并在中英 README 配置表中补充说明。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.6...v0.6.7
+
 ## 0.6.6 (2026-11-08)
 
 ### English

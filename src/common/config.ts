@@ -182,6 +182,17 @@ export function resolveConfig(
     const t = asNum(env.DSH_AGY_LONG_TOOL_IDLE_MINUTES)
     if (t !== undefined && t >= 0) cfg.longToolIdleMinutes = t
   }
+  // Model context window / output cap. agy's model list carries no window, so
+  // these are the only knobs a user has when the reported value is wrong (a
+  // 256K model shown as the 1M default); neither is exposed in the settings UI.
+  if (env.DSH_AGY_CONTEXT_WINDOW) {
+    const w = asNum(env.DSH_AGY_CONTEXT_WINDOW)
+    if (w !== undefined && w > 0) cfg.contextWindowDefault = Math.floor(w)
+  }
+  if (env.DSH_AGY_MAX_TOKENS) {
+    const m = asNum(env.DSH_AGY_MAX_TOKENS)
+    if (m !== undefined && m > 0) cfg.maxTokensDefault = Math.floor(m)
+  }
   if (env.DSH_AGY_EXTRA_ARGS) {
     cfg.extraArgs = env.DSH_AGY_EXTRA_ARGS.split(/\s+/).filter(Boolean)
   }

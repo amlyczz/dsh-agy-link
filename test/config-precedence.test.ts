@@ -25,6 +25,22 @@ test('boolean env vars are case-insensitive and accept yes/on/off', () => {
   assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'garbage' }, {}).mcpBridge, false, 'unknown falls back to base default')
 })
 
+test('context window and max tokens are configurable via env (issue #83)', () => {
+  const cfg = resolveConfig({}, { DSH_AGY_CONTEXT_WINDOW: '262144', DSH_AGY_MAX_TOKENS: '32768' }, {})
+  assert.equal(cfg.contextWindowDefault, 262144)
+  assert.equal(cfg.maxTokensDefault, 32768)
+  // Invalid values fall back instead of reporting a bogus window.
+  const bad = resolveConfig({}, { DSH_AGY_CONTEXT_WINDOW: 'nope', DSH_AGY_MAX_TOKENS: '-1' }, {})
+  assert.equal(bad.contextWindowDefault, 1048576)
+  assert.equal(bad.maxTokensDefault, 65536)
+  // Entry config still wins over the default, env wins over entry (ADR-13).
+  assert.equal(resolveConfig({ contextWindowDefault: 200000 }, {}, {}).contextWindowDefault, 200000)
+  assert.equal(
+    resolveConfig({ contextWindowDefault: 200000 }, { DSH_AGY_CONTEXT_WINDOW: '262144' }, {}).contextWindowDefault,
+    262144,
+  )
+})
+
 test('longToolIdleMinutes is configurable, accepts 0 (disable) and reads the env override', () => {
   assert.equal(resolveConfig({}, {}, {}).longToolIdleMinutes, 240)
   assert.equal(resolveConfig({ longToolIdleMinutes: 30 }, {}, {}).longToolIdleMinutes, 30)
