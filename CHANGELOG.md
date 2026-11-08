@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.9 (2026-11-09)
+
+### English
+
+- **Fix(pool): `pool.json` can no longer be torn by two writers, and a corrupt file recovers from a last-good snapshot instead of emptying the pool (issue #90).**
+  - Persists used a single fixed `.pool.json.tmp`, so two host processes writing at once could overwrite/truncate each other and leave a half-written file that `load()` could only discard — the UI then showed an empty account pool. Writes now go through a tmp name unique per writer (pid + random), a JSON round-trip validation, and `rename` with retries.
+  - Every successful persist also refreshes `pool.json.last-good`. If the primary file is unparsable, `load()` keeps the forensic `pool.json.corrupt-<ts>` copy **and** restores the last-good snapshot (`recoveredFromLastGood` is observable for diagnostics) before falling back to defaults.
+
+### 中文
+
+- **修复(pool)：两个写者同时持久化不再撕裂 `pool.json`，损坏时会从 last-good 快照恢复而不是把账号池清空（issue #90）。**
+  - 持久化过去固定用 `.pool.json.tmp`，两个宿主进程同时写会互相覆盖/截断，留下半截文件，`load()` 只能丢弃——UI 表现为「账号全没了」。现在写入改为**每写者唯一**的 tmp 名（pid + 随机）、写后 JSON 往返校验、`rename` 重试。
+  - 每次成功持久化同时刷新 `pool.json.last-good`；主文件无法解析时，`load()` 先保留 `pool.json.corrupt-<ts>` 取证副本，**再**恢复 last-good 快照（`recoveredFromLastGood` 可供诊断），两者都失败才回落默认池。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.8...v0.6.9
+
 ## 0.6.8 (2026-11-08)
 
 ### English

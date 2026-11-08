@@ -1,7 +1,7 @@
 // AccountPoolManager: multi-profile credential isolation, family-scoped cooldown,
 // and sticky sequential drain scheduling for Google Antigravity accounts.
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { homedir } from 'node:os'
 import {
   AUTH_CONFIRM_STRIKES,
@@ -34,6 +34,35 @@ export const LOW_QUOTA_WEEKLY = 0.05
 
 /** Why a pool account cannot serve a family right now (diagnostics only). */
 export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota'
+
+/**
+ * Write `body` to `file` without ever publishing a torn snapshot: a tmp name
+ * unique per writer (pid + random), a JSON round-trip check, then `rename`
+ * with retries. Two host processes persisting at once used to collide on one
+ * fixed `.pool.json.tmp` and silently truncate the pool (2026-11-04).
+ */
+function writeJsonAtomic(file: string, body: string): void {
+  const dir = dirname(file)
+  const tmp = join(dir, '.' + basename(file) + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp')
+  writeFileSync(tmp, body, 'utf8')
+  // Never rename a truncated/unparsable snapshot over the real file.
+  JSON.parse(readFileSync(tmp, 'utf8'))
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      renameSync(tmp, file)
+      return
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  try {
+    unlinkSync(tmp)
+  } catch {
+    // best effort
+  }
+  throw lastErr
+}
 
 export function defaultPoolDir(home = homedir()): string {
   if (process.env.DSH_STATE_DIR) {
@@ -72,6 +101,8 @@ export class AccountPoolManager {
   private readonly authStrikes = new Map<string, number>()
   /** Serialized snapshot of the last successful persist/load; skips no-op writes. */
   private persistedJson = ''
+  /** True when load() had to fall back to pool.json.last-good (observable for diagnostics). */
+  recoveredFromLastGood = false
 
   constructor(baseDir = defaultPoolDir()) {
     this.baseDir = baseDir
@@ -93,9 +124,28 @@ export class AccountPoolManager {
   }
 
   private load(): AccountPoolData {
+    const primary = this.readPoolFile(this.file)
+    if (primary) return primary
+    // Torn or corrupt file (concurrent hosts, truncated download, manual edit):
+    // keep a forensic copy, then prefer the last snapshot this process wrote
+    // cleanly instead of presenting the user with an empty pool.
     try {
-      if (existsSync(this.file)) {
-        const raw = readFileSync(this.file, 'utf8')
+      if (existsSync(this.file)) copyFileSync(this.file, this.file + '.corrupt-' + Date.now())
+    } catch {
+      // best effort
+    }
+    const lastGood = this.readPoolFile(this.file + '.last-good')
+    if (lastGood) {
+      this.recoveredFromLastGood = true
+      return lastGood
+    }
+    return defaultPoolData()
+  }
+
+  private readPoolFile(file: string): AccountPoolData | null {
+    try {
+      if (existsSync(file)) {
+        const raw = readFileSync(file, 'utf8')
         const parsed = JSON.parse(raw) as AccountPoolData
         if (parsed && Array.isArray(parsed.accounts)) {
           // Migration: the Gemini Web login feature was removed — drop any
@@ -140,17 +190,9 @@ export class AccountPoolManager {
         }
       }
     } catch {
-      // Corrupt file: preserve the only copy for forensics BEFORE the
-      // bootstrap defaults overwrite it on the next persist.
-      try {
-        if (existsSync(this.file)) {
-          copyFileSync(this.file, this.file + '.corrupt-' + Date.now())
-        }
-      } catch {
-        // best effort
-      }
+      // Unparsable: the caller decides whether a last-good snapshot exists.
     }
-    return defaultPoolData()
+    return null
   }
 
   private persist(): void {
@@ -178,11 +220,17 @@ export class AccountPoolManager {
     try {
       mkdirSync(dirname(this.file), { recursive: true })
       if (serialized === this.persistedJson && merged === this.data) return
-      const tmp = join(dirname(this.file), '.pool.json.tmp')
-      writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8')
-      renameSync(tmp, this.file)
+      const body = JSON.stringify(merged, null, 2)
+      writeJsonAtomic(this.file, body)
       this.persistedJson = JSON.stringify(merged)
       if (merged !== this.data) this.data = merged
+      // Keep a clean snapshot beside the pool so a torn write elsewhere can be
+      // recovered on the next start (#90). Best effort: the primary write won.
+      try {
+        writeJsonAtomic(this.file + '.last-good', body)
+      } catch {
+        // recovery copy is optional
+      }
     } catch (e) {
       // Persistence failure used to be fully silent: cooldowns/quota state
       // quietly evaporated on restart. Surface it once per failure instead.

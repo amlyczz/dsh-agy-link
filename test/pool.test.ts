@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { modelFamilyOf, needsAuthReverify, shouldPollAccount } from '../src/common/pool-types.ts'
@@ -23,6 +23,28 @@ test('modelFamilyOf correctly categorizes models', () => {
   assert.equal(modelFamilyOf('openai/gpt-4o'), 'openai')
   assert.equal(modelFamilyOf('custom-other-model'), 'unknown')
   assert.equal(modelFamilyOf(undefined), 'unknown')
+})
+
+test('load() falls back to the last-good snapshot when pool.json is torn', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-lastgood-'))
+  const pool = new AccountPoolManager(dir)
+  const ids = pool.getAccounts().map((a) => a.id)
+  pool.markAccountActive(ids[0]!) // force a persist so pool.json.last-good exists
+  // A concurrent host process truncating the file used to leave the user with
+  // an empty account pool; the last good snapshot must win instead.
+  writeFileSync(join(dir, 'pool.json'), '{"accounts":[{"id":"a1')
+  const reloaded = new AccountPoolManager(dir)
+  assert.deepEqual(reloaded.getAccounts().map((a) => a.id), ids)
+  assert.ok(existsSync(join(dir, 'pool.json.last-good')), 'a last-good snapshot is kept next to pool.json')
+})
+
+test('persist never reuses the fixed .pool.json.tmp name', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-tmp-'))
+  const pool = new AccountPoolManager(dir)
+  writeFileSync(join(dir, '.pool.json.tmp'), 'sentinel')
+  pool.markAccountActive(pool.getAccounts()[0]!.id)
+  assert.equal(readFileSync(join(dir, '.pool.json.tmp'), 'utf8'), 'sentinel', 'a foreign fixed-name tmp is never written')
+  assert.deepEqual(readdirSync(dir).filter((f) => f.endsWith('.tmp')), ['.pool.json.tmp'], 'no tmp litter is left behind')
 })
 
 test('markAccountActive records exactly one in-use account and persists it', () => {
