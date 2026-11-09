@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.11 (2026-11-09)
+
+### English
+
+- **Fix(models): drop the retired Gemini 3.5/3.6/3.7 fallback rows and add the current Claude 5.5 line-up.**
+  - Those Gemini models are gone upstream (maintainer-confirmed 2026-11-09), so the fallback catalog no longer advertises models the backend cannot serve. `claude-sonnet-5-5` and `claude-opus-5-5` are added next to the 4.6 entries.
+  - The 5.5 entries deliberately carry **no effort tiers** yet: until agy's `--effort` support for Claude is verified, advertising tiers would show levels the adapter cannot pass. When that is confirmed, add `efforts` and extend `isEffortCapable` together.
+  - Why this matters: the live catalog comes from `agy models`, but the fallback list is what the picker shows when that command cannot run (signed out / offline) — a stale entry there produces a model that fails on selection.
+
+### 中文
+
+- **修复(models)：移除已下线的 Gemini 3.5/3.6/3.7 回退项，补上当前 Claude 5.5 阵容。**
+  - 这几个 Gemini 模型上游已下线（维护者 2026-11-09 确认），回退目录不再列出后端无法提供的模型；`claude-sonnet-5-5`、`claude-opus-5-5` 与 4.6 并列。
+  - 5.5 条目**暂不声明 effort 档位**：agy 对 Claude 的 `--effort` 支持尚未验证，声明了只会显示实际传不下去的档位；确认后再同步加 `efforts` 与 `isEffortCapable`。
+  - 影响面：在线目录来自 `agy models`，但 `agy models` 不可用时（未登录/离线）选择器显示的就是这份回退目录——残留的旧条目会给出一个一选就失败的模型。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.10...v0.6.11
+
 ## 0.6.10 (2026-11-09)
 
 ### English

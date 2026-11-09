@@ -53,7 +53,7 @@ function makeAdapter(cfgOverrides: Partial<PluginConfig> = {}, deps: Partial<Agy
 function opts(messages: Message[], extra: Partial<GenerateOptions> = {}): GenerateOptions {
   return {
     provider: 'antigravity',
-    model: 'gemini-3.7-flash',
+    model: 'gemini-3.8-flash',
     messages,
     ...extra,
   } as GenerateOptions
@@ -860,7 +860,7 @@ test('issue #67: a persisted / seeded refusal is honoured before any spawn', asy
     const resolved = (await adapter.resolveModel('antigravity', 'gemini-3.8-flash')) as { reasoning?: unknown }
     assert.equal(resolved.reasoning, undefined)
     // An unrelated model keeps its levels.
-    const other = (await adapter.resolveModel('antigravity', 'gemini-3.7-flash')) as { reasoning?: { efforts?: unknown[] } }
+    const other = (await adapter.resolveModel('antigravity', 'gemini-4-argon')) as { reasoning?: { efforts?: unknown[] } }
     assert.ok(Array.isArray(other.reasoning?.efforts), 'unrelated models keep their effort row')
   } finally {
     delete process.env.FAKE_AGY_ARGS_FILE
@@ -1537,17 +1537,17 @@ test('listModels never returns duplicate ids even with duplicate fallback defs (
 })
 
 test('listModels hides hiddenModels from the picker while resolveModel still resolves them', async () => {
-  const { adapter } = makeAdapter({ hiddenModels: ['gemini-3.7-flash', ' gpt-oss-120b-medium '] })
+  const { adapter } = makeAdapter({ hiddenModels: ['gemini-3.8-flash', ' gpt-oss-120b-medium '] })
   const models = await adapter.listModels('antigravity')
   const ids = models.map((m) => m.id)
-  assert.ok(!ids.includes('gemini-3.7-flash'), 'a hidden id must leave the picker list')
+  assert.ok(!ids.includes('gemini-3.8-flash'), 'a hidden id must leave the picker list')
   assert.ok(!ids.includes('gpt-oss-120b-medium'), 'hidden ids are matched after trimming')
   assert.ok(ids.includes('claude-sonnet-4-6'), 'unlisted models stay visible (deny-list semantics)')
   // resolveModel deliberately does not filter: in-flight sessions and direct
   // references keep resolving a model after it has been hidden.
-  const resolved = await adapter.resolveModel('antigravity', 'gemini-3.7-flash')
-  assert.equal(resolved.id, 'gemini-3.7-flash')
-  assert.equal(resolved.name, 'Gemini 3.7 Flash')
+  const resolved = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
+  assert.equal(resolved.id, 'gemini-3.8-flash')
+  assert.equal(resolved.name, 'Gemini 3.8 Flash')
 })
 
 test('resolveModel uniformly advertises 1M context window across all Antigravity models (ADR-013)', async () => {
@@ -2301,7 +2301,7 @@ test('returning session prompt after an interrupted turn does not duplicate the 
     conversationId: 'conv-interrupted-1',
     lastMessageCount: 2,
     updatedAt: Date.now(),
-    model: 'gemini-3.7-flash',
+    model: 'gemini-3.8-flash',
     interrupted: true,
   })
 

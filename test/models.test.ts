@@ -56,18 +56,23 @@ test('parseModelsOutput handles dotted current-gen slugs', () => {
   assert.deepEqual(base?.efforts, ['medium'])
 })
 
-test('fallback catalog carries the current model line-up incl. 3.8 and 3.7', () => {
+test('fallback catalog carries the current line-up: 3.8/argon/4.6+5.5 Claude, retired 3.5–3.7 dropped', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
   const ids = cat.map((e) => e.id)
   assert.ok(ids.includes('gemini-3.8-flash'), '3.8 flash present')
-  assert.ok(ids.includes('gemini-3.7-flash'), '3.7 flash present')
-  assert.ok(ids.includes('gemini-3.6-flash'))
+  // Gemini 3.5–3.7 are retired upstream (maintainer-confirmed 2026-11-09).
+  assert.equal(ids.includes('gemini-3.7-flash'), false, 'retired 3.7 flash is gone')
+  assert.equal(ids.includes('gemini-3.6-flash'), false, 'retired 3.6 flash is gone')
+  assert.equal(ids.includes('gemini-3.5-flash'), false, 'retired 3.5 flash is gone')
+  assert.ok(ids.includes('claude-sonnet-5-5'), 'Claude Sonnet 5.5 present')
+  assert.ok(ids.includes('claude-opus-5-5'), 'Claude Opus 5.5 present')
   assert.ok(ids.includes('claude-opus-4-6-thinking'))
   assert.ok(ids.includes('gpt-oss-120b-medium'))
   const f38 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'gemini-3.8-flash')
   assert.deepEqual(f38?.efforts, ['low', 'medium', 'high'])
-  const f37 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'gemini-3.7-flash')
-  assert.deepEqual(f37?.efforts, ['low', 'medium', 'high'])
+  // Effort support for Claude via agy is unverified, so 5.5 must not advertise tiers.
+  const c55 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'claude-sonnet-5-5')
+  assert.equal(c55?.efforts, null)
 })
 
 test('parseModelsOutput skips banners and error lines', () => {
@@ -145,12 +150,12 @@ test('bare gemini base without siblings gets no efforts', () => {
 
 test('buildFallbackCatalog carries configurable efforts', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
-  assert.equal(cat.length, 8)
+  assert.equal(cat.length, 7)
   const flash38 = cat.find((e) => e.id === 'gemini-3.8-flash')
   assert.deepEqual(flash38?.efforts, ['low', 'medium', 'high'])
   const argon = cat.find((e) => e.id === 'gemini-4-argon')
   assert.deepEqual(argon?.efforts, ['low', 'medium', 'high'])
-  const flash = cat.find((e) => e.id === 'gemini-3.7-flash')
+  const flash = cat.find((e) => e.id === 'gemini-3.8-flash')
   assert.deepEqual(flash?.efforts, ['low', 'medium', 'high'])
   const claude = cat.find((e) => e.id === 'claude-sonnet-4-6')
   assert.equal(claude?.efforts, null)
@@ -159,7 +164,7 @@ test('buildFallbackCatalog carries configurable efforts', () => {
 test('defaultEffortFor prefers config override then high first', () => {
   const cfg: PluginConfig = { ...defaultConfig(), defaultEffort: 'low' }
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
-  const flash = findEntry({ source: 'discovered', models: cat, discoveredAt: 0 }, 'gemini-3.7-flash')
+  const flash = findEntry({ source: 'discovered', models: cat, discoveredAt: 0 }, 'gemini-3.8-flash')
   assert.equal(flash && defaultEffortFor(flash, cfg), 'low')
   // No config override: default is the highest available effort.
   const cfg2: PluginConfig = { ...defaultConfig(), defaultEffort: '' }
