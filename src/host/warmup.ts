@@ -73,7 +73,9 @@ export function pickWarmupModelForFamily(
       if (anyClaude) return anyClaude
     }
     const found = monitoredModels.find((m) => m.toLowerCase().includes('claude'))
-    return found ?? 'claude-sonnet-4-6'
+    // 4.6 is retired upstream (agy 1.5.3 lists 5.5 only); legacy accounts pick
+    // 4.6 from their own quota models above, so this fallback tracks current.
+    return found ?? 'claude-sonnet-5-5'
   }
   if (family === 'openai') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('gpt'))
@@ -495,7 +497,7 @@ export class WarmupService {
         skipReason: 'No warmup models configured',
       }]
     }
-    const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-4-6']
+    const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-5-5']
     const quotas = account.quotas ?? {}
     const families = Object.keys(quotas) as ModelFamily[]
     const modelsToPing: Array<{ family: ModelFamily; model: string; historyKey: string; failureKey: string }> = []

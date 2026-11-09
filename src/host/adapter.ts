@@ -1489,7 +1489,7 @@ export class AgyAdapter extends LlmAdapter {
         // family the scheduler just picked.
         const familyModel: Partial<Record<ModelFamily, string>> = {
           google: 'gemini-3.8-flash',
-          anthropic: 'claude-sonnet-4-6',
+          anthropic: 'claude-sonnet-5-5',
           openai: 'gpt-oss-120b-medium',
         }
         for (const fbFam of ['google', 'anthropic', 'openai'] as ModelFamily[]) {

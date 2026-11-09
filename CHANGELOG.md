@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.13 (2026-11-10)
+
+### English
+
+- **Fix(models/warmup): follow the 5.5 migration everywhere — no shipped default points at the retired Claude 4.6 any more.**
+  - Found during the 5-day architecture review: after 0.6.11/0.6.12 moved the catalog to Claude 5.5, four places still pinned 4.6 — the `warmupModels` config default (`types.ts`), the warmup family fallback and its internal default list (`warmup.ts`), and the cross-family failover map (`adapter.ts`). With 4.6 retired upstream, an auto-warmup probe or a family failover could therefore target a model that no longer exists.
+  - All four now use `claude-sonnet-5-5`; legacy accounts still get their own 4.6 picked from `quotas.anthropic.models` first (per-account resolution from #88), so nothing regresses for older plans.
+  - Bare name aliases (`claude-sonnet`, `claude-opus`) now resolve to the 5.5 line, while explicit `claude-*-4.x` names keep resolving to 4.6 (legacy sessions untouched).
+  - Tests: warmup default + anthropic fallback + alias resolution; README/CONFIGURATION warmup rows and the `/tsl` example updated.
+
+### 中文
+
+- **修复(models/warmup)：处处跟上 5.5 迁移——不再有任何出厂默认指向已下线的 Claude 4.6。**
+  - 5 天架构 review 发现：0.6.11/0.6.12 把目录迁到 Claude 5.5 后，仍有四处钉着 4.6——`warmupModels` 配置默认值（`types.ts`）、预热族回退与内部默认列表（`warmup.ts`）、跨族失败转移映射（`adapter.ts`）。4.6 上游已退役，自动预热或跨族回退可能打到一个不存在的模型。
+  - 四处统一改为 `claude-sonnet-5-5`；旧账号仍会**优先**从 `quotas.anthropic.models` 里取自己的 4.6（#88 的按账号解析），不会回退。
+  - 裸名别名（`claude-sonnet`、`claude-opus`）解析到 5.5 世代；显式 `claude-*-4.x` 仍解析到 4.6（不影响历史会话）。
+  - 测试：预热默认值、anthropic 回退、别名解析；README/CONFIGURATION 的预热行与 `/tsl` 示例同步更新。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.12...v0.6.13
+
 ## 0.6.12 (2026-11-09)
 
 ### English

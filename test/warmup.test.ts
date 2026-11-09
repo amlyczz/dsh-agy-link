@@ -17,7 +17,7 @@ import { defaultConfig, type PluginConfig } from '../src/common/types.ts'
 
 test('autoWarmup is opt-in: the default config never probes on upgrade', () => {
   assert.equal(defaultConfig().autoWarmup, false)
-  assert.deepEqual(defaultConfig().warmupModels, ['gemini-3.8-flash', 'claude-sonnet-4-6'])
+  assert.deepEqual(defaultConfig().warmupModels, ['gemini-3.8-flash', 'claude-sonnet-5-5'])
 })
 
 test('toCanonicalWarmupModel maps bare models to official physical entities', () => {
@@ -48,7 +48,7 @@ test('pickWarmupModelForFamily selects appropriate models honoring monitored pre
   assert.equal(pickWarmupModelForFamily('argon'), 'gemini-4-argon-low')
 
   // Anthropic family
-  assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-4-6')
+  assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-5-5')
   assert.equal(pickWarmupModelForFamily('anthropic', ['claude-opus-4-6-thinking']), 'claude-opus-4-6-thinking')
 
   // OpenAI family

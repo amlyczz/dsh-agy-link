@@ -151,7 +151,7 @@ export interface PluginConfig {
    * cold start, activating the 7-day upstream timer.
    */
   autoWarmup: boolean
-  /** Models monitored/used for auto-warmup. Defaults to ['gemini-3.8-flash', 'claude-sonnet-4-6']. */
+  /** Models monitored/used for auto-warmup. Defaults to ['gemini-3.8-flash', 'claude-sonnet-5-5']. */
   warmupModels: readonly string[]
   /**
    * Auto "plain language" translation after every completed agent turn
@@ -277,7 +277,7 @@ export function defaultConfig(): PluginConfig {
     // endpoints, so it must never start probing on upgrade. Users enable it
     // explicitly with `autoWarmup: true` / DSH_AGY_AUTO_WARMUP=1.
     autoWarmup: false,
-    warmupModels: ['gemini-3.8-flash', 'claude-sonnet-4-6'],
+    warmupModels: ['gemini-3.8-flash', 'claude-sonnet-5-5'],
     // Translation is strictly opt-in: it spends quota on every completed
     // turn, so the default must never silently start billing a user.
     autoTranslate: false,

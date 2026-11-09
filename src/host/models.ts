@@ -373,10 +373,14 @@ export class ModelCatalog {
 
 export function resolveModelSlug(id: string): string {
   const s = id.trim().toLowerCase()
-  if (s === 'claude-opus-4-6' || s === 'claude-opus-4-8' || s === 'claude-opus' || s === 'claude-opus-4.6' || s === 'claude-opus-4-5') {
+  // Bare aliases follow the current generation; explicit 4.x names stay 4.6 so
+  // legacy sessions/accounts keep resolving exactly what they asked for.
+  if (s === 'claude-opus') return 'claude-opus-5-5'
+  if (s === 'claude-sonnet') return 'claude-sonnet-5-5'
+  if (s === 'claude-opus-4-6' || s === 'claude-opus-4-8' || s === 'claude-opus-4.6' || s === 'claude-opus-4-5') {
     return 'claude-opus-4-6-thinking'
   }
-  if (s === 'claude-sonnet' || s === 'claude-sonnet-4.6' || s === 'claude-sonnet-4-5') {
+  if (s === 'claude-sonnet-4.6' || s === 'claude-sonnet-4-5') {
     return 'claude-sonnet-4-6'
   }
   if (s === 'gpt-oss-120b' || s === 'gpt-oss-20b' || s === 'gpt-oss') {

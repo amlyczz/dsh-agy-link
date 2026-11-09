@@ -81,7 +81,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `quotaPollIntervalMs` | `DSH_AGY_QUOTA_POLL_INTERVAL_MS` | `3600000` | Background quota poll interval (minimum 60 s) |
 | `quotaViaCli` | `DSH_AGY_QUOTA_VIA_CLI` | `true` | Prefer the agy CLI path for quota queries |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in weekly-quota warmup |
-| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-4-6` | Models used for warmup probes |
+| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | Models used for warmup probes |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refresh agy's update-check timestamp before every spawn to stop the `--bg-updater` console flash chain |
 
 ## Translation (`/tsl`)

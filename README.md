@@ -168,7 +168,7 @@ dsh plugin --profile web add dsh-agy-link
 | `proxyUrl` | `DSH_AGY_PROXY_URL` | 空字符串 | 全局代理 URL；若在控制台中单独配置了代理，优先使用账号独立代理 |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | Windows `true`，其他平台 `false` | 每次 spawn 前刷新 agy 的更新检查时间戳，阻断 `--bg-updater` 子进程链（Windows 闪窗根因）。关闭后 agy 恢复自动更新检查 |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | 7 天周配额自动预热（opt-in）：周额度到达重置时间或冷启动时发送极小探活请求，提前激活 7 天计时器。开启后每 5 分钟巡检一次；该路径直连 Google 内部端点，请自行评估风控风险 |
-| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-4-6` | 自动预热使用的模型列表（逗号分隔）；空数组表示不自动预热 |
+| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | 自动预热使用的模型列表（逗号分隔）；空数组表示不自动预热 |
 | `autoTranslate` | `DSH_AGY_AUTO_TRANSLATE` | `false` | 每轮对话完成后自动调用 `/tsl` 生成大白话翻译卡片；亦可在会话中通过 `/tsl auto on` 动态开启 |
 | `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | `/tsl` 默认使用的翻译模型，缺失时按目录回退 |
 | `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `high` | 翻译模型思考强度档位 |
@@ -188,7 +188,7 @@ dsh plugin --profile web add dsh-agy-link
 /tsl 3                     # 翻译指定第 3 轮回复
 /tsl --full                # 连同中间工具调用的叙述一并翻译
 /tsl --text 任意文本…       # 纯文本翻译模式（在终端直接输出，不生成卡片）
-/tsl --model claude-sonnet-4-6 --effort medium  # 临时指定翻译模型与思考强度
+/tsl --model claude-sonnet-5-5 --effort medium  # 临时指定翻译模型与思考强度
 /tsl --print               # 在命令执行输出中同步回显译文
 /tsl auto on|off|status    # 针对当前会话开启、关闭或查看自动翻译状态
 ```
@@ -401,7 +401,7 @@ dsh plugin --profile web add dsh-agy-link
 | `proxyUrl` | `DSH_AGY_PROXY_URL` | empty string | Global proxy URL; per-account proxies configured in console take precedence |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refreshes agy's update-check timestamp before every spawn so its `--bg-updater` child chain (the Windows console-flash root cause) never starts. `false` restores agy's own auto-update checks |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in 7-day weekly quota warmup: sends a minimal probe when the weekly window has reset or is cold, activating the 7-day timer. Scans every 5 minutes; this path talks directly to Google's internal endpoints, so assess the risk-control tradeoff yourself |
-| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-4-6` | Model list used for warmup probes (comma-separated); an empty list disables automatic warmup |
+| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | Model list used for warmup probes (comma-separated); an empty list disables automatic warmup |
 | `autoTranslate` | `DSH_AGY_AUTO_TRANSLATE` | `false` | Auto plain-language translation after every completed turn (card under the reply). Per-session override: `/tsl auto on\|off` |
 | `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | Model used by `/tsl` and auto mode; falls back through the live catalog when absent |
 | `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `high` | Reasoning effort for effort-capable translate models |

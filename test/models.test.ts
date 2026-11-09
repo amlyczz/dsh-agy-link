@@ -205,7 +205,9 @@ test('effort suffix ids still resolve to their base entry', () => {
 test('findEntry resolves aliases via resolveModelSlug', () => {
   const cat = { source: 'fallback' as const, models: buildFallbackCatalog(DEFAULT_FALLBACK_MODELS), discoveredAt: 0 }
   assert.equal(findEntry(cat, 'claude-opus-4-6')?.id, 'claude-opus-4-6-thinking')
-  assert.equal(findEntry(cat, 'claude-opus')?.id, 'claude-opus-4-6-thinking')
+  // Bare aliases point at the current generation (agy 1.5.3 serves 5.5).
+  assert.equal(findEntry(cat, 'claude-opus')?.id, 'claude-opus-5-5')
+  assert.equal(findEntry(cat, 'claude-sonnet')?.id, 'claude-sonnet-5-5')
   assert.equal(findEntry(cat, 'gpt-oss-120b')?.id, 'gpt-oss-120b-medium')
 })
 
