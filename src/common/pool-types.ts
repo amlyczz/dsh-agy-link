@@ -74,6 +74,8 @@ export interface ManagedAccount {
   systemHome?: boolean
   /** Optional custom proxy URL override (e.g. "socks5://127.0.0.1:7890"). */
   proxyUrl?: string
+  /** Epoch ms per model the account refused; the pool skips it for 6h. */
+  modelDenied?: Record<string, number>
   enabled: boolean
   createdAt: number
   lastUsedAt?: number

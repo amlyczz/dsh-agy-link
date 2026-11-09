@@ -1021,9 +1021,23 @@ export class AccountPoolManager {
    * Sticks to the current active account until it runs out of quota/rate-limited,
    * then smoothly advances to the next available account in cyclic order.
    */
-  selectAccount(family: ModelFamily): ManagedAccount | null {
+  supportsModel(acc: ManagedAccount, model: string, now = Date.now()): boolean {
+    if (model === '') return true
+    const denied = acc.modelDenied?.[model]
+    return !(typeof denied === 'number' && now - denied < 6 * 60 * 60 * 1000)
+  }
+
+  markModelUnsupported(id: string | undefined, model: string): void {
+    const acc = id !== undefined ? this.getAccount(id) : undefined
+    if (!acc || model === '') return
+    acc.modelDenied ??= {}
+    acc.modelDenied[model] = Date.now()
+    this.persist()
+  }
+
+  selectAccount(family: ModelFamily, model = ''): ManagedAccount | null {
     const now = Date.now()
-    const candidates = this.data.accounts.filter((acc) => this.isAccountEligible(acc, family, now))
+    const candidates = this.data.accounts.filter((acc) => this.isAccountEligible(acc, family, now) && this.supportsModel(acc, model, now))
 
     if (candidates.length === 0) return null
 

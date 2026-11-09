@@ -379,6 +379,13 @@ export function parseEffortUnsupported(text: string): string | null {
   return null
 }
 
+/** Account-level refusal: agy does not know the requested model on this account. */
+export function parseModelUnavailable(text: string): string | null {
+  if (text === '' || !/is not recognized as a known model|custom model in settings/i.test(text)) return null
+  const named = text.match(/--model\s+"?([A-Za-z0-9._:\/-]+)"?/i)
+  return named !== null && named[1] !== undefined && named[1] !== '' ? named[1] : null
+}
+
 /** Same-model comparison that ignores a provider prefix and case. */
 export function sameModelId(a: string, b: string): boolean {
   const norm = (s: string): string => s.trim().toLowerCase().replace(/^.*\//, '')
@@ -790,6 +797,18 @@ export class AgyAdapter extends LlmAdapter {
     }
   }
 
+  /** Mark this account as lacking `model`, so the pool rotates instead of re-picking it. */
+  markModelMissing(model: string): void {
+    try {
+      const family = modelFamilyOf(model)
+      const id = this.deps.pool?.getActiveAccountId?.(family) ?? this.deps.pool?.getActiveAccountId?.('google')
+      this.deps.pool?.markModelUnsupported?.(id, model)
+    } catch {
+      // Best-effort: the retry loop still advances to the next account.
+    }
+    this.deps.log?.('agy account lacks model "' + model + '" — rotating to the next account')
+  }
+
   private effortLessModels(): Set<string> {
     if (this.effortLessCache === null) {
       const seeded = this.deps.effortUnsupported?.() ?? []
@@ -1154,8 +1173,8 @@ export class AgyAdapter extends LlmAdapter {
     else args.push('--mode', opts.permissionMode)
     const effectiveModel = resolveModelSlug(opts.model)
     if (effectiveModel !== '') args.push('--model', effectiveModel)
-    const isGemini = effectiveModel === '' || effectiveModel.toLowerCase().startsWith('gemini') || effectiveModel.toLowerCase().startsWith('argon')
-    if (isGemini && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
+    const isEffortCapable = effectiveModel === '' || effectiveModel.toLowerCase().startsWith('gemini') || effectiveModel.toLowerCase().startsWith('argon') || effectiveModel.toLowerCase().startsWith('claude')
+    if (isEffortCapable && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
     if (opts.conversationId) args.push('--conversation', opts.conversationId)
     for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
     args.push(...opts.extraArgs)
@@ -1206,12 +1225,19 @@ export class AgyAdapter extends LlmAdapter {
         for (const chunk of telemetry) yield chunk
         return
       }
-      if (attempt === 0 && !emitted && finish.reason.kind === 'error') {
+      if (!emitted && finish.reason.kind === 'error') {
         const failure = (finish.reason as { failure?: { message?: string } }).failure
-        const refused = parseEffortUnsupported(String(failure?.message ?? ''))
-        if (refused !== null) {
-          this.learnEffortUnsupported(refused)
+        const missing = parseModelUnavailable(String(failure?.message ?? ''))
+        if (missing !== null && attempt < 9) {
+          this.markModelMissing(missing)
           continue
+        }
+        if (attempt === 0) {
+          const refused = parseEffortUnsupported(String(failure?.message ?? ''))
+          if (refused !== null) {
+            this.learnEffortUnsupported(refused)
+            continue
+          }
         }
       }
       for (const chunk of telemetry) yield chunk
@@ -1442,7 +1468,7 @@ export class AgyAdapter extends LlmAdapter {
       // pool's current active healthy candidate so they share the slot under
       // `parallelSameAccount: true` and run with 100% lock-free concurrency.
       if (process.platform === 'win32' && cfg.parallelSameAccount) {
-        const poolActive = this.deps.pool.selectAccount(family)
+        const poolActive = this.deps.pool.selectAccount(family, activeModel)
         if (poolActive) {
           account = poolActive
         }
@@ -1466,14 +1492,14 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
 
-        if (mostRecentAccount && this.deps.pool.isAccountEligible(mostRecentAccount, family)) {
+        if (mostRecentAccount && this.deps.pool.isAccountEligible(mostRecentAccount, family) && this.deps.pool.supportsModel(mostRecentAccount, activeModel)) {
           account = mostRecentAccount
         }
       }
     }
 
     if (!account && this.deps.pool) {
-      account = this.deps.pool.selectAccount(family) ?? undefined
+      account = this.deps.pool.selectAccount(family, activeModel) ?? undefined
     }
     if (this.deps.pool && this.deps.pool.getAccounts().length > 0 && !account) {
       if (cfg.autoFallbackModel) {
@@ -1489,7 +1515,7 @@ export class AgyAdapter extends LlmAdapter {
         }
         for (const fbFam of ['google', 'anthropic', 'openai'] as ModelFamily[]) {
           if (fbFam === family) continue
-          const fbAcc = this.deps.pool.selectAccount(fbFam)
+          const fbAcc = this.deps.pool.selectAccount(fbFam, familyModel[fbFam] ?? activeModel)
           if (fbAcc) {
             account = fbAcc
             family = fbFam
@@ -1524,7 +1550,7 @@ export class AgyAdapter extends LlmAdapter {
         // user resend. Longer waits still fail fast with an accurate ETA.
         if (countdown !== null && countdown > 0 && countdown <= 20_000) {
           await new Promise((r) => setTimeout(r, countdown + 250))
-          account = pool.selectAccount(family) ?? undefined
+          account = pool.selectAccount(family, activeModel) ?? undefined
         }
         if (!account) {
           let why: string
