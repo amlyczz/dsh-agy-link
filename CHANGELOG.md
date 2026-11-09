@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.10 (2026-11-09)
+
+### English
+
+- **Fix(client): the account console is readable again — full email addresses, pre-compaction sizing (reverts the density part of #81).**
+  - #81 capped the email badge at `maxWidth: 135px`, so real addresses rendered as `q98646558@gm`, and shrank every card/row (`8px 10px` cards, 10.5–11px quota type, 6px bars, 2px 6px badges) — the panel felt visibly smaller than before. The compaction is reverted; cards are back to `10px 14px` / `8px` gaps and the quota rows to 11.5px type.
+  - The two good parts of #81 are kept in a non-shrinking form: the reset/cooldown cluster now has a **fixed 150px width** (bars share identical start/end X — no jagged staircase) and status badges carry `whiteSpace: nowrap` + `flexShrink: 0` (中文 labels no longer wrap character-by-character).
+  - New `test/client-account-card-style.test.ts` guards all three: no fixed email width cap, roomy card density, aligned-and-readable quota rows.
+
+### 中文
+
+- **修复(client)：账号控制台恢复可读——邮箱完整显示、尺寸回到压缩前（回退 #81 的「紧凑化」部分）。**
+  - #81 给邮箱徽章加了 `maxWidth: 135px`，真实地址被截成 `q98646558@gm`；同时把每张卡片/每行都压小（卡片 `8px 10px`、额度字号 10.5–11px、进度条 6px、徽章 `2px 6px`），整体观感明显变小。现回退：卡片恢复 `10px 14px` / `8px` 间距，额度行字号回到 11.5px。
+  - 保留 #81 两个**不靠压缩**的改进：右侧「重置/冷却」簇固定 **150px** 宽（所有进度条起止 X 一致，不再呈阶梯状）；状态徽章加 `whiteSpace: nowrap` + `flexShrink: 0`（`冷却中` 不再逐字换行）。
+  - 新增 `test/client-account-card-style.test.ts` 守住三点：邮箱不再有固定宽度上限、卡片密度恢复、额度行对齐且字号不缩。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.9...v0.6.10
+
 ## 0.6.9 (2026-11-09)
 
 ### English
