@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.12 (2026-11-09)
+
+### English
+
+- **Fix(models): enable reasoning effort for Claude 5.5 — verified against agy 1.5.3.**
+  - `agy models` lists Claude 5.5 only as tiered slugs (`claude-sonnet-5-5-low/medium/high`), and agy **rejects a tiered slug combined with `--effort`** (`--model claude-sonnet-5-5-low conflicts with --effort=high`), while the **base slug accepts it** (`--model claude-sonnet-5-5 --effort high` → works).
+  - Therefore the catalog now folds the Claude 5.5 tiers into one entry with `efforts: low|medium|high`, `resolveModelSlug()` strips a tiered Claude 5.5 slug back to its base (so a stored tiered id can never collide with the flag), and `buildArgs` passes `--effort` for a base Claude 5.5 model.
+  - Claude 4.6 keeps its documented no-effort behaviour (it is no longer in the live catalog, and was not verified).
+
+### 中文
+
+- **修复(models)：Claude 5.5 支持推理档位 —— 已用本机 agy 1.5.3 实测确认。**
+  - `agy models` 只列出带档位的 slug（`claude-sonnet-5-5-low/medium/high`），而 agy 对「带档位 slug + `--effort`」会直接报冲突（`--model claude-sonnet-5-5-low conflicts with --effort=high`），**base slug 则接受**（`--model claude-sonnet-5-5 --effort high` 正常返回）。
+  - 因此目录把 5.5 的档位折叠为一个条目（`efforts: low|medium|high`）；`resolveModelSlug()` 会把带档位的 5.5 slug 还原成 base（避免与 `--effort` 冲突）；`buildArgs` 对 base 的 Claude 5.5 传 `--effort`。
+  - Claude 4.6 维持原有「不传 effort」行为（已不在在线目录，也未验证）。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.11...v0.6.12
+
 ## 0.6.11 (2026-11-09)
 
 ### English

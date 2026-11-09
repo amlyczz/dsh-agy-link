@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { accountHasArgon, buildFallbackCatalog, defaultEffortFor, findEntry, foldEfforts, isArgonModel, ModelCatalog, parseModelsOutput } from '../src/host/models.ts'
+import { accountHasArgon, buildFallbackCatalog, defaultEffortFor, findEntry, foldEfforts, isArgonModel, ModelCatalog, parseModelsOutput, resolveModelSlug } from '../src/host/models.ts'
 import { DEFAULT_FALLBACK_MODELS, defaultConfig, type PluginConfig } from '../src/common/types.ts'
 
 test('parseModelsOutput reads the JSON array shape', () => {
@@ -70,9 +70,28 @@ test('fallback catalog carries the current line-up: 3.8/argon/4.6+5.5 Claude, re
   assert.ok(ids.includes('gpt-oss-120b-medium'))
   const f38 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'gemini-3.8-flash')
   assert.deepEqual(f38?.efforts, ['low', 'medium', 'high'])
-  // Effort support for Claude via agy is unverified, so 5.5 must not advertise tiers.
+  // Verified on agy 1.5.3: a base Claude 5.5 slug accepts --effort, while a
+  // tiered slug conflicts with it, so the catalog advertises base + tiers.
   const c55 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'claude-sonnet-5-5')
-  assert.equal(c55?.efforts, null)
+  assert.deepEqual(c55?.efforts, ['low', 'medium', 'high'])
+})
+
+test('Claude 5.5 effort variants fold into a base entry, like gemini/argon', () => {
+  const folded = foldEfforts([
+    { slug: 'claude-sonnet-5-5-low', label: 'Claude Sonnet 5.5 (Low)' },
+    { slug: 'claude-sonnet-5-5-medium', label: 'Claude Sonnet 5.5 (Medium)' },
+    { slug: 'claude-sonnet-5-5-high', label: 'Claude Sonnet 5.5 (High)' },
+    { slug: 'claude-opus-5-5-low', label: 'Claude Opus 5.5 (Low)' },
+    { slug: 'claude-opus-5-5-medium', label: 'Claude Opus 5.5 (Medium)' },
+    { slug: 'claude-opus-5-5-high', label: 'Claude Opus 5.5 (High)' },
+  ])
+  assert.deepEqual(folded.map((e) => e.id).sort(), ['claude-opus-5-5', 'claude-sonnet-5-5'])
+  const sonnet = findEntry({ source: 'discovered', models: folded, discoveredAt: 0 }, 'claude-sonnet-5-5')
+  assert.deepEqual(sonnet?.efforts, ['low', 'medium', 'high'])
+  assert.equal(sonnet?.name, 'Claude Sonnet 5.5')
+  // A tiered slug must resolve to the base one: agy rejects the pair with --effort.
+  assert.equal(resolveModelSlug('claude-sonnet-5-5-high'), 'claude-sonnet-5-5')
+  assert.equal(resolveModelSlug('claude-opus-5-5'), 'claude-opus-5-5')
 })
 
 test('parseModelsOutput skips banners and error lines', () => {

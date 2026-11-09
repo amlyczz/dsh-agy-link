@@ -1154,8 +1154,13 @@ export class AgyAdapter extends LlmAdapter {
     else args.push('--mode', opts.permissionMode)
     const effectiveModel = resolveModelSlug(opts.model)
     if (effectiveModel !== '') args.push('--model', effectiveModel)
-    const isGemini = effectiveModel === '' || effectiveModel.toLowerCase().startsWith('gemini') || effectiveModel.toLowerCase().startsWith('argon')
-    if (isGemini && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
+    // Claude 5.5 accepts --effort on its base slug (verified against agy 1.5.3);
+    // a tiered slug plus the flag is rejected upstream, so callers must pass the
+    // base slug here — the catalog folds the tiers for exactly that reason.
+    const effortModel = effectiveModel.toLowerCase()
+    // Claude 5.5 only: 4.6 keeps its documented no-effort behaviour.
+    const isEffortCapable = effectiveModel === '' || effortModel.startsWith('gemini') || effortModel.startsWith('argon') || /^claude-(?:sonnet|opus)-5-5$/.test(effortModel)
+    if (isEffortCapable && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
     if (opts.conversationId) args.push('--conversation', opts.conversationId)
     for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
     args.push(...opts.extraArgs)

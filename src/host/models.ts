@@ -140,13 +140,16 @@ function extractModelList(parsed: unknown): RawModel[] | null {
 
 const EFFORT_SUFFIXES = ['low', 'medium', 'high']
 
-/** Fold Gemini effort variants into base + effort set (spec ADR-10). */
+/** Fold Gemini/Argon/Claude effort variants into base + effort set (spec ADR-10).
+ *  Claude 5.5 is listed only as tiered slugs by agy 1.5.3; the base slug is the
+ *  one that accepts `--effort`, and passing a tiered slug together with the flag
+ *  is rejected ("--model … conflicts with --effort=…"). */
 export function foldEfforts(raw: readonly RawModel[]): CatalogEntry[] {
   const bases = new Map<string, { label: string; efforts: Set<string> }>()
   const verbatim: CatalogEntry[] = []
   const slugSet = new Set(raw.map((r) => r.slug))
   for (const r of raw) {
-    if (!r.slug.startsWith('gemini') && !r.slug.startsWith('argon')) {
+    if (!r.slug.startsWith('gemini') && !r.slug.startsWith('argon') && !r.slug.startsWith('claude')) {
       verbatim.push({ id: r.slug, name: r.label, efforts: null });
       continue;
     }
@@ -379,6 +382,10 @@ export function resolveModelSlug(id: string): string {
   if (s === 'gpt-oss-120b' || s === 'gpt-oss-20b' || s === 'gpt-oss') {
     return 'gpt-oss-120b-medium'
   }
+  // Claude 5.5: agy lists tiered slugs, but `--effort` must ride the BASE slug
+  // (a tiered slug plus the flag is rejected: "--model … conflicts with").
+  const claude55 = s.match(/^(claude-(?:sonnet|opus)-5-5)-(?:low|medium|high)$/)
+  if (claude55 !== null && claude55[1] !== undefined) return claude55[1]
   return id.trim()
 }
 

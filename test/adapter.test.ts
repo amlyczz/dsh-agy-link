@@ -708,6 +708,20 @@ test('unknown reasoning effort on known model is rejected', async () => {
   )
 })
 
+test('buildArgs passes --effort for a Claude 5.5 base slug (agy 1.5.3 verified)', () => {
+  const { adapter } = makeAdapter()
+  const args = adapter.buildArgs({
+    prompt: 'x',
+    model: 'claude-sonnet-5-5',
+    effort: 'high',
+    permissionMode: 'skip',
+    timeoutMs: 60_000,
+    extraArgs: [],
+  })
+  assert.equal(args[args.indexOf('--model') + 1], 'claude-sonnet-5-5')
+  assert.equal(args[args.indexOf('--effort') + 1], 'high')
+})
+
 test('buildArgs assembles flags per ADR-3/8/10', () => {
   const { adapter } = makeAdapter()
   const args = adapter.buildArgs({
