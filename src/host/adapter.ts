@@ -1540,6 +1540,7 @@ export class AgyAdapter extends LlmAdapter {
         )
         const cooling = reasons.filter((r) => r === 'cooldown').length
         const quotaBlocked = reasons.filter((r) => r === 'quota').length
+        const unsupported = reasons.filter((r) => r === 'unsupported').length
         const signedOut = accounts.filter((a) => a.authRequired === true).length
         const countdown = pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
         // A reset that is seconds away is not worth failing a turn over: wait
@@ -1559,6 +1560,7 @@ export class AgyAdapter extends LlmAdapter {
             const details: string[] = []
             if (cooling > 0) details.push(`${cooling} in cooldown`)
             if (quotaBlocked > 0) details.push(`${quotaBlocked} quota-exhausted`)
+            if (unsupported > 0) details.push(`${unsupported} lack ${family} access`)
             if (signedOut > 0) details.push(`${signedOut} signed out`)
             if (disabled > 0) details.push(`${disabled} disabled`)
             const detailStr = details.length > 0 ? ` (${details.join(', ')})` : ''
@@ -1567,7 +1569,9 @@ export class AgyAdapter extends LlmAdapter {
           const waitStr = countdown !== null && countdown > 0
             ? ` (earliest reset in ${Math.ceil(countdown / 1000)}s)`
             : ''
-          const hint = quotaBlocked > 0 && cooling === 0
+          const hint = unsupported > 0 && quotaBlocked === 0 && cooling === 0
+            ? `No enabled account has access to ${family} (requires a plan with ${family} enabled).`
+            : quotaBlocked > 0 && cooling === 0
             ? 'Add an account, wait for the quota reset, or run /agy clear-cooldown to override the current quota snapshot.'
             : 'Add an account, wait for reset, or run /agy clear-cooldown.'
           throw new LlmError(`All Antigravity accounts are unavailable: ${why}${waitStr}. ${hint}`, Err.AGY_ERROR)

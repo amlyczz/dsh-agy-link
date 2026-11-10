@@ -470,6 +470,9 @@ test('explainIneligibility separates quota rotation from cooldown, and clear-coo
   pool.recordFailure(acc.id, 'anthropic', '429 Rate Limit', reset)
   assert.equal(pool.explainIneligibility(pool.getAccount(acc.id)!, 'anthropic'), 'cooldown')
 
+  // An account without Argon access reports 'unsupported', never 'quota' or 'cooldown'
+  assert.equal(pool.explainIneligibility(acc, 'argon'), 'unsupported')
+
   // The user-facing clear also lifts the low-quota bench for the cached snapshot.
   pool.clearCooldown(acc.id, 'google', true)
   assert.equal(pool.isAccountEligible(pool.getAccount(acc.id)!, 'google'), true)

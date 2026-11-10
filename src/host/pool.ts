@@ -35,7 +35,7 @@ export const LOW_QUOTA_5H = 0.10
 export const LOW_QUOTA_WEEKLY = 0.05
 
 /** Why a pool account cannot serve a family right now (diagnostics only). */
-export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota'
+export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported'
 
 /**
  * Write `body` to `file` without ever publishing a torn snapshot: a tmp name
@@ -772,7 +772,7 @@ export class AccountPoolManager {
   ): AccountIneligibilityReason | null {
     if (!acc.enabled) return 'disabled'
     if (acc.authRequired) return 'auth'
-    if (family === 'argon' && !this.accountHasArgon(acc)) return 'quota'
+    if (family === 'argon' && !this.accountHasArgon(acc)) return 'unsupported'
     const cd = acc.cooldowns?.[family]
     if (cd && cd.cooldownUntil > now) return 'cooldown'
     if (this.isQuotaBenched(acc, family, now)) return 'quota'

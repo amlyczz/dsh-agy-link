@@ -1712,6 +1712,49 @@ test('listModels exposes union of models across all accounts while resolveModel 
   assert.ok(!freeOnlyModels.some((m) => m.id === 'gemini-4-argon'), 'pool without any argon accounts must not show gemini-4-argon')
 })
 
+test('N lookups of an unavailable model do not rewrite or mutate the pool', async () => {
+  let activeId = 'acc_free'
+  let persistCalls = 0
+  const fakePool = {
+    getActiveAccountId: () => activeId,
+    getPoolData: () => ({ primaryAccountId: 'acc_free', lastActiveAccountId: activeId, accounts: [] }),
+    getAccounts: () => [{ id: 'acc_free', enabled: true, quotas: {} }],
+    getAccount: () => ({ id: 'acc_free', enabled: true }),
+    setActiveAccount: () => { persistCalls++; return true },
+    persist: () => { persistCalls++ },
+  }
+  const { adapter } = makeAdapter({
+    fallbackModels: [{ id: 'gemini-4-argon', name: 'Gemini 4 Argon' }],
+  }, { pool: fakePool as any })
+
+  for (let i = 0; i < 20; i++) {
+    const info = await adapter.resolveModel('antigravity', 'gemini-4-argon')
+    assert.equal(info.id, 'gemini-4-argon')
+  }
+  assert.equal(persistCalls, 0, 'repeated lookups of unsupported model must not rewrite the pool')
+  assert.equal(activeId, 'acc_free')
+})
+
+test('stream error provides unsupported hint when no account has access to the requested family', async () => {
+  const fakePool = {
+    getAccounts: () => [{ id: 'acc_free', enabled: true, quotas: {} }],
+    explainIneligibility: () => 'unsupported' as const,
+    isAccountEligible: () => false,
+    selectAccount: () => null,
+    getEarliestAvailableCountdown: () => null,
+    getEarliestResetCountdown: () => null,
+  }
+  const { adapter } = makeAdapter({}, { pool: fakePool as any })
+  await assert.rejects(
+    () => collect(adapter.stream(opts([msg('user', 'hi')], { model: 'gemini-4-argon' }))),
+    (err: any) => {
+      assert.ok(err.message.includes('1 lack argon access'), `expected lack argon access in ${err.message}`)
+      assert.ok(err.message.includes('No enabled account has access to argon'), `expected unsupported hint in ${err.message}`)
+      return true
+    },
+  )
+})
+
 test('compaction detection clears stale binding and re-seeds with digest (ADR-013)', async () => {
   const { adapter, store } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'
