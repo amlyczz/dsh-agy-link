@@ -37,6 +37,7 @@ import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type McpBridge, type 
 import { readJsonBody } from './host/read-json-body.ts'
 import { fileURLToPath } from 'node:url'
 import { handleMediaRequest, handleAssetRequest, type HttpRequestLike, type HttpResponseLike } from './host/media-route.ts'
+import { readAccountCredential } from './host/credential-backup.ts'
 
 export const name = 'dsh-agy-link'
 // webServer and tools are optional: the plugin loads headless too.
@@ -148,6 +149,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   const version = () => versionCache
   const store = new SessionStore(join(stateDir(), 'sessions.json'))
   const pool = new AccountPoolManager()
+  for (const account of pool.getAccounts()) {
+    if (account.dir && !account.systemHome) {
+      readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log)
+    }
+  }
   const quota = new QuotaService(
     pool,
     () => getConfig().proxyUrl || detectSystemProxy() || '',

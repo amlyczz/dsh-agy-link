@@ -28,6 +28,7 @@ import { detectSystemProxy, readWindowsCredentialRaw } from './wincred.ts'
 import { parseCredentialDoc, credentialFingerprint, readPrimaryCredential, writePrimaryCredential, credentialSlotMutex } from './credential-slot.ts'
 import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
 import { isolatedHomeEnv, proxyEnvFor } from './runner.ts'
+import { readAccountCredential, updateCredentialBackup, withCredentialFileLock } from './credential-backup.ts'
 
 /**
  * When the quota-summary endpoint transiently fails, per-model fallback
@@ -636,9 +637,12 @@ export class QuotaService {
   async getStoredToken(account: ManagedAccount, allowKeychainFallback = true): Promise<StoredToken | null> {
     const disk = (() => {
       const file = this.getTokenFilePath(account)
-      if (!existsSync(file)) return null
       try {
-        const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+        const content = account.systemHome || !account.dir
+          ? readFileSync(file, 'utf8')
+          : readAccountCredential(file)
+        if (content === null) return null
+        const raw = JSON.parse(content) as Record<string, unknown>
         const tok = normalizeStoredToken(raw)
         if (tok && (tok.accessToken || tok.refreshToken)) return tok
       } catch {
@@ -690,39 +694,50 @@ export class QuotaService {
   private persistRefreshedToken(
     account: ManagedAccount,
     tokens: { access_token: string; expiryMs?: number; refresh_token?: string },
+    expectedRefreshToken?: string,
   ): void {
     const file = this.getTokenFilePath(account)
     try {
       mkdirSync(dirname(file), { recursive: true })
-      let existing: Record<string, unknown> = {}
-      if (existsSync(file)) {
-        try {
-          existing = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
-        } catch {
-          existing = {}
+      const persist = (): void => {
+        if (expectedRefreshToken && account.dir && !account.systemHome &&
+            parseCredentialDoc(readFileSync(file, 'utf8'))?.refreshToken !== expectedRefreshToken) return
+        let existing: Record<string, unknown> = {}
+        if (existsSync(file)) {
+          try {
+            existing = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+          } catch {
+            existing = {}
+          }
+        }
+        // Accept either shape on input, always emit agy's nested shape.
+        const source =
+          typeof existing.token === 'object' && existing.token !== null
+            ? (existing.token as Record<string, unknown>)
+            : existing
+        const refreshToken =
+          tokens.refresh_token ??
+          (typeof source.refresh_token === 'string' ? source.refresh_token : undefined) ??
+          (typeof source.refreshToken === 'string' ? source.refreshToken : undefined)
+        const expiryIso = tokens.expiryMs ? new Date(tokens.expiryMs).toISOString() : undefined
+        const doc = {
+          token: {
+            access_token: tokens.access_token,
+            token_type: typeof source.token_type === 'string' ? source.token_type : 'Bearer',
+            ...(refreshToken ? { refresh_token: refreshToken } : {}),
+            ...(expiryIso ? { expiry: expiryIso } : { expiry: source.expiry }),
+          },
+          auth_method: typeof existing.auth_method === 'string' ? existing.auth_method : 'consumer',
+        }
+        // Keep their shape-preserving write, but hold main's 0600 hardening.
+        const raw = JSON.stringify(doc)
+        writeFileSync(file, raw, { encoding: 'utf8', mode: 0o600 })
+        if (account.dir && !account.systemHome) {
+          updateCredentialBackup(file, raw, JSON.stringify(existing))
         }
       }
-      // Accept either shape on input, always emit agy's nested shape.
-      const source =
-        typeof existing.token === 'object' && existing.token !== null
-          ? (existing.token as Record<string, unknown>)
-          : existing
-      const refreshToken =
-        tokens.refresh_token ??
-        (typeof source.refresh_token === 'string' ? source.refresh_token : undefined) ??
-        (typeof source.refreshToken === 'string' ? source.refreshToken : undefined)
-      const expiryIso = tokens.expiryMs ? new Date(tokens.expiryMs).toISOString() : undefined
-      const doc = {
-        token: {
-          access_token: tokens.access_token,
-          token_type: typeof source.token_type === 'string' ? source.token_type : 'Bearer',
-          ...(refreshToken ? { refresh_token: refreshToken } : {}),
-          ...(expiryIso ? { expiry: expiryIso } : { expiry: source.expiry }),
-        },
-        auth_method: typeof existing.auth_method === 'string' ? existing.auth_method : 'consumer',
-      }
-      // Keep their shape-preserving write, but hold main's 0600 hardening.
-      writeFileSync(file, JSON.stringify(doc), { encoding: 'utf8', mode: 0o600 })
+      if (account.dir && !account.systemHome) withCredentialFileLock(file, persist)
+      else persist()
     } catch {
       // Best-effort
     }
@@ -789,7 +804,7 @@ export class QuotaService {
             // Carry the grant identity forward — losing it made the credential
             // unidentifiable and disabled every corruption guard.
             refresh_token: refreshed.refresh_token ?? tok.refreshToken,
-          })
+          }, tok.refreshToken)
           if (account.authRequired) {
             this.pool.clearAuthRequired(account.id)
           }
@@ -1004,7 +1019,7 @@ export class QuotaService {
     if (account.dir && process.platform === 'win32') {
       const stored = readPrimaryCredential(this.pool.dir)
       const file = this.getTokenFilePath(account)
-      const own = existsSync(file) ? readFileSync(file, 'utf8') : null
+      const own = readAccountCredential(file)
       const ownFingerprint = own ? credentialFingerprint(own) : null
       if (
         stored &&

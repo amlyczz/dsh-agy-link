@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
@@ -38,6 +38,18 @@ test('persistRefreshedToken keeps the refresh token and writes agy nested shape'
   const second = parseCredentialDoc(readFileSync(file, 'utf8'))
   assert.equal(second?.refreshToken, 'R-KEEP', 'the refresh token must be preserved')
   assert.equal(second?.accessToken, 'A2')
+  assert.equal(parseCredentialDoc(readFileSync(file + '.bak', 'utf8'))?.accessToken, 'A2')
+})
+
+test('quota reads restore a missing isolated account credential', async () => {
+  const pool = new AccountPoolManager(mkdtempSync(join(tmpdir(), 'agy-quota-backup-')))
+  const account = pool.createAccountSlot('backup')
+  const file = writeAgyTokenFile(account.dir, { access_token: 'access', refresh_token: 'grant' })
+  const quota = new QuotaService(pool)
+  assert.equal((await quota.getStoredToken(account))?.refreshToken, 'grant')
+  unlinkSync(file)
+  assert.equal((await quota.getStoredToken(account))?.refreshToken, 'grant')
+  assert.equal(parseCredentialDoc(readFileSync(file, 'utf8'))?.refreshToken, 'grant')
 })
 
 test('QuotaService parses stored tokens and saves token refresh updates', async () => {
@@ -80,6 +92,12 @@ test('a replaced account grant is no longer current for an in-flight quota refre
   assert.equal(isCurrent(account, 'old-grant'), true)
   writeAgyTokenFile(account.dir, { access_token: 'new', refresh_token: 'new-grant' })
   assert.equal(isCurrent(account, 'old-grant'), false)
+  const persist = (quota as unknown as {
+    persistRefreshedToken: (a: unknown, tokens: Record<string, unknown>, expected: string) => void
+  }).persistRefreshedToken.bind(quota)
+  persist(account, { access_token: 'stale', refresh_token: 'old-grant' }, 'old-grant')
+  const file = join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+  assert.equal(parseCredentialDoc(readFileSync(file, 'utf8'))?.refreshToken, 'new-grant')
 })
 
 test('normalizeStoredToken reads agy 1.1.16 nested shape with ISO expiry', () => {

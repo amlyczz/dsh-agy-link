@@ -106,6 +106,7 @@ Common entry points: `/plugin`, the Antigravity settings panel, `DSH_AGY_*` envi
 
 1. **One short-lived process per turn**: `agy -p --output-format stream-json`, parsed as NDJSON.
 2. **Per-account sandbox**: the primary account uses the system HOME/keychain; secondary accounts get an isolated HOME with their own agy OAuth credentials. On Windows the credential slot is leased by identity, so parallel sessions on the same account are not serialized.
+   Secondary credentials have a `.bak` in their account directory and are restored if the original file is missing. Backups contain sensitive OAuth credentials; restrict access to the account directories. Revoked or insufficiently scoped credentials still require sign-in. The primary continues to use the system credential mechanism.
 3. **Pooled failover**: 429/quota/region/auth failures are classified and routed — cool down, rotate the pointer, or retry on another account.
 4. **Aux routes**: translation and image generation ride the same pool through dedicated purposes (`translation`, `image`), so they never pollute a normal conversation binding.
 

@@ -45,6 +45,7 @@ import { defaultPoolDir } from './pool.ts'
 import { readWindowsCredentialRaw, writeWindowsCredentialRaw } from './wincred.ts'
 import { refreshTokens } from './oauth.ts'
 import { agyFetch } from './net.ts'
+import { readAccountCredential, updateCredentialBackup, withCredentialFileLock } from './credential-backup.ts'
 
 const SLOT_TARGET = 'gemini:antigravity'
 const PRIMARY_STORE_FILE = '.primary-credential.json'
@@ -983,7 +984,7 @@ export async function acquireCredentialSlot(
   // Requested identity (cheap file read): needed both to join an identity that
   // is already installed and to register this run's switch intent while queued.
   const requestedFile = isPrimarySlot ? null : accountTokenFilePath(account, homeDir)
-  const requestedRaw = requestedFile === null ? null : readTokenFileRaw(requestedFile)
+  const requestedRaw = requestedFile === null ? null : readAccountCredential(requestedFile, log)
   const requestedFingerprint = isPrimarySlot ? null : credentialFingerprint(requestedRaw)
   const switchKey = isPrimarySlot ? 'primary' : (requestedFingerprint ?? 'unknown')
 
@@ -1146,7 +1147,7 @@ export async function acquireCredentialSlot(
   try {
     const primary = await resolvePrimaryCredential(pool, { ...options, baseDir, homeDir })
     const accountFile = accountTokenFilePath(account, homeDir)
-    const accountRaw = readTokenFileRaw(accountFile)
+    const accountRaw = isPrimarySlot ? readTokenFileRaw(accountFile) : readAccountCredential(accountFile, log)
 
     if (!primary) {
       done()
@@ -1256,8 +1257,12 @@ export async function acquireCredentialSlot(
           if (sameCredentialGrant(afterRaw, accountRaw)) {
             // Slot still belongs to this account: agy may have refreshed the
             // access token, so persist it back into the account's own file.
-            if (afterRaw && afterRaw !== accountRaw && readTokenFileRaw(accountFile) === accountRaw) {
-              writeFileAtomic(accountFile, afterRaw)
+            if (afterRaw && afterRaw !== accountRaw) {
+              withCredentialFileLock(accountFile, () => {
+                if (readTokenFileRaw(accountFile) === accountRaw && writeFileAtomic(accountFile, afterRaw)) {
+                  updateCredentialBackup(accountFile, afterRaw, accountRaw)
+                }
+              })
             }
           } else if (afterFingerprint !== null) {
             // The slot was taken over while this run was live. Writing it back

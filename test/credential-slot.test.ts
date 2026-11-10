@@ -5,7 +5,7 @@
 // row reported the same identity. The guards below make that impossible.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -1026,6 +1026,27 @@ test('a secondary with no credential file is refused instead of running as the p
     assert.equal(credentialSlotMutex.pending, 0)
   } finally {
     for (const d of [baseDir, homeDir]) rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('a missing secondary credential is restored before the slot handoff', async () => {
+  const baseDir = tmp('agy-restore-')
+  const homeDir = tmp('agy-restore-home-')
+  const accDir = tmp('agy-restore-acc-')
+  try {
+    writePrimaryCredential({ raw: tokenDoc('PRIMARY'), email: 'me@example.com', savedAt: 1 }, baseDir)
+    const file = writeAccountToken(accDir, tokenDoc('SECOND'))
+    writeFileSync(file + '.bak', readFileSync(file))
+    unlinkSync(file)
+    const io = memoryIo(tokenDoc('PRIMARY'))
+    const pool = fakePool([account('acc_primary', undefined, { systemHome: true, email: 'me@example.com' })])
+    const lease = await acquireCredentialSlot(account('backup', accDir), pool, { baseDir, homeDir, io })
+    assert.equal(credentialFingerprint(io.current), 'r:SECOND')
+    assert.equal(credentialFingerprint(readFileSync(file, 'utf8')), 'r:SECOND')
+    lease!.release()
+    assert.equal(credentialFingerprint(io.current), 'r:PRIMARY')
+  } finally {
+    for (const d of [baseDir, homeDir, accDir]) rmSync(d, { recursive: true, force: true })
   }
 })
 

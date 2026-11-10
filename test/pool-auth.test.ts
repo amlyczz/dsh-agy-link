@@ -92,6 +92,7 @@ test('reauthentication restores an existing account without changing its setting
   pool.setAccountEnabled(account.id, false)
   const file = join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
   writeFileSync(file, 'previous credential')
+  writeFileSync(file + '.bak', JSON.stringify({ token: { refresh_token: 'old' } }))
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
     openBrowser: async () => true,
     exchangeCode: async () => ({ access_token: 'access', refresh_token: 'refresh' }),
@@ -105,7 +106,22 @@ test('reauthentication restores an existing account without changing its setting
   assert.equal(account.enabled, false)
   assert.equal(account.authRequired, undefined)
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).token.refresh_token, 'refresh')
+  assert.equal(JSON.parse(readFileSync(file + '.bak', 'utf8')).token.refresh_token, 'refresh')
   assert.equal(existsSync(started.dir!), false)
+})
+
+test('adding an account saves a backup of the newly authorized credential', async () => {
+  const { pool, quota } = fixture()
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    openBrowser: async () => true,
+    exchangeCode: async () => ({ access_token: 'access', refresh_token: 'new-grant' }),
+    fetchUserEmail: async () => 'new@example.com',
+  })
+  await flow.begin('Backup')
+  assert.equal((await flow.submitCode('4/1AfValidLookingCode')).phase, 'done')
+  const account = pool.getAccounts().find((item) => item.email === 'new@example.com')!
+  const file = join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+  assert.equal(JSON.parse(readFileSync(file + '.bak', 'utf8')).token.refresh_token, 'new-grant')
 })
 
 test('reauthentication rejects wrong or unverifiable identities without overwriting credentials', async () => {
