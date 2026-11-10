@@ -3,7 +3,8 @@
 // surface the conversation id so the caller can continue later.
 import { looksLikeAuthFailure, type PluginConfig } from '../common/types.ts'
 import { StreamJsonParser } from './parser.ts'
-import { startAgyProcess, buildStreamInputLine, shouldUsePromptStdin, stripNulBytes } from './runner.ts'
+import { startAgyProcess, buildStreamInputLine, proxyEnvFor, shouldUsePromptStdin, stripNulBytes } from './runner.ts'
+import { detectSystemProxy } from './wincred.ts'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -165,6 +166,9 @@ export async function runAgyOnce(
     cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
     timeoutMs,
     signal: req.signal,
+    // GUI hosts have no shell proxy env, so agy_ask would otherwise run without
+    // the configured/detected proxy while chat and /tsl work (issue #94).
+    env: { ...process.env, ...proxyEnvFor(cfg.proxyUrl || detectSystemProxy()) },
     stdinPayload,
     preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
     onLine: (line) => {

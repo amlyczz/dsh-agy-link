@@ -33,6 +33,17 @@ if (process.env.FAKE_AGY_INVOCATION_FILE) {
 if (process.env.FAKE_AGY_ARGS_FILE) {
   try { writeFileSync(process.env.FAKE_AGY_ARGS_FILE, JSON.stringify(argv)) } catch {}
 }
+if (process.env.FAKE_AGY_ENV_FILE) {
+  try {
+    writeFileSync(process.env.FAKE_AGY_ENV_FILE, JSON.stringify({
+      HTTP_PROXY: process.env.HTTP_PROXY,
+      HTTPS_PROXY: process.env.HTTPS_PROXY,
+      ALL_PROXY: process.env.ALL_PROXY,
+      http_proxy: process.env.http_proxy,
+      https_proxy: process.env.https_proxy,
+    }))
+  } catch { /* recording is best-effort */ }
+}
 if (process.env.FAKE_AGY_CWD_FILE) {
   try { writeFileSync(process.env.FAKE_AGY_CWD_FILE, process.cwd()) } catch {}
 }
