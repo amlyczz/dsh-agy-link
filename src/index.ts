@@ -681,6 +681,15 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   bootProbeTimer.unref?.()
   ctx.effect(() => () => clearTimeout(bootProbeTimer))
 
+  // Catalog freshness without probing from listModels(): refreshIfNeeded()
+  // honours its TTL, so this costs at most one `agy models` spawn per window
+  // and cannot feed back into a listing loop.
+  const catalogPollTimer = setInterval(() => {
+    void catalog.refreshIfNeeded().catch(() => undefined)
+  }, 30 * 60_000)
+  catalogPollTimer.unref?.()
+  ctx.effect(() => () => clearInterval(catalogPollTimer))
+
   // ---- llm registration (dormant-safe) ----
   if (getConfig().enabled) {
     try {
@@ -920,6 +929,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           translateModel: cfg.translateModel,
           translateEffort: cfg.translateEffort,
           translateTargetLanguage: cfg.translateTargetLanguage,
+          imageModel: cfg.imageModel,
+          imageEffort: cfg.imageEffort,
+          imageOutputDir: cfg.imageOutputDir,
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },
           bindings: Object.keys(store.all()).length,
           effortUnsupported: adapter.effortUnsupportedModels(),
@@ -1300,6 +1312,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const allowed = [
           'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
+          'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })

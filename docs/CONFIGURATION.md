@@ -91,17 +91,45 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `autoTranslate` | `DSH_AGY_AUTO_TRANSLATE` | `false` | Translate every completed turn |
 | `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | Translate model, with catalog fallback |
-| `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `high` | Reasoning effort for the translate model |
+| `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `medium` | Reasoning effort for the translate model (`low` faster, `high` more rigorous) |
 | `translateTargetLanguage` | `DSH_AGY_TRANSLATE_LANG` | `中文（简体）` | Target language wording in the prompt |
 | `translateMaxChars` | `—` | `8000` | Source truncation limit |
 | `translateMaxTokens` | `—` | `4096` | Output token cap |
 | `translateTimeoutMs` | `—` | `120000` | Per-translation timeout |
 | `translateRetries` | `—` | `2` | Retries on retryable failures (account stall, empty answer) |
 
-`translateModel` and `translateEffort` are also editable in **DSH Settings → Antigravity**, on the auto-translate row (two dropdowns next to the on/off control). Leaving them on their default option hands the choice back to the fallback chain above.
 | `translateSkipSameModel` | `—` | `true` | Skip translation when the reply already came from the translate model |
 | `translateBindConversation` | `—` | `true` | One agy conversation per DSH session, persona sent once |
 | `translateMinIntervalMs` | `—` | `3000` | Minimum spacing between automatic translations |
+
+`translateModel` and `translateEffort` are also editable in **DSH Settings → Antigravity**, on the auto-translate row (two dropdowns next to the on/off control). Leaving them on their default option hands the choice back to the fallback chain above.
+
+## Image generation (`dsh-agy-image`)
+
+| Key | Environment | Default | Description |
+| --- | --- | --- | --- |
+| `imageModel` | `DSH_AGY_IMAGE_MODEL` | (empty) | Chat model that drives the `generate_image` call; empty → `defaultModel` → `gemini-3.8-flash` |
+| `imageEffort` | `DSH_AGY_IMAGE_EFFORT` | `low` | Reasoning effort for that hop (the image model does the real work) |
+| `imageTimeoutMs` | `DSH_AGY_IMAGE_TIMEOUT_MS` | `240000` | Wall-clock cap for one image generation |
+| `imageMaxBytes` | `DSH_AGY_IMAGE_MAX_BYTES` | `20971520` | Largest artifact the plugin accepts (20 MiB) |
+| `imageOutputDir` | `DSH_AGY_IMAGE_OUTPUT_DIR` | (empty) | Default directory to copy finished images into |
+| `imageRetries` | `DSH_AGY_IMAGE_RETRIES` | `1` | Extra attempts after a retryable failure (each may pick another account) |
+
+The CLI is installed with the plugin as `dsh-agy-image`:
+
+```bash
+dsh-agy-image -p "一只柴犬，扁平插画风" -a 16:9 -o ./dog.jpg
+dsh-agy-image -p "把背景换成夜晚" -i ./day.png --json
+```
+
+There is no HTTP endpoint. Settings → Antigravity exposes `imageModel` / `imageEffort` and a copyable
+`dsh-agy-image` command next to the translation row.
+
+The CLI instantiates the plugin's real `AgyAdapter` with
+`purpose:'image'`, so account selection, quota cooldown/rotation, proxy, failure
+classification and the retry-on-effort-refusal all come from the same code path a
+normal turn uses. `--json` returns the validated artifact (`path`, `mime`,
+`width`, `height`, `bytes`, `aspectRatio`, `accountId`) or a stable failure `code`.
 
 ## Diagnostics
 

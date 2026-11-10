@@ -11,6 +11,7 @@ import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm
 import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, parseEffortUnsupported, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { utf8Bytes } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
+import { DEFAULT_FALLBACK_MODELS } from '../src/common/types.ts'
 import { AccountPoolManager } from '../src/host/pool.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
@@ -706,6 +707,23 @@ test('unknown reasoning effort on known model is rejected', async () => {
     () => collect(adapter.stream(opts([msg('user', 'x')], { reasoningEffort: 'ultra' as never }))),
     (e: unknown) => e instanceof LlmError && (e as LlmError & { code?: string }).code === Err.UNSUPPORTED_REASONING_EFFORT,
   )
+})
+
+test('listModels is side-effect free: listing never spawns model discovery', async () => {
+  // Reported as an infinite probe loop (100% CPU, fan spinning, UI flashing):
+  // listModels() kicked off refreshIfNeeded(), whose completion emits
+  // llm/adapters-updated — which makes DSH call listModels() again. A zero TTL
+  // makes every refresh eligible, so any probing here would fire on each call.
+  let probes = 0
+  const catalog = new ModelCatalog(
+    async () => { probes++; return { stdout: 'gemini-3.8-flash\tGemini 3.8 Flash', stderr: '' } },
+    DEFAULT_FALLBACK_MODELS,
+    0,
+  )
+  const { adapter } = makeAdapter({}, { catalog } as never)
+  await adapter.listModels('antigravity')
+  await adapter.listModels('antigravity')
+  assert.equal(probes, 0, 'refresh belongs to startup/account-switch paths, never to listing')
 })
 
 test('maxTurnMinutes terminates a self-driving turn that never goes idle (issue #92)', async () => {
@@ -2569,4 +2587,48 @@ test('goal round with a live active goal emits update_goal with the live revisio
   assert.equal(args.goal_id, 'goal-live')
   assert.equal(args.revision, 5, 'live revision wins over the stale one in history')
   assert.equal(args.action, 'complete')
+})
+
+test('purpose:image uses the verbatim bridge prompt, the configured mode and the event hook', async () => {
+  // The image CLI drives this exact route: no plan mode (the tool writes an
+  // artifact), no session binding, the caller's prompt untouched, and raw agy
+  // events handed back so the CLI can find the artifact.
+  const argsFile = join(workDir, 'image-args.json')
+  rmSync(argsFile, { force: true })
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  try {
+    const { adapter, store } = makeAdapter({ permissionMode: 'accept-edits' })
+    const bindingsBefore = JSON.stringify(store.all())
+    const kinds: string[] = []
+    const chunks = await collect(adapter.stream(opts([msg('user', 'THIS MESSAGE MUST BE IGNORED')], {
+      purpose: 'image',
+      agyImagePrompt: 'IMAGE PROMPT: a solid red square',
+      agyOnEvent: (ev: { kind: string }) => { kinds.push(ev.kind) },
+    } as unknown as Partial<GenerateOptions>)))
+    assert.equal((chunks[chunks.length - 1] as { reason: { kind: string } }).reason.kind, 'stop')
+
+    const args = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    const prompt = args[args.indexOf('-p') + 1]
+    assert.equal(prompt, 'IMAGE PROMPT: a solid red square', 'the bridge prompt is sent verbatim')
+    assert.doesNotMatch(prompt, /THIS MESSAGE MUST BE IGNORED/, 'session context is not mixed in')
+    assert.equal(args[args.indexOf('--mode') + 1], 'accept-edits', 'image is NOT forced into plan mode')
+    assert.equal(args.includes('--conversation'), false, 'each image run is a fresh conversation')
+    assert.ok(kinds.includes('init'), 'agyOnEvent saw init')
+    assert.ok(kinds.includes('result'), 'agyOnEvent saw the result envelope')
+    assert.equal(JSON.stringify(store.all()), bindingsBefore, 'no conversation binding is persisted')
+
+    // A headless caller can override the configured mode for one image call.
+    await collect(adapter.stream(opts([msg('user', 'x')], {
+      purpose: 'image',
+      agyImagePrompt: 'IMAGE PROMPT: second',
+      agyPermissionMode: 'skip',
+    } as unknown as Partial<GenerateOptions>)))
+    const args2 = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    assert.ok(args2.includes('--dangerously-skip-permissions'), 'agyPermissionMode:skip reaches agy')
+    assert.equal(args2.includes('--mode'), false, 'skip mode does not also pass --mode')
+  } finally {
+    delete process.env.FAKE_AGY_ARGS_FILE
+    process.env.FAKE_AGY_MODE = 'ok'
+  }
 })

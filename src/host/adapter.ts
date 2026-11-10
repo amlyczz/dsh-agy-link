@@ -1012,8 +1012,9 @@ export class AgyAdapter extends LlmAdapter {
     const accounts = pool ? pool.getAccounts().filter((a) => a.enabled) : []
     const cfg = this.deps.getConfig()
     // Model picker exposes the UNION of all models available across all pool accounts.
-    // Strictly synchronous and side-effect-free: NO background probing or event emissions
-    // inside listModels to prevent infinite discovery loops and UI flickering.
+    // Keep listing synchronous and side-effect-free: catalog refresh can emit
+    // llm/adapters-updated, which asks DSH to list models again. Freshness is
+    // handled by startup, TTL, account switches, and explicit refresh paths.
     const models = this.deps.catalog.getUnion(accounts, pool)
     const { entries, dropped } = sanitizeCatalogEntries(models)
     if (dropped.length > 0) {
@@ -1253,9 +1254,26 @@ export class AgyAdapter extends LlmAdapter {
     // (aux calls are otherwise pinned to 'low') and is never gated by
     // `allowAuxiliary` — it is a user-invoked feature, not a background helper.
     const isTranslate = (options.purpose as string | undefined) === 'translation'
+    // Image generation (`purpose:'image'`, the `dsh-agy-image` CLI): rides the
+    // same aux route as translation (account pool, cooldown/rotation, proxy,
+    // failure classification), but it must be able to call the built-in
+    // `generate_image` tool, so it keeps the configured permission mode instead
+    // of being forced into read-only plan mode. The caller hands the exact
+    // bridge prompt and receives agy events through `agyOnEvent`.
+    const isImage = (options.purpose as string | undefined) === 'image'
     // Title calls are aux, but must not be forced into plan mode (that drops the
     // length/format constraints): see the mode selection below.
-    const isAux = isCompaction || isTitle || isReview || isTranslate
+    const isAux = isCompaction || isTitle || isReview || isTranslate || isImage
+    // The image CLI may override the configured mode for one call (headless
+    // callers often need `skip`). Everything else keeps the historical rules:
+    // aux runs are read-only plan mode, titles keep the configured mode.
+    const imageModeRaw = isImage ? (options as { agyPermissionMode?: unknown }).agyPermissionMode : undefined
+    const effectivePermissionMode: PluginConfig['permissionMode'] =
+      imageModeRaw === 'skip' || imageModeRaw === 'plan' || imageModeRaw === 'accept-edits'
+        ? imageModeRaw
+        : isAux && !isTitle && !isImage
+          ? 'plan'
+          : cfg.permissionMode
     // Translation with its OWN agy conversation (1:1 with the DSH session). The
     // host hands over two strings: `setup` (persona + the DSH session id + how to
     // read that session's history) and `text` (this reply's source). The setup is
@@ -1272,7 +1290,7 @@ export class AgyAdapter extends LlmAdapter {
           }
         : null
     const isTranslateSession = translateSession !== null
-    if (isAux && !isReview && !isTranslate && !cfg.allowAuxiliary) {
+    if (isAux && !isReview && !isTranslate && !isImage && !cfg.allowAuxiliary) {
       throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
     }
     // Prefer direct native agy_tool cards when the host registered the mirror
@@ -1379,7 +1397,7 @@ export class AgyAdapter extends LlmAdapter {
         // would fail the whole invocation, so the flag is dropped silently —
         // the requested level is simply not selectable on this agy build.
         effort = undefined
-      } else if (isAux && !isTranslate) {
+      } else if (isAux && !isTranslate && !isImage) {
         effort = 'low'
       } else if (options.reasoningEffort !== undefined) {
         const wanted = String(options.reasoningEffort)
@@ -1582,6 +1600,17 @@ export class AgyAdapter extends LlmAdapter {
     // console shows exactly one badge (per-family pointers may point at
     // families the user is not currently running).
     if (account && !isAux) this.deps.pool?.markAccountActive(account.id)
+    // Image callers need the account's HOME to find agy's artifact directory
+    // (`<home>/.gemini/antigravity-cli/brain/<conversation>/`). The hook is
+    // advisory: a throwing listener must never break a run.
+    const onAccount = (options as { agyOnAccount?: unknown }).agyOnAccount
+    if (typeof onAccount === 'function' && account) {
+      try {
+        onAccount({ id: account.id, home: account.dir || process.env.HOME || homedir() })
+      } catch {
+        // contained
+      }
+    }
 
     // A translation conversation is keyed apart from the turn conversation of the
     // same DSH session, and it persists like one (the point of the 1:1 mapping).
@@ -1691,7 +1720,12 @@ export class AgyAdapter extends LlmAdapter {
     // digest may add one before the multimodal section runs.
     let stagedDirs: string[] = []
     let prompt = ''
-    if (isTranslateSession) {
+    const imagePromptRaw = (options as { agyImagePrompt?: unknown }).agyImagePrompt
+    if (isImage) {
+      // Verbatim: the CLI's bridge prompt already pins the tool arguments and
+      // the machine-readable reply contract. No session context is mixed in.
+      prompt = typeof imagePromptRaw === 'string' ? imagePromptRaw : ''
+    } else if (isTranslateSession) {
       // The persona (role, the DSH session id, where its history lives and how to
       // read it) travels with the FIRST message only. Once agy owns the
       // conversation, every later translation is just the source text — no
@@ -2120,7 +2154,7 @@ export class AgyAdapter extends LlmAdapter {
       model: activeModelForArgs,
       effort,
       conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
-      permissionMode: isAux && !isTitle ? 'plan' : cfg.permissionMode,
+      permissionMode: effectivePermissionMode,
       timeoutMs: cfg.timeoutMs,
       printTimeoutMinutes,
       extraArgs: cfg.extraArgs,
@@ -2135,7 +2169,7 @@ export class AgyAdapter extends LlmAdapter {
           model: activeModelForArgs,
           effort,
           conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
-          permissionMode: isAux && !isTitle ? 'plan' : cfg.permissionMode,
+          permissionMode: effectivePermissionMode,
           timeoutMs: cfg.timeoutMs,
           printTimeoutMinutes,
           extraArgs: cfg.extraArgs,
@@ -2481,6 +2515,14 @@ export class AgyAdapter extends LlmAdapter {
             }
           }
           rec.append(ev)
+          const onEvent = (options as { agyOnEvent?: unknown }).agyOnEvent
+          if (typeof onEvent === 'function') {
+            try {
+              onEvent(ev)
+            } catch {
+              // contained: a listener must never break the stream
+            }
+          }
         }
       },
       })
@@ -2525,6 +2567,14 @@ export class AgyAdapter extends LlmAdapter {
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
         rec.append(ev)
+        const onEvent = (options as { agyOnEvent?: unknown }).agyOnEvent
+        if (typeof onEvent === 'function') {
+          try {
+            onEvent(ev)
+          } catch {
+            // contained
+          }
+        }
       }
       const diffed = diffConversations(before, conversationsDir).conversationId
       const conversationId = streamCid ?? diffed

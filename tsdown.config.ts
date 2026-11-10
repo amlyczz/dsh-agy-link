@@ -5,7 +5,7 @@
 //  Client half: src/client/index.ts -> dist/client.js in the DSH
 //              ModuleLoader closure-factory format.
 import { defineConfig } from "tsdown";
-import { cpSync } from "node:fs";
+import { chmodSync, cpSync } from "node:fs";
 import { join } from "node:path";
 
 const hostExternals = [/^@deepseek-ai\//, "qrcode", /^node:/];
@@ -45,6 +45,29 @@ export default defineConfig([
       try {
         cpSync(join(import.meta.dirname, "assets/mermaid.min.js"), join(import.meta.dirname, "dist/mermaid.min.js"));
       } catch {}
+    },
+  },
+  {
+    // Headless image CLI (`dsh-agy-image`): one self-contained ESM file. It
+    // deliberately bundles @deepseek-ai/dsh-llm (the adapter's base classes and
+    // stream types) so the CLI can drive the SAME AgyAdapter outside the DSH
+    // process — account pool, cooldowns, proxy and failure classification
+    // included.
+    entry: { "cli-image": "src/cli/image.ts" },
+    outDir: "dist",
+    format: ["esm"],
+    platform: "node",
+    target: "es2024",
+    dts: false,
+    clean: false,
+    fixedExtension: false,
+    external: [/^node:/],
+    outputOptions: {
+      entryFileNames: "cli-image.mjs",
+      banner: "#!/usr/bin/env node",
+    },
+    onSuccess: () => {
+      chmodSync(join(import.meta.dirname, "dist/cli-image.mjs"), 0o755);
     },
   },
   {

@@ -22,7 +22,7 @@ export interface TslCommandDeps {
 }
 
 const HELP = [
-  '**/tsl** — 用 Gemini 把当前会话的输出翻成人话（默认 `gemini-3.8-flash` · high）',
+  '**/tsl** — 用 Gemini 把当前会话的输出翻成人话（默认 `gemini-3.8-flash` · medium；`--effort low` 更快）',
   '- `/tsl` — 翻译当前会话**最后一个已完成回合**，并在该回复下方生成译文卡片',
   '- `/tsl 3` — 翻译第 3 回合（卡片锚在那条回复下方）',
   '- `/tsl --full` — 连本回合的中间解释一起翻（默认只翻最终答复）',

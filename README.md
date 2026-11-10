@@ -13,12 +13,8 @@
 </p>
 
 <p align="center">
-  <b>🌐 Language / 语言：</b>
-  <a href="#中文">中文</a> ·
-  <a href="#english">English</a> ·
-  <a href="./docs/README.pt-BR.md">Português (Brasil)</a> ·
-  <a href="./docs/README.es.md">Español</a> ·
-  <a href="./docs/README.en.md">English (standalone)</a> ·
+  <b>🌐 语言：</b>
+  <a href="./docs/README.en.md">English</a> ·
   <a href="./docs/CONFIGURATION.md">完整配置文档</a>
 </p>
 
@@ -104,6 +100,7 @@
 | 🖼 **图片多模态** | 支持多模态图片传入，自动落盘本地媒体目录并通过 `--add-dir` 安全授权给 agy 查看 |
 | 🤝 **`agy_ask` 辅助工具** | 允许任意 DSH 模型把单次任务委托给 Antigravity 模型（AskAntigravity 协作模式） |
 | 🧠 **思考强度自适应学习** | 模型若拒绝 `--effort`，自动无 effort 原样重放并记录至本地，后续自动收回档位声明，杜绝重复报错 |
+| 🎨 **生图（`generate_image` 桥接）** | `dsh-agy-image` CLI；直接复用真实 `AgyAdapter`（`purpose:'image'`）与账号池，额度/地区失败自动换号；固定 Prompt/ImageName/AspectRatio/ImagePaths 参数，产物按魔数+宽高+比例强校验 |
 | 🗣 **`/tsl` 大白话翻译** | DSH 原生卡片锚定在回复下方，会话 1:1 独立绑定复用；支持 `/tsl` 命令、自动翻译开关（设置页同一行可选**翻译模型**与**思考档**下拉框）及回复快捷按钮「译成人话」 |
 | ⌨️ **`/agy` 快捷命令族** | `status` / `pool` / `auth` / `models` / `mode` / `effort` / `workspace` / `goal` / `session` / `enable-account` / `disable-account` / `clear` / `doctor` / `help` |
 
@@ -146,43 +143,21 @@ dsh plugin --profile web add dsh-agy-link
 # 4. 在 /model 选择器中挑选 Antigravity 模型，立即开启对话！
 ```
 
+> 无头运行（`dsh headless`）的权限预设与目录白名单见 [docs/HEADLESS-PERMISSIONS.md](./docs/HEADLESS-PERMISSIONS.md)。
+
 ---
 
 ## ⚙️ 配置说明
 
-插件配置可在 `/plugin`、设置面板或环境变量中灵活调整：
+所有配置键、环境变量、默认值与高级选项**只维护一份**：[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)。
 
-| 键名 | 环境变量 | 默认值 | 作用说明 |
-| --- | --- | --- | --- |
-| `enabled` | `DSH_AGY_ENABLED` | `true` | 插件主开关 |
-| `agyBin` | `DSH_AGY_BIN` | 自动探测 | 显式指定 `agy` 二进制路径 |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | 权限模式：`skip`（无人值守执行）/ `plan` / `accept-edits`。设置面板已固定为 `skip`；`plan` / `accept-edits` 仍可用配置或 `DSH_AGY_MODE` 覆盖（例如无头运行） |
-| `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `(agy 默认)` | 默认模型 slug |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | 思考预算：`low` / `medium` / `high`（`auto` = 各模型自身默认）。设置面板「默认思考强度」可直接切换；它只是会话**模型下拉框**的初始档位，仍可在该下拉框里按模型覆盖（与 agy 的等级一一对应） |
-| `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | 在 `/model` 选择器中隐藏的模型 slug 列表（黑名单语义，新模型默认可见；建议直接在设置面板"模型显示"中点选管理） |
-| `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | 单轮活跃看门狗超时（毫秒） |
-| `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | 存在未完成工具步骤（ACTIVE）时的空闲预算（分钟）；`0` = 不抬高预算，卡死的工具按 `timeoutMs` 快速失败 |
-| `maxTurnMinutes` | `DSH_AGY_MAX_TURN_MINUTES` | `0` | 单轮**墙钟**硬上限（分钟），`0` = 不限。空闲看门狗会被每一行输出重置，因此持续自驱动的会话只能靠它兜底；超限会终止 agy 进程树并返回可续跑错误（issue #92） |
-| `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | 上报给 DSH 的模型上下文窗口（token）。agy 的模型列表不上报窗口，所以统一用该值；若你的模型实际是 256K（如部分 Claude/Gemini 配置），设为 `262144` 即可让「上下文已用 %」正确 |
-| `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | 单次输出 token 上限（上报给 DSH） |
-| `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | 会话 cwd | agy 工作区根目录（默认跟随当前会话工作区） |
-| `proxyUrl` | `DSH_AGY_PROXY_URL` | 空字符串 | 全局代理 URL；若在控制台中单独配置了代理，优先使用账号独立代理 |
-| `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | Windows `true`，其他平台 `false` | 每次 spawn 前刷新 agy 的更新检查时间戳，阻断 `--bg-updater` 子进程链（Windows 闪窗根因）。关闭后 agy 恢复自动更新检查 |
-| `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | 7 天周配额自动预热（opt-in）：周额度到达重置时间或冷启动时发送极小探活请求，提前激活 7 天计时器。开启后每 5 分钟巡检一次；该路径直连 Google 内部端点，请自行评估风控风险 |
-| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | 自动预热使用的模型列表（逗号分隔）；空数组表示不自动预热 |
-| `autoTranslate` | `DSH_AGY_AUTO_TRANSLATE` | `false` | 每轮对话完成后自动调用 `/tsl` 生成大白话翻译卡片；亦可在会话中通过 `/tsl auto on` 动态开启 |
-| `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | `/tsl` 默认使用的翻译模型，缺失时按目录回退 |
-| `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `high` | 翻译模型思考强度档位 |
-| `translateTargetLanguage` | `DSH_AGY_TRANSLATE_LANG` | `中文（简体）` | 翻译提示词中指定的目标语言 |
-| `translateBindConversation` | — | `true` | 每个 DSH 会话绑定一条独立的 agy 翻译会话，人格仅发送一次，后续轮次仅传请求行与原文 |
-
-> 💡 完整配置参数清单、高级选项与环境变量映射请参见 [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)。
+常用入口：`/plugin`、设置面板（Antigravity）、`DSH_AGY_*` 环境变量，以及 `~/.dsh/agy-link/runtime-overrides.json`（设置面板的写入位置）。
 
 ---
 
 ## 🗣 /tsl 大白话翻译
 
-模型输出往往偏专业、冗长或充满机器腔。`/tsl` 命令调用 Gemini 模型（默认 `gemini-3.8-flash` · `high`）将当前会话的回复重写为通俗、口语化的大白话。
+模型输出往往偏专业、冗长或充满机器腔。`/tsl` 命令调用 Gemini 模型（默认 `gemini-3.8-flash` · `medium`）将当前会话的回复重写为通俗、口语化的大白话。
 
 ```bash
 /tsl                       # 翻译上一轮已完成的回复
@@ -199,6 +174,26 @@ dsh plugin --profile web add dsh-agy-link
 - **会话 1:1 独立绑定 (`translateBindConversation`)**：每个 DSH 会话对应一条独立的 agy 翻译会话（`<sessionKey>#tsl`）。首次调用注入翻译员身份、工作区与日志路径；后续翻译复用该会话，每轮仅发送指令行与原文，显著降低 Token 开销。
 - **共享号池与自愈容错**：翻译调用走插件辅助通道，共享主账号池与冷却机制，账号额度耗尽自动故障转移至下一个可用账号；遇到空返回（`EMPTY_RESPONSE`）自动退避重试。
 - **严格遵循用户授权**：自动翻译默认关闭（`autoTranslate: false`），可在「设置 → Antigravity」中全局开启，或在会话中通过 `/tsl auto on` 动态开启。同一行右侧的两个下拉框可分别改**翻译模型**（默认自动挑 Gemini Flash）与**翻译思考档**（默认跟随「默认思考强度」），改完即写配置、下一轮翻译生效。
+
+
+---
+
+## 🎨 生图（`generate_image` 桥接 + `dsh-agy-image`）
+
+agy 内置 `generate_image`（文生图 / 改图，产物写入会话 artifacts）。插件把它接成 headless 可用的 CLI，**不新增 HTTP API**：CLI 直接实例化插件真实的 `AgyAdapter`（`purpose:'image'`），所以选号、额度冷却、**额度/地区失败自动换号**、代理、失败分类全部复用主流程那一套，而不是另写一份 spawn / 选号逻辑。
+
+```bash
+# 安装插件后即可用；无需交互式会话
+dsh-agy-image -p "一只戴墨镜的柴犬，扁平插画风" -a 16:9 -o ./dog.jpg
+dsh-agy-image -p "把背景换成夜晚" -i ./day.png -n night_scene --json
+```
+
+- **与主流程共用同一套号池**：每次尝试都走 `AccountPoolManager.selectAccount()`；额度耗尽会冷却当前账号并换下一个；`User location is not supported`（地区/资格）也会前移指针换号重试。实测：主号被地区拒绝后，CLI 自动落到支持地区的备用号并成功出图（`accountId` 会写进 JSON）。
+- **参数固定**：`Prompt`、`ImageName`、`AspectRatio`（`1:1` / `2:3` / `3:2` / `3:4` / `4:3` / `4:5` / `5:4` / `9:16` / `16:9` / `21:9` / `1:8` / `8:1` / `1:4` / `4:1`）、`ImagePaths`（参考图 / 改图源）。
+- **强校验**：产物必须存在、按魔数确认为 PNG/JPEG/WebP/GIF/BMP、能解析出宽高、不超过 `imageMaxBytes`；指定了 `AspectRatio` 时按 3% 容差核对比例。
+- **返回结构**（`--json`）：`{ok, path, mime, width, height, aspectRatio, bytes, model, effort, durationMs, attempts, accountId?, conversationId?}`。失败带稳定 `code`：`BAD_PARAMS` / `EMPTY_PROMPT` / `IMAGE_NOT_FOUND` / `IMAGE_INVALID` / `IMAGE_ASPECT_MISMATCH` / `IMAGE_REGION_UNSUPPORTED` / `NO_ACCOUNT` / `TIMEOUT` …
+- **退出码**：`0` 成功 · `2` 参数错误 · `3` 找不到 agy · `4` 生成失败 · `5` 产物校验失败 · `6` 账号/地区不可用。
+- **已知限制**：agy 的图片模型只按比例出图，不接受任意像素尺寸（1:1 实测 1024×1024，16:9 实测 1376×768）；部分网络出口地区会被 Google 拒绝（`User location is not supported for the API use.`），此时换号/换代理即可。真实生成通常 20–60 秒。
 
 ---
 
@@ -261,261 +256,5 @@ dsh plugin --profile web add dsh-agy-link
 本插件仅通过调用用户本地官方安装的未修改 `agy` CLI 进程进行交互。使用本插件需遵循 Google Antigravity 服务条款。
 
 ## 许可证
-
-MIT License.
-
----
-
-# English
-
-Bring **Google Antigravity models into DeepSeek Harness (DSH)** — featuring **Multi-Account Pooling & Automatic Rotation**, **Official Multi-Bucket Quota Tracking (5h Rolling + 7d Weekly + Argon Weekly Pool)**, **Zero-Paste In-GUI OAuth Login**, and **Theme-Adaptive High-Contrast UI**, powered by the official unmodified `agy` CLI.
-
-<p align="center">
-  <img src="./docs/assets/console.png" alt="Antigravity Management Console - Multi-Account Pool & Quota Monitor" width="760" />
-</p>
-<p align="center">
-  <img src="./docs/assets/model-picker.png" alt="Antigravity Model Lineup in DSH Model Picker" width="280" />
-  &nbsp;&nbsp;
-  <img src="./docs/assets/settings.png" alt="Antigravity Settings Panel in DSH" width="540" />
-</p>
-<p align="center">
-  <img src="./docs/assets/token-usage.png" alt="Native Context Caching & Token Usage Breakdown" width="340" />
-  &nbsp;&nbsp;
-  <img src="./docs/assets/context-metering.png" alt="Accurate 1M Context Window Metering" width="340" />
-</p>
-
----
-
-> 🚨 **【Important: System Proxy / VPN / TUN Mode Required in Restricted Regions】**
->
-> Google Antigravity services and Google OAuth require access to Google servers (`oauth2.googleapis.com`, `cloudcode-pa.googleapis.com`, etc.).
->
-> 1. **Recommended**: Enable **TUN mode / System Proxy** in your VPN or proxy client (Clash, Surge, Sing-box, etc.) so that all terminal commands, Node.js background processes, and browser calls route through your proxy.
-> 2. **Terminal Proxy Export**: If your terminal does not inherit proxy automatically, export the environment variables before starting DSH:
->    ```bash
->    export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 ALL_PROXY=socks5://127.0.0.1:7890
->    ```
-> 3. **Per-Account Dedicated Proxy**: You can also configure a dedicated proxy URL per account directly in DSH Settings → Antigravity by clicking the "🌐 Proxy" button on the account card (e.g. `http://127.0.0.1:7890`).
-
----
-
-## 🌟 Core Feature: Multi-Account Pool & Smart Rotation
-
-Have multiple Google Antigravity / Gemini accounts? **dsh-agy-link makes multi-account orchestration seamless and automated**:
-
-- 👥 **Multi-Account Pooling**: Manage unlimited Google accounts (Primary + Secondary pool) with fully isolated HOME sandbox environments and credentials.
-- 🔄 **Sequential Drain Failover**: When an account reaches its rate limits (429) or runs out of 5h/weekly quotas, requests **automatically and smoothly fail over to the next available account** without interrupting your conversation!
-- 🕰 **Quota-Expiry-First Rotation**: With several accounts available, the scheduler prefers the one whose **reset window expires soonest**, maximizing utilization across the whole pool.
-- 🧠 **Jitter-Safe Auth Classification**: A keyring-auth timeout caused by proxy jitter is recognized as a **retryable network error**, not a sign-out — classified from the `keyringAuth` transport evidence in agy's own run log, and sticky "needs re-login" quarantine requires a second confirmation, so healthy accounts are never falsely flagged.
-- 📊 **Official Multi-Bucket Quota Tracking**: Direct integration with Antigravity's official `v1internal:retrieveUserQuotaSummary` endpoint, providing real-time visibility for the **5-Hour Rolling Limit**, the **7-Day Weekly Limit**, and the **Gemini 4 Argon weekly pool** (paid Pro/Ultra accounts, billed separately from the plain Gemini pool).
-- 🔀 **Manual Switch-Active**: One click on "Set active" pins the scheduler pointer to the account you choose.
-- 🔑 **In-GUI Zero-Paste OAuth**: One-click "Add Account" opens your browser and automatically captures OAuth tokens via local loopback — **no copying and pasting of authorization codes required**.
-- 🎨 **Theme-Adaptive High-Contrast UI**: Seamlessly adapts to Light and Dark DSH themes with crystal clear typography and crisp contrast.
-- 📱 **Mobile Web Responsiveness**: Below 680px width, the console modal adapts to a full-height sheet drawer (`100dvh`) with stacked labels, full-width quota bars, and equal-width button grids, tested on 360×800, 390×844, and 768×1024 viewports.
-- 🗣 **DSH-Native Translation Card (`/tsl`)**: Plain-language explanations rendered as a native DSH card (0.5px hairline border, markdown code-block fill, 12px radius, banner header) differentiated only by a monochrome spark and a "Gemini 译文" label; light and dark themes come straight from DSH tokens instead of a brand gradient. Binds 1:1 agy translation conversation per session (`<sessionId>#tsl`).
-- 🧠 **Effort Learning Mechanism**: Automatically learns when a model rejects `--effort`, replays the turn without effort, records the slug in `~/.dsh/agy-link/effort-unsupported.json`, and withdraws the level declarations to prevent repeated errors.
-- 🌐 **Per-Account Proxy**: Configure dedicated HTTP(S) / SOCKS proxy for each individual account to isolate IP addresses; when unset, the system proxy is auto-detected (macOS `scutil` / Windows registry / Linux gsettings).
-- ⚡ **Family-Scoped Cooldowns**: Gemini, Claude, GPT-OSS, and Argon rate limits are calculated independently, preventing one exhausted model from blocking others.
-
----
-
-## ✨ Features Overview
-
-| Feature | Description |
-| --- | --- |
-| 🎨 **Official Vector Logo** | Clean 36×36 retina vector mark (`assets/icon.svg`) with transparent background; dynamically replaces fallback gear in DSH Settings sidebar (`[role="dialog"] nav`) |
-| 🧩 **Unified Settings & Plugin Console** | Embedded Antigravity console directly in DSH Plugins settings; configure account pool, quotas, and proxies in one place while keeping list cards clean |
-| 🚀 **Secondary Account Parallel Leases** | Windows credential slot allows concurrent sessions on the same account to share leases without queue starvation; serializes only for cross-account switches |
-| ⚡ **Native Context Caching & Token Metering** | Native Google Gemini Prompt Caching (`cache_read_tokens`) forwarding; accurate cache read tracking and real prompt occupancy across 1M context windows |
-| 👥 **Multi-Account Pool** | Primary + unlimited spare accounts with automatic Sequential Drain rotation upon rate limits; quota-expiry-first scheduling |
-| 🧠 **Jitter-Safe Auth** | Distinguishes network jitter from a real sign-out via keyring transport evidence in agy's run log; sticky quarantine requires confirmation — no false "needs re-login" flags |
-| 📊 **Multi-Bucket Quota HUD** | Real-time progress bars for the **5h rolling**, **7d weekly**, and **Argon weekly** (paid Pro/Ultra) pools with exact reset countdowns |
-| 🔑 **Zero-Paste Browser Login** | Automatic browser-based Google OAuth login with loopback callback handler |
-| 🔀 **Manual Switch-Active** | Pin the scheduler to any account from the console; the header badge always names the server-scheduled account |
-| 🎨 **Theme-Adaptive UI** | Dynamic light/dark theme switching, pure SVG vector marks (no emojis), high contrast |
-| 📱 **Mobile Web Responsiveness** | Transitions to full-height sheet drawer (`100dvh`) below 680px, stacked labels, and equal-width button grid for touch devices |
-| 🌐 **Per-Account Proxy** | Dedicated HTTP(S) proxy per account slot, or auto-detected system proxy |
-| 🔌 **Native Model Routing** | Registers `antigravity` provider in DSH; choose Gemini / Claude / GPT-OSS / Argon in `/model` picker under `Antigravity (agy CLI)` |
-| 🌊 **Full Streaming Protocol** | Native streaming for text, thinking turn annotations, and tool calls |
-| 🃏 **Native Tool UI Cards** | Command runs and inline diffs render as clean, native DSH tool cards; MCP meta-tools unwrap to Terminal/Search cards |
-| 🔗 **Session Continuity** | Binds DSH sessions to native agy conversations (`--conversation`) for zero-redundancy context |
-| 🎯 **DSH Goal & Plan Integration** | Long-running tasks carry DSH goal / plan context across tool continuations |
-| 📊 **Accurate Token Metering** | Input, output, thinking, and cacheRead tokens are fully reported to DSH with 1M context support |
-| 🎛 **Top Header Console Badge** | Click the `AGY (n)` badge in the header to instantly open the management console |
-| 🖼 **Multimodal Images** | Stages images to local storage and passes safe absolute paths via `--add-dir` |
-| 🤝 **`agy_ask` Delegation** | Allows other DSH models to delegate subtasks to Antigravity models |
-| 🧠 **Effort Learning Mechanism** | Automatically learns model effort refusals, replays without `--effort`, and hides unsupported options |
-| 🗣 **`/tsl` Plain-Language Translation** | Gemini rewrites the agent's final answer in plain language and the card is pinned under that reply (persisted in session, labelled "Gemini translation", original text preserved); `/tsl auto on` translates every new turn; the settings row carries **translation model** and **thinking effort** dropdowns |
-| ⌨️ **`/agy` Commands** | Full command suite: `status`, `pool`, `auth`, `models`, `mode`, `effort`, `workspace`, `goal`, `session`, `enable-account`, `disable-account`, `clear`, `doctor`, `help` |
-
----
-
-## 📋 Prerequisites
-
-| Requirement | Details |
-| --- | --- |
-| **1. System Proxy / VPN** | **【Required in restricted regions】** (TUN mode or `HTTPS_PROXY` environment variable to ensure Google endpoints are reachable) |
-| **2. DeepSeek Harness (DSH)** | Your current DSH environment (`dsh --version`) |
-| **3. Node.js ≥ 24** | Required runtime (`node --version`) |
-| **4. Google Antigravity `agy` CLI** | Installed per [Google's official guide](https://antigravity.google/docs/cli/install). Verified with `agy --version` |
-
----
-
-## 🚀 Quick Start
-
-```bash
-# 0. Ensure System Proxy / TUN mode is active (required for Google connectivity):
-export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890
-
-# 1. Install plugin:
-dsh plugin --profile web add dsh-agy-link
-
-# Upgrade to latest:
-# dsh plugin --profile web add dsh-agy-link@latest --registry https://registry.npmjs.org
-
-# 2. Start DSH Web GUI, test status:
-#   /agy status
-
-# 3. Add accounts:
-#   Click "AGY (n)" badge in the top header, click "➕ Add Account" and complete browser login.
-
-# 4. Select an Antigravity model in /model and start chatting!
-```
-
----
-
-## ⚙️ Configuration
-
-| Key | Environment Variable | Default | Description |
-| --- | --- | --- | --- |
-| `enabled` | `DSH_AGY_ENABLED` | `true` | Master switch |
-| `agyBin` | `DSH_AGY_BIN` | auto-detected | Path to `agy` binary |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` (unattended execution) / `plan` / `accept-edits`. The settings panel no longer switches this; it stays `skip` by default, and `plan` / `accept-edits` remain available through config or `DSH_AGY_MODE` (e.g. headless runs) |
-| `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `(agy default)` | Default model slug |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | Thinking budget: `low` / `medium` / `high` (`auto` = each model keeps its own default). Switchable from the settings panel row **Default thinking effort**; it only seeds the session **model menu** and can still be overridden per model there (levels map 1:1 to agy) |
-| `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | Model slugs hidden from the `/model` picker (deny-list, newly discovered models stay visible; manage them via the "Model visibility" row in the settings panel) |
-| `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Activity watchdog timeout in milliseconds |
-| `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget while a tool step is ACTIVE (minutes); `0` keeps the normal `timeoutMs` budget so wedged tools fail fast |
-| `maxTurnMinutes` | `DSH_AGY_MAX_TURN_MINUTES` | `0` | Hard **wall-clock** cap per turn (minutes); `0` = unlimited. The idle watchdog is re-armed on every output line, so a self-driving session can only be bounded by this; exceeding it kills the agy process tree and returns a resumable error (issue #92) |
-| `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | Model context window (tokens) reported to DSH. agy's model list carries no window, so this single value is used for every model; if yours is really 256K, set `262144` and the "context used %" becomes correct |
-| `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | Output token cap reported to DSH |
-| `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | session cwd | Working directory root |
-| `proxyUrl` | `DSH_AGY_PROXY_URL` | empty string | Global proxy URL; per-account proxies configured in console take precedence |
-| `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refreshes agy's update-check timestamp before every spawn so its `--bg-updater` child chain (the Windows console-flash root cause) never starts. `false` restores agy's own auto-update checks |
-| `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in 7-day weekly quota warmup: sends a minimal probe when the weekly window has reset or is cold, activating the 7-day timer. Scans every 5 minutes; this path talks directly to Google's internal endpoints, so assess the risk-control tradeoff yourself |
-| `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | Model list used for warmup probes (comma-separated); an empty list disables automatic warmup |
-| `autoTranslate` | `DSH_AGY_AUTO_TRANSLATE` | `false` | Auto plain-language translation after every completed turn (card under the reply). Per-session override: `/tsl auto on\|off` |
-| `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | Model used by `/tsl` and auto mode; falls back through the live catalog when absent |
-| `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `high` | Reasoning effort for effort-capable translate models |
-| `translateTargetLanguage` | `DSH_AGY_TRANSLATE_LANG` | `中文（简体）` | Target language wording in the translator prompt |
-| `translateBindConversation` | — | `true` | Keep ONE agy conversation per DSH session for translations: the persona is sent once; later translations reuse it and send only the short request line |
-
-> 💡 For full configuration reference, see [docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
-
----
-
-## 🗣 Plain-language translation (`/tsl`)
-
-Not every model writes plainly. `/tsl` sends the current session's output to a
-Gemini model (default `gemini-3.8-flash` · `high`) and gets a "human language"
-rewrite back.
-
-```
-/tsl                       # translate the last completed turn
-/tsl 3                     # translate turn 3
-/tsl --full                # include the turn's intermediate narration
-/tsl --text 任意文本…       # translate arbitrary text (no card)
-/tsl --model claude-sonnet-5-5 --effort medium
-/tsl --print               # also echo the body in the command result
-/tsl auto on|off|status    # per-session auto mode
-```
-
-- The result is stored as a durable `plugin:agy-link/translation` session
-  record and rendered as a **"Gemini translation" card pinned directly under the
-  reply it translates** — it survives reloads, reads like any other DSH card (one
-  tinted spark plus a "Gemini 译文" label are the only Gemini signals), and never
-  enters the model-visible history.
-- Every reply also gets a hover action **"译成人话"** so historical turns can be
-  translated on demand.
-- Binds 1:1 agy translation conversation (`<sessionId>#tsl`): persona sent once, per-turn calls transmit only the request line.
-- The translation call rides this plugin's own auxiliary adapter route, so it
-  uses the same account pool: **when an account is out of quota it is cooled
-  down and the request retries on the next account automatically** (watch
-  `/agy pool` for the switch). Empty model responses (`EMPTY_RESPONSE`) retry automatically.
-- Translation is strictly opt-in (`autoTranslate: false` by default) because it
-  spends quota per turn. Toggle it in **Settings → Antigravity**, or per session
-  with `/tsl auto on`.
-
----
-
-## Headless operation
-
-See [Headless permissions](docs/HEADLESS-PERMISSIONS.md) for a bounded reproduction,
-least-privilege read-rule validation, and process-versus-tool acceptance checks.
-
-The plugin passes the selected permission mode to `agy`; it does not approve,
-deny, or bypass permissions itself. In headless/print operation, `agy` can
-automatically deny a tool request in `plan` or `accept-edits`. The raw tool
-error is retained in `/agy status`; it is not proof of a human denial.
-
-Do not assume undocumented wildcard semantics for either mode. Test the exact
-`agy` version and command set in a scoped workspace. Choose `skip` only when
-you explicitly accept unattended tool execution.
-
----
-
-## ❓ FAQ & Troubleshooting
-
-### Desktop app fails to boot after upgrading to DSH 0.2.2 (`web boot: 1 entry did not activate` / `locale "es" is already registered`)?
-**A: That is a 0.4.99-and-earlier compatibility bug, fixed in 0.5.5 (#70 / `31c99c1`); current 0.6.x is unaffected.**
-- **Cause**: the 0.4.99 client called `locale.addLanguage({ id: 'es' | 'pt-BR' })` unconditionally. DSH 0.2.2's host locale plugin may have registered those languages first, so the call threw `locale "es" is already registered`; the plugin's client entry failed to activate and took the whole web boot down (the desktop app could not reach the chat UI).
-- **Fix**: upgrade `dsh-agy-link` to **≥ 0.5.5** (0.6.x recommended). Registration now inspects the host catalog, tolerates only "already registered / already has locale", and disposing removes only entries the plugin owns; host-registered `es`/`pt-BR` (including `ES`/`pt-br` case variants) coexist fine.
-- **Workaround**: if you cannot upgrade yet, disable the plugin to reach the chat UI.
-
-### Why does a black command prompt / terminal window briefly flash when starting a conversation on Windows?
-**A: This is a cosmetic behavior of the Windows Console subsystem and is completely harmless.**
-- **Root Cause**: DSH is an Electron desktop app (GUI process). Before each conversation turn, the plugin verifies/syncs Google credentials via the Windows Credential Manager and launches the `agy.exe` console child process for streaming. On Windows 11, if the system default terminal is set to "Windows Terminal", Windows Terminal intercepts the background console allocation and momentarily flashes an empty window (a known Windows Terminal OpenConsole delegation behavior).
-- **Solution**:
-  1. Open **Windows Terminal** → **Settings** → **Startup** (or Windows **Settings** → **System** → **For developers**).
-  2. Change **Default terminal application** from "Let Windows decide" or "Windows Terminal" to **"Windows Console Host"**.
-  3. Click **Save** in the bottom-right corner.
-  4. **Completely exit and restart DSH** so the running host process picks up the updated console delegation setting.
-
-### agy's own auto-updater also flashes a window (fixed in 0.4.66)
-On top of the console-delegation flash above, `agy` itself spawns a
-`--bg-updater` → `agy --version` child chain once its last update check is more
-than 15 minutes old. **That chain is created inside agy and allocates its own
-visible console**, so the parent's `windowsHide` and `AGY_CLI_DISABLE_AUTO_UPDATE=1`
-both apply too late — the exact conclusion of the measurements recorded in issue #49.
-
-Since 0.4.66 the plugin refreshes agy's fast-path timestamp
-(`<agy home>/last_check.timestamp`) right before every spawn. agy skips the
-check entirely when it is under 15 minutes old and spawns nothing, so the
-visible window chain never starts — for turns, boot probes, model-picker
-refreshes and login probes alike.
-
-- **Cost**: the agy home used by this plugin stops auto-checking for updates;
-  a manual `agy update` still works normally.
-- **Switch**: `suppressAgyAutoUpdate` (env `DSH_AGY_SUPPRESS_AUTOUPDATE`).
-  On by default on Windows, off elsewhere; set `false` to restore agy's own behaviour.
-- **Manual workaround on older versions**: make
-  `%USERPROFILE%\.gemini\antigravity-cli\updater\update.lock` read-only
-  (`attrib +R ...`). agy then fails to acquire the update lock and skips the
-  check — at the price of `agy update` reporting `update already in progress`
-  until you run `attrib -R`.
-
-### What happens when a model rejects `--effort` with `--effort is not supported`?
-Certain models do not support the `--effort` parameter. The plugin automatically detects this refusal, parses the model slug from the error envelope, and replays the turn once without `--effort` so that execution succeeds seamlessly. It then writes the model slug to `~/.dsh/agy-link/effort-unsupported.json` and withdraws the model's effort level declarations, hiding the option in the UI for subsequent sessions. Learned records can be inspected via `/agy status` (`effortUnsupported`) or `/agy doctor`.
-
-### Why are quota bars not updating?
-Quotas update via periodic background polling (defaulting to once per hour, tunable via `quotaPollIntervalMs`). For immediate updates, click "Sync" on the console card or run `/agy refresh-quota` in the chat input.
-
----
-
-## ⚠️ Disclaimer
-
-This plugin operates strictly by invoking the official, unmodified `agy` CLI binary installed on your local system. Use of this plugin is subject to Google Antigravity's Terms of Service.
-
-## License
 
 MIT License.

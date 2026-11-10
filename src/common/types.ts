@@ -168,7 +168,11 @@ export interface PluginConfig {
   autoTranslate: boolean
   /** Model used for translation (default `gemini-3.8-flash`; falls back through the live catalog). */
   translateModel: string
-  /** Reasoning effort for effort-capable translate models (default `high`). */
+  /**
+   * Reasoning effort for effort-capable translate models (default `medium`).
+   * Measured on real agy for one 964-char reply: low ≈ 12s, medium ≈ 33s,
+   * high ≈ 45s — and the high-effort output also reads more like a formal report.
+   */
   translateEffort: string
   /** Target language wording passed to the translator prompt. */
   translateTargetLanguage: string
@@ -190,6 +194,19 @@ export interface PluginConfig {
   translateSkipSameModel: boolean
   /** Minimum spacing between automatic translations inside one session (0 = no throttle). */
   translateMinIntervalMs: number
+  // ---- image generation (`dsh-agy-image` CLI, purpose:'image' adapter route) ----
+  /** Chat model that drives the `generate_image` call ('' = defaultModel → gemini-3.8-flash). */
+  imageModel: string
+  /** Reasoning effort for that hop (default `low`: the image model does the real work). */
+  imageEffort: string
+  /** Wall-clock cap for one image generation, including the image model (default 240s). */
+  imageTimeoutMs: number
+  /** Largest artifact the plugin will accept (default 20 MiB). */
+  imageMaxBytes: number
+  /** Copy finished images here by default ('' = leave them in agy's artifact dir). */
+  imageOutputDir: string
+  /** Extra attempts after a retryable image failure (default 1). */
+  imageRetries: number
 }
 
 // Fallback line-up. Serves the picker when `agy models` cannot run (signed out
@@ -289,7 +306,10 @@ export function defaultConfig(): PluginConfig {
     // turn, so the default must never silently start billing a user.
     autoTranslate: false,
     translateModel: 'gemini-3.8-flash',
-    translateEffort: 'high',
+    // Medium is the speed/quality compromise measured on real agy: low ≈ 12s,
+    // medium ≈ 33s, high ≈ 45s for the same 964-char reply (most of the low
+    // figure is agy's own ~9s startup). high made a frequent action feel broken.
+    translateEffort: 'medium',
     translateTargetLanguage: '中文（简体）',
     translateMaxChars: 8_000,
     translateMaxTokens: 4_096,
@@ -298,6 +318,12 @@ export function defaultConfig(): PluginConfig {
     translateBindConversation: true,
     translateSkipSameModel: true,
     translateMinIntervalMs: 3_000,
+    imageModel: '',
+    imageEffort: 'low',
+    imageTimeoutMs: 240_000,
+    imageMaxBytes: 20 * 1024 * 1024,
+    imageOutputDir: '',
+    imageRetries: 1,
   }
 }
 

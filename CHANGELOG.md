@@ -1,22 +1,80 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(catalog): expose pool-wide models and route by selected model.**
+  - The model picker exposes the union of models available across enabled accounts; Argon appears when an account in the pool supports it.
+  - Model resolution and turn dispatch select an account eligible for the selected model, so Argon can use a capable secondary account while the primary lacks it.
+  - Argon reasoning effort is mapped to agy's tiered model slugs.
+
+### 中文
+
+- **修复(目录)：展示号池模型全集，并按所选模型路由。**
+  - 模型选单合并启用账号可用的模型；号池中有账号支持 Argon 时即可显示。
+  - 模型解析与请求调度按具体模型选择可用账号，让不支持 Argon 的主账号也可使用支持 Argon 的副账号。
+  - 将 Argon 思考档转换为 agy CLI 的 tiered slug。
+
+## 0.6.16 (2026-11-10)
+
+### English
+
+- **Feat(image): headless image generation as a CLI (`dsh-agy-image`) that reuses the real `AgyAdapter` — no new HTTP API.**
+  - The CLI instantiates the plugin's own `AgyAdapter` with a new `purpose:'image'` route, so account selection, quota cooldown/rotation, proxy, failure classification and the `--effort`-refusal replay are the same code path a normal turn uses. A region/quota refusal rotates the pool and the retry lands on the next account (verified live: the primary was region-refused, a proxied account generated the image).
+  - The adapter sends the caller's bridge prompt verbatim (`agyImagePrompt`), is not forced into plan mode (the tool writes an artifact), and hands raw agy events back through `agyOnEvent` / `agyOnAccount` so the service can locate `brain/<conversation_id>/`.
+  - The bridge prompt pins `Prompt` / `ImageName` / `AspectRatio` / `ImagePaths` and asks for `IMAGE_PATH=` / `IMAGE_ERROR=`. Success is accepted only after magic-byte sniff (PNG/JPEG/WebP/GIF/BMP), dimension parsing, `imageMaxBytes` and a 3% aspect-ratio check.
+  - `--json` exposes `{ok, path, mime, width, height, aspectRatio, bytes, accountId?, conversationId?}` plus stable failure codes. Config: `imageModel` / `imageEffort` / `imageTimeoutMs` / `imageMaxBytes` / `imageOutputDir` / `imageRetries`.
+
+- **Docs/UI: one README per language, a single configuration source, and a Settings row for image generation.**
+  - `README.md` is now Chinese-only; the duplicated English half moved to `docs/README.en.md` (fully rewritten, including image generation). Stale `docs/README.es.md` / `docs/README.pt-BR.md` were removed, and historical process docs moved under `docs/archive/`.
+  - The configuration table is no longer duplicated in the README — `docs/CONFIGURATION.md` is the only copy.
+  - Settings → Antigravity now shows an **Image generation** row: model/effort dropdowns (`imageModel` / `imageEffort`) plus a copyable `dsh-agy-image` command. It documents the CLI instead of pretending to run it in-page.
+
+- **Fix(translate): the per-reply "translate" button now explains the message you actually clicked — and the translation is faster and much more colloquial.**
+  - `translateMessage` resolved the clicked message to its *turn* and then translated that turn's **last** answer. A turn often holds a preamble plus the real answer, so clicking message A could show a translation of message B. It now translates the clicked message by `messageId` (own text, own anchor seq).
+  - Dedupe is message-scoped: `findTranslationRecord` accepts a `messageId`, so siblings in one turn can each have their own card and clicking B never returns A's stored translation. Records written before `messageId` existed remain a fallback only while the turn has no message-scoped record at all.
+  - Default thinking effort drops from `high` to `medium`: on real agy the same 964-char reply takes **low ≈ 12s / medium ≈ 33s / high ≈ 45s** (≈9s is agy's own startup), and high-effort output also reads like a formal report. Switch to `low` in Settings for ~12s, or `high` when rigour matters.
+  - Prompt rewritten around "这一条回复": plain spoken Chinese, no report headings/bullets, no 书面 connectors, terms unpacked — and **keep the real content volume** (the old "挑重点" hint is gone; long sources are told to finish the walk-through instead of compressing).
+  - `sessionDigest` is now one pass instead of rescanning the whole log per turn (O(n²) → O(n)); chunked translations join with a blank line instead of a `---` divider.
+
+### 中文
+
+- **新增(生图)：headless 生图 CLI（`dsh-agy-image`），直接复用真实 `AgyAdapter`——不新增 HTTP API。**
+  - CLI 用插件自己的 `AgyAdapter` 新增 `purpose:'image'` 通道：选号、额度冷却/换号、代理、失败分类、`--effort` 被拒重放，全部与真实对话同一套代码。地区/额度拒绝会前移号池指针，重试落到下一个账号（实测：主号被地区拒绝 → 自动落到代理账号成功出图）。
+  - Adapter 原样发送调用方的桥接提示词（`agyImagePrompt`），不强制 plan 模式（工具要写 artifact），并通过 `agyOnEvent` / `agyOnAccount` 把 agy 原始事件与账号 HOME 交回服务层，用于定位 `brain/<conversation_id>/`。
+  - 提示词固定 `Prompt` / `ImageName` / `AspectRatio` / `ImagePaths`，要求回 `IMAGE_PATH=` / `IMAGE_ERROR=`；成功必须通过魔数识别（PNG/JPEG/WebP/GIF/BMP）、宽高解析、`imageMaxBytes` 与 3% 比例核对。
+  - `--json` 返回 `{ok, path, mime, width, height, aspectRatio, bytes, accountId?, conversationId?}`，失败带稳定 `code`。配置：`imageModel` / `imageEffort` / `imageTimeoutMs` / `imageMaxBytes` / `imageOutputDir` / `imageRetries`。
+
+- **文档/UI：每种语言只留一份 README，配置只维护一份，设置页新增「生图」一行。**
+  - `README.md` 现在只保留中文；重复的英文半边移到 `docs/README.en.md`（完整重写，含生图）。删除过时的 `docs/README.es.md` / `docs/README.pt-BR.md`，历史过程文档移到 `docs/archive/`。
+  - README 不再重复配置表 —— `docs/CONFIGURATION.md` 是唯一副本。
+  - 设置 → Antigravity 新增「生图」行：模型/思考档下拉框（`imageModel` / `imageEffort`）+ 可复制的 `dsh-agy-image` 命令；只展示 CLI，不假装页面内能直接跑。
+
+- **修复(翻译)：每条回复的「译成人话」按钮现在翻的就是你点的那一条，并且更快、更口语。**
+  - `translateMessage` 原来先把消息映射到所属回合，再翻该回合的**最后一条**答复。一个回合里常常先有一段说明、后面才是真正的答复，所以点 A 可能拿到 B 的译文。现在按 `messageId` 精确翻译被点的那条（用它自己的正文和锚点 seq）。
+  - 去重改成消息级：`findTranslationRecord` 接受 `messageId`，同一回合的 A/B 各自可以有卡片，点 B 不会命中 A 的旧译文；没有 `messageId` 的历史记录只在该回合完全没有消息级记录时兜底。
+  - 默认思考档从 `high` 降到 `medium`：真实 agy 上同一段 964 字回复实测 **low ≈ 12s / medium ≈ 33s / high ≈ 45s**（其中约 9s 是 agy 启动开销），且 high 的译文更像正式报告。想更快可在设置里切 `low`（≈12s），需要更严谨再切 `high`。
+  - 提示词围绕「这一条回复」重写：大白话、短句、不要标题/分点/报告腔、不要「首先 / 其次 / 综上 / 因此」这类书面词、术语先用日常说法解释；同时**保留实际内容量**（删掉了旧的「挑重点」提示，长原文改为要求按顺序讲完，而不是压成结论）。
+  - `sessionDigest` 改为单次遍历（原来每个回合都重扫全量事件，O(n²)）；多块翻译之间改用空行连接，不再插入 `---` 分隔线。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.15...v0.6.16
+
 ## 0.6.15 (2026-11-10)
 
 ### English
 
-- **Fix(catalog): eliminate dynamic probe infinite loop, stop model picker flicker, and serve complete catalog superset for manual picking.**
-  - `listModels` previously launched asynchronous `refreshIfNeeded` probes across pool accounts and announced catalog changes with `llm/adapters-updated`. This caused DSH to immediately re-read `listModels`, resulting in an infinite event loop, high CPU usage, and frantic model selector flickering. Removed all dynamic discovery probes from `listModels` and `resolveModel`, making model listing 100% synchronous, static, and side-effect-free.
-  - The settings console (`/status` `catalogModels`) now exposes the full superset (`getAllKnownModels`), merging fallbacks, account discovered models, and quota-reported models (including Gemini 4 Argon, Claude 4.6/5.5, GPT-OSS). Users can manually toggle models on or off via the settings UI.
-  - Adhere to the selected fixed model: on turn dispatch (`streamAttempt`), the scheduler accurately routes the session to an eligible account that supports the selected model (`selectAccount(family, model)`).
-  - Convert `gemini-4-argon` efforts into official CLI tiered slugs (e.g. `gemini-4-argon-low/medium/high`).
+- **Fix(catalog): `listModels()` is side-effect free — the `agy models` feedback loop is gone (no more 100% CPU / fan spin / UI flashing).**
+  - `listModels()` kicked off `catalog.refreshIfNeeded()`, and a refresh that discovered models emits `llm/adapters-updated` — which makes DSH call `listModels()` again. Each round could spawn `agy models`, producing a self-sustaining probe loop until the TTL happened to suppress it (and for an account with no cached catalog the TTL guards were skipped entirely).
+  - Listing is now pure: it reads the cached catalog only. Freshness is owned by the startup probe, a new **30-minute periodic TTL refresh** (one probe per window at most), account switches (`forceRefreshAndNotify`) and the explicit `/agy` refresh paths.
+  - Test asserts two consecutive `listModels()` calls spawn zero discovery processes even with a zero TTL.
 
 ### 中文
 
-- **修复(目录)：消除动态探测死循环与风扇狂转，修复模型选择器闪烁，设置面板展示全集供手动挑选。**
-  - `listModels` 之前会在每次查询时触发后台子进程异步探测 `refreshIfNeeded` 并广播 `llm/adapters-updated`，导致 DSH 客户端反复重新查询并陷入无限事件循环，CPU 占满且界面疯狂闪烁。彻底移除了 `listModels` 与 `resolveModel` 内部的动态探测与重绘广播，模型列表查询恢复为纯同步、纯静态、无副作用。
-  - 设置面板（`/status` 下的 `catalogModels`）现改为展示模型完整全集（`getAllKnownModels`），整合回退模型、号池各账号探测模型及配额模型（涵盖 Gemini 4 Argon、Claude 4.6/5.5、GPT-OSS 等），用户可在设置页手动开启或隐藏各模型。
-  - 严格遵循选定的固定模型：会话调度执行（`streamAttempt`）时，系统自动匹配并路由至号池中支持该模型的可用账号（`selectAccount(family, model)`）。
-  - 支持 `gemini-4-argon` 思考力度自动转换为官方规范 slug（如 `gemini-4-argon-low/medium/high`）。
+- **修复(catalog)：`listModels()` 无副作用——`agy models` 反馈循环消失（不再 100% CPU / 风扇狂转 / UI 闪烁）。**
+  - 原实现里 `listModels()` 会触发 `catalog.refreshIfNeeded()`，而刷新发现新模型时会发 `llm/adapters-updated`，DSH 收到后又调用 `listModels()`——每轮都可能 spawn `agy models`，形成自维持的探测循环（对「尚无缓存目录」的账号更是完全跳过 TTL 守卫）。
+  - 现在列举是纯读缓存；新鲜度由启动探测、新增的**每 30 分钟 TTL 刷新**（每窗口最多一次探测）、切换账号（`forceRefreshAndNotify`）与显式 `/agy` 刷新负责。
+  - 测试断言：即使 TTL=0，连续两次 `listModels()` 也不会 spawn 任何探测进程。
 
 **Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.14...v0.6.15
 
