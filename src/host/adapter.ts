@@ -1158,14 +1158,25 @@ export class AgyAdapter extends LlmAdapter {
     if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
     else args.push('--mode', opts.permissionMode)
     const effectiveModel = resolveModelSlug(opts.model)
-    if (effectiveModel !== '') args.push('--model', effectiveModel)
+    let finalModel = effectiveModel
+    let finalEffort = opts.effort
+    if (isArgonModel(effectiveModel)) {
+      if (finalEffort && finalEffort !== '' && !effectiveModel.includes('-low') && !effectiveModel.includes('-medium') && !effectiveModel.includes('-high')) {
+        finalModel = `${effectiveModel}-${finalEffort}`
+        finalEffort = undefined
+      } else if (effectiveModel === 'gemini-4-argon' || effectiveModel === 'argon') {
+        finalModel = 'gemini-4-argon-low'
+      }
+    }
+    if (finalModel !== '') args.push('--model', finalModel)
     // Claude 5.5 accepts --effort on its base slug (verified against agy 1.5.3);
     // a tiered slug plus the flag is rejected upstream, so callers must pass the
     // base slug here — the catalog folds the tiers for exactly that reason.
-    const effortModel = effectiveModel.toLowerCase()
+    const effortModel = finalModel.toLowerCase()
     // Claude 5.5 only: 4.6 keeps its documented no-effort behaviour.
-    const isEffortCapable = effectiveModel === '' || effortModel.startsWith('gemini') || effortModel.startsWith('argon') || /^claude-(?:sonnet|opus)-5-5$/.test(effortModel)
-    if (isEffortCapable && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
+    // Argon models encode effort in their tiered slug and must not pass --effort.
+    const isEffortCapable = (finalModel === '' || effortModel.startsWith('gemini') || /^claude-(?:sonnet|opus)-5-5$/.test(effortModel)) && !isArgonModel(finalModel)
+    if (isEffortCapable && finalEffort && finalEffort !== '') args.push('--effort', finalEffort)
     if (opts.conversationId) args.push('--conversation', opts.conversationId)
     for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
     args.push(...opts.extraArgs)

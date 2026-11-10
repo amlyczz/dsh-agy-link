@@ -754,6 +754,41 @@ test('buildArgs passes --effort for a Claude 5.5 base slug (agy 1.5.3 verified)'
   assert.equal(args[args.indexOf('--effort') + 1], 'high')
 })
 
+test('buildArgs maps gemini-4-argon effort to tiered CLI slug without --effort', () => {
+  const { adapter } = makeAdapter()
+  const argsHigh = adapter.buildArgs({
+    prompt: 'x',
+    model: 'gemini-4-argon',
+    effort: 'high',
+    permissionMode: 'skip',
+    timeoutMs: 60_000,
+    extraArgs: [],
+  })
+  assert.equal(argsHigh[argsHigh.indexOf('--model') + 1], 'gemini-4-argon-high')
+  assert.equal(argsHigh.includes('--effort'), false, 'Argon encodes effort in slug and must not pass --effort')
+
+  const argsLow = adapter.buildArgs({
+    prompt: 'x',
+    model: 'gemini-4-argon',
+    effort: 'low',
+    permissionMode: 'skip',
+    timeoutMs: 60_000,
+    extraArgs: [],
+  })
+  assert.equal(argsLow[argsLow.indexOf('--model') + 1], 'gemini-4-argon-low')
+  assert.equal(argsLow.includes('--effort'), false)
+
+  const argsDefault = adapter.buildArgs({
+    prompt: 'x',
+    model: 'gemini-4-argon',
+    permissionMode: 'skip',
+    timeoutMs: 60_000,
+    extraArgs: [],
+  })
+  assert.equal(argsDefault[argsDefault.indexOf('--model') + 1], 'gemini-4-argon-low')
+  assert.equal(argsDefault.includes('--effort'), false)
+})
+
 test('buildArgs assembles flags per ADR-3/8/10', () => {
   const { adapter } = makeAdapter()
   const args = adapter.buildArgs({
