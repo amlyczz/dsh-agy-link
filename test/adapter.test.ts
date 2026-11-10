@@ -11,6 +11,7 @@ import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm
 import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, parseEffortUnsupported, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { utf8Bytes } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
+import { DEFAULT_FALLBACK_MODELS } from '../src/common/types.ts'
 import { AccountPoolManager } from '../src/host/pool.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
@@ -706,6 +707,23 @@ test('unknown reasoning effort on known model is rejected', async () => {
     () => collect(adapter.stream(opts([msg('user', 'x')], { reasoningEffort: 'ultra' as never }))),
     (e: unknown) => e instanceof LlmError && (e as LlmError & { code?: string }).code === Err.UNSUPPORTED_REASONING_EFFORT,
   )
+})
+
+test('listModels is side-effect free: listing never spawns model discovery', async () => {
+  // Reported as an infinite probe loop (100% CPU, fan spinning, UI flashing):
+  // listModels() kicked off refreshIfNeeded(), whose completion emits
+  // llm/adapters-updated — which makes DSH call listModels() again. A zero TTL
+  // makes every refresh eligible, so any probing here would fire on each call.
+  let probes = 0
+  const catalog = new ModelCatalog(
+    async () => { probes++; return { stdout: 'gemini-3.8-flash\tGemini 3.8 Flash', stderr: '' } },
+    DEFAULT_FALLBACK_MODELS,
+    0,
+  )
+  const { adapter } = makeAdapter({}, { catalog } as never)
+  await adapter.listModels('antigravity')
+  await adapter.listModels('antigravity')
+  assert.equal(probes, 0, 'refresh belongs to startup/account-switch paths, never to listing')
 })
 
 test('maxTurnMinutes terminates a self-driving turn that never goes idle (issue #92)', async () => {

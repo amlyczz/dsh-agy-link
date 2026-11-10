@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.15 (2026-11-10)
+
+### English
+
+- **Fix(catalog): `listModels()` is side-effect free — the `agy models` feedback loop is gone (no more 100% CPU / fan spin / UI flashing).**
+  - `listModels()` kicked off `catalog.refreshIfNeeded()`, and a refresh that discovered models emits `llm/adapters-updated` — which makes DSH call `listModels()` again. Each round could spawn `agy models`, producing a self-sustaining probe loop until the TTL happened to suppress it (and for an account with no cached catalog the TTL guards were skipped entirely).
+  - Listing is now pure: it reads the cached catalog only. Freshness is owned by the startup probe, a new **30-minute periodic TTL refresh** (one probe per window at most), account switches (`forceRefreshAndNotify`) and the explicit `/agy` refresh paths.
+  - Test asserts two consecutive `listModels()` calls spawn zero discovery processes even with a zero TTL.
+
+### 中文
+
+- **修复(catalog)：`listModels()` 无副作用——`agy models` 反馈循环消失（不再 100% CPU / 风扇狂转 / UI 闪烁）。**
+  - 原实现里 `listModels()` 会触发 `catalog.refreshIfNeeded()`，而刷新发现新模型时会发 `llm/adapters-updated`，DSH 收到后又调用 `listModels()`——每轮都可能 spawn `agy models`，形成自维持的探测循环（对「尚无缓存目录」的账号更是完全跳过 TTL 守卫）。
+  - 现在列举是纯读缓存；新鲜度由启动探测、新增的**每 30 分钟 TTL 刷新**（每窗口最多一次探测）、切换账号（`forceRefreshAndNotify`）与显式 `/agy` 刷新负责。
+  - 测试断言：即使 TTL=0，连续两次 `listModels()` 也不会 spawn 任何探测进程。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.14...v0.6.15
+
 ## 0.6.14 (2026-11-10)
 
 ### English

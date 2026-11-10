@@ -1009,7 +1009,12 @@ export class AgyAdapter extends LlmAdapter {
 
   override async listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
     const activeAcc = this.getActiveAccount()
-    void this.deps.catalog.refreshIfNeeded(activeAcc?.id)
+    // NO probing here. listModels() is called by DSH after every
+    // `llm/adapters-updated`, and refreshIfNeeded() emits exactly that event
+    // when it discovers new models — so probing from listing is a feedback loop
+    // (repeated `agy models` spawns, 100% CPU, UI flashing). Freshness is owned
+    // by the startup probe, the periodic TTL refresh, account switches and the
+    // explicit /agy refresh paths.
     const cfg = this.deps.getConfig()
     const cat = this.deps.catalog.get(activeAcc?.id)
     let models = cat.models

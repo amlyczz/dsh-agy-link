@@ -681,6 +681,15 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   bootProbeTimer.unref?.()
   ctx.effect(() => () => clearTimeout(bootProbeTimer))
 
+  // Catalog freshness without probing from listModels(): refreshIfNeeded()
+  // honours its TTL, so this costs at most one `agy models` spawn per window
+  // and cannot feed back into a listing loop.
+  const catalogPollTimer = setInterval(() => {
+    void catalog.refreshIfNeeded().catch(() => undefined)
+  }, 30 * 60_000)
+  catalogPollTimer.unref?.()
+  ctx.effect(() => () => clearInterval(catalogPollTimer))
+
   // ---- llm registration (dormant-safe) ----
   if (getConfig().enabled) {
     try {
