@@ -1609,7 +1609,7 @@ test('listModels and resolveModel defensively handle empty IDs, empty names, and
   assert.equal(resolvedNoEffort.reasoning, undefined)
 })
 
-test('listModels dynamically isolates Argon models based on active account eligibility', async () => {
+test('listModels exposes union of models across all accounts and auto-switches on selection', async () => {
   let activeId = 'acc_free'
   const accounts: Record<string, any> = {
     acc_free: {
@@ -1629,9 +1629,21 @@ test('listModels dynamically isolates Argon models based on active account eligi
   }
   const fakePool = {
     getActiveAccountId: () => activeId,
-    getPoolData: () => ({ primaryAccountId: 'acc_free', accounts: Object.values(accounts) }),
+    getPoolData: () => ({ primaryAccountId: 'acc_free', lastActiveAccountId: activeId, accounts: Object.values(accounts) }),
+    getAccounts: () => Object.values(accounts),
     getAccount: (id: string) => accounts[id],
     hasDedicatedGroup: (id: string, fam: string) => id === 'acc_pro' && fam === 'argon',
+    accountHasArgon: (acc: any) => acc.id === 'acc_pro',
+    isAccountEligible: (acc: any, fam: string) => fam === 'argon' ? acc.id === 'acc_pro' : true,
+    isAccountEligibleForModel: (acc: any, fam: string, model: string) => {
+      if (model.includes('argon')) return acc.id === 'acc_pro'
+      return true
+    },
+    selectAccount: (fam: string, model?: string) => {
+      if (fam === 'argon' || (model && model.includes('argon'))) return accounts['acc_pro']
+      return accounts[activeId]
+    },
+    setActiveAccount: (id: string) => { activeId = id; return true },
   }
   const { adapter } = makeAdapter({
     fallbackModels: [
@@ -1640,17 +1652,32 @@ test('listModels dynamically isolates Argon models based on active account eligi
     ],
   }, { pool: fakePool as any })
 
-  // 1. With free account active: gemini-4-argon is hidden from picker
+  // 1. With free account active, but pro account in pool: gemini-4-argon is included in the union!
   activeId = 'acc_free'
-  const freeModels = await adapter.listModels('antigravity')
-  assert.ok(freeModels.some((m) => m.id === 'gemini-3.8-flash'))
-  assert.ok(!freeModels.some((m) => m.id === 'gemini-4-argon'), 'free account must not show gemini-4-argon')
+  const models = await adapter.listModels('antigravity')
+  assert.ok(models.some((m) => m.id === 'gemini-3.8-flash'))
+  assert.ok(models.some((m) => m.id === 'gemini-4-argon'), 'model picker must show gemini-4-argon from pool union')
 
-  // 2. With pro account active: gemini-4-argon is present in picker
-  activeId = 'acc_pro'
-  const proModels = await adapter.listModels('antigravity')
-  assert.ok(proModels.some((m) => m.id === 'gemini-3.8-flash'))
-  assert.ok(proModels.some((m) => m.id === 'gemini-4-argon'), 'pro account must show gemini-4-argon')
+  // 2. When resolving or selecting gemini-4-argon, automatically switches active account to acc_pro
+  await adapter.resolveModel('antigravity', 'gemini-4-argon')
+  assert.equal(activeId, 'acc_pro', 'should automatically switch active account to acc_pro')
+
+  // 3. When NO account in the pool has Argon access, Argon is excluded
+  const fakePoolNoArgon = {
+    ...fakePool,
+    getAccounts: () => [accounts['acc_free']],
+    getPoolData: () => ({ primaryAccountId: 'acc_free', lastActiveAccountId: 'acc_free', accounts: [accounts['acc_free']] }),
+    hasDedicatedGroup: () => false,
+    accountHasArgon: () => false,
+  }
+  const { adapter: adapterNoArgon } = makeAdapter({
+    fallbackModels: [
+      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
+      { id: 'gemini-4-argon', name: 'Gemini 4 Argon' },
+    ],
+  }, { pool: fakePoolNoArgon as any })
+  const freeOnlyModels = await adapterNoArgon.listModels('antigravity')
+  assert.ok(!freeOnlyModels.some((m) => m.id === 'gemini-4-argon'), 'pool without any argon accounts must not show gemini-4-argon')
 })
 
 test('compaction detection clears stale binding and re-seeds with digest (ADR-013)', async () => {

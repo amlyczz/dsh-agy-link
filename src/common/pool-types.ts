@@ -2,6 +2,12 @@
 
 export type ModelFamily = 'google' | 'argon' | 'anthropic' | 'openai' | 'unknown'
 
+/** Check if a model identifier belongs to the Gemini 4 Argon family. */
+export function isArgonModel(modelId?: string): boolean {
+  if (!modelId) return false
+  return modelId.trim().toLowerCase().includes('argon')
+}
+
 /**
  * Map a model slug to its backend quota counter family.
  *

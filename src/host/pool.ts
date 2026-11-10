@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import {
   AUTH_CONFIRM_STRIKES,
   defaultPoolData,
+  isArgonModel,
   modelFamilyOf,
   type AccountPoolData,
   type FamilyCooldownState,
@@ -758,6 +759,21 @@ export class AccountPoolManager {
    * folded into "in cooldown", which pointed users at `/agy clear-cooldown` for
    * a state that command did not touch.
    */
+  /** Determine whether a managed account has confirmed access to Gemini 4 Argon. */
+  accountHasArgon(acc: ManagedAccount): boolean {
+    if (acc.quotas?.argon !== undefined) return true
+    if (this.hasDedicatedGroup(acc.id, 'argon')) return true
+    if (acc.quotas?.google?.models?.some((m) => isArgonModel(m.modelId))) return true
+    return false
+  }
+
+  /**
+   * Why this account cannot serve `family` right now, or null when it can.
+   *
+   * Exists so callers can report the ACTUAL blocker: quota rotation used to be
+   * folded into "in cooldown", which pointed users at `/agy clear-cooldown` for
+   * a state that command did not touch.
+   */
   explainIneligibility(
     acc: ManagedAccount,
     family: ModelFamily,
@@ -765,6 +781,7 @@ export class AccountPoolManager {
   ): AccountIneligibilityReason | null {
     if (!acc.enabled) return 'disabled'
     if (acc.authRequired) return 'auth'
+    if (family === 'argon' && !this.accountHasArgon(acc)) return 'quota'
     const cd = acc.cooldowns?.[family]
     if (cd && cd.cooldownUntil > now) return 'cooldown'
     if (this.isQuotaBenched(acc, family, now)) return 'quota'
@@ -779,20 +796,35 @@ export class AccountPoolManager {
   }
 
   /**
+   * Check whether an account is eligible to serve a specific model.
+   * Enforces family eligibility plus model-specific requirements (e.g. Argon).
+   */
+  isAccountEligibleForModel(
+    acc: ManagedAccount,
+    family: ModelFamily,
+    model?: string,
+    now = Date.now(),
+  ): boolean {
+    if (!this.isAccountEligible(acc, family, now)) return false
+    if (model && isArgonModel(model) && !this.accountHasArgon(acc)) return false
+    return true
+  }
+
+  /**
    * Returns the currently active and healthy account ID.
    * If the recorded lastActiveAccountId is healthy, returns it;
    * otherwise falls back to selectAccount(family) to advance to the next healthy candidate,
    * or primaryAccountId if all are exhausted.
    */
-  getActiveAccountId(family: ModelFamily = 'google'): string | undefined {
+  getActiveAccountId(family: ModelFamily = 'google', model?: string): string | undefined {
     const now = Date.now()
     if (this.data.lastActiveAccountId) {
       const active = this.getAccount(this.data.lastActiveAccountId)
-      if (active && this.isAccountEligible(active, family, now)) {
+      if (active && (model ? this.isAccountEligibleForModel(active, family, model, now) : this.isAccountEligible(active, family, now))) {
         return active.id
       }
     }
-    const next = this.selectAccount(family)
+    const next = this.selectAccount(family, model)
     if (next) return next.id
     return this.data.accounts.find((a) => a.id === this.data.primaryAccountId && a.enabled)?.id
       ?? this.data.accounts.find((a) => a.enabled)?.id
@@ -1068,10 +1100,13 @@ export class AccountPoolManager {
    * Core scheduling algorithm: Sticky Sequential Drain.
    * Sticks to the current active account until it runs out of quota/rate-limited,
    * then smoothly advances to the next available account in cyclic order.
+   * When `model` is specified, filters candidates to accounts that support that model.
    */
-  selectAccount(family: ModelFamily): ManagedAccount | null {
+  selectAccount(family: ModelFamily, model?: string): ManagedAccount | null {
     const now = Date.now()
-    const candidates = this.data.accounts.filter((acc) => this.isAccountEligible(acc, family, now))
+    const candidates = this.data.accounts.filter((acc) =>
+      model ? this.isAccountEligibleForModel(acc, family, model, now) : this.isAccountEligible(acc, family, now)
+    )
 
     if (candidates.length === 0) return null
 

@@ -1008,33 +1008,20 @@ export class AgyAdapter extends LlmAdapter {
   }
 
   override async listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
-    const activeAcc = this.getActiveAccount()
-    void this.deps.catalog.refreshIfNeeded(activeAcc?.id)
+    const pool = this.deps.pool
+    const accounts = pool ? pool.getAccounts().filter((a) => a.enabled) : []
     const cfg = this.deps.getConfig()
-    const cat = this.deps.catalog.get(activeAcc?.id)
-    let models = cat.models
-    // If the active account has no Argon access, filter out Argon models so the
-    // composer model picker only shows models available to the current active account.
-    if (!activeAcc || !accountHasArgon(activeAcc, this.deps.pool, cat)) {
-      models = models.filter((m) => !isArgonModel(m.id))
-    }
-    // DSH's llm.listModels rejects a provider catalog containing any
-    // duplicate model id or invalid id (INVALID_CATALOG) and the model picker then drops
-    // the whole Antigravity group — dedupe and sanitize as a final guard over every
-    // catalog source (discovered, fallback, user-configured fallbackModels).
+    // Model picker exposes the UNION of all models available across all pool accounts.
+    // Strictly synchronous and side-effect-free: NO background probing or event emissions
+    // inside listModels to prevent infinite discovery loops and UI flickering.
+    const models = this.deps.catalog.getUnion(accounts, pool)
     const { entries, dropped } = sanitizeCatalogEntries(models)
     if (dropped.length > 0) {
-      // Observable on purpose: without this the guard silently masks the
-      // catalog duplication that would otherwise remove every Antigravity
-      // model from the picker (issue #1).
       this.warnOnce(
         'catalog-dupes',
         'model catalog contained duplicate ids [' + dropped.join(', ') + '] — kept first occurrence so DSH does not drop the whole provider group (INVALID_CATALOG)',
       )
     }
-    // Picker visibility (hiddenModels deny-list): hidden ids leave the picker
-    // but resolveModel deliberately still accepts them, so in-flight sessions
-    // and direct model references keep working after a model is hidden.
     const hidden = new Set(cfg.hiddenModels.map((s) => s.trim()))
     return entries
       .filter((m) => !hidden.has(m.id))
@@ -1047,12 +1034,32 @@ export class AgyAdapter extends LlmAdapter {
   }
 
   override async resolveModel(_provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+    const pool = this.deps.pool
     const activeAcc = this.getActiveAccount()
     const cfg = this.deps.getConfig()
-    const cat = this.deps.catalog.get(activeAcc?.id)
+    const accounts = pool ? pool.getAccounts().filter((a) => a.enabled) : []
     const rawModel = typeof model === 'string' ? model.trim() : ''
     const cleanId = rawModel !== '' ? rawModel : cfg.defaultModel
-    const entry = findEntry(cat, cleanId)
+
+    // Match the selected fixed model to an account that supports this model.
+    // Silent switch — NEVER emit picker updates during model resolution.
+    if (pool && cleanId !== '') {
+      const family = modelFamilyOf(cleanId)
+      if (!activeAcc || !pool.isAccountEligibleForModel(activeAcc, family, cleanId)) {
+        const candidate = pool.selectAccount(family, cleanId)
+        if (candidate && candidate.id !== activeAcc?.id) {
+          pool.setActiveAccount(candidate.id, family)
+        }
+      }
+    }
+
+    const currentAcc = this.getActiveAccount()
+    const unionModels = this.deps.catalog.getUnion(accounts, pool)
+    const allModels = this.deps.catalog.getAllKnownModels(accounts)
+    const entry = unionModels.find((m) => m.id === cleanId)
+      ?? allModels.find((m) => m.id === cleanId)
+      ?? findEntry(this.deps.catalog.get(currentAcc?.id), cleanId)
+      ?? findEntry(this.deps.catalog.get(), cleanId)
     const rawName = entry ? entry.name : cleanId
     const name = (typeof rawName === 'string' && rawName.trim() !== '') ? rawName.trim() : cleanId
     const contextWindow = typeof cfg.contextWindowDefault === 'number' && cfg.contextWindowDefault > 0 ? cfg.contextWindowDefault : 200_000
@@ -1153,14 +1160,22 @@ export class AgyAdapter extends LlmAdapter {
     if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
     else args.push('--mode', opts.permissionMode)
     const effectiveModel = resolveModelSlug(opts.model)
-    if (effectiveModel !== '') args.push('--model', effectiveModel)
+    let finalModel = effectiveModel
+    let finalEffort = opts.effort
+    if (isArgonModel(effectiveModel)) {
+      if (finalEffort && finalEffort !== '' && !effectiveModel.includes('-low') && !effectiveModel.includes('-medium') && !effectiveModel.includes('-high')) {
+        finalModel = `${effectiveModel}-${finalEffort}`
+        finalEffort = undefined
+      } else if (effectiveModel === 'gemini-4-argon' || effectiveModel === 'argon') {
+        finalModel = 'gemini-4-argon-low'
+      }
+    }
+    if (finalModel !== '') args.push('--model', finalModel)
+    const effortModel = finalModel.toLowerCase()
     // Claude 5.5 accepts --effort on its base slug (verified against agy 1.5.3);
-    // a tiered slug plus the flag is rejected upstream, so callers must pass the
-    // base slug here — the catalog folds the tiers for exactly that reason.
-    const effortModel = effectiveModel.toLowerCase()
-    // Claude 5.5 only: 4.6 keeps its documented no-effort behaviour.
-    const isEffortCapable = effectiveModel === '' || effortModel.startsWith('gemini') || effortModel.startsWith('argon') || /^claude-(?:sonnet|opus)-5-5$/.test(effortModel)
-    if (isEffortCapable && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
+    // Gemini supports --effort; Argon models encode effort in the model slug.
+    const isEffortCapable = (finalModel === '' || effortModel.startsWith('gemini') || /^claude-(?:sonnet|opus)-5-5$/.test(effortModel)) && !isArgonModel(finalModel)
+    if (isEffortCapable && finalEffort && finalEffort !== '') args.push('--effort', finalEffort)
     if (opts.conversationId) args.push('--conversation', opts.conversationId)
     for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
     args.push(...opts.extraArgs)
@@ -1447,7 +1462,7 @@ export class AgyAdapter extends LlmAdapter {
       // pool's current active healthy candidate so they share the slot under
       // `parallelSameAccount: true` and run with 100% lock-free concurrency.
       if (process.platform === 'win32' && cfg.parallelSameAccount) {
-        const poolActive = this.deps.pool.selectAccount(family)
+        const poolActive = this.deps.pool.selectAccount(family, activeModel)
         if (poolActive) {
           account = poolActive
         }
@@ -1471,14 +1486,20 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
 
-        if (mostRecentAccount && this.deps.pool.isAccountEligible(mostRecentAccount, family)) {
+        if (mostRecentAccount && this.deps.pool.isAccountEligibleForModel(mostRecentAccount, family, activeModel)) {
           account = mostRecentAccount
         }
       }
     }
 
     if (!account && this.deps.pool) {
-      account = this.deps.pool.selectAccount(family) ?? undefined
+      account = this.deps.pool.selectAccount(family, activeModel) ?? undefined
+    }
+
+    if (account && this.deps.pool) {
+      if (this.deps.pool.getPoolData().lastActiveAccountId !== account.id) {
+        this.deps.pool.setActiveAccount(account.id, family)
+      }
     }
     if (this.deps.pool && this.deps.pool.getAccounts().length > 0 && !account) {
       if (cfg.autoFallbackModel) {

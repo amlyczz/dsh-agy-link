@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.15 (2026-11-10)
+
+### English
+
+- **Fix(catalog): eliminate dynamic probe infinite loop, stop model picker flicker, and serve complete catalog superset for manual picking.**
+  - `listModels` previously launched asynchronous `refreshIfNeeded` probes across pool accounts and announced catalog changes with `llm/adapters-updated`. This caused DSH to immediately re-read `listModels`, resulting in an infinite event loop, high CPU usage, and frantic model selector flickering. Removed all dynamic discovery probes from `listModels` and `resolveModel`, making model listing 100% synchronous, static, and side-effect-free.
+  - The settings console (`/status` `catalogModels`) now exposes the full superset (`getAllKnownModels`), merging fallbacks, account discovered models, and quota-reported models (including Gemini 4 Argon, Claude 4.6/5.5, GPT-OSS). Users can manually toggle models on or off via the settings UI.
+  - Adhere to the selected fixed model: on turn dispatch (`streamAttempt`), the scheduler accurately routes the session to an eligible account that supports the selected model (`selectAccount(family, model)`).
+  - Convert `gemini-4-argon` efforts into official CLI tiered slugs (e.g. `gemini-4-argon-low/medium/high`).
+
+### 中文
+
+- **修复(目录)：消除动态探测死循环与风扇狂转，修复模型选择器闪烁，设置面板展示全集供手动挑选。**
+  - `listModels` 之前会在每次查询时触发后台子进程异步探测 `refreshIfNeeded` 并广播 `llm/adapters-updated`，导致 DSH 客户端反复重新查询并陷入无限事件循环，CPU 占满且界面疯狂闪烁。彻底移除了 `listModels` 与 `resolveModel` 内部的动态探测与重绘广播，模型列表查询恢复为纯同步、纯静态、无副作用。
+  - 设置面板（`/status` 下的 `catalogModels`）现改为展示模型完整全集（`getAllKnownModels`），整合回退模型、号池各账号探测模型及配额模型（涵盖 Gemini 4 Argon、Claude 4.6/5.5、GPT-OSS 等），用户可在设置页手动开启或隐藏各模型。
+  - 严格遵循选定的固定模型：会话调度执行（`streamAttempt`）时，系统自动匹配并路由至号池中支持该模型的可用账号（`selectAccount(family, model)`）。
+  - 支持 `gemini-4-argon` 思考力度自动转换为官方规范 slug（如 `gemini-4-argon-low/medium/high`）。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.14...v0.6.15
+
 ## 0.6.14 (2026-11-10)
 
 ### English
