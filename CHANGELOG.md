@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Account reauthentication:** `/agy auth <id|alias|email>` restores an existing secondary account without recreating it; `/agy auth-status` reports the final result. Identity verification rejects a different or unverifiable Google account.
+- **账号重新登录：** `/agy auth <ID|别名|邮箱>` 可恢复已有副账号，无需重新添加；`/agy auth-status` 查看最终结果。身份不匹配或无法验证时不会覆盖凭据。
+
 ## 0.6.16 (2026-11-10)
 
 ### English

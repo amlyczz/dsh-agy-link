@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
@@ -82,4 +82,90 @@ test('PoolAuthFlow fails cleanly when the exchange is rejected', async () => {
     if (String(err).includes('fetch failed')) return // offline: skip
     throw err
   }
+})
+
+test('reauthentication restores an existing account without changing its settings', async () => {
+  const { pool, quota } = fixture()
+  const account = pool.createAccountSlot('Backup')
+  pool.updateAccountQuotas(account.id, {}, 'backup@example.com')
+  pool.markAuthRequired(account.id, 'missing')
+  pool.setAccountEnabled(account.id, false)
+  const file = join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+  writeFileSync(file, 'previous credential')
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    openBrowser: async () => true,
+    exchangeCode: async () => ({ access_token: 'access', refresh_token: 'refresh' }),
+    fetchUserEmail: async () => 'backup@example.com',
+  })
+  const started = await flow.beginAccount(account.id)
+  assert.equal(started.ok, true)
+  const result = await flow.submitCode('4/1AfValidLookingCode')
+  assert.equal(result.phase, 'done')
+  assert.equal(pool.getAccounts().length, 2)
+  assert.equal(account.enabled, false)
+  assert.equal(account.authRequired, undefined)
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).token.refresh_token, 'refresh')
+  assert.equal(existsSync(started.dir!), false)
+})
+
+test('reauthentication rejects wrong or unverifiable identities without overwriting credentials', async () => {
+  for (const [email, refresh, expected] of [
+    ['wrong@example.com', 'refresh', 'identity_mismatch'],
+    [undefined, 'refresh', 'identity_unverified'],
+    ['backup@example.com', undefined, 'identity_unverified'],
+  ] as const) {
+    const { pool, quota } = fixture()
+    const account = pool.createAccountSlot('Backup')
+    pool.updateAccountQuotas(account.id, {}, 'backup@example.com')
+    const file = join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+    writeFileSync(file, 'original')
+    const flow = new PoolAuthFlow(pool, quota, () => {}, {
+      openBrowser: async () => true,
+      exchangeCode: async () => ({ access_token: 'access', refresh_token: refresh }),
+      fetchUserEmail: async () => email,
+    })
+    const started = await flow.beginAccount(account.id)
+    const result = await flow.submitCode('4/1AfValidLookingCode')
+    assert.equal(result.code, expected)
+    assert.equal(readFileSync(file, 'utf8'), 'original')
+    assert.equal(existsSync(started.dir!), false)
+    assert.equal(existsSync(account.dir), true)
+  }
+})
+
+test('cancelled reauthentication never deletes the existing account or commits a late exchange', async () => {
+  const { pool, quota } = fixture()
+  const account = pool.createAccountSlot('Backup')
+  let resolveExchange!: (value: { access_token: string; refresh_token: string }) => void
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    openBrowser: async () => true,
+    exchangeCode: async () => new Promise((resolve) => { resolveExchange = resolve }),
+    fetchUserEmail: async () => 'backup@example.com',
+  })
+
+  test('reauthentication rejects an identity already assigned to a sibling account', async () => {
+    const { pool, quota } = fixture()
+    const account = pool.createAccountSlot('Backup')
+    const sibling = pool.createAccountSlot('Other')
+    pool.updateAccountQuotas(sibling.id, {}, 'other@example.com')
+    const flow = new PoolAuthFlow(pool, quota, () => {}, {
+      openBrowser: async () => true,
+      exchangeCode: async () => ({ access_token: 'access', refresh_token: 'refresh' }),
+      fetchUserEmail: async () => 'OTHER@example.com',
+    })
+    await flow.beginAccount(account.id)
+    const result = await flow.submitCode('4/1AfValidLookingCode')
+    assert.equal(result.code, 'identity_mismatch')
+    assert.equal(existsSync(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')), false)
+    assert.equal(pool.getAccounts().length, 3)
+  })
+  const started = await flow.beginAccount(account.id)
+  const pending = flow.submitCode('4/1AfValidLookingCode')
+  await flow.cancel()
+  resolveExchange({ access_token: 'access', refresh_token: 'refresh' })
+  await pending
+  assert.equal(existsSync(started.dir!), false)
+  assert.equal(existsSync(account.dir), true)
+  assert.equal(existsSync(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')), false)
+  assert.equal(flow.status().phase, 'idle')
 })
