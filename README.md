@@ -138,7 +138,9 @@ dsh plugin --profile web add dsh-agy-link
 
 # 3. 登录与添加账号：
 #   方式 A：点击顶部导航栏的 "AGY (n)" 徽标，点击 "➕ 添加账号"，浏览器一键登录；
-#   方式 B：输入框执行 /agy auth 为主账号发起登录。
+#   方式 B：输入框执行 /agy auth 为主账号发起登录；执行 /agy pool 查看账号 ID，
+#           再用 /agy auth <账号 ID> 重新登录已有的备用账号（也支持完整别名或邮箱）。
+#           授权后 30 秒内执行 /agy auth-status 查看最终登录结果。
 
 # 4. 在 /model 选择器中挑选 Antigravity 模型，立即开启对话！
 ```

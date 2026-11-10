@@ -1256,7 +1256,7 @@ export async function acquireCredentialSlot(
           if (sameCredentialGrant(afterRaw, accountRaw)) {
             // Slot still belongs to this account: agy may have refreshed the
             // access token, so persist it back into the account's own file.
-            if (afterRaw && afterRaw !== accountRaw) {
+            if (afterRaw && afterRaw !== accountRaw && readTokenFileRaw(accountFile) === accountRaw) {
               writeFileAtomic(accountFile, afterRaw)
             }
           } else if (afterFingerprint !== null) {

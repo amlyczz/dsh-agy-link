@@ -11,7 +11,8 @@
 // via fetchAvailableModels/userinfo -> commit into the pool. Manual code
 // (or redirect URL) paste is the fallback when the listener cannot bind.
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   buildAuthorizeUrl,
   exchangeCode,
@@ -36,6 +37,8 @@ export type PoolAuthStatusCode =
   | 'invalid_code'
   | 'invalid_state'
   | 'exchange_failed'
+  | 'identity_mismatch'
+  | 'identity_unverified'
   | 'primary_activated'
   | 'account_activated'
   | 'missing_code'
@@ -65,6 +68,7 @@ interface ActiveFlow {
   listener: CallbackHandle | null
   /** Primary/system-HOME login: no staging slot, writes to the real HOME. */
   primary?: boolean
+  accountId?: string
 }
 
 const DONE_STATUS_TTL_MS = 30_000
@@ -72,6 +76,8 @@ const DONE_STATUS_TTL_MS = 30_000
 export interface PoolAuthFlowDeps {
   /** Injectable for tests; defaults to the OS browser open. */
   openBrowser?: (url: string) => Promise<boolean>
+  exchangeCode?: typeof exchangeCode
+  fetchUserEmail?: typeof fetchUserEmail
 }
 
 export class PoolAuthFlow {
@@ -79,6 +85,8 @@ export class PoolAuthFlow {
   private statusValue: PoolAuthStatus = { phase: 'idle' }
   private doneResetTimer: NodeJS.Timeout | null = null
   private readonly open: (url: string) => Promise<boolean>
+  private readonly exchange: typeof exchangeCode
+  private readonly userEmail: typeof fetchUserEmail
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -87,6 +95,8 @@ export class PoolAuthFlow {
     deps: PoolAuthFlowDeps = {},
   ) {
     this.open = deps.openBrowser ?? openBrowser
+    this.exchange = deps.exchangeCode ?? exchangeCode
+    this.userEmail = deps.fetchUserEmail ?? fetchUserEmail
   }
 
   status(): PoolAuthStatus {
@@ -181,6 +191,19 @@ export class PoolAuthFlow {
     return this.startFlow({ stagingId: 'acc_primary', dir: homedir(), primary: true, proxyUrl: proxyUrl || detectSystemProxy() })
   }
 
+  /** Reauthenticate an existing isolated account without replacing its pool entry. */
+  async beginAccount(accountId: string, proxyUrl?: string): Promise<PoolAuthStatus & { ok: boolean; dir?: string }> {
+    const account = this.pool.getAccount(accountId)
+    if (!account || !account.dir || account.systemHome) {
+      return { ok: false, phase: 'failed', code: 'request_failed' }
+    }
+    const staging = this.pool.createStagingSlot()
+    return this.startFlow({
+      stagingId: staging.id, dir: staging.dir, accountId, alias: account.alias,
+      proxyUrl: account.proxyUrl || proxyUrl || detectSystemProxy(),
+    })
+  }
+
   /** Manual paste fallback: accepts a bare code or the full redirect URL. */
   async submitCode(input: string): Promise<PoolAuthStatus & { ok: boolean }> {
     const flow = this.flow
@@ -219,7 +242,35 @@ export class PoolAuthFlow {
     }
     this.setStatus({ phase: 'exchanging' })
     try {
-      const tokens = await exchangeCode(code, flow.verifier, flow.proxyUrl)
+      const tokens = await this.exchange(code, flow.verifier, flow.proxyUrl)
+      if (this.flow !== flow) return
+      if (flow.accountId) {
+        const email = await this.userEmail(tokens.access_token, flow.proxyUrl)
+        if (this.flow !== flow) return
+        const account = this.pool.getAccount(flow.accountId)
+        if (!account || !account.dir || account.systemHome || !email || !tokens.refresh_token) {
+          this.fail('identity_unverified')
+          return
+        }
+        const normalized = email.toLowerCase()
+        if ((account.email && account.email.toLowerCase() !== normalized) ||
+            this.pool.getAccounts().some((other) => other.id !== account.id && other.email?.toLowerCase() === normalized)) {
+          this.fail('identity_mismatch')
+          return
+        }
+        const stagedFile = writeAgyTokenFile(flow.dir, tokens)
+        const targetDir = join(account.dir, '.gemini', 'antigravity-cli')
+        mkdirSync(targetDir, { recursive: true })
+        renameSync(stagedFile, join(targetDir, 'antigravity-oauth-token'))
+        this.pool.updateAccountQuotas(account.id, {}, email)
+        this.pool.clearAuthRequired(account.id)
+        this.pool.cleanupStagingSlot(flow.dir)
+        void this.quota.refreshAccountQuota(account).catch(() => undefined)
+        this.flow = null
+        if (flow.listener) void flow.listener.close().catch(() => undefined)
+        this.setStatus({ phase: 'done', alias: account.alias, code: 'account_activated' })
+        return
+      }
       const tokenFile = writeAgyTokenFile(flow.dir, tokens)
       if (flow.primary && process.platform === 'win32') {
         try {
@@ -229,7 +280,7 @@ export class PoolAuthFlow {
           // best-effort
         }
       }
-      const email = await fetchUserEmail(tokens.access_token, flow.proxyUrl)
+      const email = await this.userEmail(tokens.access_token, flow.proxyUrl)
       if (flow.primary && process.platform === 'win32') {
         try {
           // Record the freshly verified primary credential so every later slot
@@ -268,7 +319,7 @@ export class PoolAuthFlow {
       if (flow.listener) void flow.listener.close().catch(() => undefined)
       this.setStatus({ phase: 'done', alias: acc.alias, code: 'account_activated' })
     } catch (err) {
-      this.fail('exchange_failed', err)
+      if (this.flow === flow) this.fail('exchange_failed', err)
     }
   }
 

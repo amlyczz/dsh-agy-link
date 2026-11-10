@@ -967,6 +967,7 @@ test('a refreshed token from the same grant is persisted back and the primary re
       io,
       log: () => {},
     })
+
     assert.ok(lease)
     // agy rotated the access token in place; the grant identity is unchanged.
     io.writeSlot(tokenDoc('SECOND', 'access-new'))
@@ -979,6 +980,26 @@ test('a refreshed token from the same grant is persisted back and the primary re
     assert.equal(credentialSlotMutex.pending, 0)
   } finally {
     for (const d of [baseDir, homeDir]) rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('a running lease does not overwrite a newly reauthenticated account', async () => {
+  const baseDir = tmp('agy-reauth-')
+  const homeDir = tmp('agy-reauth-home-')
+  const accDir = tmp('agy-reauth-acc-')
+  try {
+    writePrimaryCredential({ raw: tokenDoc('PRIMARY'), email: 'me@example.com', savedAt: 1 }, baseDir)
+    const file = writeAccountToken(accDir, tokenDoc('OLD'))
+    const io = memoryIo(tokenDoc('PRIMARY'))
+    const pool = fakePool([account('acc_primary', undefined, { systemHome: true, email: 'me@example.com' })])
+    const lease = await acquireCredentialSlot(account('backup', accDir), pool, { baseDir, homeDir, io, log: () => {} })
+    const replacement = tokenDoc('NEW')
+    writeFileSync(file, replacement)
+    io.writeSlot(tokenDoc('OLD', 'refreshed-old'))
+    lease!.release()
+    assert.equal(readFileSync(file, 'utf8'), replacement)
+  } finally {
+    for (const d of [baseDir, homeDir, accDir]) rmSync(d, { recursive: true, force: true })
   }
 })
 

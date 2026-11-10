@@ -57,6 +57,9 @@ dsh web
 # In the chat input:
 /agy status              # binary, version, pool and catalog status
 /agy auth                # sign the primary account in
+/agy pool                # list account IDs
+/agy auth <account-id>   # reauthenticate an existing secondary account (also accepts full alias or email)
+/agy auth-status         # check the final login result within 30 seconds
 ```
 
 Add more accounts from the **AGY (n)** badge in the header (browser login), then pick an Antigravity model in `/model`.

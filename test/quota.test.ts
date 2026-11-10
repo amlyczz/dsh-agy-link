@@ -68,6 +68,20 @@ test('QuotaService parses stored tokens and saves token refresh updates', async 
   assert.equal(validToken, 'fake_access_token_123')
 })
 
+test('a replaced account grant is no longer current for an in-flight quota refresh', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-reauth-'))
+  const pool = new AccountPoolManager(dir)
+  const account = pool.createAccountSlot('backup')
+  const quota = new QuotaService(pool)
+  const isCurrent = (quota as unknown as {
+    isCurrentAccountGrant: (a: unknown, refresh: string) => boolean
+  }).isCurrentAccountGrant.bind(quota)
+  writeAgyTokenFile(account.dir, { access_token: 'old', refresh_token: 'old-grant' })
+  assert.equal(isCurrent(account, 'old-grant'), true)
+  writeAgyTokenFile(account.dir, { access_token: 'new', refresh_token: 'new-grant' })
+  assert.equal(isCurrent(account, 'old-grant'), false)
+})
+
 test('normalizeStoredToken reads agy 1.1.16 nested shape with ISO expiry', () => {
   // Real on-disk format: {"token": {...}, "auth_method": "consumer"} with
   // expiry as a local ISO-8601 string. The old flat read returned the
