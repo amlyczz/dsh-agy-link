@@ -161,6 +161,12 @@ export function resolveConfig(
     translateSkipSameModel: asBool(get('translateSkipSameModel')) ?? base.translateSkipSameModel,
     translateBindConversation: asBool(get('translateBindConversation')) ?? base.translateBindConversation,
     translateMinIntervalMs: asNum(get('translateMinIntervalMs')) ?? base.translateMinIntervalMs,
+    imageModel: asString(get('imageModel')) ?? base.imageModel,
+    imageEffort: asString(get('imageEffort')) ?? base.imageEffort,
+    imageTimeoutMs: asNum(get('imageTimeoutMs')) ?? base.imageTimeoutMs,
+    imageMaxBytes: asNum(get('imageMaxBytes')) ?? base.imageMaxBytes,
+    imageOutputDir: asString(get('imageOutputDir')) ?? base.imageOutputDir,
+    imageRetries: asNum(get('imageRetries')) ?? base.imageRetries,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -265,5 +271,20 @@ export function resolveConfig(
   if (env.DSH_AGY_TRANSLATE_MODEL) cfg.translateModel = env.DSH_AGY_TRANSLATE_MODEL
   if (env.DSH_AGY_TRANSLATE_EFFORT) cfg.translateEffort = env.DSH_AGY_TRANSLATE_EFFORT
   if (env.DSH_AGY_TRANSLATE_LANG) cfg.translateTargetLanguage = env.DSH_AGY_TRANSLATE_LANG
+  if (env.DSH_AGY_IMAGE_MODEL) cfg.imageModel = env.DSH_AGY_IMAGE_MODEL
+  if (env.DSH_AGY_IMAGE_EFFORT) cfg.imageEffort = env.DSH_AGY_IMAGE_EFFORT
+  if (env.DSH_AGY_IMAGE_TIMEOUT_MS) {
+    const v = asNum(env.DSH_AGY_IMAGE_TIMEOUT_MS)
+    if (v !== undefined) cfg.imageTimeoutMs = v
+  }
+  if (env.DSH_AGY_IMAGE_MAX_BYTES) {
+    const v = asNum(env.DSH_AGY_IMAGE_MAX_BYTES)
+    if (v !== undefined) cfg.imageMaxBytes = v
+  }
+  if (env.DSH_AGY_IMAGE_OUTPUT_DIR) cfg.imageOutputDir = env.DSH_AGY_IMAGE_OUTPUT_DIR
+  if (env.DSH_AGY_IMAGE_RETRIES) {
+    const v = asNum(env.DSH_AGY_IMAGE_RETRIES)
+    if (v !== undefined) cfg.imageRetries = v
+  }
   return cfg
 }

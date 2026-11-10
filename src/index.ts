@@ -928,6 +928,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           translateModel: cfg.translateModel,
           translateEffort: cfg.translateEffort,
           translateTargetLanguage: cfg.translateTargetLanguage,
+          imageModel: cfg.imageModel,
+          imageEffort: cfg.imageEffort,
+          imageOutputDir: cfg.imageOutputDir,
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },
           bindings: Object.keys(store.all()).length,
           effortUnsupported: adapter.effortUnsupportedModels(),
@@ -1308,6 +1311,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         const allowed = [
           'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
+          'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })

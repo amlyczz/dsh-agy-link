@@ -8,6 +8,7 @@ import {
   chunkText,
   completedTurns,
   finalAnswerOfTurn,
+  findTranslationRecord,
   isTurnRunning,
   lastCompletedTurn,
   buildTranslationSetup,
@@ -66,42 +67,51 @@ const log: SessionEventLike[] = [
   assistant(2, 2, '第二个回合的答案。'),
 ]
 
-test('prompt stays a one-liner: plain words, no format mandate, source fenced', () => {
+test('prompt asks for plain speech at the real content volume', () => {
   const p = buildTranslationPrompt('原文内容', '中文（简体）', 4000)
-  assert.match(p, /通俗易懂/)
+  assert.match(p, /讲成大白话/)
   assert.match(p, /中文（简体）/)
   assert.match(p, /别用行话/)
+  assert.match(p, /该长就长/)
   assert.match(p, /别改原意/)
   assert.match(p, /<content>\n原文内容\n<\/content>/)
   // The rule list that produced headings and bullet lists is gone.
   assert.doesNotMatch(p, /结论先行/)
   assert.doesNotMatch(p, /输出 Markdown/)
   assert.doesNotMatch(p, /^\d\. /m)
-  // Short source: no length talk at all. Long source: one budget hint, still no format.
-  assert.doesNotMatch(p, /有点长/)
+  // Short source: no length talk at all. Long source: a "finish it" hint, NOT
+  // the old "挑重点" compression ask — the reader wants the real volume.
+  assert.doesNotMatch(p, /原文比较长/)
   const long = buildTranslationPrompt('x'.repeat(5_000), '中文（简体）', 8_000)
-  assert.match(long, /挑重点讲清楚/)
+  assert.match(long, /原文比较长/)
+  assert.match(long, /一步步讲完/)
+  assert.doesNotMatch(long, /挑重点/)
   assert.doesNotMatch(long, /输出 Markdown/)
-  // Instructions stay far shorter than the material they carry.
-  assert.ok(p.split('\n')[0]!.length < 200, 'the instruction is one short line')
+  // The DSH session id is an anchor for "which thread is this", not history:
+  // it only appears when the caller knows it.
+  assert.doesNotMatch(p, /DSH 会话/)
+  assert.match(buildTranslationPrompt('原文', '中文（简体）', 4000, 's1'), /DSH 会话 s1/)
 })
 
-test('prompt pins the model to THIS turn and to spoken register', () => {
-  // The reader complained the output was compact but not plain enough, so the
-  // instruction now names the reply it must explain and spells out the register.
+test('prompt pins the model to THIS message and to spoken register', () => {
+  // The reader complained the output was complete but too professional, so the
+  // instruction names the ONE reply it must explain, spells out the spoken
+  // register, and forbids compressing the real content volume.
   const p = buildTranslationPrompt('原文内容', '中文（简体）', 4000)
-  assert.match(p, /当前这一轮 AI 回复/)
-  assert.match(p, /按原文的顺序讲/)
-  assert.match(p, /别为了短把细节吞掉/)
+  assert.match(p, /当前这一条 AI 回复/)
+  assert.match(p, /只讲这一条回复/)
+  assert.match(p, /该长就长/)
+  assert.match(p, /首先 \/ 其次|别写成标题/)
   // A bound conversation hears the persona once; the per-turn request must carry
   // the same pinning, or the model happily re-translates an earlier answer.
   const b = buildTranslationRequest('原文内容', '中文（简体）', 4000)
-  assert.match(b, /当前这一轮 AI 回复/)
-  assert.match(b, /通俗易懂/)
+  assert.match(b, /当前这一条 AI 回复/)
+  assert.match(b, /讲成大白话/)
+  assert.match(b, /只讲这一条/)
   assert.match(b, /<content>\n原文内容\n<\/content>/)
   assert.match(b, /只输出讲解本身/)
   assert.doesNotMatch(b, /^\d\. /m)
-  assert.match(buildTranslationRequest('x'.repeat(9_000), '中文（简体）', 8_000), /挑重点讲清楚/)
+  assert.match(buildTranslationRequest('x'.repeat(9_000), '中文（简体）', 8_000), /原文比较长/)
 })
 
 test('chunkText never exceeds the cap and keeps every paragraph', () => {
@@ -144,11 +154,11 @@ test('turnOfMessage maps a message id back to its turn', () => {
   assert.equal(turnOfMessage(log, 'nope'), null)
 })
 
-test('resolveTranslateTarget defaults to gemini-3.8-flash high', () => {
+test('resolveTranslateTarget defaults to gemini-3.8-flash medium', () => {
   const cfg = defaultConfig()
   const t = resolveTranslateTarget(cfg, catalog)
   assert.equal(t.model, 'gemini-3.8-flash')
-  assert.equal(t.effort, 'high')
+  assert.equal(t.effort, 'medium')
 })
 
 test('resolveTranslateTarget falls back to the newest flash when 3.8 is absent', () => {
@@ -170,6 +180,7 @@ test('resolveTranslateTarget clamps an unsupported effort to the model default',
   const cfg = defaultConfig()
   const t = resolveTranslateTarget(cfg, catalog, { effort: 'banana' })
   assert.equal(t.model, 'gemini-3.8-flash')
+  // An unknown explicit level is unsupported, so the model default (cfg.defaultEffort) wins.
   assert.equal(t.effort, 'high')
 })
 
@@ -282,7 +293,7 @@ test('the bound translation conversation gets a persona once and a per-turn requ
   const res = await service.translate({ text: '一段黑话', sessionId: 's1' })
   assert.equal(res.ok, true)
   const call = calls[0]!
-  assert.match(call.text!, /当前这一轮 AI 回复/, 'the request names the reply it must explain')
+  assert.match(call.text!, /当前这一条 AI 回复/, 'the request names the reply it must explain')
   assert.match(call.text!, /<content>\n一段黑话\n<\/content>/, 'the source rides inside the request')
   const setup = call.setup ?? ''
   assert.match(setup, /人话翻译器/)
@@ -292,9 +303,9 @@ test('the bound translation conversation gets a persona once and a per-turn requ
   assert.match(setup, /session\.v4\.jsonl\.zstd/, 'and where the raw session log is')
   assert.match(setup, /zstd -dc/, 'and how to read it')
   assert.match(setup, /<digest>[\s\S]*用户：/, 'with a digest of the asks so the first reply has context')
-  assert.match(setup, /只讲「当前这一轮」的 AI 回复/, 'the persona pins the current turn too')
+  assert.match(setup, /「当前这一条」AI 回复/, 'the persona pins the clicked message too')
   // The self-contained prompt still exists for hosts that do NOT bind.
-  assert.match(call.prompt, /通俗易懂/)
+  assert.match(call.prompt, /讲成大白话/)
   assert.match(call.prompt, /<content>\n一段黑话\n<\/content>/)
 })
 
@@ -344,7 +355,7 @@ test('translateTurn appends a durable record anchored at the final message', asy
   assert.equal(rec.anchorSeq, 103)
   assert.equal(rec.messageId, 'm-1-3')
   assert.equal(rec.model, 'gemini-3.8-flash')
-  assert.equal(rec.effort, 'high')
+  assert.equal(rec.effort, 'medium')
   assert.equal(rec.provider, 'antigravity')
   assert.equal(rec.text, '人话版')
 })
@@ -453,4 +464,69 @@ test('autoTranslateTurn translates and persists when enabled', async () => {
   const res = await service.autoTranslateTurn('s1', 1)
   assert.equal(res?.ok, true)
   assert.equal(records.length, 1)
+})
+
+test('translateMessage explains the CLICKED message, not the turn final answer', async () => {
+  // Turn 1 holds three assistant events: prose at seq 101, a tool-only step at
+  // 102 and the real answer at 103. Clicking the early prose used to resolve
+  // through `finalAnswerOfTurn` and return the *last* one — the exact "I clicked
+  // this reply but got another one" complaint.
+  const { service, calls, records } = makeService({ runs: [{ ok: true, text: '人话版' }] })
+  const res = await service.translateMessage('s1', 'm-1-1')
+  assert.equal(res.ok, true)
+  assert.equal(calls.length, 1)
+  assert.match(calls[0]!.text ?? '', /先看下代码/)
+  assert.doesNotMatch(calls[0]!.text ?? '', /最终答复/)
+  assert.equal(records[0]!.record.messageId, 'm-1-1')
+  assert.equal(records[0]!.record.anchorSeq, 101, 'the card lands under the clicked message')
+  assert.equal(records[0]!.record.turn, 1)
+})
+
+test('dedupe is message-scoped: siblings in one turn translate independently', async () => {
+  const { service, calls, records } = makeService({ runs: [{ ok: true, text: '第一版' }, { ok: true, text: '第二版' }] })
+  const first = await service.translateMessage('s1', 'm-1-1')
+  assert.equal(first.ok, true)
+  // The turn already owns a record (for m-1-1); m-1-3 must NOT be served it.
+  const second = await service.translateMessage('s1', 'm-1-3')
+  assert.equal(second.ok, true)
+  assert.equal(second.cached, false, 'a sibling message is not a cache hit')
+  assert.equal(second.text, '第二版')
+  assert.equal(calls.length, 2, 'both messages reached the model')
+  assert.equal(records.length, 2)
+  assert.deepEqual(records.map((r) => r.record.messageId), ['m-1-1', 'm-1-3'])
+  // Clicking the same message again is still deduped.
+  const again = await service.translateMessage('s1', 'm-1-1')
+  assert.equal(again.cached, true)
+  assert.equal(again.recordSeq, 42)
+  assert.equal(calls.length, 2)
+})
+
+test('long source is split into paragraph chunks and the parts are joined', async () => {
+  const { service, calls } = makeService({ runs: [{ ok: true, text: '第一段人话' }, { ok: true, text: '第二段人话' }] })
+  const long = ('甲'.repeat(3_000) + '\n\n' + '乙'.repeat(3_000) + '\n\n' + '丙'.repeat(3_000))
+  const res = await service.translate({ text: long })
+  assert.equal(res.ok, true)
+  assert.equal(calls.length, 2, '9000 chars over the 8000 cap → two chunks')
+  assert.equal(res.text, '第一段人话\n\n第二段人话')
+})
+
+test('findTranslationRecord scopes by messageId and honours legacy turn records', async () => {
+  const events: SessionEventLike[] = [
+    { type: 'plugin:agy-link/translation', seq: 10, data: { turn: 1, messageId: 'a', text: 'A 的人话', model: 'gemini-3.8-flash', effort: 'medium' } },
+    { type: 'plugin:agy-link/translation', seq: 11, data: { turn: 1, messageId: 'b', text: 'B 的人话', model: 'gemini-3.8-flash', effort: 'medium' } },
+  ]
+  assert.equal(findTranslationRecord(events, 1, undefined, undefined, 'a')?.text, 'A 的人话')
+  assert.equal(findTranslationRecord(events, 1, undefined, undefined, 'b')?.text, 'B 的人话')
+  assert.equal(findTranslationRecord(events, 1, undefined, undefined, 'missing'), null)
+  // Turn-level lookups (the /tsl command) still take the newest record.
+  assert.equal(findTranslationRecord(events, 1)?.text, 'B 的人话')
+  // A record written before messageId existed is a fallback only while the turn
+  // has no message-scoped record at all.
+  const legacyOnly: SessionEventLike[] = [
+    { type: 'plugin:agy-link/translation', seq: 20, data: { turn: 2, text: '老译文', model: 'gemini-3.8-flash', effort: 'medium' } },
+  ]
+  assert.equal(findTranslationRecord(legacyOnly, 2, undefined, undefined, 'x')?.text, '老译文')
+  const mixed: SessionEventLike[] = [...legacyOnly, { type: 'plugin:agy-link/translation', seq: 21, data: { turn: 2, messageId: 'y', text: '新译文', model: 'gemini-3.8-flash', effort: 'medium' } }]
+  assert.equal(findTranslationRecord(mixed, 2, undefined, undefined, 'x'), null)
+  assert.equal(findTranslationRecord(mixed, 2, undefined, undefined, 'y')?.text, '新译文')
 })

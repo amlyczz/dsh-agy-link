@@ -2561,3 +2561,47 @@ test('goal round with a live active goal emits update_goal with the live revisio
   assert.equal(args.revision, 5, 'live revision wins over the stale one in history')
   assert.equal(args.action, 'complete')
 })
+
+test('purpose:image uses the verbatim bridge prompt, the configured mode and the event hook', async () => {
+  // The image CLI drives this exact route: no plan mode (the tool writes an
+  // artifact), no session binding, the caller's prompt untouched, and raw agy
+  // events handed back so the CLI can find the artifact.
+  const argsFile = join(workDir, 'image-args.json')
+  rmSync(argsFile, { force: true })
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  try {
+    const { adapter, store } = makeAdapter({ permissionMode: 'accept-edits' })
+    const bindingsBefore = JSON.stringify(store.all())
+    const kinds: string[] = []
+    const chunks = await collect(adapter.stream(opts([msg('user', 'THIS MESSAGE MUST BE IGNORED')], {
+      purpose: 'image',
+      agyImagePrompt: 'IMAGE PROMPT: a solid red square',
+      agyOnEvent: (ev: { kind: string }) => { kinds.push(ev.kind) },
+    } as unknown as Partial<GenerateOptions>)))
+    assert.equal((chunks[chunks.length - 1] as { reason: { kind: string } }).reason.kind, 'stop')
+
+    const args = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    const prompt = args[args.indexOf('-p') + 1]
+    assert.equal(prompt, 'IMAGE PROMPT: a solid red square', 'the bridge prompt is sent verbatim')
+    assert.doesNotMatch(prompt, /THIS MESSAGE MUST BE IGNORED/, 'session context is not mixed in')
+    assert.equal(args[args.indexOf('--mode') + 1], 'accept-edits', 'image is NOT forced into plan mode')
+    assert.equal(args.includes('--conversation'), false, 'each image run is a fresh conversation')
+    assert.ok(kinds.includes('init'), 'agyOnEvent saw init')
+    assert.ok(kinds.includes('result'), 'agyOnEvent saw the result envelope')
+    assert.equal(JSON.stringify(store.all()), bindingsBefore, 'no conversation binding is persisted')
+
+    // A headless caller can override the configured mode for one image call.
+    await collect(adapter.stream(opts([msg('user', 'x')], {
+      purpose: 'image',
+      agyImagePrompt: 'IMAGE PROMPT: second',
+      agyPermissionMode: 'skip',
+    } as unknown as Partial<GenerateOptions>)))
+    const args2 = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    assert.ok(args2.includes('--dangerously-skip-permissions'), 'agyPermissionMode:skip reaches agy')
+    assert.equal(args2.includes('--mode'), false, 'skip mode does not also pass --mode')
+  } finally {
+    delete process.env.FAKE_AGY_ARGS_FILE
+    process.env.FAKE_AGY_MODE = 'ok'
+  }
+})

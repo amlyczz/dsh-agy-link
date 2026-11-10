@@ -140,10 +140,10 @@ export function buildTranslationSetup(input: TranslationSetupInput): string {
   lines.push(
     '',
     '规则：',
-    '1. 只讲「当前这一轮」的 AI 回复：我每次发来的是这一轮的原文，别去翻历史里的其它回答来顶替它。',
-    '2. 说' + lang + '的大白话，像当面给同事解释：口语、短句、按原文顺序讲；不要标题，不要分点罗列，不要写成报告。',
-    '3. 遇到术语、缩写、报错、函数名，先用日常说法讲清，再往下说；必要时补一句它大概是干什么的。',
-    '4. 结论、条件、谁做了什么都要留着；别为了短把细节吞掉，也别替它下原文没有的结论。',
+    '1. 每次我只发来「当前这一条」AI 回复的原文：只讲这一条，别去翻历史里的其它回答来顶替它。',
+    '2. 说' + lang + '的大白话，像当面给同事解释：口语、短句、怎么顺口怎么来；不要标题，不要分点罗列，不要写成报告。',
+    '3. 别用行话、缩写和「首先 / 其次 / 综上 / 因此 / 旨在 / 该方案」这类书面词；遇到术语先用日常说法讲清它大概是干什么的。',
+    '4. 原文说了多少就讲多少：结论、条件、谁做了什么都要留着，别为了短把细节吞掉，也别替它下结论。',
     '5. 只输出讲解本身，不要前言、不要复述我发的内容、不要反问我。',
   )
   return lines.join('\n')
@@ -386,16 +386,28 @@ export function turnOfMessage(
 
 /**
  * The newest durable translation record for one turn (optionally narrowed to an
- * exact model/effort recipe). Used to dedupe repeated requests so clicking the
- * per-turn affordance twice can never stack two identical cards.
+ * exact model/effort recipe and to ONE assistant message). Used to dedupe
+ * repeated requests so clicking the per-turn affordance twice can never stack
+ * two identical cards.
+ *
+ * `messageId` is what makes the per-reply button correct: a turn can contain
+ * several text messages (a preamble, then the real answer), and a turn-level
+ * record must never be handed back for a sibling message — that is exactly the
+ * "I clicked message A but got the translation of message B" bug. Records
+ * written by older builds carry no `messageId`; they are honoured as a legacy
+ * turn-level fallback only while the turn has no message-scoped record at all.
  */
 export function findTranslationRecord(
   events: readonly SessionEventLike[],
   turn: number,
   model?: string,
   effort?: string,
+  messageId?: string,
 ): { seq: number; text: string; model: string; effort: string } | null {
-  let found: { seq: number; text: string; model: string; effort: string } | null = null
+  const scoped = messageId !== undefined && messageId !== ''
+  let exact: { seq: number; text: string; model: string; effort: string } | null = null
+  let legacy: { seq: number; text: string; model: string; effort: string } | null = null
+  let sawScoped = false
   for (const ev of events) {
     if (ev.type !== TRANSLATION_RECORD_TYPE) continue
     const d = dataOf(ev)
@@ -407,9 +419,18 @@ export function findTranslationRecord(
     if (effort !== undefined && recordEffort !== effort) continue
     const text = typeof d.text === 'string' ? d.text : ''
     if (text.trim() === '') continue
-    found = { seq: num(ev.seq) ?? 0, text, model: recordModel, effort: recordEffort }
+    const hit = { seq: num(ev.seq) ?? 0, text, model: recordModel, effort: recordEffort }
+    const recordMessage = typeof d.messageId === 'string' && d.messageId !== '' ? d.messageId : null
+    if (recordMessage !== null) sawScoped = true
+    if (!scoped) {
+      exact = hit
+      continue
+    }
+    if (recordMessage === messageId) exact = hit
+    else if (recordMessage === null) legacy = hit
   }
-  return found
+  if (exact !== null) return exact
+  return scoped && !sawScoped ? legacy : null
 }
 
 /** Text of one `user/message` event (the asks that carry the thread). */
@@ -430,6 +451,18 @@ function userTextOf(ev: SessionEventLike): string {
  */
 export function sessionDigest(events: readonly SessionEventLike[], maxChars: number): string {
   const cap = Math.max(200, Math.round(maxChars / 4))
+  // One pass collects each turn's LAST text answer. The old version called
+  // `finalAnswerOfTurn` once per assistant message, i.e. rescanned the whole
+  // event log for every turn (O(n²)) — harmless in tests, a real cost in a
+  // 5000-event session, and the digest is rebuilt on every translation call.
+  const answers = new Map<number, string>()
+  for (const ev of events) {
+    if (ev.type !== 'assistant/message') continue
+    const turn = num(dataOf(ev).turn)
+    if (turn === undefined) continue
+    const text = textOfAssistant(ev)
+    if (text !== '') answers.set(turn, text)
+  }
   const parts: string[] = []
   const done = new Set<number>()
   for (const ev of events) {
@@ -441,10 +474,10 @@ export function sessionDigest(events: readonly SessionEventLike[], maxChars: num
     if (ev.type !== 'assistant/message') continue
     const turn = num(dataOf(ev).turn)
     if (turn === undefined || done.has(turn)) continue
-    const answer = finalAnswerOfTurn(events, turn)
-    if (answer === null || answer.text.trim() === '') continue
+    const answer = answers.get(turn)
+    if (answer === undefined || answer.trim() === '') continue
     done.add(turn)
-    parts.push('回复：' + clip(answer.text, 900))
+    parts.push('回复：' + clip(answer, 900))
   }
   let kept = ''
   for (let i = parts.length - 1; i >= 0; i--) {
@@ -465,28 +498,26 @@ function clip(text: string, max: number): string {
  * explicit about "never invent facts": a cheerful paraphrase that adds a
  * promise the agent never made is worse than no translation at all.
  */
-export function buildTranslationPrompt(text: string, targetLanguage: string, maxChars: number): string {
+export function buildTranslationPrompt(text: string, targetLanguage: string, maxChars: number, sessionId?: string): string {
   const lang = targetLanguage.trim() === '' ? '中文（简体）' : targetLanguage.trim()
   const limit = Math.max(MIN_TEXT_LIMIT, Math.round(maxChars))
-  // Deliberately one short line. The earlier rule list ("结论先行 / 去黑话 /
-  // 保留可执行信息 / 输出 Markdown …") made the model write a book report:
-  // headings, bullet lists, formal register. What the reader wants is the same
-  // thing explained out loud, so the only constraints kept are the ones that
-  // stop it from drifting: plain words, keep the meaning, invent nothing, and
-  // answer with the explanation alone. A long source gets one budget hint — the
-  // 80/20 cut — instead of a format mandate.
-  // Deliberately short, but explicit about three things the old one-liner let the
-  // model drift on: WHICH reply it is explaining (the current turn's answer, not
-  // some other turn it found in the history), how plain the register must be
-  // (spoken, jargon unpacked), and that brevity is not an excuse to drop the
-  // conditions and conclusions that made the answer useful.
+  // Deliberately a short instruction with NO format mandate. The earlier rule
+  // list ("结论先行 / 去黑话 / 输出 Markdown …") made the model write a book
+  // report: headings, bullet lists, formal register. What the reader wants is
+  // the same thing said out loud, so the constraints only stop it drifting:
+  // spoken register, keep the meaning, invent nothing, and answer with the
+  // explanation alone. "该长就长" is explicit because the reader asked for the
+  // real content volume — a long answer must not be compressed into three
+  // bullet conclusions.
   const long = text.length > Math.min(2_000, Math.floor(limit / 4))
+  const where = sessionId === undefined || sessionId.trim() === '' ? '' : '（DSH 会话 ' + sessionId.trim() + '）'
   const lines = [
-    '把下面这段「当前这一轮 AI 回复」的原文，用' + lang + '通俗易懂地讲一遍，就像当面跟同事解释：',
-    '说大白话、短句，按原文的顺序讲；别用行话和缩写，遇到术语先换成日常说法（必要时补一句它是干什么的）；别写标题或分点列表，别写成报告。',
-    '结论、条件、谁做了什么都要留着，别为了短把细节吞掉；别改原意，别加原文没有的内容，别替它下结论。',
-    ...(long ? ['原文有点长，挑重点讲清楚就行，按它自己的顺序讲，别压成几句结论。'] : []),
-    '只输出这段讲解本身，不要复述我发的内容，不要提问。',
+    '把下面这段「当前这一条 AI 回复」的原文，用' + lang + '讲成大白话，就像当面跟同事解释：',
+    '说人话、用短句，怎么顺口怎么来；别用行话、缩写和「首先 / 其次 / 综上 / 因此」这类书面词，遇到术语先用日常说法讲清它大概是干什么的。',
+    '原文说了多少就讲多少，该长就长、该短就短，别压成几句结论，也别写成标题或分点报告。',
+    '只讲这一条回复' + where + '本身，别把历史里别的回复混进来；别改原意，别加原文没有的内容，别替它下结论。',
+    ...(long ? ['原文比较长，按它自己的顺序一步步讲完，别漏掉关键条件。'] : []),
+    '只输出讲解本身，不要复述我发的内容，不要提问。',
     '',
     '<content>',
     text,
@@ -507,9 +538,10 @@ export function buildTranslationRequest(text: string, targetLanguage: string, ma
   const lang = targetLanguage.trim() === '' ? '中文（简体）' : targetLanguage.trim()
   const long = text.length > Math.min(2_000, Math.floor(Math.max(MIN_TEXT_LIMIT, Math.round(maxChars)) / 4))
   return [
-    '把「当前这一轮 AI 回复」的下面这段原文，用' + lang + '通俗易懂地讲一遍：说大白话、短句，按原文顺序，术语先换成日常说法，别写成报告，别为了短丢信息，别加原文没有的内容。',
-    ...(long ? ['原文有点长，挑重点讲清楚就行，别压成几句结论。'] : []),
-    '只输出讲解本身。',
+    '把「当前这一条 AI 回复」的下面这段原文，用' + lang + '讲成大白话：说人话、短句，别用行话和书面腔（不要「首先 / 其次 / 综上 / 因此」），术语先用日常说法解释。',
+    '原文说了多少就讲多少，按它自己的顺序讲，该长就长，别压成几句结论，也别写成标题或分点报告；别改原意，别加原文没有的内容。',
+    ...(long ? ['原文比较长，一步步讲完，别漏掉关键条件。'] : []),
+    '只讲这一条，别把前面几轮的内容混进来；只输出讲解本身。',
     '',
     '<content>',
     text,
@@ -768,8 +800,10 @@ export class TranslationService {
       const res = await this.withRetry(
         {
           // Self-contained prompt: used verbatim when the run is NOT bound to a
-          // translation conversation (older host, or the knob turned off).
-          prompt: buildTranslationPrompt(chunk, language, cfg.translateMaxChars),
+          // translation conversation (older host, or the knob turned off). The
+          // DSH session id rides along so the model knows which thread this one
+          // reply belongs to, without carrying any history in the prompt.
+          prompt: buildTranslationPrompt(chunk, language, cfg.translateMaxChars, sessionId),
           // Bound path: the per-turn request line + source, plus the persona that
           // is sent only when that conversation is created.
           text: buildTranslationRequest(chunk, language, cfg.translateMaxChars),
@@ -787,7 +821,7 @@ export class TranslationService {
       if (!res.ok) {
         const result: TranslateResult = {
           ok: false,
-          text: out.join('\n\n---\n\n'),
+          text: out.join('\n\n'),
           model: target.model,
           effort: target.effort,
           cached: false,
@@ -803,7 +837,7 @@ export class TranslationService {
     }
     const result: TranslateResult = {
       ok: true,
-      text: out.join('\n\n---\n\n'),
+      text: out.join('\n\n'),
       model: target.model,
       effort: target.effort,
       cached: false,
@@ -876,20 +910,42 @@ export class TranslationService {
   async translateTurn(sessionId: string, turn: number, opts: TranslateTurnOptions = {}, signal?: AbortSignal): Promise<TranslateResult> {
     const session = this.deps.getSession(sessionId)
     const events = sessionEvents(session)
+    const target = this.target(opts)
     if (session === undefined || events.length === 0) {
-      const target = this.target(opts)
       return { ...emptyResult(target.model, target.effort), error: 'session is not available', code: 'SESSION_UNAVAILABLE' }
     }
     if (isTurnRunning(events, turn)) {
-      const target = this.target(opts)
       return { ...emptyResult(target.model, target.effort), error: 'the current turn is still running', code: 'TRANSIENT' }
     }
+    const answer = opts.full === true ? allTextOfTurn(events, turn) : finalAnswerOfTurn(events, turn)
+    if (answer === null || answer.text.trim() === '') {
+      return { ...emptyResult(target.model, target.effort), error: 'no assistant text in turn ' + turn, code: 'TURN_NOT_FOUND' }
+    }
+    return this.translateAnswer(sessionId, turn, answer, opts, signal)
+  }
+
+  /**
+   * Translate exactly ONE assistant message (the shared body of the turn command
+   * and the per-reply button). The button passes the message the reader clicked:
+   * a turn can hold several text messages (a preamble, tool narration, then the
+   * real answer), and resolving them through "the turn's last answer" made the
+   * card show a *different* message than the one that was clicked.
+   */
+  private async translateAnswer(
+    sessionId: string,
+    turn: number,
+    answer: TurnAnswer,
+    opts: TranslateTurnOptions,
+    signal?: AbortSignal,
+  ): Promise<TranslateResult> {
     const target = this.target(opts)
+    const events = sessionEvents(this.deps.getSession(sessionId))
     if (opts.force !== true) {
-      const existing = findTranslationRecord(events, turn, target.model, target.effort)
+      const existing = findTranslationRecord(events, turn, target.model, target.effort, answer.messageId)
       if (existing !== null) {
         // Already translated with this exact recipe: hand back the durable card
-        // instead of paying for a second identical call.
+        // instead of paying for a second identical call. The match is scoped to
+        // the message, so a sibling reply in the same turn is NOT reused.
         return {
           ok: true,
           text: existing.text,
@@ -901,10 +957,6 @@ export class TranslationService {
           turn,
         }
       }
-    }
-    const answer = opts.full === true ? allTextOfTurn(events, turn) : finalAnswerOfTurn(events, turn)
-    if (answer === null || answer.text.trim() === '') {
-      return { ...emptyResult(target.model, target.effort), error: 'no assistant text in turn ' + turn, code: 'TURN_NOT_FOUND' }
     }
     const res = await this.translate(
       {
@@ -957,7 +1009,11 @@ export class TranslationService {
     }
     const located = turnOfMessage(events, messageId)
     if (located === null) return null
-    return findTranslationRecord(events, located.turn)
+    // Legacy records written before `messageId` existed are the last resort, and
+    // only while the turn has no message-scoped record at all (see
+    // findTranslationRecord) — otherwise message B would show "done" because
+    // message A had been translated.
+    return findTranslationRecord(events, located.turn, undefined, undefined, messageId)
   }
 
   /** True while a translation is running for this session. */
@@ -976,11 +1032,11 @@ export class TranslationService {
     return this.translateTurn(sessionId, turn, opts, signal)
   }
 
-  /** Translate the turn that owns one assistant message (history button). */
+  /** Translate exactly the assistant message the reader clicked. */
   async translateMessage(sessionId: string, messageId: string, opts: TranslateTurnOptions = {}, signal?: AbortSignal): Promise<TranslateResult> {
     const events = sessionEvents(this.deps.getSession(sessionId))
+    const target = this.target(opts)
     if (events.length === 0) {
-      const target = this.target(opts)
       return { ...emptyResult(target.model, target.effort), error: 'session is not available', code: 'SESSION_UNAVAILABLE' }
     }
     const located = turnOfMessage(events, messageId)
@@ -989,10 +1045,24 @@ export class TranslationService {
       if (last !== null) {
         return this.translateTurn(sessionId, last, { ...opts, full: false }, signal)
       }
-      const target = this.target(opts)
       return { ...emptyResult(target.model, target.effort), error: 'message not found in this session', code: 'MESSAGE_NOT_FOUND' }
     }
-    return this.translateTurn(sessionId, located.turn, { ...opts, full: false }, signal)
+    // A message that carries no prose (a tool-only step) cannot be explained;
+    // fall back to that turn's real answer instead of failing the click.
+    const answer: TurnAnswer | null =
+      located.text.trim() === '' ? finalAnswerOfTurn(events, located.turn) : located
+    if (answer === null || answer.text.trim() === '') {
+      return { ...emptyResult(target.model, target.effort), error: 'that message carries no text to translate', code: 'MESSAGE_NOT_FOUND' }
+    }
+    // Keep the CLICKED message's id (and anchor) even when its content fell back
+    // to the turn answer: the card must land under the reply the reader chose.
+    const scoped: TurnAnswer = {
+      text: answer.text,
+      anchorSeq: located.anchorSeq !== 0 ? located.anchorSeq : answer.anchorSeq,
+      messageId,
+      ...(answer.sourceModel === undefined ? {} : { sourceModel: answer.sourceModel }),
+    }
+    return this.translateAnswer(sessionId, located.turn, scoped, { ...opts, full: false }, signal)
   }
 
   /**

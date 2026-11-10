@@ -40,7 +40,12 @@ const win = globalThis as unknown as {
 	};
 	addEventListener?: (type: string, listener: (ev: any) => void, useCapture?: boolean) => void;
 	removeEventListener?: (type: string, listener: (ev: any) => void, useCapture?: boolean) => void;
+	navigator?: { clipboard?: { writeText(text: string): Promise<void> } };
 };
+
+// Shown (and copyable) in Settings: image generation is a CLI feature, so the
+// panel documents the exact command instead of pretending to run it in-page.
+const IMAGE_CLI_SAMPLE = 'dsh-agy-image -p "…" -a 16:9 -o ./image.jpg'
 
 const portalToBody = (node: unknown) => {
 	const body = win.document?.body ?? (typeof document !== 'undefined' ? document.body : null);
@@ -104,6 +109,9 @@ interface StatusPayload {
 	autoTranslate?: boolean;
 	translateModel?: string;
 	translateEffort?: string;
+	imageModel?: string;
+	imageEffort?: string;
+	imageOutputDir?: string;
 	bindings?: number;
 	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
 }
@@ -1678,6 +1686,17 @@ export function apply(ctx: ClientContext): void {
 			}, 6000);
 		};
 
+		const copyImageCommand = (): void => {
+			const clip = win.navigator?.clipboard;
+			if (clip?.writeText === undefined) {
+				showToast(t('config.imageCopyFailed'), 'warn');
+				return;
+			}
+			void clip.writeText(IMAGE_CLI_SAMPLE)
+				.then(() => showToast(t('config.imageCopied'), 'success'))
+				.catch(() => showToast(t('config.imageCopyFailed'), 'warn'));
+		};
+
 		const actionFailed = (): void => {
 			showToast(t('api.genericError'), 'error');
 		};
@@ -2586,6 +2605,62 @@ h('div', { key: 'agy-body', style: S.quotaBox },
 								medium: t('effort.medium'),
 								high: t('effort.high'),
 							}).map((option) => h('option', { key: option.value, value: option.value }, option.label))),
+						),
+					),
+					// Image generation is CLI-only; expose the two knobs the CLI reads
+					// plus a copyable command, so the feature is discoverable in
+					// Settings without pretending there is an in-GUI run button.
+					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+						h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
+							h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
+								h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.image')),
+								h('span', { style: S.muted }, t('config.imageDesc')),
+							),
+							h('div', { style: S.cfgRowRight },
+								h('select', {
+									className: 'agy-select',
+									'aria-label': t('config.imageModel'),
+									title: t('config.imageModelDesc'),
+									style: S.select,
+									value: status?.imageModel ?? '',
+									disabled: loadingAction === 'config:imageModel',
+									onChange: (e: { target?: { value?: string } }) => void setCfg('imageModel', e?.target?.value ?? ''),
+								}, translateModelOptions(status?.imageModel ?? '', geminiCatalogModels(catalogModels), t('config.translateModelAuto')).map((option) =>
+									h('option', { key: option.value, value: option.value }, option.label),
+								)),
+								h('select', {
+									className: 'agy-select',
+									'aria-label': t('config.imageEffort'),
+									title: t('config.imageEffortDesc'),
+									style: { ...S.select, minWidth: '78px', maxWidth: '110px' },
+									value: status?.imageEffort ?? '',
+									disabled: loadingAction === 'config:imageEffort',
+									onChange: (e: { target?: { value?: string } }) => void setCfg('imageEffort', e?.target?.value ?? ''),
+								}, translateEffortOptions(status?.imageEffort ?? '', {
+									auto: t('config.translateEffortAuto'),
+									low: t('effort.low'),
+									medium: t('effort.medium'),
+									high: t('effort.high'),
+								}).map((option) => h('option', { key: option.value, value: option.value }, option.label))),
+							),
+						),
+						h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
+							h('code', {
+								style: {
+									flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+									fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '11px',
+									color: 'var(--agy-text-secondary)', background: 'var(--agy-bg-subbox)',
+									border: '1px solid var(--agy-border-subbox)', borderRadius: '5px', padding: '3px 7px',
+								},
+							}, IMAGE_CLI_SAMPLE),
+							h('button', {
+								type: 'button',
+								className: 'agy-btn',
+								// Same secondary small-button recipe as every other row in
+								// this panel (border, fill, radius, type scale).
+								style: { ...S.btnSm, flex: '0 0 auto', whiteSpace: 'nowrap' },
+								onClick: copyImageCommand,
+							}, t('config.imageCopy')),
 						),
 					),
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },

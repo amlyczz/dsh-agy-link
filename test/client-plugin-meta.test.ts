@@ -60,6 +60,9 @@ test('console dictionary keys exist in every shipped language', () => {
     'effort.auto', 'effort.low', 'effort.medium', 'effort.high',
     'config.translateModel', 'config.translateModelDesc', 'config.translateModelAuto',
     'config.translateEffort', 'config.translateEffortDesc', 'config.translateEffortAuto',
+    'config.image', 'config.imageDesc', 'config.imageModel', 'config.imageModelDesc',
+    'config.imageEffort', 'config.imageEffortDesc', 'config.imageCopy', 'config.imageCopied',
+    'config.imageCopyFailed',
   ];
   for (const [lang, dict] of Object.entries(languages)) {
     for (const key of required) {
@@ -90,4 +93,14 @@ test('settings row exposes translation model and effort as dropdowns', () => {
   // The two selects sit in the auto-translate row, not in a separate section.
   assert.match(source, /config\.autoTranslate/)
   assert.match(source, /cfgRowRight/)
+});
+
+
+test('settings row exposes image generation model/effort and the CLI command', () => {
+  const source = readFileSync(join(root, 'dist', 'client.js'), 'utf8');
+  assert.match(source, /setCfg\(["']imageModel["']/);
+  assert.match(source, /setCfg\(["']imageEffort["']/);
+  assert.match(source, /config\.image/);
+  assert.match(source, /dsh-agy-image/);
+  assert.match(source, /config\.imageCopy/);
 });
