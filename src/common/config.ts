@@ -110,6 +110,7 @@ export function resolveConfig(
     defaultEffort: asString(get('defaultEffort')) ?? base.defaultEffort,
     timeoutMs: asNum(get('timeoutMs')) ?? base.timeoutMs,
     longToolIdleMinutes: asNum(get('longToolIdleMinutes')) ?? base.longToolIdleMinutes,
+    maxTurnMinutes: asNum(get('maxTurnMinutes')) ?? base.maxTurnMinutes,
     dispatchTimeoutMinutes: asNum(get('dispatchTimeoutMinutes')) ?? base.dispatchTimeoutMinutes,
     dispatchRetries: asNum(get('dispatchRetries')) ?? base.dispatchRetries,
     parallelSameAccount: asBool(get('parallelSameAccount')) ?? base.parallelSameAccount,
@@ -181,6 +182,10 @@ export function resolveConfig(
   if (env.DSH_AGY_LONG_TOOL_IDLE_MINUTES) {
     const t = asNum(env.DSH_AGY_LONG_TOOL_IDLE_MINUTES)
     if (t !== undefined && t >= 0) cfg.longToolIdleMinutes = t
+  }
+  if (env.DSH_AGY_MAX_TURN_MINUTES) {
+    const mt = asNum(env.DSH_AGY_MAX_TURN_MINUTES)
+    if (mt !== undefined && mt >= 0) cfg.maxTurnMinutes = mt
   }
   // Model context window / output cap. agy's model list carries no window, so
   // these are the only knobs a user has when the reported value is wrong (a

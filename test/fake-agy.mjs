@@ -78,6 +78,23 @@ if (mode === 'exit12') {
   process.exit(12)
 }
 
+// Issue #92: a self-driving turn that keeps emitting events forever. The idle
+// watchdog is re-armed by every line, so only the wall-clock maxTurnMinutes cap
+// can stop it. Exits on SIGTERM (what killTree sends first).
+if (mode === 'hang') {
+  process.on('SIGTERM', () => process.exit(143))
+  let i = 0
+  const timer = setInterval(() => {
+    emit({
+      event: 'step_update',
+      step_update: { step_type: 'tool', status: 'ACTIVE', step_id: 'task-' + i, tool_name: 'run_command' },
+    })
+    i++
+  }, 50)
+  await new Promise(() => {})
+  clearInterval(timer)
+}
+
 // Real location refusal observed live: agy exits 3 after a result envelope
 // carrying FAILED_PRECONDITION (code 400).
 if (mode === 'location-denied') {

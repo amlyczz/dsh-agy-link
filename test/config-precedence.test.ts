@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { resolveConfig } from '../src/common/config.ts'
+import { defaultConfig } from '../src/common/types.ts'
 
 for (const permissionMode of ['plan', 'accept-edits', 'skip'] as const) {
   test(`runtime selection ${permissionMode} overrides a configured entry mode`, () => {
@@ -23,6 +24,14 @@ test('boolean env vars are case-insensitive and accept yes/on/off', () => {
   assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'OFF' }, {}).mcpBridge, false)
   assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'No' }, {}).mcpBridge, false)
   assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'garbage' }, {}).mcpBridge, false, 'unknown falls back to base default')
+})
+
+test('maxTurnMinutes defaults to 0 (off) and reads the env override (issue #92)', () => {
+  assert.equal(defaultConfig().maxTurnMinutes, 0)
+  assert.equal(resolveConfig({ maxTurnMinutes: 30 }, {}, {}).maxTurnMinutes, 30)
+  assert.equal(resolveConfig({}, { DSH_AGY_MAX_TURN_MINUTES: '45' }, {}).maxTurnMinutes, 45)
+  assert.equal(resolveConfig({}, { DSH_AGY_MAX_TURN_MINUTES: '0' }, {}).maxTurnMinutes, 0)
+  assert.equal(resolveConfig({}, { DSH_AGY_MAX_TURN_MINUTES: 'nope' }, {}).maxTurnMinutes, 0)
 })
 
 test('context window and max tokens are configurable via env (issue #83)', () => {

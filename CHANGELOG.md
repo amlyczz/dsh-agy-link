@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.14 (2026-11-10)
+
+### English
+
+- **Feat(stability): optional `maxTurnMinutes` wall-clock cap — a self-driving turn can no longer run unbounded (issue #92).**
+  - The idle watchdog is re-armed by every output line, so an agy turn that keeps emitting events (async `task-xxxx` receipts, tool chatter) never trips it: `longToolIdleMinutes` (default 240) only bounds *silence*. A new `maxTurnMinutes` bounds the whole turn regardless of activity; when it fires the runner kills the agy process tree (SIGTERM group → SIGKILL escalation, `taskkill /T /F` on Windows) and the turn fails with a resumable `maxTurnMinutes` error.
+  - Default `0` = **off**, so behaviour is unchanged until you opt in (e.g. `DSH_AGY_MAX_TURN_MINUTES=60` for exploratory sessions). Env + config key, README/CONFIGURATION rows, and tests for the cap and the config precedence.
+
+### 中文
+
+- **新增(稳定性)：可选 `maxTurnMinutes` 墙钟上限——自驱动轮次不再可能无限运行（issue #92）。**
+  - 空闲看门狗会被每一行输出重置，所以「持续有输出」的 agy 轮次（异步 `task-xxxx` 回执、工具碎碎念）永远不会触发；`longToolIdleMinutes`（默认 240）只约束**静默**。新增 `maxTurnMinutes` 约束整轮墙钟，触发时 runner 会杀掉 agy 进程树（组 `SIGTERM`→`SIGKILL`，Windows `taskkill /T /F`），并返回可续跑的 `maxTurnMinutes` 错误。
+  - 默认 `0` = **关闭**，不改变现有行为；需要时显式开启（如排障类会话设 `DSH_AGY_MAX_TURN_MINUTES=60`）。含 env + 配置键、README/CONFIGURATION 说明，以及上限与配置优先级的测试。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.13...v0.6.14
+
 ## 0.6.13 (2026-11-10)
 
 ### English

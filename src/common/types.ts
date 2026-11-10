@@ -35,6 +35,12 @@ export interface PluginConfig {
    * loudly instead of holding the session for hours.
    */
   longToolIdleMinutes: number
+  /**
+   * Hard wall-clock cap for a single turn, in minutes (0 = unlimited). The idle
+   * watchdog re-arms on every output line, so without this a self-driving agy
+   * loop that keeps printing can run unbounded (issue #92).
+   */
+  maxTurnMinutes: number
   /** Hard cap (minutes) on the credential-slot wait before release+retry; 0 = unlimited. */
   dispatchTimeoutMinutes: number
   /** Extra dispatch attempts after a credential-slot hard-cap timeout. */
@@ -214,6 +220,7 @@ export function defaultConfig(): PluginConfig {
     defaultEffort: 'high',
     timeoutMs: 600_000,
     longToolIdleMinutes: 240,
+    maxTurnMinutes: 0,
     /**
      * Hard cap (minutes) on waiting for the Windows credential slot before the
      * dispatch releases, backs off and retries (dispatchRetries). Each attempt

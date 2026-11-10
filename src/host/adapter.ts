@@ -2416,6 +2416,10 @@ export class AgyAdapter extends LlmAdapter {
       args,
       cwd: workspaceRoot,
       timeoutMs: cfg.timeoutMs,
+      // Wall-clock cap for the whole turn (issue #92): the idle watchdog is
+      // re-armed by every output line, so a self-driving loop that keeps
+      // printing never trips it. 0 disables (behaviour unchanged).
+      maxTurnMs: cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined,
       signal: options.signal,
       env,
       stdinPayload,
@@ -2542,6 +2546,12 @@ export class AgyAdapter extends LlmAdapter {
       let failure: { kind: 'error' | 'aborted'; code: string; message: string; retryAfterMs?: number } | null = null
       if (outcome.aborted) {
         failure = { kind: 'aborted', code: 'ABORTED', message: 'agy run aborted by caller' }
+      } else if (outcome.capped) {
+        failure = {
+          kind: 'error',
+          code: Err.TIMEOUT,
+          message: 'agy turn exceeded maxTurnMinutes (' + cfg.maxTurnMinutes + ' min) — the agy process tree was terminated. Re-send to continue. 本轮超过 maxTurnMinutes 上限，已终止 agy 进程树',
+        }
       } else if (outcome.timedOut) {
         failure = { kind: 'error', code: Err.TIMEOUT, message: 'agy run was idle for ' + cfg.timeoutMs + 'ms without output'
           + (silentTimeout
@@ -2807,7 +2817,7 @@ export class AgyAdapter extends LlmAdapter {
         // A response can be usable even when agy reports an individual tool
         // failure. Keep process health distinct from those raw tool errors:
         // collapsing them into one "ok" bit hid real denials in /agy status.
-        processOk: !outcome.aborted && !outcome.timedOut && outcome.code === 0,
+        processOk: !outcome.aborted && !outcome.timedOut && !outcome.capped && outcome.code === 0,
         processCode: outcome.aborted
           ? 'ABORTED'
           : outcome.timedOut

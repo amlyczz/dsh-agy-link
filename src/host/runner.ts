@@ -495,6 +495,8 @@ export interface RunOutcome {
   signal: NodeJS.Signals | null;
   timedOut: boolean;
   aborted: boolean;
+  /** True when the turn's wall-clock cap (opts.maxTurnMs) fired. */
+  capped: boolean;
   stdout: string;
   stderrTail: string;
   durationMs: number;
@@ -505,6 +507,13 @@ export interface RunOptions {
   args: readonly string[];
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * Hard wall-clock cap for one turn. Unlike timeoutMs (an idle watchdog the
+   * activity stream re-arms), this fires once regardless of output, so a
+   * self-driving loop that keeps printing cannot run unbounded (issue #92).
+   * Undefined/0 disables it.
+   */
+  maxTurnMs?: number;
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   onLine?: (line: string) => void;
@@ -690,6 +699,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
   let stderr = '';
   let timedOut = false;
   let aborted = false;
+  let capped = false;
   let settled = false;
 
   // EPIPE on stdin arrives ASYNC as an 'error' event (the try/catch around
@@ -731,6 +741,15 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
   };
   refreshWatchdog();
 
+  let turnCap: NodeJS.Timeout | null = null;
+  if (opts.maxTurnMs !== undefined && opts.maxTurnMs > 0) {
+    turnCap = setTimeout(() => {
+      capped = true;
+      killTree(child);
+    }, opts.maxTurnMs);
+    turnCap.unref?.();
+  }
+
   const onAbort = () => {
     aborted = true;
     killTree(child);
@@ -767,6 +786,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
       if (settled) return;
       settled = true;
       if (watchdog) clearTimeout(watchdog);
+      if (turnCap) clearTimeout(turnCap);
       opts.signal?.removeEventListener('abort', onAbort);
       // Flush the partial tails before settling: a final line without a
       // trailing newline must still be decoded (and parsed) exactly once.
@@ -786,6 +806,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
         signal,
         timedOut,
         aborted,
+        capped,
         stdout,
         stderrTail: stderr,
         durationMs: Date.now() - started,
@@ -809,6 +830,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
       if (reason === 'timeout') timedOut = true;
       else aborted = true;
       if (watchdog) clearTimeout(watchdog);
+      if (turnCap) clearTimeout(turnCap);
       killTree(child);
     },
   };

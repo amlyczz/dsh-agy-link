@@ -708,6 +708,20 @@ test('unknown reasoning effort on known model is rejected', async () => {
   )
 })
 
+test('maxTurnMinutes terminates a self-driving turn that never goes idle (issue #92)', async () => {
+  const { adapter } = makeAdapter({ maxTurnMinutes: 0.02 }) // 1.2 s wall-clock cap
+  process.env.FAKE_AGY_MODE = 'hang'
+  const started = Date.now()
+  try {
+    const chunks = await collect(adapter.stream(opts([msg('user', 'loop forever')])))
+    const blob = JSON.stringify(chunks)
+    assert.ok(blob.includes('maxTurnMinutes'), 'the cap message is surfaced to the caller')
+    assert.ok(Date.now() - started < 8_000, 'the cap fires well before an idle timeout would')
+  } finally {
+    delete process.env.FAKE_AGY_MODE
+  }
+})
+
 test('buildArgs passes --effort for a Claude 5.5 base slug (agy 1.5.3 verified)', () => {
   const { adapter } = makeAdapter()
   const args = adapter.buildArgs({
