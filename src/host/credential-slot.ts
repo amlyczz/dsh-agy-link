@@ -45,7 +45,7 @@ import { defaultPoolDir } from './pool.ts'
 import { readWindowsCredentialRaw, writeWindowsCredentialRaw } from './wincred.ts'
 import { refreshTokens } from './oauth.ts'
 import { agyFetch } from './net.ts'
-import { readAccountCredential, updateCredentialBackup, withCredentialFileLock } from './credential-backup.ts'
+import { readAccountCredential, saveCredentialBackup } from './credential-backup.ts'
 
 const SLOT_TARGET = 'gemini:antigravity'
 const PRIMARY_STORE_FILE = '.primary-credential.json'
@@ -1258,11 +1258,9 @@ export async function acquireCredentialSlot(
             // Slot still belongs to this account: agy may have refreshed the
             // access token, so persist it back into the account's own file.
             if (afterRaw && afterRaw !== accountRaw) {
-              withCredentialFileLock(accountFile, () => {
-                if (readTokenFileRaw(accountFile) === accountRaw && writeFileAtomic(accountFile, afterRaw)) {
-                  updateCredentialBackup(accountFile, afterRaw, accountRaw)
-                }
-              })
+              if (readTokenFileRaw(accountFile) === accountRaw && writeFileAtomic(accountFile, afterRaw)) {
+                saveCredentialBackup(accountFile, afterRaw)
+              }
             }
           } else if (afterFingerprint !== null) {
             // The slot was taken over while this run was live. Writing it back

@@ -28,7 +28,7 @@ import { detectSystemProxy, readWindowsCredentialRaw } from './wincred.ts'
 import { parseCredentialDoc, credentialFingerprint, readPrimaryCredential, writePrimaryCredential, credentialSlotMutex } from './credential-slot.ts'
 import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
 import { isolatedHomeEnv, proxyEnvFor } from './runner.ts'
-import { readAccountCredential, updateCredentialBackup, withCredentialFileLock } from './credential-backup.ts'
+import { readAccountCredential, saveCredentialBackup } from './credential-backup.ts'
 
 /**
  * When the quota-summary endpoint transiently fails, per-model fallback
@@ -733,11 +733,10 @@ export class QuotaService {
         const raw = JSON.stringify(doc)
         writeFileSync(file, raw, { encoding: 'utf8', mode: 0o600 })
         if (account.dir && !account.systemHome) {
-          updateCredentialBackup(file, raw, JSON.stringify(existing))
+          saveCredentialBackup(file, raw)
         }
       }
-      if (account.dir && !account.systemHome) withCredentialFileLock(file, persist)
-      else persist()
+      persist()
     } catch {
       // Best-effort
     }

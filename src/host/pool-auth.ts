@@ -28,7 +28,7 @@ import type { AccountPoolManager } from './pool.ts'
 import type { QuotaService } from './quota.ts'
 import { detectSystemProxy, writeWindowsCredentialRaw } from './wincred.ts'
 import { writePrimaryCredential } from './credential-slot.ts'
-import { saveCredentialBackup, withCredentialFileLock } from './credential-backup.ts'
+import { saveCredentialBackup } from './credential-backup.ts'
 
 export type PoolAuthPhase = 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed'
 export type PoolAuthStatusCode =
@@ -263,13 +263,8 @@ export class PoolAuthFlow {
         const targetDir = join(account.dir, '.gemini', 'antigravity-cli')
         mkdirSync(targetDir, { recursive: true })
         const targetFile = join(targetDir, 'antigravity-oauth-token')
-        const committed = withCredentialFileLock(targetFile, () => {
-          const raw = readFileSync(stagedFile, 'utf8')
-          if (!saveCredentialBackup(targetFile, raw)) throw new Error('Cannot back up the new credential')
-          renameSync(stagedFile, targetFile)
-          return true
-        })
-        if (!committed) throw new Error('Account credential is busy; retry sign-in')
+        renameSync(stagedFile, targetFile)
+        saveCredentialBackup(targetFile)
         this.pool.updateAccountQuotas(account.id, {}, email)
         this.pool.clearAuthRequired(account.id)
         this.pool.cleanupStagingSlot(flow.dir)
@@ -321,11 +316,7 @@ export class PoolAuthFlow {
       }
       const acc = this.pool.commitStagingAccount(flow.stagingId, flow.dir, flow.alias, email, flow.proxyUrl)
       const accountFile = join(acc.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
-      try {
-        withCredentialFileLock(accountFile, () => saveCredentialBackup(accountFile, readFileSync(accountFile, 'utf8')))
-      } catch {
-        this.log(`credential backup failed for account ${acc.id}`)
-      }
+      saveCredentialBackup(accountFile)
       this.log(`pool auth committed account ${acc.id}${email ? ` <${email}>` : ''}`)
       // Quota refresh is best-effort; the account is usable regardless.
       void this.quota.refreshAccountQuota(acc).catch(() => undefined)
