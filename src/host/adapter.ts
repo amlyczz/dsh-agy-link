@@ -1042,24 +1042,11 @@ export class AgyAdapter extends LlmAdapter {
     const rawModel = typeof model === 'string' ? model.trim() : ''
     const cleanId = rawModel !== '' ? rawModel : cfg.defaultModel
 
-    // Match the selected fixed model to an account that supports this model.
-    // Silent switch — NEVER emit picker updates during model resolution.
-    if (pool && cleanId !== '') {
-      const family = modelFamilyOf(cleanId)
-      if (!activeAcc || !pool.isAccountEligibleForModel(activeAcc, family, cleanId)) {
-        const candidate = pool.selectAccount(family, cleanId)
-        if (candidate && candidate.id !== activeAcc?.id) {
-          pool.setActiveAccount(candidate.id, family)
-        }
-      }
-    }
-
-    const currentAcc = this.getActiveAccount()
     const unionModels = this.deps.catalog.getUnion(accounts, pool)
     const allModels = this.deps.catalog.getAllKnownModels(accounts)
     const entry = unionModels.find((m) => m.id === cleanId)
       ?? allModels.find((m) => m.id === cleanId)
-      ?? findEntry(this.deps.catalog.get(currentAcc?.id), cleanId)
+      ?? findEntry(this.deps.catalog.get(activeAcc?.id), cleanId)
       ?? findEntry(this.deps.catalog.get(), cleanId)
     const rawName = entry ? entry.name : cleanId
     const name = (typeof rawName === 'string' && rawName.trim() !== '') ? rawName.trim() : cleanId
@@ -1472,7 +1459,7 @@ export class AgyAdapter extends LlmAdapter {
       // pool's current active healthy candidate so they share the slot under
       // `parallelSameAccount: true` and run with 100% lock-free concurrency.
       if (process.platform === 'win32' && cfg.parallelSameAccount) {
-        const poolActive = this.deps.pool.selectAccount(family, activeModel)
+        const poolActive = this.deps.pool.selectAccount(family)
         if (poolActive) {
           account = poolActive
         }
@@ -1496,14 +1483,14 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
 
-        if (mostRecentAccount && this.deps.pool.isAccountEligibleForModel(mostRecentAccount, family, activeModel)) {
+        if (mostRecentAccount && this.deps.pool.isAccountEligible(mostRecentAccount, family)) {
           account = mostRecentAccount
         }
       }
     }
 
     if (!account && this.deps.pool) {
-      account = this.deps.pool.selectAccount(family, activeModel) ?? undefined
+      account = this.deps.pool.selectAccount(family) ?? undefined
     }
 
     if (account && this.deps.pool) {

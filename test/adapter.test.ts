@@ -1644,7 +1644,7 @@ test('listModels and resolveModel defensively handle empty IDs, empty names, and
   assert.equal(resolvedNoEffort.reasoning, undefined)
 })
 
-test('listModels exposes union of models across all accounts and auto-switches on selection', async () => {
+test('listModels exposes union of models across all accounts while resolveModel remains pure', async () => {
   let activeId = 'acc_free'
   const accounts: Record<string, any> = {
     acc_free: {
@@ -1670,12 +1670,8 @@ test('listModels exposes union of models across all accounts and auto-switches o
     hasDedicatedGroup: (id: string, fam: string) => id === 'acc_pro' && fam === 'argon',
     accountHasArgon: (acc: any) => acc.id === 'acc_pro',
     isAccountEligible: (acc: any, fam: string) => fam === 'argon' ? acc.id === 'acc_pro' : true,
-    isAccountEligibleForModel: (acc: any, fam: string, model: string) => {
-      if (model.includes('argon')) return acc.id === 'acc_pro'
-      return true
-    },
-    selectAccount: (fam: string, model?: string) => {
-      if (fam === 'argon' || (model && model.includes('argon'))) return accounts['acc_pro']
+    selectAccount: (fam: string) => {
+      if (fam === 'argon') return accounts['acc_pro']
       return accounts[activeId]
     },
     setActiveAccount: (id: string) => { activeId = id; return true },
@@ -1693,9 +1689,10 @@ test('listModels exposes union of models across all accounts and auto-switches o
   assert.ok(models.some((m) => m.id === 'gemini-3.8-flash'))
   assert.ok(models.some((m) => m.id === 'gemini-4-argon'), 'model picker must show gemini-4-argon from pool union')
 
-  // 2. When resolving or selecting gemini-4-argon, automatically switches active account to acc_pro
-  await adapter.resolveModel('antigravity', 'gemini-4-argon')
-  assert.equal(activeId, 'acc_pro', 'should automatically switch active account to acc_pro')
+  // 2. Resolving gemini-4-argon succeeds from union models without mutating active account (pure query)
+  const resolved = await adapter.resolveModel('antigravity', 'gemini-4-argon')
+  assert.equal(resolved.id, 'gemini-4-argon')
+  assert.equal(activeId, 'acc_free', 'resolveModel must remain side-effect free')
 
   // 3. When NO account in the pool has Argon access, Argon is excluded
   const fakePoolNoArgon = {

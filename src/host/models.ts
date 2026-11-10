@@ -6,10 +6,10 @@
 // a bundled catalog so the /model picker is never empty.
 import type { FallbackModelDef, PluginConfig } from '../common/types.ts'
 import type { ManagedAccount } from '../common/pool-types.ts'
-import { isArgonModel } from '../common/pool-types.ts'
+import { accountHasArgon, isArgonModel } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 
-export { isArgonModel }
+export { accountHasArgon, isArgonModel }
 
 export interface RawModel { slug: string; label: string }
 
@@ -26,45 +26,6 @@ export interface Catalog {
   discoveredAt: number
   /** Last discovery error, surfaced by /agy models and doctor. */
   lastError?: string
-}
-
-
-/**
- * Determine whether a managed account has confirmed access to the Gemini 4 Argon family.
- * Argon is exclusive to paid Pro/Ultra plans and returns a separate quota bucket
- * and/or dedicated model list from agy cli. Free/standard accounts do not have Argon.
- */
-export function accountHasArgon(
-  acc?: ManagedAccount | null,
-  pool?: AccountPoolManager | null,
-  catalog?: Catalog,
-): boolean {
-  if (!acc) return false
-
-  // 1. Authoritative quota bucket explicitly exists
-  if (acc.quotas?.argon !== undefined) return true
-
-  // 2. Pool recorded dedicated Argon quota group (PR #54)
-  if (pool && typeof pool.hasDedicatedGroup === 'function' && pool.hasDedicatedGroup(acc.id, 'argon')) return true
-
-  // 3. Per-model quotas reported an argon model
-  if (acc.quotas?.google?.models?.some((m) => isArgonModel(m.modelId))) return true
-
-  // 4. Authoritative negative only when the Google group reported a PER-MODEL
-  // breakdown: a free/standard account enumerates its models, and none of them
-  // is Argon. A Google AI Ultra account folds Argon into the shared Gemini
-  // bucket and omits that breakdown entirely (issue #68) — a missing list is
-  // UNKNOWN, not negative, so it must fall through to catalog discovery.
-  if (Array.isArray(acc.quotas?.google?.models)) {
-    return false
-  }
-
-  // 5. Account's discovered catalog contains argon (only when quota has not been polled yet)
-  if (catalog && catalog.source === 'discovered') {
-    return catalog.models.some((m) => isArgonModel(m.id))
-  }
-
-  return false
 }
 
 /** Check whether any enabled account in the pool has confirmed access to Argon. */
@@ -304,17 +265,12 @@ export class ModelCatalog {
         for (const m of cat.models) list.push(m)
       }
       if (acc.quotas) {
-        if (acc.quotas.argon?.models?.length) {
-          const rawArgon: RawModel[] = acc.quotas.argon.models.map((m) => ({ slug: m.modelId, label: m.displayName || m.modelId }))
-          for (const m of foldEfforts(rawArgon)) list.push(m)
-        }
-        if (acc.quotas.anthropic?.models?.length) {
-          const rawAnthropic: RawModel[] = acc.quotas.anthropic.models.map((m) => ({ slug: m.modelId, label: m.displayName || m.modelId }))
-          for (const m of foldEfforts(rawAnthropic)) list.push(m)
-        }
-        if (acc.quotas.google?.models?.length) {
-          const rawGoogle: RawModel[] = acc.quotas.google.models.map((m) => ({ slug: m.modelId, label: m.displayName || m.modelId }))
-          for (const m of foldEfforts(rawGoogle)) list.push(m)
+        for (const fam of ['argon', 'anthropic', 'google'] as const) {
+          const models = acc.quotas[fam]?.models
+          if (models?.length) {
+            const raw: RawModel[] = models.map((m) => ({ slug: m.modelId, label: m.displayName || m.modelId }))
+            for (const m of foldEfforts(raw)) list.push(m)
+          }
         }
       }
     }

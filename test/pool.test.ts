@@ -810,6 +810,19 @@ test('getPoolData exposes systemProxy when defaultProxy is provided or system pr
   assert.equal(poolData.systemProxy, 'http://127.0.0.1:17891')
 })
 
+test('selectAccount for family=argon routes only to Argon-capable accounts', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-argon-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts()[0]!
+  pool.updateAccountQuotas(primary.id, { google: { remainingFraction: 1 } })
+
+  const secondary = pool.createAccountSlot('Pro Account')
+  pool.updateAccountQuotas(secondary.id, { argon: { remainingFraction: 1 } })
+
+  assert.equal(pool.selectAccount('argon')?.id, secondary.id, 'must select secondary account with Argon')
+  assert.equal(pool.selectAccount('google')?.id, primary.id, 'google requests can still use primary')
+})
+
 test('defaultPoolDir recovers when home directory is inside an isolated account path', () => {
   assert.equal(
     defaultPoolDir('C:\\Users\\kybco\\.dsh\\agy-accounts\\acc_1793341113485_51ytc'),
