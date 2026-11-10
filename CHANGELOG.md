@@ -1,9 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.6.17 (2026-11-11)
 
-- **Account reauthentication:** `/agy auth <id|alias|email>` restores an existing secondary account without recreating it; `/agy auth-status` reports the final result. Identity verification rejects a different or unverifiable Google account.
-- **账号重新登录：** `/agy auth <ID|别名|邮箱>` 可恢复已有副账号，无需重新添加；`/agy auth-status` 查看最终结果。身份不匹配或无法验证时不会覆盖凭据。
+### English
+
+- **Feat(auth): reauthenticate an existing pool account in place — `/agy auth <id|alias|email>`, final result via `/agy auth-status`.** (thanks @Ronnoc, #96)
+  - When a secondary account's stored credential is missing or invalid, you no longer have to remove and recreate it (losing its configuration and local state): the browser flow writes into a staging slot, verifies the Google identity, and only then **atomically** moves the new token into that account's isolated `.gemini/antigravity-cli` dir (mode 0600).
+  - Identity checks before the swap: the account must be isolated (not the system-HOME primary), the verified email must match the account's recorded email when one exists, and no **other** pool account may already own that email. Missing email, missing refresh token or a mismatched/duplicate identity aborts with `identity_unverified` / `identity_mismatch` and leaves the old credential untouched.
+  - The flow is stale-safe (a superseded flow never writes), clears `authRequired`, records the address, and refreshes that account's quota. No credential value is ever printed.
+
+### 中文
+
+- **新增(auth)：原地重登已有账号——`/agy auth <ID|别名|邮箱>`，最终结果用 `/agy auth-status` 查看。**（感谢 @Ronnoc，#96）
+  - 副账号凭据缺失/失效时，不必再「删除后重建」（会丢配置与本地状态）：浏览器流程先写入 staging 槽位并校验 Google 身份，再把新 token **原子地** rename 到该账号独立的 `.gemini/antigravity-cli`（0600 权限）。
+  - 替换前的身份校验：必须是隔离账号（不是 system-HOME 主账号）；已记录邮箱的账号要求邮箱一致；同一邮箱不得属于池中**其他**账号。缺邮箱/缺 refresh token/身份不符或重复 → `identity_unverified` / `identity_mismatch`，旧凭据保持不动。
+  - 流程具备「旧流程不写盘」的过期保护，成功后清除 `authRequired`、记录邮箱并刷新该账号配额；任何输出都不打印凭据值。
+
+**Full Changelog**: https://github.com/amlyczz/dsh-agy-link/compare/v0.6.16...v0.6.17
 
 ## 0.6.16 (2026-11-10)
 
