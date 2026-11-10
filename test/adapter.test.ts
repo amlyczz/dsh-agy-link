@@ -754,6 +754,23 @@ test('buildArgs passes --effort for a Claude 5.5 base slug (agy 1.5.3 verified)'
   assert.equal(args[args.indexOf('--effort') + 1], 'high')
 })
 
+test('buildArgs keeps the Argon base slug and passes effort separately', () => {
+  const { adapter } = makeAdapter()
+  for (const effort of ['high', undefined] as const) {
+    const args = adapter.buildArgs({
+      prompt: 'x',
+      model: 'gemini-4-argon',
+      effort,
+      permissionMode: 'skip',
+      timeoutMs: 60_000,
+      extraArgs: [],
+    })
+    assert.equal(args[args.indexOf('--model') + 1], 'gemini-4-argon')
+    if (effort) assert.equal(args[args.indexOf('--effort') + 1], effort)
+    else assert.ok(!args.includes('--effort'))
+  }
+})
+
 test('buildArgs assembles flags per ADR-3/8/10', () => {
   const { adapter } = makeAdapter()
   const args = adapter.buildArgs({

@@ -7,14 +7,12 @@
 - **Fix(catalog): expose pool-wide models and route by selected model.**
   - The model picker exposes the union of models available across enabled accounts; Argon appears when an account in the pool supports it.
   - Model resolution and turn dispatch select an account eligible for the selected model, so Argon can use a capable secondary account while the primary lacks it.
-  - Argon reasoning effort is mapped to agy's tiered model slugs.
 
 ### 中文
 
 - **修复(目录)：展示号池模型全集，并按所选模型路由。**
   - 模型选单合并启用账号可用的模型；号池中有账号支持 Argon 时即可显示。
   - 模型解析与请求调度按具体模型选择可用账号，让不支持 Argon 的主账号也可使用支持 Argon 的副账号。
-  - 将 Argon 思考档转换为 agy CLI 的 tiered slug。
 
 ## 0.6.16 (2026-11-10)
 
