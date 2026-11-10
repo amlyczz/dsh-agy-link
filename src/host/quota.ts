@@ -781,6 +781,7 @@ export class QuotaService {
     if (tok.refreshToken) {
       try {
         const refreshed = await refreshTokens(tok.refreshToken, this.proxyFor(account))
+        if (!this.isCurrentAccountGrant(account, tok.refreshToken)) return null
         if (refreshed?.access_token) {
           this.persistRefreshedToken(account, {
             access_token: refreshed.access_token,
@@ -795,6 +796,7 @@ export class QuotaService {
           return refreshed.access_token
         }
       } catch (err: unknown) {
+        if (!this.isCurrentAccountGrant(account, tok.refreshToken)) return null
         const errMsg = String(err)
         // Only authoritative OAuth states flag the account; a bare 400
         // (captive portal / proxy error page) or a transport failure must not.
@@ -805,6 +807,15 @@ export class QuotaService {
     }
 
     return tok.accessToken || null
+  }
+
+  private isCurrentAccountGrant(account: ManagedAccount, refreshToken: string): boolean {
+    if (account.systemHome || !account.dir) return true
+    try {
+      return parseCredentialDoc(readFileSync(this.getTokenFilePath(account), 'utf8'))?.refreshToken === refreshToken
+    } catch {
+      return false
+    }
   }
 
   /**

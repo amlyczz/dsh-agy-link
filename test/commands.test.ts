@@ -12,6 +12,34 @@ const baseDeps = {
   store: () => ({ all: () => ({}) }),
 }
 
+test('agy auth defaults to primary and selects existing accounts unambiguously', async () => {
+  const { AccountPoolManager } = await import('../src/host/pool.ts')
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const pool = new AccountPoolManager(mkdtempSync(join(tmpdir(), 'agy-cmd-auth-')))
+  const account = pool.createAccountSlot('Backup Google account 3')
+  let selected = ''
+  const flow = {
+    beginPrimary: async () => { selected = 'primary'; return { ok: true, url: 'https://example.com' } },
+    beginAccount: async (id: string) => { selected = id; return { ok: true, url: 'https://example.com' } },
+    status: () => ({ phase: 'failed', code: 'identity_mismatch' }),
+  }
+  const def = agyCommandDefinition({ ...baseDeps, pool: () => pool, poolAuth: () => flow } as never)
+  await def.handler({ rawInput: 'auth' } as never)
+  assert.equal(selected, 'primary')
+  await def.handler({ rawInput: 'auth Backup Google account 3' } as never)
+  assert.equal(selected, account.id)
+  await def.handler({ rawInput: `auth ${account.id}` } as never)
+  assert.equal(selected, account.id)
+  assert.match((await def.handler({ rawInput: 'auth missing' } as never)).text ?? '', /not found/)
+  assert.match((await def.handler({ rawInput: 'auth-status' } as never)).text ?? '', /identity_mismatch/)
+  const listing = await def.handler({ rawInput: 'pool' } as never)
+  assert.ok(listing.text?.includes(account.id))
+  pool.createAccountSlot('Backup Google account 3')
+  assert.match((await def.handler({ rawInput: 'auth Backup Google account 3' } as never)).text ?? '', /Multiple accounts/)
+})
+
 // Issue #27: without input.hint, DSH composer drops `/agy <sub>` to plain chat.
 test('agy command declares input hint so subcommands are intercepted', () => {
   const def = agyCommandDefinition(baseDeps as never)

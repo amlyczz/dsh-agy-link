@@ -48,7 +48,8 @@ const HELP = [
   '- `/agy refresh-quota` — query Google backend for fresh quota %',
   '- `/agy clear-cooldown` — reset cooldown timers (and any active low-quota bench)',
   '- `/agy remove-account <id>` — delete an account slot',
-  '- `/agy auth` — Google login for the primary account (opens the browser)',
+  '- `/agy auth [id|alias|email]` — login to the primary or reauthenticate an existing account',
+  '- `/agy auth-status` — check the current or most recent login result',
   '- `/agy auth-code <code>` — finish login by pasting the code (fallback)',
   '- `/agy models` — refresh and list discovered models',
   '- `/agy mode <skip|plan|accept-edits>` — permission mode (next turn)',
@@ -117,7 +118,7 @@ async function handle(deps: CommandDeps, raw: string, invocation?: CommandInvoca
             statusText = `   - ⚠️ ${cds.join('; ')}`
           }
           lines.push(
-            `${i + 1}. **${a.alias}** (${a.email || a.id})${isPrimary ? ' ⭐ primary' : ''}`,
+            `${i + 1}. **${a.alias}** (${a.email || 'email unknown'}; id: \`${a.id}\`)${isPrimary ? ' ⭐ primary' : ''}`,
             // Proxy URLs can embed user:pass — never print them raw into the GUI.
             `   - Proxy: ${a.proxyUrl ? redactProxyUrl(a.proxyUrl) : deps.cfg().proxyUrl ? redactProxyUrl(deps.cfg().proxyUrl) : 'system default'}`,
             quotaLine,
@@ -146,7 +147,7 @@ async function handle(deps: CommandDeps, raw: string, invocation?: CommandInvoca
         return ok([
           `**Account slot created: [${acc.alias}]** (id: \`${acc.id}\`)`,
           `- Isolated directory: \`${acc.dir}\``,
-          `- Run in terminal: \`HOME="${acc.dir}" agy\` to authenticate this Google account.`,
+          `- Run \`/agy auth ${acc.id}\` to authenticate this Google account.`,
           `- The slot stays OUT of rotation (authRequired) until the login completes and a quota refresh verifies it.`,
           `- Once logged in, run: \`/agy pool\` or click 🔄 刷新额度 in WebUI.`,
         ].join('\n'))
@@ -379,7 +380,23 @@ async function handle(deps: CommandDeps, raw: string, invocation?: CommandInvoca
     if (sub === 'auth') {
       const flow = deps.poolAuth?.()
       if (!flow) return err('auth flow not available')
-      const st = await flow.beginPrimary()
+      const selector = parts.slice(1).join(' ')
+      let st
+      if (!selector) {
+        st = await flow.beginPrimary()
+      } else {
+        const pool = deps.pool?.()
+        if (!pool) return err('Account pool not available')
+        const matches = pool.getAccounts().filter((a) =>
+          [a.id, a.alias, a.email].some((value) => value?.toLowerCase() === selector.toLowerCase()))
+        if (matches.length !== 1) {
+          return err(matches.length ? 'Multiple accounts match; use an account ID from /agy pool.' : 'Account not found; use /agy pool to list account IDs.')
+        }
+        const account = matches[0]!
+        st = account.systemHome || !account.dir
+          ? await flow.beginPrimary(account.proxyUrl || deps.cfg().proxyUrl || undefined)
+          : await flow.beginAccount(account.id, deps.cfg().proxyUrl || undefined)
+      }
       if (st.ok && st.url) {
         return ok([
           st.browserOpened
@@ -388,10 +405,20 @@ async function handle(deps: CommandDeps, raw: string, invocation?: CommandInvoca
           '',
           st.url,
           '',
+          '授权后请在 30 秒内运行 `/agy auth-status` 检查登录结果。',
           '备用：授权完成后运行 `/agy auth-code <授权码或完整回调URL>`。',
         ].join('\n'))
       }
       return err(`failed to start the login flow (${st.code ?? 'request_failed'})`)
+    }
+    if (sub === 'auth-status') {
+      const flow = deps.poolAuth?.()
+      if (!flow) return err('auth flow not available')
+      const st = flow.status()
+      if (st.phase === 'done') return ok(`Login completed${st.alias ? ` for ${st.alias}` : ''}.`)
+      if (st.phase === 'failed') return err(`Login failed (${st.code ?? 'request_failed'}).`)
+      if (st.phase === 'waiting' || st.phase === 'exchanging') return ok(`Login ${st.phase}; authorization is not complete yet.`)
+      return ok('No login is in progress.')
     }
     if (sub === 'auth-code') {
       if (arg === '') return err('usage: /agy auth-code <code-or-callback-url>')
