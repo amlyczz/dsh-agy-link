@@ -35,8 +35,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh-commands": "*",
     "@deepseek-ai/dsh-client-locale": "*",
+    "@deepseek-ai/dsh-commands": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-tools": "*",
     "react": "^18.0.0"
@@ -69,6 +69,8 @@
     "@deepseek-ai/dsh-tools": "0.1.2-rc.1",
     "@types/node": "^24.3.0",
     "@types/qrcode": "^1.5.5",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
     "tsdown": "^0.22.14",
     "typescript": "^5.9.2",
     "undici": "^8.10.0"
