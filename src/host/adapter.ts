@@ -13,11 +13,13 @@ import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { resolveCallContext } from '../provider/call-context.ts'
 import { purposePolicy } from '../provider/purpose-policy.ts'
 import { classifyFailure } from '../provider/failure.ts'
+import { finalizeAttempt } from '../provider/finalize.ts'
+export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
 import { isToolResultMessage, utf8Bytes, trimToUtf8Bytes, writeContextTransferFile, type ForeignSource, type UnknownBlock } from '../provider/prompt-text.ts'
 export { buildDigest, collectUnsentImageRefs, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserMessageAny, latestUserTaskText, utf8Bytes } from '../provider/prompt-text.ts'
-import { type RawUsage, Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, isAuthoritativeAuthError, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, looksLikeHardRateLimit, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { conversationsDirFor, diffConversations, snapshotConversations } from './discovery.ts'
@@ -30,7 +32,7 @@ import { ensureIsolatedKeychain, startAgyProcess, buildStreamInputLine, shouldUs
 import { detectSystemProxy } from './wincred.ts'
 import { AbortedWaitError, WaitTimeoutError, acquireCredentialSlot, credentialSlotMutex, SlotUnavailableError, armSlotHandoff, type SlotHandoff } from './credential-slot.ts'
 import { agyHomeDirFor, readAgyRunLogText, snapshotAgyLogs } from './agy-log.ts'
-import { SENT_IMAGE_IDS_MAX, type SessionStore } from './sessions.ts'
+import { type SessionStore } from './sessions.ts'
 import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
 import { getGitHeadContent, unwrapMcpTool } from './mirror-tool.ts'
 import { isGoalToolContinuation, isPlanToolContinuation, isPlanMode, resolveGoalContext, type GoalContext } from './dsh-goal.ts'
@@ -52,22 +54,6 @@ export function toolCallIdOf(m: Message): string | null {
     }
   }
   return null
-}
-
-/** Merge newly forwarded attachment ids into a bounded, oldest-first list. */
-export function mergeSentImageIds(
-  existing: readonly string[] | undefined,
-  added: readonly string[],
-  max = SENT_IMAGE_IDS_MAX,
-): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const id of [...(existing ?? []), ...added]) {
-    if (typeof id !== 'string' || id === '' || seen.has(id)) continue
-    seen.add(id)
-    out.push(id)
-  }
-  return out.length > max ? out.slice(out.length - max) : out
 }
 
 /**
@@ -329,15 +315,6 @@ async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: number):
     await new Promise((r) => setTimeout(r, 50))
   }
   return run.isSettled
-}
-
-export function calcPromptTokens(usage: RawUsage | null | undefined): number | undefined {
-  if (!usage) return undefined
-  const input = typeof usage.input_tokens === 'number' && usage.input_tokens > 0 ? usage.input_tokens : 0
-  const cacheRead = typeof usage.cache_read_tokens === 'number' && usage.cache_read_tokens > 0 ? usage.cache_read_tokens : 0
-  const cacheWrite = typeof usage.cache_write_tokens === 'number' && usage.cache_write_tokens > 0 ? usage.cache_write_tokens : 0
-  const totalPrompt = input + cacheRead + cacheWrite
-  return totalPrompt > 0 ? totalPrompt : undefined
 }
 
 export class AgyAdapter extends LlmAdapter {
@@ -1734,164 +1711,32 @@ export class AgyAdapter extends LlmAdapter {
       // lastMessageCount/sentImageIds and re-digest or re-attach old images.
       const superseded = this.activeRuns.get(sessionKey) !== undefined
         && this.activeRuns.get(sessionKey) !== rec
-      if (failure === null) {
-        if (account) this.deps.pool?.recordSuccess(account.id, family)
-        this.failoverBudget.delete(sessionKey)
-        this.rateLimitFailover.delete(sessionKey)
-        this.clearNetworkStreak(sessionKey)
-        if (persistBinding && sessionAccountKey !== '' && !superseded) {
-          const finalId = binding !== undefined ? binding.conversationId : conversationId
-          if (finalId) {
-            const finalUsage = rec.lastUsage ?? rec.finalUsage({})
-            const promptTokens = calcPromptTokens(finalUsage)
-            const inputTokens = promptTokens ?? (
-              typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
-                ? finalUsage.input_tokens
-                : binding?.lastInputTokens
-            )
-            this.deps.store.set(sessionAccountKey, {
-              conversationId: finalId,
-              lastMessageCount: messages.length,
-              updatedAt: Date.now(),
-              model: activeModel,
-              sentImageIds: mergeSentImageIds(binding?.sentImageIds, newlySentImageIds),
-              ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
-            })
-          }
-        }
-      } else {
-        // Cooldown is a costly local penalty (account leaves rotation): only
-        // HARD server-issued signatures may trigger it. Soft signals (model
-        // overloaded) shape the message above but never cool the account.
-        // Caller-aborted runs (stop button / steer preemption) are NOT server
-        // rate limits and must never slap a cooldown on the account.
-        if (account && !outcome.aborted && looksLikeHardRateLimit(rawErrText)) {
-          this.deps.pool?.recordFailure(account.id, family, failure.message)
-        }
-        // Silent timeout: rotate to the next account for the automatic retry
-        // WITHOUT a cooldown. A 15-minute penalty for what may be a transient
-        // network blip would pull every account out of rotation and turn the
-        // accurate "cannot reach Google" hint into a misleading "all accounts
-        // in cooldown".
-        if (account && silentTimeout) {
-          this.deps.pool?.advanceAccount(account.id, family)
-        }
-        // Region refusal is scoped to the account's own egress (skip the
-        // primary's direct connection, take a proxied account). Rotate so the
-        // automatic retry cannot land back on the refused account.
-        if (account && failure.code === Err.ELIGIBILITY) {
-          this.deps.pool?.advanceAccount(account.id, family)
-        }
-        // Account-scoped failures must not let the retry land back on the
-        // account that could not serve this turn. One rotation per failure:
-        //  - NETWORK / OVERLOADED: transport blip or capacity refusal. Nothing
-        //    was spent, so NO cooldown — a 15-minute penalty would only shrink
-        //    the pool.
-        //  - AUTH: the account is marked authRequired below, which already
-        //    excludes it from rotation; rotating here makes the intent explicit.
-        // Account-scoped failures that must advance the pointer so the retry tries another account:
-        //  - RATE_LIMIT: account quota spent (cooldown applied in recordFailure above)
-        //  - NETWORK / AUTH: transport blip or dead login for this specific account
-        // Server capacity overload (OVERLOADED / 503 / 529): Google-side pressure.
-        // We deliberately STAY on the current account with exponential backoff rather
-        // than rotating, protecting healthy accounts in the pool from cascaded exhaustion.
-        //
-        // A transport failure only belongs on that list when the accounts have
-        // SEPARATE egress. With one shared proxy the failure says nothing about
-        // the account: rotating repoints the session, drops the conversation
-        // binding and spends the rotation budget a quota hop needs.
-        const sharedEgressNetwork = failure.code === Err.NETWORK && this.sharesSingleEgress()
-        const rotateAway = !outcome.aborted && failure.code !== Err.RATE_LIMIT
-          && failure.code !== Err.OVERLOADED
-          && !sharedEgressNetwork
-          && (failure.code === Err.NETWORK
-            || failure.code === Err.AUTH)
-        if (rotateAway && account) this.deps.pool?.advanceAccount(account.id, family)
-        // Only authoritative auth states may flag an account: the old
-        // /auth/i substring matched "oauth2.googleapis.com … i/o timeout"
-        // transport noise and quarantined healthy accounts until a manual
-        // quota refresh disproved the flag. NETWORK is not AUTH, and
-        // shouldMarkAuthRequired additionally exempts transport-shaped text.
-        if (account && shouldMarkAuthRequired(failure.code, failure.message)) {
-          // Authoritative OAuth evidence (invalid_grant, revoked…) or the
-          // explicit re-login paths quarantine immediately. A bare "not signed
-          // in" banner carries no such proof — it is byte-identical for a real
-          // sign-out and a keyring validation that lost the network race — so
-          // it needs a second independent confirmation before it may take the
-          // account out of rotation.
-          const authoritative = isAuthoritativeAuthError(rawErrText + ' ' + runLogText)
-          if (failure.code === Err.AUTH && !authoritative) {
-            this.deps.pool?.noteAuthFailure(account.id, failure.message)
-          } else {
-            this.deps.pool?.markAuthRequired(account.id, failure.message)
-          }
-        }
-        // A conversation only becomes unusable when the login died or agy
-        // itself rejected the id. Rate limits / overload / transport blips do
-        // NOT invalidate it: deleting the binding there threw away a resumable
-        // native conversation (and its tool history) for a 15-minute cooldown,
-        // forcing a fresh 660K-char digest seed on the next turn.
-        const staleConversation =
-          failure.code === Err.AUTH ||
-          (failure.message !== '' && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
-        // The run was cut mid-flight (Stop button / steer preemption / idle
-        // watchdog) or aborted before it finished. agy's server-side turn has
-        // no finalized reply, so the NEXT prompt must say so explicitly —
-        // otherwise the model treats the interrupted user turn as the live
-        // question and answers it instead of the newest message (the "latest
-        // input ignored" bug, reproduced from session-c65a826e turns 17→19).
-        const interruptedTurn = failure.kind === 'aborted' || outcome.timedOut === true
-        if (persistBinding && sessionAccountKey !== '' && staleConversation) {
-          // If auth expired or conversation rejected, drop stale binding
-          this.deps.store.delete(sessionAccountKey)
-        } else if (persistBinding && sessionAccountKey !== '' && !superseded) {
-          // Abort / timeout / process-exit still leave a usable agy
-          // conversation behind once init or the result envelope named one.
-          // Persisting it here is what lets the next hop continue instead of
-          // starting a fresh conversation with a digest-only prompt
-          // (issue #35 root cause ②: "aborted 分支永远存不下来").
-          const finalId = binding !== undefined ? binding.conversationId : conversationId
-          if (finalId) {
-            const finalUsage = rec.lastUsage ?? rec.finalUsage({})
-            const promptTokens = calcPromptTokens(finalUsage)
-            const inputTokens = promptTokens ?? (
-              typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
-                ? finalUsage.input_tokens
-                : binding?.lastInputTokens
-            )
-            this.deps.store.set(sessionAccountKey, {
-              conversationId: finalId,
-              lastMessageCount: messages.length,
-              updatedAt: Date.now(),
-              model: activeModel,
-              // Images are only "delivered" when the run actually consumed
-              // them. A killed run used to mark its staged screenshots as sent,
-              // so re-sending the same image after a Stop was silently deduped
-              // away and an image-only follow-up died with "request carries no
-              // user text or images".
-              sentImageIds: mergeSentImageIds(binding?.sentImageIds, []),
-              ...((interruptedTurn || binding?.interrupted === true) ? { interrupted: true } : {}),
-              ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
-            })
-          }
-        }
-      }
-      this.deps.onRun?.({
-        // A response can be usable even when agy reports an individual tool
-        // failure. Keep process health distinct from those raw tool errors:
-        // collapsing them into one "ok" bit hid real denials in /agy status.
-        processOk: !outcome.aborted && !outcome.timedOut && !outcome.capped && outcome.code === 0,
-        processCode: outcome.aborted
-          ? 'ABORTED'
-          : outcome.timedOut
-            ? Err.TIMEOUT
-            : outcome.code === 0
-              ? 'OK'
-              : 'EXIT_' + String(outcome.code),
-        toolErrors: rec.toolErrors(),
-        durationMs: outcome.durationMs,
+      await finalizeAttempt({
+        rec,
+        outcome,
+        failure,
+        store: this.deps.store,
+        pool: this.deps.pool,
+        account,
+        family,
+        persistBinding,
+        sessionAccountKey,
+        binding,
+        conversationId,
+        messages,
         model,
-        tokenSpeed: rec.speedStats(),
+        activeModel,
+        superseded,
+        newlySentImageIds,
+        rawErrText,
+        runLogText,
+        silentTimeout,
+        sessionKey,
+        clearNetworkStreak: (key) => this.clearNetworkStreak(key),
+        dropFailoverBudget: (key) => this.failoverBudget.delete(key),
+        clearRateLimitFailover: (key) => this.rateLimitFailover.delete(key),
+        sharesSingleEgress: () => this.sharesSingleEgress(),
+        ...(this.deps.onRun === undefined ? {} : { onRun: this.deps.onRun }),
       })
     })().catch((err) => {
       releaseOnce()
