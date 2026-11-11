@@ -158,6 +158,30 @@ if (mode === 'effort-unsupported') {
   process.exit(0)
 }
 
+if (mode === 'model-unsupported') {
+  const modelAt = argv.indexOf('--model')
+  const model = modelAt >= 0 ? (argv[modelAt + 1] ?? '') : ''
+  if (invocation === 0) {
+    emit({
+      event: 'result',
+      result: {
+        conversation_id: '',
+        status: 'ERROR',
+        response: '',
+        error: 'invalid model selection (--model "' + model + '" --effort ""): model ' + model + ' is not recognized as a known model or custom model in settings',
+        duration_seconds: 0,
+        num_turns: 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    })
+    process.exit(1)
+  }
+  emit({ event: 'init', conversation_id: conv, model })
+  emit({ event: 'step_update', idx: 1, step_type: 'text', text: 'answered on supported account' })
+  emit({ event: 'result', result: { conversation_id: conv, status: 'DONE', response: 'answered on supported account', duration_seconds: 1, num_turns: 1, usage: { input_tokens: 900, output_tokens: 40, total_tokens: 940 } } })
+  process.exit(0)
+}
+
 // Google-side account/region eligibility refusal (issue #32).
 if (mode === 'exit-eligible') {
   emit({

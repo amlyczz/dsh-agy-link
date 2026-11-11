@@ -32,6 +32,7 @@ import { SENT_IMAGE_IDS_MAX, type SessionBinding, type SessionStore } from '../h
 import type { RunRecording } from '../host/recording.ts'
 import type { RunOutcome } from '../host/runner.ts'
 import type { AttemptFailure } from './failure.ts'
+import { parseModelNotRecognized } from './effort-policy.ts'
 
 /** Shape of the /agy status last-run telemetry callback. */
 export interface RunTelemetry {
@@ -159,7 +160,12 @@ function rotateOnFailure(input: FinalizeInput, failure: AttemptFailure): void {
   // primary's direct connection, take a proxied account). Rotate so the
   // automatic retry cannot land back on the refused account.
   if (account && failure.code === Err.ELIGIBILITY) {
-    pool?.advanceAccount(account.id, family)
+    const rawErr = failure.message ?? ''
+    const unrecog = parseModelNotRecognized(rawErr)
+    if (unrecog && typeof (pool as any)?.markModelUnsupported === 'function') {
+      (pool as any).markModelUnsupported(account.id, unrecog)
+    }
+    pool?.advanceAccount(account.id, family, input.activeModel)
   }
   // Account-scoped failures must not let the retry land back on the
   // account that could not serve this turn. One rotation per failure:

@@ -154,6 +154,7 @@ export async function* dispatchCredentialSlot(
   let release: (() => void) | null = null
   let slotLease: Awaited<ReturnType<typeof acquireCredentialSlot>>
   let granted = false
+  let currentAccount = input.account
   let dispatchBackoffMs = 2_000
   const maxDispatchAttempts = 1 + Math.max(0, cfg.dispatchRetries)
   // Set when the CALLER abandons this generator (Stop / stream closed) while
@@ -193,12 +194,30 @@ export async function* dispatchCredentialSlot(
             Math.max(1, Math.round(waitedMs / 60_000)) + 'm elapsed).',
         })
         heartbeat.start()
-        slotLease = await acquireSlotLease(deps, input, dispatchHardCapMs)
+        slotLease = await acquireSlotLease(deps, { ...input, account: currentAccount }, dispatchHardCapMs)
         granted = true
       } catch (e) {
         // Return the concurrency slot before deciding: a retry re-acquires.
         release?.()
         release = null
+        if (e instanceof SlotUnavailableError && currentAccount && deps.pool) {
+          deps.pool.markAuthRequired(currentAccount.id, e.message)
+          const next = attempt < maxDispatchAttempts ? deps.pool.selectAccount(input.family, input.activeModel) : undefined
+          if (next && next.id !== currentAccount.id) {
+            deps.log?.(`slot unavailable on ${currentAccount.id}: ${e.message} — failed over to ${next.id}`)
+            yield {
+              type: 'reasoning-delta',
+              index: STATUS_NOTICE_BLOCK_INDEX,
+              text: `[agy] 账号凭据不可用，正在自动切换至可用账号 ${next.alias || next.id}...\n`,
+            }
+            currentAccount = next
+            input.account = next
+            heartbeat.stop()
+            await abortableDelay(dispatchBackoffMs, input.signal, 'request aborted during dispatch backoff')
+            dispatchBackoffMs = Math.min(dispatchBackoffMs * 2, 15_000)
+            continue
+          }
+        }
         const plan = planDispatchFailure(e, cfg, attempt, maxDispatchAttempts, dispatchBackoffMs)
         if (plan.kind === 'abort') {
           throw new LlmError('request aborted while waiting for the agy credential slot', Err.AGY_ERROR)

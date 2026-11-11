@@ -53,6 +53,9 @@ let dom: any;
 let saved: Array<[string, PropertyDescriptor | undefined]> = [];
 let clipboardWrites: string[] = [];
 const disposers: Array<() => void> = [];
+const trackedTimers = new Set<any>();
+const origGlobalSetTimeout = globalThis.setTimeout;
+const origGlobalClearTimeout = globalThis.clearTimeout;
 
 function setGlobal(key: string, value: unknown): void {
 	saved.push([key, Object.getOwnPropertyDescriptor(globalThis, key)]);
@@ -67,6 +70,20 @@ function installDom(options: { url?: string; readyState?: string; html?: string 
 		{ pretendToBeVisual: true, url: options.url ?? 'http://example.com/' },
 	);
 	const w = dom.window;
+	globalThis.setTimeout = ((cb: any, ms?: number, ...args: any[]) => {
+		const id = origGlobalSetTimeout((...cbArgs: any[]) => {
+			trackedTimers.delete(id);
+			cb(...cbArgs);
+		}, ms, ...args);
+		trackedTimers.add(id);
+		return id;
+	}) as typeof globalThis.setTimeout;
+	globalThis.clearTimeout = ((id: any) => {
+		trackedTimers.delete(id);
+		origGlobalClearTimeout(id);
+	}) as typeof globalThis.clearTimeout;
+	w.setTimeout = globalThis.setTimeout;
+	w.clearTimeout = globalThis.clearTimeout;
 	for (const key of GLOBAL_KEYS) {
 		if (key !== 'window' && key !== 'document' && key !== 'navigator' && key !== 'requestAnimationFrame' && key !== 'cancelAnimationFrame') {
 			setGlobal(key, (w as any)[key]);
@@ -92,6 +109,12 @@ function restoreDom(): void {
 	for (const dispose of disposers.splice(0)) {
 		try { dispose(); } catch { /* already torn down */ }
 	}
+	for (const id of trackedTimers) {
+		try { origGlobalClearTimeout(id); } catch { /* ignore */ }
+	}
+	trackedTimers.clear();
+	globalThis.setTimeout = origGlobalSetTimeout;
+	globalThis.clearTimeout = origGlobalClearTimeout;
 	try { disposeScrollListener(); } catch { /* window already gone */ }
 	for (const [key, descriptor] of saved.reverse()) {
 		if (descriptor !== undefined) Object.defineProperty(globalThis, key, descriptor);
@@ -390,7 +413,7 @@ test('decisions: chip click inserts the selected option and marks the chip', asy
 	await act(() => { chip.click(); });
 	assert.ok((ta as HTMLTextAreaElement).value.includes('我选择'));
 	assert.ok(chip.classList.contains('selected'));
-	await act(async () => { await wait(1300); }); // flush the 1200ms 'selected' timer before teardown
+	await act(async () => { await wait(10); }); // flush after click
 });
 
 test('decisions: p>strong headings, option parsing and empty lists', () => {
@@ -657,7 +680,7 @@ test('translate card: copy, collapse and show-original handlers', async () => {
 	const collapse = buttons().find((b) => (b.textContent ?? '').includes('收起'))!;
 	await act(() => { collapse.click(); });
 	assert.equal(container.querySelector('.agy-tsl-body'), null, 'body collapsed');
-	await act(async () => { await wait(1600); }); // flush copy's 1500ms reset timer
+	await act(async () => { await wait(10); }); // wait for react render
 	await act(() => { root.unmount(); });
 });
 
@@ -683,7 +706,7 @@ test('question card: options + insert button fill the composer', async () => {
 	await act(() => { (container.querySelector('.agy-tv-q-insert-btn') as HTMLButtonElement).click(); });
 	assert.ok((ta as HTMLTextAreaElement).value.includes('A'));
 	assert.ok((container.querySelector('.agy-tv-q-insert-btn') as HTMLElement).textContent?.includes('已填入'));
-	await act(async () => { await wait(1600); }); // flush insert's 1500ms reset timer
+	await act(async () => { await wait(10); }); // wait for react render
 	await act(() => { root.unmount(); });
 });
 

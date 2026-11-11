@@ -28,6 +28,7 @@ import type { AccountPoolManager } from './pool.ts'
 import type { QuotaService } from './quota.ts'
 import { detectSystemProxy, writeWindowsCredentialRaw } from './wincred.ts'
 import { writePrimaryCredential } from './credential-slot.ts'
+import { saveCredentialBackup } from './credential-backup.ts'
 
 export type PoolAuthPhase = 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed'
 export type PoolAuthStatusCode =
@@ -261,7 +262,9 @@ export class PoolAuthFlow {
         const stagedFile = writeAgyTokenFile(flow.dir, tokens)
         const targetDir = join(account.dir, '.gemini', 'antigravity-cli')
         mkdirSync(targetDir, { recursive: true })
-        renameSync(stagedFile, join(targetDir, 'antigravity-oauth-token'))
+        const targetFile = join(targetDir, 'antigravity-oauth-token')
+        renameSync(stagedFile, targetFile)
+        saveCredentialBackup(targetFile)
         this.pool.updateAccountQuotas(account.id, {}, email)
         this.pool.clearAuthRequired(account.id)
         this.pool.cleanupStagingSlot(flow.dir)
@@ -312,6 +315,8 @@ export class PoolAuthFlow {
         return
       }
       const acc = this.pool.commitStagingAccount(flow.stagingId, flow.dir, flow.alias, email, flow.proxyUrl)
+      const accountFile = join(acc.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+      saveCredentialBackup(accountFile)
       this.log(`pool auth committed account ${acc.id}${email ? ` <${email}>` : ''}`)
       // Quota refresh is best-effort; the account is usable regardless.
       void this.quota.refreshAccountQuota(acc).catch(() => undefined)

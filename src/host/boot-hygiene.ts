@@ -2,9 +2,11 @@
 // Covers stale staging/log cleanup, per-account login keychains (macOS) and the
 // process-global credential slot (Windows). Keeps index.ts a thin root.
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { detectSystemProxy } from './wincred.ts'
 import { ensureIsolatedKeychain, purgeStaleIsolatedKeychain, repairMacSystemKeychain } from './runner.ts'
 import { resolvePrimaryCredential, findDuplicateCredentialIdentities } from './credential-slot.ts'
+import { readAccountCredential } from './credential-backup.ts'
 import type { HostServices } from './services.ts'
 
 export function runBootHygiene(services: HostServices): void {
@@ -33,9 +35,15 @@ export function runBootHygiene(services: HostServices): void {
   }
   let kcProvisioned = 0
   for (const acc of pool.getAccounts()) {
-    if (acc.dir) {
+    if (acc.dir && !acc.systemHome) {
       purgeStaleIsolatedKeychain(acc.dir)
       if (ensureIsolatedKeychain(acc.dir)) kcProvisioned++
+      const tokenFile = join(acc.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+      const token = readAccountCredential(tokenFile, log)
+      if (!token && !acc.authRequired) {
+        pool.markAuthRequired?.(acc.id, 'credential file is missing or corrupted')
+        log(`account ${acc.alias || acc.id} has no valid credential file; marked as auth_required`)
+      }
     }
   }
   if (kcProvisioned > 0) log('provisioned isolated keychains for ' + kcProvisioned + ' pool account(s)')

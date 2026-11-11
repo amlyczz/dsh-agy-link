@@ -38,6 +38,21 @@ export function parseEffortUnsupported(text: string): string | null {
 }
 
 /**
+ * Detect when agy refuses a model because the current active account/settings
+ * do not have access to it:
+ * `invalid model selection (--model "claude-opus-4-6-thinking" --effort ""): model claude-opus-4-6-thinking is not recognized as a known model or custom model in settings`
+ *
+ * @param text - stdout envelope error, stderr tail, or a mapped failure message.
+ * @returns the unrecognized model id, or null when this is not a model-recognition refusal.
+ */
+export function parseModelNotRecognized(text: string): string | null {
+  if (text === '' || !/not recognized as a known model/i.test(text)) return null
+  const m = text.match(/invalid model selection.*?model\s+["']?([^\s"':]+)["']?\s+is not recognized as a known model/i)
+    ?? text.match(/model\s+["']?([^\s"':]+)["']?\s+is not recognized as a known model/i)
+  return m && m[1] ? m[1] : null
+}
+
+/**
  * In-memory effort-refusal cache, seeded once from the host's persisted list
  * and grown by each learned refusal.
  */

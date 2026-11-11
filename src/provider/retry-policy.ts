@@ -7,7 +7,7 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
 import { Err, NETWORK_RETRY_DELAYS_MS } from '../common/types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
-import { parseEffortUnsupported } from './effort-policy.ts'
+import { parseEffortUnsupported, parseModelNotRecognized } from './effort-policy.ts'
 
 /**
  * Fail fast on auth and abort; allow retries for transient process failures
@@ -66,6 +66,7 @@ export function providerRetryPolicyFor(pool: AccountPoolManager | undefined) {
 export interface EffortRetryDeps {
   streamAttempt: (options: AgyGenerateOptions, suppressEffort: boolean) => AsyncIterable<StreamChunk>
   learnEffortUnsupported: (model: string) => void
+  onModelUnsupported?: (model: string) => void
 }
 
 /**
@@ -112,9 +113,15 @@ export async function* streamWithEffortRetry(
     }
     if (attempt === 0 && !emitted && finish.reason.kind === 'error') {
       const failure = (finish.reason as { failure?: { message?: string } }).failure
-      const refused = parseEffortUnsupported(String(failure?.message ?? ''))
+      const rawMsg = String(failure?.message ?? '')
+      const refused = parseEffortUnsupported(rawMsg)
       if (refused !== null) {
         deps.learnEffortUnsupported(refused)
+        continue
+      }
+      const unrecog = parseModelNotRecognized(rawMsg)
+      if (unrecog !== null && deps.onModelUnsupported) {
+        deps.onModelUnsupported(unrecog)
         continue
       }
     }

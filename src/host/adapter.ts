@@ -7,6 +7,7 @@
 // first bind (ADR-7).
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
 import { resolveCallContext } from '../provider/call-context.ts'
 import { purposePolicy } from '../provider/purpose-policy.ts'
@@ -31,7 +32,7 @@ import { isGoalToolContinuation, isPlanToolContinuation, isPlanMode, resolveGoal
 
 import type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
 export type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
-export { parseEffortUnsupported } from '../provider/effort-policy.ts'
+export { parseEffortUnsupported, parseModelNotRecognized } from '../provider/effort-policy.ts'
 import { detectContinuation } from '../provider/continuation.ts'
 export { detectContinuation, toolCallIdOf } from '../provider/continuation.ts'
 
@@ -61,6 +62,9 @@ export class AgyAdapter extends LlmAdapter {
 
   constructor(private readonly deps: AgyAdapterDeps) {
     super()
+    if (deps.pool && deps.catalog && typeof (deps.pool as any).setCatalog === 'function') {
+      (deps.pool as any).setCatalog(deps.catalog)
+    }
     this.effortPolicy = new EffortPolicy(
       () => this.deps.effortUnsupported?.(),
       this.deps.log,
@@ -199,11 +203,22 @@ export class AgyAdapter extends LlmAdapter {
     return buildAgyArgs(opts)
   }
 
-  /** Effort self-healing wrapper around streamAttempt (issue #67). */
+  /** Effort and model self-healing wrapper around streamAttempt (issue #67, PR #100). */
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     yield* streamWithEffortRetry({
       streamAttempt: (opts, suppressEffort) => this.streamAttempt(opts, suppressEffort),
       learnEffortUnsupported: (model) => this.learnEffortUnsupported(model),
+      onModelUnsupported: (unrecog) => {
+        const fam = modelFamilyOf(unrecog)
+        const pool = this.deps.pool
+        if (pool) {
+          const currentId = pool.getActiveAccountId(fam)
+          if (currentId) {
+            pool.markModelUnsupported(currentId, unrecog)
+          }
+          pool.selectAccount(fam, unrecog)
+        }
+      },
     }, options as AgyGenerateOptions)
   }
 

@@ -23,6 +23,7 @@ import {
 import { AbortedWaitError, SlotUnavailableError, WaitTimeoutError } from './errors.ts'
 import { acquireCrossProcessSlotLock } from './lock.ts'
 import { credentialSlotMutex } from './mutex.ts'
+import { saveCredentialBackup } from './backup.ts'
 import { installSlotBestEffort, installSlotOrThrow, type SlotLease } from './lease.ts'
 import type { CredentialPlatform } from './platform.ts'
 import { resolvePrimaryCredentialAt, type AccountPoolLike } from './resolve.ts'
@@ -549,8 +550,10 @@ class SlotAcquire {
           if (sameCredentialGrant(afterRaw, accountRaw)) {
             // Slot still belongs to this account: agy may have refreshed the
             // access token, so persist it back into the account's own file.
-            if (afterRaw && afterRaw !== accountRaw && readTokenFileRaw(accountFile) === accountRaw) {
-              writeFileAtomic(accountFile, afterRaw)
+            if (afterRaw && afterRaw !== accountRaw) {
+              if (readTokenFileRaw(accountFile) === accountRaw && writeFileAtomic(accountFile, afterRaw)) {
+                saveCredentialBackup(accountFile, afterRaw)
+              }
             }
           } else if (afterFingerprint !== null) {
             // The slot was taken over while this run was live. Writing it back

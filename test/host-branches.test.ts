@@ -155,6 +155,7 @@ function hygieneServices(over: {
     getAccounts: () => accounts,
     sweepStaleStaging: () => over.swept ?? 0,
     sweepOldLogs: () => over.logsSwept ?? 0,
+    markAuthRequired: () => {},
   }
   return {
     pool,
@@ -389,7 +390,7 @@ test('account-selection: error reasons — all detail counters + wait string', a
       account('acc_off', { enabled: false }),
     ],
     select: () => null,
-    countdown: 5_000,
+    countdown: 25_000,
     explain: (a) => reasons[a.id] ?? null,
   })
   const { message, code } = await expectUnavailable(pool)
@@ -399,7 +400,7 @@ test('account-selection: error reasons — all detail counters + wait string', a
   assert.match(message, /1 lack google access/)
   assert.match(message, /1 signed out/)
   assert.match(message, /1 disabled/)
-  assert.match(message, /earliest reset in 5s/)
+  assert.match(message, /earliest reset in 25s/)
 })
 
 test('account-selection: error reasons — unsupported-only hint', async () => {
@@ -659,6 +660,7 @@ test('getStoredToken: disk token, corrupted file, and isolated-account short cir
     assert.equal(await getStoredToken(deps, acc), null)
 
     rmSync(file, { force: true })
+    rmSync(file + '.bak', { force: true })
     assert.equal(await getStoredToken(deps, acc), null)
   } finally {
     rmSync(dir, { recursive: true, force: true })

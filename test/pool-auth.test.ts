@@ -16,7 +16,10 @@ function fixture() {
 
 test('PoolAuthFlow begin produces a PKCE authorize URL and auto mode', async () => {
   const { pool, quota } = fixture()
-  const flow = new PoolAuthFlow(pool, quota, () => {}, { openBrowser: async () => true })
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    openBrowser: async () => true,
+    exchangeCode: async () => { throw new Error('invalid_grant: Bad Request') },
+  })
   const st = await flow.begin('测试账号')
   assert.equal(st.ok, true)
   assert.equal(st.phase, 'waiting')
@@ -47,7 +50,10 @@ test('PoolAuthFlow cancel cleans the staging dir', async () => {
 
 test('PoolAuthFlow rejects bogus paste and wrong-state URLs', async () => {
   const { pool, quota } = fixture()
-  const flow = new PoolAuthFlow(pool, quota, () => {}, { openBrowser: async () => true })
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    openBrowser: async () => true,
+    exchangeCode: async () => { throw new Error('invalid_grant: Bad Request') },
+  })
   const st = await flow.begin()
   assert.equal(st.ok, true)
 
@@ -65,7 +71,10 @@ test('PoolAuthFlow rejects bogus paste and wrong-state URLs', async () => {
 
 test('PoolAuthFlow fails cleanly when the exchange is rejected', async () => {
   const { dir, pool, quota } = fixture()
-  const flow = new PoolAuthFlow(pool, quota, () => {}, { openBrowser: async () => true })
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    openBrowser: async () => true,
+    exchangeCode: async () => { throw new Error('invalid_grant: Bad Request') },
+  })
   const st = await flow.begin()
   assert.equal(st.ok, true)
   // A real-looking but invalid code reaches the token endpoint and is

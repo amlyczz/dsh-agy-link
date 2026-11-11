@@ -11,6 +11,7 @@ import { shouldMarkAuthRequired } from '../../common/types.ts'
 import { normalizeStoredToken, type StoredToken } from '../../domain/quota/identity.ts'
 import { refreshTokens } from '../../host/oauth.ts'
 import { readWindowsCredentialRaw } from '../../host/wincred.ts'
+import { readAccountCredential, saveCredentialBackup } from '../../domain/credentials/backup.ts'
 
 /** Durable primary credential record (mirrors credential-slot.PrimaryCredential). */
 export interface PrimaryCredentialLike {
@@ -49,7 +50,7 @@ export interface QuotaTokenDeps {
   proxyFor(account: ManagedAccount): string | undefined
   readSystemKeychainToken(): Promise<StoredToken | null>
   getStoredToken(account: ManagedAccount, allowKeychainFallback?: boolean): Promise<StoredToken | null>
-  persistRefreshedToken(account: ManagedAccount, tokens: RefreshedTokenInput): void
+  persistRefreshedToken(account: ManagedAccount, tokens: RefreshedTokenInput, expectedRefreshToken?: string): void
   readPrimaryCredential(baseDir: string): PrimaryCredentialLike | null
   writePrimaryCredential(cred: PrimaryCredentialLike, baseDir: string): boolean
   parseCredentialDoc(raw: string | null | undefined): CredentialDocLike | null
@@ -221,9 +222,12 @@ export async function getStoredToken(
 ): Promise<StoredToken | null> {
   const disk = (() => {
     const file = quotaTokenFilePath(account)
-    if (!existsSync(file)) return null
     try {
-      const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+      const content = account.systemHome || !account.dir
+        ? (existsSync(file) ? readFileSync(file, 'utf8') : null)
+        : readAccountCredential(file)
+      if (content === null) return null
+      const raw = JSON.parse(content) as Record<string, unknown>
       const tok = normalizeStoredToken(raw)
       if (tok && (tok.accessToken || tok.refreshToken)) return tok
     } catch {
@@ -276,9 +280,19 @@ export function persistRefreshedToken(
   deps: QuotaTokenDeps,
   account: ManagedAccount,
   tokens: RefreshedTokenInput,
+  expectedRefreshToken?: string,
 ): void {
   const file = quotaTokenFilePath(account)
   try {
+    if (
+      expectedRefreshToken &&
+      account.dir &&
+      !account.systemHome &&
+      existsSync(file) &&
+      deps.parseCredentialDoc(readFileSync(file, 'utf8'))?.refreshToken !== expectedRefreshToken
+    ) {
+      return
+    }
     mkdirSync(dirname(file), { recursive: true })
     let existing: Record<string, unknown> = {}
     if (existsSync(file)) {
@@ -308,7 +322,11 @@ export function persistRefreshedToken(
       auth_method: typeof existing.auth_method === 'string' ? existing.auth_method : 'consumer',
     }
     // Keep their shape-preserving write, but hold main's 0600 hardening.
-    writeFileSync(file, JSON.stringify(doc), { encoding: 'utf8', mode: 0o600 })
+    const raw = JSON.stringify(doc)
+    writeFileSync(file, raw, { encoding: 'utf8', mode: 0o600 })
+    if (account.dir && !account.systemHome) {
+      saveCredentialBackup(file, raw)
+    }
   } catch {
     // Best-effort
   }
@@ -390,13 +408,17 @@ async function getValidAccessTokenUncached(deps: QuotaTokenDeps, account: Manage
       const refreshed = await refreshTokens(tok.refreshToken, deps.proxyFor(account))
       if (!isCurrentAccountGrant(deps, account, tok.refreshToken)) return null
       if (refreshed?.access_token) {
-        deps.persistRefreshedToken(account, {
-          access_token: refreshed.access_token,
-          expiryMs: refreshed.expiryMs,
-          // Carry the grant identity forward — losing it made the credential
-          // unidentifiable and disabled every corruption guard.
-          refresh_token: refreshed.refresh_token ?? tok.refreshToken,
-        })
+        deps.persistRefreshedToken(
+          account,
+          {
+            access_token: refreshed.access_token,
+            expiryMs: refreshed.expiryMs,
+            // Carry the grant identity forward — losing it made the credential
+            // unidentifiable and disabled every corruption guard.
+            refresh_token: refreshed.refresh_token ?? tok.refreshToken,
+          },
+          tok.refreshToken,
+        )
         if (account.authRequired) {
           deps.pool.clearAuthRequired(account.id)
         }

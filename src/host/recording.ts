@@ -85,7 +85,7 @@ export class RunRecording {
    */
   requestAbort: (() => void) | null = null
 
-  constructor(runId: string = randomUUID()) {
+  constructor(runId: string = randomUUID(), private readonly now: () => number = Date.now) {
     this.runId = runId
   }
 
@@ -93,7 +93,7 @@ export class RunRecording {
   append(ev: AgyEvent): void {
     if (this.settled) return
     this.events.push(ev)
-    const now = Date.now()
+    const now = this.now()
     this.eventTimes.push(now)
     if (ev.kind === 'result') this.resultConversationId = ev.conversationId ?? null
     if (ev.kind === 'init' && typeof ev.conversationId === 'string' && ev.conversationId !== '') {

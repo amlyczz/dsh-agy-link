@@ -29,6 +29,7 @@ import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, type ImageRefLike } from './media.ts'
 import type { McpBridge } from './mcp-bridge.ts'
+import { readAccountCredential } from './credential-backup.ts'
 
 /** Cross-session concurrency limiter (ADR-12). max() <= 0 means unlimited. */
 class Semaphore {
@@ -109,6 +110,11 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   const version = () => versionCache
   const store = new SessionStore(join(stateDir(), 'sessions.json'))
   const pool = new AccountPoolManager()
+  for (const account of pool.getAccounts()) {
+    if (account.dir && !account.systemHome) {
+      readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log)
+    }
+  }
   const quota = new QuotaService(
     pool,
     () => getConfig().proxyUrl || detectSystemProxy() || '',

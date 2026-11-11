@@ -10,6 +10,8 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import {
   accountHasArgon,
+  accountSupportsModel,
+  baseModelSlug,
   type AccountPoolData,
   type FamilyQuotaInfo,
   type ManagedAccount,
@@ -53,8 +55,14 @@ export class AccountPoolManager {
    * blip that healed while the process was down.
    */
   private readonly authStrikes = new Map<string, number>()
+  private readonly unsupportedModels = new Map<string, Set<string>>()
+  private catalog?: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }
   /** True when load() had to fall back to pool.json.last-good (observable for diagnostics). */
   recoveredFromLastGood = false
+
+  setCatalog(catalog: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }): void {
+    this.catalog = catalog
+  }
 
   constructor(baseDir = defaultPoolDir()) {
     this.baseDir = baseDir
@@ -73,9 +81,30 @@ export class AccountPoolManager {
       persist: () => this.persist(),
       markKnown: (id) => this.store.markKnown(id),
       ensureIsolatedKeychain,
-      pool: { hasDedicatedGroup: (id, family) => this.hasDedicatedGroup(id, family) },
-      selectAccount: (family) => this.selectAccount(family),
+      pool: {
+        hasDedicatedGroup: (id, family) => this.hasDedicatedGroup(id, family),
+        isModelSupported: (acc: ManagedAccount, model: string) => this.isModelSupported(acc, model),
+      },
+      selectAccount: (family, model) => this.selectAccount(family, model),
     })
+  }
+
+  /** Determine whether a managed account supports a specific model. */
+  isModelSupported(acc: ManagedAccount, model: string): boolean {
+    if (this.unsupportedModels.get(acc.id)?.has(baseModelSlug(model))) {
+      return false
+    }
+    const cat = this.catalog?.get(acc.id)
+    return accountSupportsModel(acc, model, this, cat)
+  }
+
+  markModelUnsupported(accountId: string, model: string): void {
+    let set = this.unsupportedModels.get(accountId)
+    if (!set) {
+      set = new Set()
+      this.unsupportedModels.set(accountId, set)
+    }
+    set.add(baseModelSlug(model))
   }
 
   /**
@@ -279,8 +308,9 @@ export class AccountPoolManager {
     acc: ManagedAccount,
     family: ModelFamily,
     now = Date.now(),
+    model?: string,
   ): AccountIneligibilityReason | null {
-    return explainIneligibility(acc, family, now, this)
+    return explainIneligibility(acc, family, now, this, model)
   }
 
   /** Check whether an account is eligible to serve requests for the given family. */
@@ -288,9 +318,14 @@ export class AccountPoolManager {
     return isAccountEligible(acc, family, now, this)
   }
 
+  /** Check whether an account is eligible to serve requests for the given family and model. */
+  isAccountEligibleForModel(acc: ManagedAccount, family: ModelFamily, model?: string, now = Date.now()): boolean {
+    return this.explainIneligibility(acc, family, now, model) === null
+  }
+
   /** Returns the currently active and healthy account ID (see PoolAdmin). */
-  getActiveAccountId(family: ModelFamily = 'google'): string | undefined {
-    return this.admin.getActiveAccountId(family)
+  getActiveAccountId(family: ModelFamily = 'google', model?: string): string | undefined {
+    return this.admin.getActiveAccountId(family, model)
   }
 
   /**
@@ -324,8 +359,8 @@ export class AccountPoolManager {
    * Move the active pointer past `fromId` for one family WITHOUT cooling the
    * account down, and return the account the next run should use (see PoolAdmin).
    */
-  advanceAccount(fromId: string, family: ModelFamily): string | null {
-    return this.admin.advanceAccount(fromId, family)
+  advanceAccount(fromId: string, family: ModelFamily, model?: string): string | null {
+    return this.admin.advanceAccount(fromId, family, model)
   }
 
   updateAccountQuotas(id: string, quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>, email?: string): void {
@@ -448,9 +483,9 @@ export class AccountPoolManager {
    * Sticks to the current active account until it runs out of quota/rate-limited,
    * then smoothly advances to the next available account in cyclic order.
    */
-  selectAccount(family: ModelFamily): ManagedAccount | null {
+  selectAccount(family: ModelFamily, model?: string): ManagedAccount | null {
     const now = Date.now()
-    const candidates = this.data.accounts.filter((acc) => this.isAccountEligible(acc, family, now))
+    const candidates = this.data.accounts.filter((acc) => this.isAccountEligibleForModel(acc, family, model, now))
 
     if (candidates.length === 0) return null
 

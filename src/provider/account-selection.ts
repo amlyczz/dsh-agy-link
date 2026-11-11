@@ -34,6 +34,7 @@ function stickyAccount(
   deps: AccountSelectionDeps,
   family: ModelFamily,
   sessionKey: string,
+  model?: string,
 ): ManagedAccount | undefined {
   const pool = deps.pool
   if (pool === undefined || sessionKey === '') return undefined
@@ -50,7 +51,12 @@ function stickyAccount(
       deps.store.delete(k)
     }
   }
-  return mostRecent !== undefined && pool.isAccountEligible(mostRecent, family) ? mostRecent : undefined
+  return mostRecent !== undefined
+    && (typeof pool.isAccountEligibleForModel === 'function'
+      ? pool.isAccountEligibleForModel(mostRecent, family, model)
+      : pool.isAccountEligible(mostRecent, family))
+    ? mostRecent
+    : undefined
 }
 
 /** Cross-family failover when the requested family has no account left. */
@@ -78,21 +84,21 @@ function crossFamilyFallback(
 }
 
 /** Wait out a reset that is only seconds away, then re-pick. */
-async function waitForShortReset(pool: AccountPoolManager, family: ModelFamily): Promise<ManagedAccount | undefined> {
+async function waitForShortReset(pool: AccountPoolManager, family: ModelFamily, model?: string): Promise<ManagedAccount | undefined> {
   const countdown = pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
   if (countdown === null || countdown <= 0 || countdown > 20_000) return undefined
   await new Promise((r) => setTimeout(r, countdown + 250))
-  return pool.selectAccount(family) ?? undefined
+  return pool.selectAccount(family, model) ?? undefined
 }
 
 /** Build the "all accounts unavailable" error with the real reasons. */
-function unavailableError(pool: AccountPoolManager, family: ModelFamily): LlmError {
+function unavailableError(pool: AccountPoolManager, family: ModelFamily, model?: string): LlmError {
   const allAccounts = pool.getAccounts()
   const accounts = allAccounts.filter((a) => a.enabled)
   const disabled = allAccounts.length - accounts.length
   const reasons = accounts.map((a) =>
     typeof pool.explainIneligibility === 'function'
-      ? pool.explainIneligibility(a, family)
+      ? pool.explainIneligibility(a, family, Date.now(), model)
       : (pool.isAccountEligible(a, family) ? null : 'cooldown'),
   )
   const cooling = reasons.filter((r) => r === 'cooldown').length
@@ -136,13 +142,13 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
   // Windows has one global credential slot; align sessions to the pool's
   // active candidate so they share it lock-free (parallelSameAccount).
   if (pool !== undefined && !isAux && sessionKey !== '' && process.platform === 'win32' && cfg.parallelSameAccount) {
-    account = pool.selectAccount(family) ?? undefined
+    account = pool.selectAccount(family, activeModel) ?? undefined
   }
   if (account === undefined && pool !== undefined && !isAux && sessionKey !== '') {
-    account = stickyAccount(deps, family, sessionKey)
+    account = stickyAccount(deps, family, sessionKey, activeModel)
   }
   if (account === undefined && pool !== undefined) {
-    account = pool.selectAccount(family) ?? undefined
+    account = pool.selectAccount(family, activeModel) ?? undefined
   }
   if (account !== undefined && pool !== undefined && pool.getPoolData().lastActiveAccountId !== account.id) {
     pool.setActiveAccount(account.id, family)
@@ -158,8 +164,8 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
         if (!isAux && sessionKey !== '') deps.syncSessionModel?.(sessionKey, activeModel)
       }
     }
-    if (account === undefined) account = await waitForShortReset(pool, family)
-    if (account === undefined) throw unavailableError(pool, family)
+    if (account === undefined) account = await waitForShortReset(pool, family, activeModel)
+    if (account === undefined) throw unavailableError(pool, family, activeModel)
   }
 
   return { account, family, activeModel }

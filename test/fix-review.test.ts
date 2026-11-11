@@ -23,10 +23,11 @@ function userText(text: string): Message {
 }
 
 describe('recording token-speed stats', () => {
-	test('per-step samples with a measurable window produce tps; sub-500ms windows stay excluded', async () => {
-		const rec = new RunRecording()
+	test('per-step samples with a measurable window produce tps; sub-500ms windows stay excluded', () => {
+		let clock = 1000
+		const rec = new RunRecording('test-sub', () => clock)
 		rec.append(step({ stepKey: '0', usage: { output_tokens: 100 } }))
-		await new Promise((r) => setTimeout(r, 20))
+		clock += 20
 		rec.append(step({ stepKey: '0', usage: { output_tokens: 300 } }))
 		rec.append(step({ stepKey: '1', usage: { output_tokens: 5 } }))
 		const stats = rec.speedStats()
@@ -42,15 +43,16 @@ describe('recording token-speed stats', () => {
 		assert.equal(rec.speedStats().outputTokens, 25, 'last per-call sample wins')
 	})
 
-	test('a measurable window yields finite tps values', async () => {
-		const rec = new RunRecording()
+	test('a measurable window yields finite tps values', () => {
+		let clock = 1000
+		const rec = new RunRecording('test-win', () => clock)
 		rec.append(step({ stepKey: 's', usage: { output_tokens: 10 } }))
-		await new Promise((r) => setTimeout(r, 550))
+		clock += 600
 		rec.append(step({ stepKey: 's', usage: { output_tokens: 55 } }))
 		const stats = rec.speedStats()
 		assert.equal(stats.measuredSteps, 1)
 		assert.ok(stats.avgTps !== null && Number.isFinite(stats.avgTps))
-		assert.ok(stats.avgTps! > 0 && stats.avgTps! < 500, 'tps is plausible for a ~0.55s window')
+		assert.ok(stats.avgTps! > 0 && stats.avgTps! < 500, 'tps is plausible for a ~0.6s window')
 		assert.ok(stats.lastTps !== null)
 	})
 })

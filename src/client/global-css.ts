@@ -405,12 +405,12 @@ html.agy-modal-open body {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 7px 10px;
-	font-size: 11.5px;
-	border-radius: 6px;
+	padding: 4px 8px;
+	font-size: 11px;
+	border-radius: 5px;
 	background: var(--agy-bg-subbox);
 	border: 1px solid var(--agy-border-box);
-	margin: 4px 0;
+	margin: 2px 0;
 	color: var(--agy-text-primary);
 }
 
@@ -478,23 +478,37 @@ body[data-ds-dark-theme] select.agy-select { color-scheme: dark; }
 	/* Per-model rows may wrap their value under the name. */
 	.agy-console .agy-submodel-row { flex-wrap: wrap; gap: 4px 8px; }
 
-	/* Quota line: window name and badge share the first row, the bar takes
-	   the second one — 52px of label plus a 140px badge cluster leaves no
-	   room for a bar on a 360px screen. */
+	/* Quota line: window name, percentage badge, and reset info share the first row,
+	   the bar takes the second one — on narrow screens this keeps all info legible
+	   and avoids horizontal collision. */
 	.agy-quota-line {
 		display: grid !important;
-		grid-template-columns: minmax(0, 1fr) auto;
-		grid-template-areas: "label cluster" "bar bar";
-		align-items: center;
-		gap: 5px 8px;
+		grid-template-columns: auto 1fr auto auto !important;
+		grid-template-areas:
+			"label . pct reset"
+			"bar bar bar bar" !important;
+		align-items: center !important;
+		gap: 4px 6px !important;
 	}
 	.agy-quota-line > span:first-child {
 		grid-area: label;
 		width: auto !important;
-		white-space: nowrap;
+		white-space: nowrap !important;
 	}
-	.agy-quota-line > div:nth-child(2) { grid-area: bar; margin: 0 !important; }
-	.agy-quota-line > div:nth-child(3) { grid-area: cluster; min-width: 0 !important; }
+	.agy-quota-line > div:nth-child(2) {
+		grid-area: bar;
+		margin: 0 !important;
+		width: 100% !important;
+	}
+	.agy-quota-line > span:nth-child(3) {
+		grid-area: pct;
+	}
+	.agy-quota-line > div:nth-child(4) {
+		grid-area: reset;
+		width: auto !important;
+		min-width: 0 !important;
+		margin-left: 0 !important;
+	}
 
 	/* Header actions: the primary action keeps a full row, the two
 	   secondary ones share the next. */
@@ -508,14 +522,36 @@ body[data-ds-dark-theme] select.agy-select { color-scheme: dark; }
 	.agy-header-actions > button { width: 100%; justify-content: center; }
 
 	/* Account actions: equal-width buttons instead of one ragged line. */
-	.agy-card-actions {
-		display: grid !important;
-		grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
-		gap: 6px;
-		width: 100%;
-		align-items: stretch;
+	.agy-card-head {
+		display: contents !important;
 	}
-	.agy-card-actions > button { width: 100%; justify-content: center; }
+	.agy-card-title-cluster {
+		order: 1 !important;
+		margin-bottom: 2px !important;
+	}
+	.agy-card-meta {
+		order: 2 !important;
+		margin-bottom: 5px !important;
+		gap: 4px !important;
+	}
+	.agy-card-actions {
+		order: 3 !important;
+		display: grid !important;
+		grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)) !important;
+		gap: 4px !important;
+		width: 100% !important;
+		align-items: stretch !important;
+	}
+	.agy-card-actions > button {
+		width: 100% !important;
+		justify-content: center !important;
+		min-height: 28px !important;
+	}
+	/* Micro move buttons stay compact on phone */
+	.agy-card-title-cluster .agy-btn {
+		min-height: 18px !important;
+		height: 18px !important;
+	}
 }
 
 @media (max-width: 420px) {
@@ -526,5 +562,20 @@ body[data-ds-dark-theme] select.agy-select { color-scheme: dark; }
 	}
 	.agy-modal-body { padding: 12px 10px calc(16px + env(safe-area-inset-bottom)) !important; }
 	.agy-console [style*="justify-content: space-between"] { gap: 6px !important; }
+	.agy-card-actions {
+		grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)) !important;
+		gap: 3px !important;
+	}
+	.agy-card-actions > button {
+		padding: 2px 4px !important;
+		font-size: 10.5px !important;
+		min-height: 26px !important;
+	}
+	.agy-card-meta {
+		gap: 3px !important;
+	}
+	.agy-quota-line {
+		gap: 3px 6px !important;
+	}
 }
 `;

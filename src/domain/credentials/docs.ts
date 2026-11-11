@@ -9,6 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { ManagedAccount } from '../../common/pool-types.ts'
+import { readAccountCredential } from './backup.ts'
 
 const PRIMARY_STORE_FILE = '.primary-credential.json'
 
@@ -92,13 +93,8 @@ export function sameCredentialGrant(
 }
 
 export function readTokenFileRaw(file: string): string | null {
-  if (!existsSync(file)) return null
-  try {
-    const raw = readFileSync(file, 'utf8')
-    return raw.trim() ? raw : null
-  } catch {
-    return null
-  }
+  const raw = readAccountCredential(file)
+  return raw && raw.trim() ? raw : null
 }
 
 /** Atomic-ish replace: write a sibling temp file then rename over the target. */

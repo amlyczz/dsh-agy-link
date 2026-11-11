@@ -83,6 +83,10 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			cursor: 'default',
 			padding: '10px 14px',
 			marginBottom: '8px',
+			...(isInUse ? {
+				borderColor: 'var(--dsw-alias-state-business-primary, #3b82f6)',
+				boxShadow: 'var(--agy-shadow-card-primary)',
+			} : {}),
 			...(!acc.enabled ? { opacity: 0.72 } : {}),
 		};
 		// Built-in aliases are canonical server data; translate display only.
@@ -114,7 +118,12 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 				acc.quotas.argon ? renderQuotaBar('Argon', 'argon', acc) : null,
 				h(Button, {
 					variant: 'dashed',
-					style: { color: isExpanded ? 'var(--dsw-alias-state-business-primary, #3b82f6)' : 'var(--agy-text-secondary)' },
+					style: {
+						color: isExpanded ? 'var(--dsw-alias-state-business-primary, #3b82f6)' : 'var(--agy-text-secondary)',
+						padding: '3px 8px',
+						fontSize: '11px',
+						margin: '4px 0 2px 0',
+					},
 					onClick: () => toggleExpand(acc.id),
 				},
 					uiIcon(isExpanded ? 'chevronUp' : 'chevronDown', 10),
@@ -152,164 +161,190 @@ interface CardHeaderCtx {
 function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown[] {
 	const { isAuthRequired, hasCooldown, isInUse, pool } = ctx;
 	return [
-		isAuthRequired ? h('span', {
+		acc.email ? h('span', {
+			style: {
+				...S.badgeTag!,
+				background: 'var(--agy-badge-email-bg)',
+				color: 'var(--agy-badge-email-text)',
+				borderColor: 'var(--agy-badge-email-border)',
+				gap: '4px',
+				fontSize: '11px',
+				padding: '1px 6px',
+				whiteSpace: 'nowrap',
+			},
+			title: acc.email,
+		}, uiIcon('mail', 10, 'var(--agy-badge-email-text)'), acc.email) : null,
+		isInUse ? h('span', {
+			style: {
+				...S.badgeTag!,
+				background: 'rgba(16, 185, 129, 0.12)',
+				color: '#10b981',
+				borderColor: 'rgba(16, 185, 129, 0.45)',
+				gap: '3px',
+				fontSize: '10px',
+				padding: '1px 5px',
+				fontWeight: 700,
+				whiteSpace: 'nowrap',
+				flexShrink: 0,
+			},
+			title: t('status.inUse'),
+		}, uiIcon('zap', 10, '#10b981'), t('status.inUse')) : null,
+		(() => {
+			const effectiveProxy = acc.proxyUrl || pool?.systemProxy;
+			return effectiveProxy ? h('span', {
 				style: {
 					...S.badgeTag!,
-					background: 'var(--agy-badge-email-bg)',
-					color: '#ef4444',
-					borderColor: '#fca5a5',
-					gap: '3px',
-					fontSize: '10px',
-					padding: '1px 5px',
-					fontWeight: 700,
-					whiteSpace: 'nowrap',
-					flexShrink: 0,
-				},
-			}, uiIcon('alert', 10, '#ef4444'), t('status.authRequired')) : null,
-			hasCooldown ? h('span', {
-				style: {
-					...S.badgeTag!,
-					background: 'rgba(245, 158, 11, 0.15)',
-					color: '#f59e0b',
-					borderColor: 'rgba(245, 158, 11, 0.4)',
-					gap: '3px',
-					fontSize: '10px',
-					padding: '1px 5px',
-					fontWeight: 700,
-					whiteSpace: 'nowrap',
-					flexShrink: 0,
-				},
-			}, uiIcon('alert', 10, '#f59e0b'), '冷却中') : null,
-			acc.email ? h('span', {
-				style: {
-					...S.badgeTag!,
-					background: 'var(--agy-badge-email-bg)',
-					color: 'var(--agy-badge-email-text)',
-					borderColor: 'var(--agy-badge-email-border)',
+					background: 'var(--agy-badge-proxy-bg)',
+					color: 'var(--agy-badge-proxy-text)',
+					borderColor: 'var(--agy-badge-proxy-border)',
 					gap: '4px',
-					fontSize: '11px',
-					padding: '1px 6px',
-					whiteSpace: 'nowrap',
-				},
-				title: acc.email,
-			}, uiIcon('mail', 10, 'var(--agy-badge-email-text)'), acc.email) : null,
-			isInUse ? h('span', {
-				style: {
-					...S.badgeTag!,
-					background: 'rgba(16, 185, 129, 0.12)',
-					color: '#10b981',
-					borderColor: 'rgba(16, 185, 129, 0.45)',
-					gap: '3px',
 					fontSize: '10px',
 					padding: '1px 5px',
-					fontWeight: 700,
-					whiteSpace: 'nowrap',
-					flexShrink: 0,
 				},
-				title: t('status.inUse'),
-			}, uiIcon('zap', 10, '#10b981'), t('status.inUse')) : null,
-			(() => {
-				const effectiveProxy = acc.proxyUrl || pool?.systemProxy;
-				return effectiveProxy ? h('span', {
-					style: {
-						...S.badgeTag!,
-						background: 'var(--agy-badge-proxy-bg)',
-						color: 'var(--agy-badge-proxy-text)',
-						borderColor: 'var(--agy-badge-proxy-border)',
-						gap: '4px',
-						fontSize: '10px',
-						padding: '1px 5px',
-					},
-					title: effectiveProxy,
-				}, uiIcon('globe', 10, 'var(--agy-badge-proxy-text)'), t('status.proxy')) : null;
-			})(),
-			!acc.enabled ? h('span', {
-				style: {
-					...S.badgeTag!,
-					background: 'var(--agy-bg-subbox)',
-					color: 'var(--agy-text-secondary)',
-					borderColor: 'var(--agy-border-subbox)',
-					gap: '3px',
-					fontSize: '10px',
-					padding: '1px 5px',
-					fontWeight: 700,
-				},
-				title: t('status.disabled'),
-			}, uiIcon('power', 10, '#64748b'), t('status.disabled')) : null,
+				title: effectiveProxy,
+			}, uiIcon('globe', 10, 'var(--agy-badge-proxy-text)'), t('status.proxy')) : null;
+		})(),
+		isAuthRequired ? h('span', {
+			style: {
+				...S.badgeTag!,
+				background: 'var(--agy-badge-email-bg)',
+				color: '#ef4444',
+				borderColor: '#fca5a5',
+				gap: '3px',
+				fontSize: '10px',
+				padding: '1px 5px',
+				fontWeight: 700,
+				whiteSpace: 'nowrap',
+				flexShrink: 0,
+			},
+		}, uiIcon('alert', 10, '#ef4444'), t('status.authRequired')) : null,
+		hasCooldown ? h('span', {
+			style: {
+				...S.badgeTag!,
+				background: 'rgba(245, 158, 11, 0.15)',
+				color: '#f59e0b',
+				borderColor: 'rgba(245, 158, 11, 0.4)',
+				gap: '3px',
+				fontSize: '10px',
+				padding: '1px 5px',
+				fontWeight: 700,
+				whiteSpace: 'nowrap',
+				flexShrink: 0,
+			},
+		}, uiIcon('alert', 10, '#f59e0b'), '冷却中') : null,
+		!acc.enabled ? h('span', {
+			style: {
+				...S.badgeTag!,
+				background: 'var(--agy-bg-subbox)',
+				color: 'var(--agy-text-secondary)',
+				borderColor: 'var(--agy-border-subbox)',
+				gap: '3px',
+				fontSize: '10px',
+				padding: '1px 5px',
+				fontWeight: 700,
+			},
+			title: t('status.disabled'),
+		}, uiIcon('power', 10, '#64748b'), t('status.disabled')) : null,
 	];
 }
 
 function renderHeaderBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
-	const { isPrimary, isAuthRequired, hasCooldown, isInUse, dotColor, displayAlias, accIndex, accounts, pool, handlers } = ctx;
-	return h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', flex: '1', minWidth: 0 } },
-			h('span', {
-				style: {
-					...S.badgeTag!,
-					fontWeight: 700,
-					fontSize: '10.5px',
-					padding: '1px 5px',
-					background: isPrimary ? 'var(--agy-badge-primary-bg)' : 'var(--agy-badge-tag-bg)',
-					color: isPrimary ? 'var(--agy-badge-primary-text)' : 'var(--agy-badge-tag-text)',
-					borderColor: isPrimary ? 'var(--agy-badge-primary-border)' : 'var(--agy-badge-tag-border)',
-				},
-				title: `优先级 #${accIndex + 1}`,
-			}, `#${accIndex + 1}`),
-			accounts.length > 1 ? h('div', {
-				style: { display: 'inline-flex', gap: '2px', alignItems: 'center' },
+	const { isPrimary, dotColor, displayAlias, accIndex, accounts, handlers } = ctx;
+	return h('div', { className: 'agy-card-title-cluster', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', minWidth: 0 } },
+		h('span', {
+			style: {
+				...S.badgeTag!,
+				fontWeight: 700,
+				fontSize: '10.5px',
+				padding: '1px 5px',
+				background: isPrimary ? 'var(--agy-badge-primary-bg)' : 'var(--agy-badge-tag-bg)',
+				color: isPrimary ? 'var(--agy-badge-primary-text)' : 'var(--agy-badge-tag-text)',
+				borderColor: isPrimary ? 'var(--agy-badge-primary-border)' : 'var(--agy-badge-tag-border)',
 			},
-				accIndex > 0 ? h(Button, {
-					variant: 'default', size: 'sm', className: 'agy-btn',
-					style: { padding: '1px 4px', fontSize: '10px', lineHeight: 1, height: '18px' },
-					title: t('account.moveUp'),
-					onClick: () => void handlers.moveAccount(acc.id, -1),
-				}, uiIcon('arrowUp', 10)) : null,
-				accIndex < accounts.length - 1 ? h(Button, {
-					variant: 'default', size: 'sm', className: 'agy-btn',
-					style: { padding: '1px 4px', fontSize: '10px', lineHeight: 1, height: '18px' },
-					title: t('account.moveDown'),
-					onClick: () => void handlers.moveAccount(acc.id, 1),
-				}, uiIcon('arrowDown', 10)) : null,
-			) : null,
-			h('span', {
-				className: 'agy-pulse-dot',
-				style: { background: dotColor, boxShadow: `0 0 6px ${dotColor}aa`, marginLeft: '1px' },
-			}),
-			h('span', {
-				style: { fontWeight: 700, fontSize: '13px', color: 'var(--agy-text-primary)', whiteSpace: 'nowrap' },
-				title: displayAlias,
-			}, displayAlias),
-			h('span', {
-				style: {
-					...S.badgeTag!,
-					background: 'rgba(59, 130, 246, 0.12)',
-					color: '#3b82f6',
-					borderColor: 'rgba(59, 130, 246, 0.35)',
-					fontSize: '10px',
-					padding: '1px 5px',
-					fontWeight: 700,
-				},
-			}, 'AGY'),
-			...renderStatusBadges(t, acc, ctx)
-		);
+			title: `优先级 #${accIndex + 1}`,
+		}, `#${accIndex + 1}`),
+		accounts.length > 1 ? h('div', {
+			style: { display: 'inline-flex', gap: '2px', alignItems: 'center' },
+		},
+			accIndex > 0 ? h(Button, {
+				variant: 'default', size: 'sm', className: 'agy-btn',
+				style: { padding: '1px 4px', fontSize: '10px', lineHeight: 1, height: '18px' },
+				title: t('account.moveUp'),
+				onClick: () => void handlers.moveAccount(acc.id, -1),
+			}, uiIcon('arrowUp', 10)) : null,
+			accIndex < accounts.length - 1 ? h(Button, {
+				variant: 'default', size: 'sm', className: 'agy-btn',
+				style: { padding: '1px 4px', fontSize: '10px', lineHeight: 1, height: '18px' },
+				title: t('account.moveDown'),
+				onClick: () => void handlers.moveAccount(acc.id, 1),
+			}, uiIcon('arrowDown', 10)) : null,
+		) : null,
+		h('span', {
+			className: 'agy-pulse-dot',
+			style: { background: dotColor, boxShadow: `0 0 6px ${dotColor}aa`, marginLeft: '1px' },
+		}),
+		h('span', {
+			style: { fontWeight: 700, fontSize: '13px', color: 'var(--agy-text-primary)', whiteSpace: 'nowrap' },
+			title: displayAlias,
+		}, displayAlias),
+		h('span', {
+			style: {
+				...S.badgeTag!,
+				background: 'rgba(59, 130, 246, 0.12)',
+				color: '#3b82f6',
+				borderColor: 'rgba(59, 130, 246, 0.35)',
+				fontSize: '10px',
+				padding: '1px 5px',
+				fontWeight: 700,
+			},
+		}, 'AGY'),
+	);
+}
+
+function renderMetaRow(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
+	const badges = renderStatusBadges(t, acc, ctx).filter(Boolean);
+	if (badges.length === 0) return null;
+	return h('div', {
+		className: 'agy-card-meta',
+		style: {
+			display: 'flex',
+			alignItems: 'center',
+			gap: '5px',
+			flexWrap: 'wrap',
+			minWidth: 0,
+			paddingLeft: '1px',
+		},
+	}, badges);
 }
 
 function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
 	const {
-		isPrimary, isAuthRequired, hasCooldown, isInUse, dotColor, isEditingProxy,
-		displayAlias, accIndex, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId,
+		isEditingProxy, isInUse, displayAlias, accounts, loadingAction, accountActionBusy, handlers, setEditingProxyId,
 	} = ctx;
 	return h('div', {
+		className: 'agy-card-header',
 		style: {
 			display: 'flex',
-			alignItems: 'center',
-			justifyContent: 'space-between',
+			flexDirection: 'column',
+			gap: '5px',
 			userSelect: 'none',
-			gap: '8px',
 			marginBottom: '8px',
 		},
 	},
-		renderHeaderBadges(t, acc, ctx),
-		renderActionButtons(t, acc, { isEditingProxy, isInUse, displayAlias, showRemove: accounts.length > 1, loadingAction, accountActionBusy, handlers, setEditingProxyId }),
+		h('div', {
+			className: 'agy-card-head',
+			style: {
+				display: 'flex',
+				alignItems: 'center',
+				justifyContent: 'space-between',
+				gap: '8px',
+				flexWrap: 'wrap',
+			},
+		},
+			renderHeaderBadges(t, acc, ctx),
+			renderActionButtons(t, acc, { isEditingProxy, isInUse, displayAlias, showRemove: accounts.length > 1, loadingAction, accountActionBusy, handlers, setEditingProxyId }),
+		),
+		renderMetaRow(t, acc, ctx),
 	);
 }
 
@@ -330,7 +365,7 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	},
 		h(Button, {
 			variant: acc.enabled ? 'default' : 'primary', size: 'sm', className: 'agy-btn',
-			style: { gap: '3px', fontSize: '11px', padding: '2px 6px' },
+			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			title: acc.enabled ? t('account.disableTitle') : t('account.enableTitle'),
 			disabled: accountActionBusy(acc, 'enable'),
 			onClick: () => void handlers.toggleAccountEnabled(acc),
@@ -339,34 +374,34 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 			: [uiIcon('power', 10, acc.enabled ? 'var(--agy-text-secondary)' : '#ffffff'), ` ${acc.enabled ? t('account.disable') : t('account.enable')}`]),
 		h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
-			style: { gap: '3px', fontSize: '11px', padding: '2px 6px', minWidth: '58px', justifyContent: 'center' },
+			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px', justifyContent: 'center' },
 			title: t('account.syncTitle'),
 			disabled: accountActionBusy(acc, 'refresh'),
 			onClick: () => void handlers.refreshQuota(acc.id),
 		}, loadingAction === `refresh:${acc.id}` ? [Spinner(), t('account.syncing')] : [uiIcon('refresh', 10), ` ${t('account.sync')}`]),
 		acc.enabled && !acc.authRequired ? h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
-			style: { gap: '3px', fontSize: '11px', padding: '2px 6px', minWidth: '58px', justifyContent: 'center' },
+			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px', justifyContent: 'center' },
 			title: t('account.warmupTitle'),
 			disabled: accountActionBusy(acc, 'warmup'),
 			onClick: () => void handlers.warmupAccount(acc.id),
 		}, loadingAction === `warmup:${acc.id}` ? [Spinner(), t('account.warmingUp')] : [uiIcon('flame', 10, '#f97316'), ` ${t('account.warmup')}`]) : null,
 		acc.enabled && !isInUse ? h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
-			style: { gap: '3px', fontSize: '11px', padding: '2px 6px' },
+			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			title: t('account.setActive'),
 			disabled: accountActionBusy(acc, 'active'),
 			onClick: () => void handlers.setActiveAccount(acc.id),
 		}, loadingAction === `active:${acc.id}` ? [Spinner(), t('account.settingActive')] : [uiIcon('zap', 10), ` ${t('account.setActive')}`]) : null,
 		h(Button, {
 			variant: isEditingProxy ? 'primary' : 'default', size: 'sm', className: 'agy-btn',
-			style: { gap: '3px', fontSize: '11px', padding: '2px 6px' },
+			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			disabled: accountActionBusy(acc, 'proxy'),
 			onClick: () => setEditingProxyId(isEditingProxy ? null : acc.id),
 		}, [uiIcon('globe', 10), ` ${t('proxy.button')}`]),
 		(showRemove ? h(Button, {
 			variant: 'danger', size: 'sm', className: 'agy-btn',
-			style: { padding: '2px 6px', fontSize: '11px' },
+			style: { padding: '1px 6px', fontSize: '11px', height: '22px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
 			title: t('account.removeTitle'),
 			'aria-label': t('account.removeTitle'),
 			disabled: accountActionBusy(acc, 'remove'),
@@ -378,8 +413,8 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 function renderChildModels(t: Translator, allChildModels: { family: string; model: ModelQuotaInfo }[]): unknown {
 	return h('div', {
 		style: {
-			marginTop: '8px',
-			paddingTop: '8px',
+			marginTop: '6px',
+			paddingTop: '6px',
 			borderTop: '1px solid var(--agy-border-box)',
 		},
 	},

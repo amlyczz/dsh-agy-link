@@ -32,7 +32,7 @@ export interface PoolAdminDeps {
   /** Pool surface used by the Argon eligibility check. */
   pool: DedicatedGroupSource
   /** The class scheduler (sticky sequential drain) that stays in the manager. */
-  selectAccount(family: ModelFamily): ManagedAccount | null
+  selectAccount(family: ModelFamily, model?: string): ManagedAccount | null
 }
 
 export class PoolAdmin {
@@ -453,11 +453,11 @@ export class PoolAdmin {
    * account, but a healthy account should not be punished with a cooldown
    * because the network blipped.
    */
-  advanceAccount(fromId: string, family: ModelFamily): string | null {
+  advanceAccount(fromId: string, family: ModelFamily, model?: string): string | null {
     const data = this.deps.getData()
     const now = Date.now()
     const candidates = data.accounts.filter(
-      (a) => a.id !== fromId && isAccountEligible(a, family, now, this.deps.pool),
+      (a) => a.id !== fromId && isAccountEligible(a, family, now, this.deps.pool, model),
     )
     if (candidates.length === 0) return null
     const next = orderByExpiry(data.accounts, candidates, family, fromId, Date.now())[0]!
@@ -474,16 +474,16 @@ export class PoolAdmin {
    * otherwise falls back to the scheduler (selectAccount) to advance to the next
    * healthy candidate, or primaryAccountId if all are exhausted.
    */
-  getActiveAccountId(family: ModelFamily = 'google'): string | undefined {
+  getActiveAccountId(family: ModelFamily = 'google', model?: string): string | undefined {
     const data = this.deps.getData()
     const now = Date.now()
     if (data.lastActiveAccountId) {
       const active = data.accounts.find((a) => a.id === data.lastActiveAccountId)
-      if (active && isAccountEligible(active, family, now, this.deps.pool)) {
+      if (active && isAccountEligible(active, family, now, this.deps.pool, model)) {
         return active.id
       }
     }
-    const next = this.deps.selectAccount(family)
+    const next = this.deps.selectAccount(family, model)
     if (next) return next.id
     const latest = this.deps.getData()
     return latest.accounts.find((a) => a.id === latest.primaryAccountId && a.enabled)?.id

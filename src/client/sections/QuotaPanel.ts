@@ -125,8 +125,8 @@ export function renderFamilyQuotaBar(
 		const tooltipText = typeof rawFraction === 'number'
 			? `${(rawFraction * 100).toFixed(1)}% (raw: ${rawFraction})${rawReset ? ` · reset: ${rawReset}` : ''}`
 			: resetStr ? `↻ ${resetStr}` : undefined;
-		return h('div', { className: 'agy-quota-line', style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '4px 0' } },
-			h('span', { style: { width: '64px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap' } }, windowName),
+		return h('div', { className: 'agy-quota-line', style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '2px 0' } },
+			h('span', { style: { width: '64px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' } }, windowName),
 			h('div', {
 				className: isShimmer ? 'agy-shimmer-track' : '',
 				style: S.progressBarBg,
@@ -141,29 +141,42 @@ export function renderFamilyQuotaBar(
 					},
 				}),
 			),
-			h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', width: '150px', minWidth: '150px', justifyContent: 'flex-end', flexShrink: 0 } },
-				h('span', {
-					title: tooltipText,
-					style: {
-						padding: '2px 7px',
-						borderRadius: '4px',
-						background: c.bg,
-						color: c.text,
-						border: `1px solid ${c.border}`,
-						fontWeight: 700,
-						fontSize: '11.5px',
-						lineHeight: 1.2,
-						cursor: tooltipText ? 'help' : 'default',
-					},
-				}, percent < 0 ? '—' : `${percent}%`),
-				resetStr ? h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '11px', fontWeight: 500 } }, `↻ ${resetStr}`) : null,
+			h('span', {
+				title: tooltipText,
+				style: {
+					padding: '1px 5px',
+					borderRadius: '4px',
+					background: c.bg,
+					color: c.text,
+					border: `1px solid ${c.border}`,
+					fontWeight: 700,
+					fontSize: '11px',
+					lineHeight: 1.2,
+					cursor: tooltipText ? 'help' : 'default',
+					minWidth: '36px',
+					textAlign: 'center',
+					flexShrink: 0,
+				},
+			}, percent < 0 ? '—' : `${percent}%`),
+			h('div', {
+				style: {
+					display: 'inline-flex',
+					alignItems: 'center',
+					justifyContent: 'flex-end',
+					width: '150px',
+					minWidth: '150px',
+					flexShrink: 0,
+					marginLeft: '6px',
+				},
+			},
+				resetStr ? h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '10.5px', fontWeight: 500, whiteSpace: 'nowrap' } }, `↻ ${resetStr}`) : null,
 			),
 		);
 	};
 
-	return h('div', { style: { margin: '6px 0', padding: '8px 10px', background: 'var(--agy-bg-subbox)', borderRadius: '7px', border: '1px solid var(--agy-border-box)' } },
-		h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12.5px', marginBottom: '5px', color: 'var(--agy-text-primary)' } },
-			brandIcon(FAMILY_BRAND[familyKey], 14),
+	return h('div', { style: { margin: '4px 0', padding: '5px 8px', background: 'var(--agy-bg-subbox)', borderRadius: '6px', border: '1px solid var(--agy-border-box)' } },
+		h('div', { style: { display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 700, fontSize: '12px', marginBottom: '3px', color: 'var(--agy-text-primary)' } },
+			brandIcon(FAMILY_BRAND[familyKey], 13),
 			h('span', null, label),
 		),
 		// Argon is a WEEKLY-only counter today: render the 5h row only when

@@ -83,6 +83,20 @@ test('extractStepThoughts: extracts Field 20.3 from protobuf payload', () => {
   assert.equal(extracted, thought)
 })
 
+test('extractStepThoughts: returns null when Field 20.3 is empty (does not extract response text as thoughts)', () => {
+  const payload = buildThoughtStepPayload('', '你好！请问有什么我可以帮你的吗？无论是关于 dsh-agy-link 的开发、测试、调试，还是其他任务，随时告诉我！')
+  const extracted = extractStepThoughts(payload)
+  assert.equal(extracted, null)
+})
+
+test('extractStepThoughts: extracts Field 20.3 even when response text is much longer than thoughts', () => {
+  const thought = 'Quick evaluation'
+  const longResponse = 'This is a much longer response text that has more characters and sentences! It contains lots of punctuation and Chinese characters: 无论是关于开发、测试还是调试。'
+  const payload = buildThoughtStepPayload(thought, longResponse)
+  const extracted = extractStepThoughts(payload)
+  assert.equal(extracted, thought)
+})
+
 test('readFullToolArgs and readStepThoughts: parse realistic nested protobuf step_payloads', async (t) => {
   // The reader prefers node:sqlite (no external binary — the desktop-host
   // fix for issue #43) and falls back to the sqlite3 CLI. The FIXTURE is now

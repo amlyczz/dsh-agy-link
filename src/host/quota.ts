@@ -163,7 +163,7 @@ export class QuotaService {
       proxyFor: (a) => this.proxyFor(a),
       readSystemKeychainToken: () => this.readSystemKeychainToken(),
       getStoredToken: (a, allow) => this.getStoredToken(a, allow),
-      persistRefreshedToken: (a, tokens) => this.persistRefreshedToken(a, tokens),
+      persistRefreshedToken: (a, tokens, exp) => this.persistRefreshedToken(a, tokens, exp),
       readPrimaryCredential: (baseDir) => readPrimaryCredential(baseDir),
       writePrimaryCredential: (cred, baseDir) => writePrimaryCredential(cred, baseDir),
       parseCredentialDoc: (raw) => parseCredentialDoc(raw),
@@ -303,8 +303,9 @@ export class QuotaService {
   private persistRefreshedToken(
     account: ManagedAccount,
     tokens: RefreshedTokenInput,
+    expectedRefreshToken?: string,
   ): void {
-    persistRefreshedTokenImpl(this.tokenDeps(), account, tokens)
+    persistRefreshedTokenImpl(this.tokenDeps(), account, tokens, expectedRefreshToken)
   }
 
   /**

@@ -76,6 +76,11 @@ export function buildAgyEnv(input: BuildAgyEnvInput): NodeJS.ProcessEnv {
     env.DISABLE_TELEMETRY = '1'
     env.GOOGLE_CLOUD_DISABLE_TELEMETRY = '1'
     env.ANTIGRAVITY_DISABLE_TELEMETRY = '1'
+  } else {
+    delete env.DO_NOT_TRACK
+    delete env.DISABLE_TELEMETRY
+    delete env.GOOGLE_CLOUD_DISABLE_TELEMETRY
+    delete env.ANTIGRAVITY_DISABLE_TELEMETRY
   }
   return env
 }
