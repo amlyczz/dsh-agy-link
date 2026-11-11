@@ -22,8 +22,11 @@ jobs:
       - run: npm ci
 
       - run: npm run check
+      - run: npm run lint:arch
+      - run: npm run lint:budget
 
       # build before test: the MCP bridge E2E test spawns dist/bridge.mjs
       - run: npm run build
 
-      - run: npm test
+      # Full suite + built-in coverage thresholds (lines/branches/functions).
+      - run: npm run test:coverage
