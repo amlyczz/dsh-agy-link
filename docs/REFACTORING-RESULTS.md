@@ -8,14 +8,15 @@ Branch `refactor/modular-monolith` (git worktree), based on `main` @ v0.6.18.
 | --- | ---: | ---: |
 | `src/index.ts` | 1,634 | **414** |
 | `src/client/index.ts` | 3,031 | **219** |
-| `src/host/adapter.ts` | 3,152 | **1,089** |
+| `src/host/adapter.ts` | 3,152 | **593** |
 | `src/host/pool.ts` | 1,179 | **546** |
 | `src/host/quota.ts` | 1,455 | **462** |
-| Longest function (`streamAttempt`) | 1,673 | **391** |
-| Modules | 54 | **118** |
+| Longest function (`streamAttempt`) | 1,673 | **384** |
+| Modules | 54 | **205** |
 | Import cycles | 0 | **0** |
 | Tests | 754 | **791** |
-| Coverage (lines / branches / functions) | 78.79 / 75.73 / 75.82 | **80.50 / 76.79 / 76.04** |
+| Coverage (lines / branches / functions) | 78.79 / 75.73 / 75.82 | **80.38 / 76.83 / 76.45** |
+| Files > 600 lines | 19 | **0** (largest: 597) |
 
 New modules:
 - `provider/`: call-context, purpose-policy, account-selection, failure, prompt,
@@ -24,7 +25,10 @@ New modules:
 - `domain/`: quota/{buckets,identity,parse}, accounts/{selection,paths,store,admin},
   credentials/{mutex,lock,docs,platform,lease,handoff,resolve,slot,errors}.
 - `features/quota/`: refresh, http, token.
-- `client/`: api, status, icons, styles, global-css, react, ui/*, hooks/*, sections/*.
+- `client/`: api, status, icons, styles, global-css, react, ui/*, hooks/*, sections/*,
+  toolview/*, images/*, translate-*.ts, mermaid-*.ts.
+- `runtime/agy/`: bin, env, keychain, process, console, db/*.
+- `host/commands/`, `provider/mapper/`, `provider/mirror/`.
 - `host/services.ts` + `host/boot-hygiene.ts` (composition factory).
 
 ## Verification commands
@@ -38,12 +42,11 @@ npm run test:coverage  # Node coverage thresholds
 npm run verify         # check + arch + budget + build + test
 ```
 
-## Still intentionally in place
-- `src/host/adapter.ts` (1,089) still owns model/effort choice, rate-limit
-  spacing and the thin `streamAttempt` orchestrator (391 lines); the spawn,
-  parser, dispatch and outcome machinery now live in `provider/attempt*.ts`.
-- Legacy files above 600 lines (client toolview/mermaid/images/translate,
-  host runner/translate/image/commands/mirror-tool/mapper/warmup/agy-db,
-  common types) are tracked in `scripts/budgets-allowlist.json`; the ratchet
-  prevents them from growing and each can be split in a follow-up.
-- `client/index.ts` split is guarded by `test/client-architecture.test.ts`.
+## Size status
+- **Every source file is ≤ 600 lines** (largest: `src/host/services.ts` 597).
+  `scripts/budgets-allowlist.json` is now empty: the budget gate is strict for
+  all files, no legacy exceptions.
+- `streamAttempt` is 384 lines; the adapter is a 593-line composition/delegate
+  layer. Spawn/parse/outcome, prompt, account selection, failure, finalize and
+  span streaming are separate provider modules.
+- Client split is guarded by `test/client-architecture.test.ts`.

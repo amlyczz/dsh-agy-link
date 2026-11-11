@@ -41,7 +41,7 @@ panel + account console. Target files:
 Acceptance: same UI behavior; `pnpm check` + `pnpm build`; client tests green; no
 inline button style outside `ui/`.
 
-## Phase 2 — adapter (done: spawn/parse/outcome extracted)
+## Phase 2 — adapter (done: spawn/parse/outcome + policy/model modules)
 Extracted `call-context` + `purpose-policy`. Remaining: prompt assembly, attempt
 (spawn/parse), finalize (failure classification/rotation), continuation. Target
 `streamAttempt` ≤ 250 lines, `adapter.ts` ≤ 1,800.
