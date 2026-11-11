@@ -470,6 +470,9 @@ test('explainIneligibility separates quota rotation from cooldown, and clear-coo
   pool.recordFailure(acc.id, 'anthropic', '429 Rate Limit', reset)
   assert.equal(pool.explainIneligibility(pool.getAccount(acc.id)!, 'anthropic'), 'cooldown')
 
+  // An account without Argon access reports 'unsupported', never 'quota' or 'cooldown'
+  assert.equal(pool.explainIneligibility(acc, 'argon'), 'unsupported')
+
   // The user-facing clear also lifts the low-quota bench for the cached snapshot.
   pool.clearCooldown(acc.id, 'google', true)
   assert.equal(pool.isAccountEligible(pool.getAccount(acc.id)!, 'google'), true)
@@ -808,6 +811,19 @@ test('getPoolData exposes systemProxy when defaultProxy is provided or system pr
   const pool = new AccountPoolManager(dir)
   const poolData = pool.getPoolData('http://127.0.0.1:17891')
   assert.equal(poolData.systemProxy, 'http://127.0.0.1:17891')
+})
+
+test('selectAccount for family=argon routes only to Argon-capable accounts', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-argon-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts()[0]!
+  pool.updateAccountQuotas(primary.id, { google: { remainingFraction: 1 } })
+
+  const secondary = pool.createAccountSlot('Pro Account')
+  pool.updateAccountQuotas(secondary.id, { argon: { remainingFraction: 1 } })
+
+  assert.equal(pool.selectAccount('argon')?.id, secondary.id, 'must select secondary account with Argon')
+  assert.equal(pool.selectAccount('google')?.id, primary.id, 'google requests can still use primary')
 })
 
 test('defaultPoolDir recovers when home directory is inside an isolated account path', () => {

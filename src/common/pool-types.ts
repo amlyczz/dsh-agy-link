@@ -2,6 +2,12 @@
 
 export type ModelFamily = 'google' | 'argon' | 'anthropic' | 'openai' | 'unknown'
 
+/** Check if a model identifier belongs to the Gemini 4 Argon family. */
+export function isArgonModel(modelId?: string): boolean {
+  if (!modelId) return false
+  return modelId.trim().toLowerCase().includes('argon')
+}
+
 /**
  * Map a model slug to its backend quota counter family.
  *
@@ -103,6 +109,44 @@ export interface ManagedAccount {
    * cleared, because its argon cooldowns come from real 429s.
    */
   dedicatedGroups?: ModelFamily[]
+}
+
+/**
+ * Determine whether a managed account has confirmed access to the Gemini 4 Argon family.
+ *
+ * An account qualifies for Argon when:
+ * 1. It carries an authoritative Argon quota bucket.
+ * 2. It has a dedicated Argon group recorded by the pool.
+ * 3. Its Google per-model quota breakdown includes an Argon model.
+ * 4. Or its discovered catalog includes Argon (when no negative quota breakdown is present).
+ */
+export function accountHasArgon(
+  acc?: ManagedAccount | null,
+  pool?: { hasDedicatedGroup?: (id: string, family: ModelFamily) => boolean } | null,
+  catalog?: { source?: string; models?: readonly { id: string }[] } | null,
+): boolean {
+  if (!acc) return false
+
+  // 1. Authoritative quota bucket explicitly exists
+  if (acc.quotas?.argon !== undefined) return true
+
+  // 2. Pool recorded dedicated Argon quota group (PR #54)
+  if (pool && typeof pool.hasDedicatedGroup === 'function' && pool.hasDedicatedGroup(acc.id, 'argon')) return true
+
+  // 3. Per-model quotas reported an argon model
+  if (acc.quotas?.google?.models?.some((m) => isArgonModel(m.modelId))) return true
+
+  // 4. Authoritative negative only when the Google group reported a PER-MODEL breakdown
+  if (Array.isArray(acc.quotas?.google?.models)) {
+    return false
+  }
+
+  // 5. Account's discovered catalog contains argon (only when quota has not been polled yet)
+  if (catalog && catalog.source === 'discovered') {
+    return catalog.models?.some((m) => isArgonModel(m.id)) ?? false
+  }
+
+  return false
 }
 
 export type AccountHealthStatus = 'healthy' | 'cooldown' | 'auth_required' | 'disabled'

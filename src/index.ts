@@ -903,6 +903,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       void (async () => {
         const cfg = getConfig()
         const cat = catalog.get()
+        const allKnown = catalog.getAllKnownModels(pool.getAccounts())
         sendJson(res as RawRes, 200, {
           plugin: 'dsh-agy-link',
           bin: bin(),
@@ -918,9 +919,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           poolAuth: poolAuth.status(),
           pool: pool.getPoolData(cfg.proxyUrl?.trim() || undefined),
           catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
-          // Full sanitized catalog + the current deny-list so the settings UI's
+          // Full sanitized catalog (complete superset) + the current deny-list so the settings UI's
           // model-visibility toggles show every known model, hidden ones included.
-          catalogModels: sanitizeCatalogEntries(cat.models).entries,
+          catalogModels: sanitizeCatalogEntries(allKnown).entries,
           hiddenModels: cfg.hiddenModels,
           autoWarmup: cfg.autoWarmup,
           warmupModels: cfg.warmupModels,

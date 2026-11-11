@@ -754,6 +754,23 @@ test('buildArgs passes --effort for a Claude 5.5 base slug (agy 1.5.3 verified)'
   assert.equal(args[args.indexOf('--effort') + 1], 'high')
 })
 
+test('buildArgs keeps the Argon base slug and passes effort separately', () => {
+  const { adapter } = makeAdapter()
+  for (const effort of ['high', undefined] as const) {
+    const args = adapter.buildArgs({
+      prompt: 'x',
+      model: 'gemini-4-argon',
+      effort,
+      permissionMode: 'skip',
+      timeoutMs: 60_000,
+      extraArgs: [],
+    })
+    assert.equal(args[args.indexOf('--model') + 1], 'gemini-4-argon')
+    if (effort) assert.equal(args[args.indexOf('--effort') + 1], effort)
+    else assert.ok(!args.includes('--effort'))
+  }
+})
+
 test('buildArgs assembles flags per ADR-3/8/10', () => {
   const { adapter } = makeAdapter()
   const args = adapter.buildArgs({
@@ -1627,7 +1644,7 @@ test('listModels and resolveModel defensively handle empty IDs, empty names, and
   assert.equal(resolvedNoEffort.reasoning, undefined)
 })
 
-test('listModels dynamically isolates Argon models based on active account eligibility', async () => {
+test('listModels exposes union of models across all accounts while resolveModel remains pure', async () => {
   let activeId = 'acc_free'
   const accounts: Record<string, any> = {
     acc_free: {
@@ -1647,9 +1664,17 @@ test('listModels dynamically isolates Argon models based on active account eligi
   }
   const fakePool = {
     getActiveAccountId: () => activeId,
-    getPoolData: () => ({ primaryAccountId: 'acc_free', accounts: Object.values(accounts) }),
+    getPoolData: () => ({ primaryAccountId: 'acc_free', lastActiveAccountId: activeId, accounts: Object.values(accounts) }),
+    getAccounts: () => Object.values(accounts),
     getAccount: (id: string) => accounts[id],
     hasDedicatedGroup: (id: string, fam: string) => id === 'acc_pro' && fam === 'argon',
+    accountHasArgon: (acc: any) => acc.id === 'acc_pro',
+    isAccountEligible: (acc: any, fam: string) => fam === 'argon' ? acc.id === 'acc_pro' : true,
+    selectAccount: (fam: string) => {
+      if (fam === 'argon') return accounts['acc_pro']
+      return accounts[activeId]
+    },
+    setActiveAccount: (id: string) => { activeId = id; return true },
   }
   const { adapter } = makeAdapter({
     fallbackModels: [
@@ -1658,17 +1683,76 @@ test('listModels dynamically isolates Argon models based on active account eligi
     ],
   }, { pool: fakePool as any })
 
-  // 1. With free account active: gemini-4-argon is hidden from picker
+  // 1. With free account active, but pro account in pool: gemini-4-argon is included in the union!
   activeId = 'acc_free'
-  const freeModels = await adapter.listModels('antigravity')
-  assert.ok(freeModels.some((m) => m.id === 'gemini-3.8-flash'))
-  assert.ok(!freeModels.some((m) => m.id === 'gemini-4-argon'), 'free account must not show gemini-4-argon')
+  const models = await adapter.listModels('antigravity')
+  assert.ok(models.some((m) => m.id === 'gemini-3.8-flash'))
+  assert.ok(models.some((m) => m.id === 'gemini-4-argon'), 'model picker must show gemini-4-argon from pool union')
 
-  // 2. With pro account active: gemini-4-argon is present in picker
-  activeId = 'acc_pro'
-  const proModels = await adapter.listModels('antigravity')
-  assert.ok(proModels.some((m) => m.id === 'gemini-3.8-flash'))
-  assert.ok(proModels.some((m) => m.id === 'gemini-4-argon'), 'pro account must show gemini-4-argon')
+  // 2. Resolving gemini-4-argon succeeds from union models without mutating active account (pure query)
+  const resolved = await adapter.resolveModel('antigravity', 'gemini-4-argon')
+  assert.equal(resolved.id, 'gemini-4-argon')
+  assert.equal(activeId, 'acc_free', 'resolveModel must remain side-effect free')
+
+  // 3. When NO account in the pool has Argon access, Argon is excluded
+  const fakePoolNoArgon = {
+    ...fakePool,
+    getAccounts: () => [accounts['acc_free']],
+    getPoolData: () => ({ primaryAccountId: 'acc_free', lastActiveAccountId: 'acc_free', accounts: [accounts['acc_free']] }),
+    hasDedicatedGroup: () => false,
+    accountHasArgon: () => false,
+  }
+  const { adapter: adapterNoArgon } = makeAdapter({
+    fallbackModels: [
+      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
+      { id: 'gemini-4-argon', name: 'Gemini 4 Argon' },
+    ],
+  }, { pool: fakePoolNoArgon as any })
+  const freeOnlyModels = await adapterNoArgon.listModels('antigravity')
+  assert.ok(!freeOnlyModels.some((m) => m.id === 'gemini-4-argon'), 'pool without any argon accounts must not show gemini-4-argon')
+})
+
+test('N lookups of an unavailable model do not rewrite or mutate the pool', async () => {
+  let activeId = 'acc_free'
+  let persistCalls = 0
+  const fakePool = {
+    getActiveAccountId: () => activeId,
+    getPoolData: () => ({ primaryAccountId: 'acc_free', lastActiveAccountId: activeId, accounts: [] }),
+    getAccounts: () => [{ id: 'acc_free', enabled: true, quotas: {} }],
+    getAccount: () => ({ id: 'acc_free', enabled: true }),
+    setActiveAccount: () => { persistCalls++; return true },
+    persist: () => { persistCalls++ },
+  }
+  const { adapter } = makeAdapter({
+    fallbackModels: [{ id: 'gemini-4-argon', name: 'Gemini 4 Argon' }],
+  }, { pool: fakePool as any })
+
+  for (let i = 0; i < 20; i++) {
+    const info = await adapter.resolveModel('antigravity', 'gemini-4-argon')
+    assert.equal(info.id, 'gemini-4-argon')
+  }
+  assert.equal(persistCalls, 0, 'repeated lookups of unsupported model must not rewrite the pool')
+  assert.equal(activeId, 'acc_free')
+})
+
+test('stream error provides unsupported hint when no account has access to the requested family', async () => {
+  const fakePool = {
+    getAccounts: () => [{ id: 'acc_free', enabled: true, quotas: {} }],
+    explainIneligibility: () => 'unsupported' as const,
+    isAccountEligible: () => false,
+    selectAccount: () => null,
+    getEarliestAvailableCountdown: () => null,
+    getEarliestResetCountdown: () => null,
+  }
+  const { adapter } = makeAdapter({}, { pool: fakePool as any })
+  await assert.rejects(
+    () => collect(adapter.stream(opts([msg('user', 'hi')], { model: 'gemini-4-argon' }))),
+    (err: any) => {
+      assert.ok(err.message.includes('1 lack argon access'), `expected lack argon access in ${err.message}`)
+      assert.ok(err.message.includes('No enabled account has access to argon'), `expected unsupported hint in ${err.message}`)
+      return true
+    },
+  )
 })
 
 test('compaction detection clears stale binding and re-seeds with digest (ADR-013)', async () => {
