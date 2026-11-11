@@ -22,13 +22,14 @@ import { defineAgyMirrorTool } from './host/mirror-tool.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { ModelCatalog, sanitizeCatalogEntries } from './host/models.ts'
 import { RunRegistry } from './host/recording.ts'
-import { MIN_AGY_VERSION, compareVersions, ensureIsolatedKeychain, isolatedHomeEnv, openAccountTerminal, parseVersion, probeProcess, proxyEnvFor, purgeStaleIsolatedKeychain, repairMacSystemKeychain, resolveAgyBin } from './host/runner.ts'
+import { MIN_AGY_VERSION, compareVersions, ensureIsolatedKeychain, isolatedHomeEnv, openAccountTerminal, parseVersion, probeProcess, purgeStaleIsolatedKeychain, repairMacSystemKeychain, resolveAgyBin } from './host/runner.ts'
 import { SessionStore } from './host/sessions.ts'
 import { AccountPoolManager } from './host/pool.ts'
 import { PoolAuthFlow } from './host/pool-auth.ts'
 import { QuotaService } from './host/quota.ts'
 import { WarmupService, type WarmupResult } from './host/warmup.ts'
 import { detectSystemProxy } from './host/wincred.ts'
+import { buildAgyEnv } from './runtime/net/account-env.ts'
 import { resolvePrimaryCredential, findDuplicateCredentialIdentities } from './host/credential-slot.ts'
 import { homedir } from 'node:os'
 import { StreamJsonParser } from './host/parser.ts'
@@ -168,22 +169,12 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   )
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
 
-  const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv => {
-    const cfg = getConfig()
-    return {
-      ...process.env,
-      ...(cfg.disableTelemetry
-        ? {
-            DO_NOT_TRACK: '1',
-            DISABLE_TELEMETRY: '1',
-            GOOGLE_CLOUD_DISABLE_TELEMETRY: '1',
-            ANTIGRAVITY_DISABLE_TELEMETRY: '1',
-          }
-        : {}),
-      ...(account && account.dir ? isolatedHomeEnv(account.dir) : {}),
-      ...proxyEnvFor(account?.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined),
-    }
-  }
+  const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv =>
+    buildAgyEnv({
+      ...(account === undefined ? {} : { account }),
+      cfg: getConfig(),
+      telemetryFlags: true,
+    })
 
   const catalog = new ModelCatalog(
     async (signal, accountId) => {

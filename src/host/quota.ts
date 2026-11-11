@@ -24,10 +24,10 @@ import { shouldMarkAuthRequired } from '../common/types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { AGY_ENDPOINTS, refreshTokens } from './oauth.ts'
 import { agyFetch } from './net.ts'
-import { detectSystemProxy, readWindowsCredentialRaw } from './wincred.ts'
+import { readWindowsCredentialRaw } from './wincred.ts'
 import { parseCredentialDoc, credentialFingerprint, readPrimaryCredential, writePrimaryCredential, credentialSlotMutex } from './credential-slot.ts'
 import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
-import { isolatedHomeEnv, proxyEnvFor } from './runner.ts'
+import { buildAgyEnvWithProxy, pickProxy } from '../runtime/net/account-env.ts'
 
 /**
  * When the quota-summary endpoint transiently fails, per-model fallback
@@ -565,11 +565,10 @@ export class QuotaService {
       if (!(await this.cliSlotHoldsAccount(account))) {
         return null
       }
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        ...(account.dir ? isolatedHomeEnv(account.dir) : {}),
-        ...proxyEnvFor(this.proxyFor(account)),
-      }
+      const env = buildAgyEnvWithProxy({
+        account,
+        proxy: pickProxy(account.proxyUrl, this.globalProxy()),
+      })
       const groups = await readAgyUsage({
         bin,
         env,
@@ -600,7 +599,7 @@ export class QuotaService {
 
   /** Dedicated account proxy wins, then the global config proxy, then detected system proxy. */
   private proxyFor(account: ManagedAccount): string | undefined {
-    return account.proxyUrl || this.globalProxy() || detectSystemProxy() || undefined
+    return pickProxy(account.proxyUrl, this.globalProxy())
   }
 
   private getTokenFilePath(account: ManagedAccount): string {

@@ -9,6 +9,8 @@ import { dirname, join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AgyGenerateOptions } from '../common/protocol.ts'
+import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { type RawUsage, Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, isAuthoritativeAuthError, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, looksLikeHardRateLimit, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
@@ -18,7 +20,7 @@ import { parseMirrorCallId, type RunRecording, type RunRegistry } from './record
 import { accountHasArgon, defaultEffortFor, findEntry, isArgonModel, ModelCatalog, resolveModelSlug, sanitizeCatalogEntries } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir, stageImages, sweepDir, type ImageRefLike } from './media.ts'
-import { ensureIsolatedKeychain, isolatedHomeEnv, proxyEnvFor, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin, stripNulBytes } from './runner.ts'
+import { ensureIsolatedKeychain, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin, stripNulBytes } from './runner.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { AbortedWaitError, WaitTimeoutError, acquireCredentialSlot, credentialSlotMutex, SlotUnavailableError, armSlotHandoff, type SlotHandoff } from './credential-slot.ts'
 import { agyHomeDirFor, readAgyRunLogText, snapshotAgyLogs } from './agy-log.ts'
@@ -1188,7 +1190,7 @@ export class AgyAdapter extends LlmAdapter {
       let emitted = false
       const telemetry: StreamChunk[] = []
       let finish: StreamChunk | null = null
-      for await (const chunk of this.streamAttempt(options, attempt > 0)) {
+      for await (const chunk of this.streamAttempt(options as AgyGenerateOptions, attempt > 0)) {
         if (chunk.type === 'finish') {
           // Hold the finish back one step: a refusal must not reach the caller
           // when the replay is about to succeed.
@@ -1220,7 +1222,7 @@ export class AgyAdapter extends LlmAdapter {
     }
   }
 
-  private async *streamAttempt(options: GenerateOptions, suppressEffort = false): AsyncIterable<StreamChunk> {
+  private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false): AsyncIterable<StreamChunk> {
     const cfg = this.deps.getConfig()
     const bin = this.deps.bin()
     if (!bin) throw new LlmError('agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install', Err.AGY_NOT_INSTALLED)
@@ -1246,7 +1248,7 @@ export class AgyAdapter extends LlmAdapter {
     // The image CLI may override the configured mode for one call (headless
     // callers often need `skip`). Everything else keeps the historical rules:
     // aux runs are read-only plan mode, titles keep the configured mode.
-    const imageModeRaw = isImage ? (options as { agyPermissionMode?: unknown }).agyPermissionMode : undefined
+    const imageModeRaw = isImage ? options.agyPermissionMode : undefined
     const effectivePermissionMode: PluginConfig['permissionMode'] =
       imageModeRaw === 'skip' || imageModeRaw === 'plan' || imageModeRaw === 'accept-edits'
         ? imageModeRaw
@@ -1260,12 +1262,12 @@ export class AgyAdapter extends LlmAdapter {
     // only the text, because agy already holds the persona. The conversation is
     // bound under `${sessionKey}#tsl` so it never collides with the turn
     // conversation of the same DSH session.
-    const translateSessionRaw = (options as { agyTranslateSession?: unknown }).agyTranslateSession
+    const translateSessionRaw = options.agyTranslateSession
     const translateSession =
-      isTranslate && typeof translateSessionRaw === 'object' && translateSessionRaw !== null
+      isTranslate && translateSessionRaw !== undefined
         ? {
-            setup: String((translateSessionRaw as { setup?: unknown }).setup ?? ''),
-            text: String((translateSessionRaw as { text?: unknown }).text ?? ''),
+            setup: String(translateSessionRaw.setup ?? ''),
+            text: String(translateSessionRaw.text ?? ''),
           }
         : null
     const isTranslateSession = translateSession !== null
@@ -1586,7 +1588,7 @@ export class AgyAdapter extends LlmAdapter {
     // Image callers need the account's HOME to find agy's artifact directory
     // (`<home>/.gemini/antigravity-cli/brain/<conversation>/`). The hook is
     // advisory: a throwing listener must never break a run.
-    const onAccount = (options as { agyOnAccount?: unknown }).agyOnAccount
+    const onAccount = options.agyOnAccount
     if (typeof onAccount === 'function' && account) {
       try {
         onAccount({ id: account.id, home: account.dir || process.env.HOME || homedir() })
@@ -1703,7 +1705,7 @@ export class AgyAdapter extends LlmAdapter {
     // digest may add one before the multimodal section runs.
     let stagedDirs: string[] = []
     let prompt = ''
-    const imagePromptRaw = (options as { agyImagePrompt?: unknown }).agyImagePrompt
+    const imagePromptRaw = options.agyImagePrompt
     if (isImage) {
       // Verbatim: the CLI's bridge prompt already pins the tool arguments and
       // the machine-readable reply contract. No session context is mixed in.
@@ -2386,25 +2388,15 @@ export class AgyAdapter extends LlmAdapter {
     // network; only this log separates the two.
     const runLogHome = agyHomeDirFor(account)
     const runLogsBefore = snapshotAgyLogs(runLogHome)
-    const effectiveProxy = account?.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined
-    const env = {
-      ...process.env,
-      // Identity for the MCP reverse bridge (issue #55): agy passes its env to
-      // the MCP server it spawns, so the bridge script learns which DSH session
-      // this run belongs to and the host can resolve the calling agent.
-      ...(sessionKey === '' ? {} : { DSH_MCP_SESSION: sessionKey }),
-      ...(cfg.disableTelemetry
-        ? {
-            DO_NOT_TRACK: '1',
-            DISABLE_TELEMETRY: '1',
-            GOOGLE_CLOUD_DISABLE_TELEMETRY: '1',
-            ANTIGRAVITY_DISABLE_TELEMETRY: '1',
-          }
-        : {}),
-      ...(account && account.dir ? isolatedHomeEnv(account.dir) : {}),
-      // Dedicated account proxy wins, then global config proxy, then detected system proxy.
-      ...proxyEnvFor(effectiveProxy),
-    }
+    // One shared precedence + env assembly (runtime/net/account-env.ts). The
+    // MCP session id rides along so the bridge can resolve the calling agent
+    // (issue #55); telemetry flags keep their historical behaviour here.
+    const env = buildAgyEnv({
+      ...(account === undefined ? {} : { account }),
+      cfg,
+      ...(sessionKey === '' ? {} : { sessionId: sessionKey }),
+      telemetryFlags: cfg.disableTelemetry,
+    })
 
     let proc: ReturnType<typeof startAgyProcess>
     let spawned = false
@@ -2498,7 +2490,7 @@ export class AgyAdapter extends LlmAdapter {
             }
           }
           rec.append(ev)
-          const onEvent = (options as { agyOnEvent?: unknown }).agyOnEvent
+          const onEvent = options.agyOnEvent
           if (typeof onEvent === 'function') {
             try {
               onEvent(ev)
@@ -2550,7 +2542,7 @@ export class AgyAdapter extends LlmAdapter {
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
         rec.append(ev)
-        const onEvent = (options as { agyOnEvent?: unknown }).agyOnEvent
+        const onEvent = options.agyOnEvent
         if (typeof onEvent === 'function') {
           try {
             onEvent(ev)
