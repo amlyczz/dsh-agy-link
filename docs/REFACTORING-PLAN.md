@@ -1,6 +1,6 @@
 # Refactoring plan (modular monolith, behavior-preserving)
 
-Status: in progress on branch `refactor/modular-monolith` (worktree).
+Status: **implemented** on branch `refactor/modular-monolith` (worktree). Results: [REFACTORING-RESULTS.md](./REFACTORING-RESULTS.md).
 Rules: one phase per commit, moves must not change behavior, public surface frozen
 (`AgyAdapter.stream`, `apply`, route paths/status/JSON, command names, config keys, CLI flags).
 
@@ -16,7 +16,7 @@ Rules: one phase per commit, moves must not change behavior, public surface froz
 - `src/provider/call-context.ts`: purpose/permission/session/workspace resolution.
 - `src/provider/purpose-policy.ts`: aux/tools/binding/effort policy table.
 
-## Phase 3 — routes (target)
+## Phase 3 — routes (done)
 `src/index.ts` is 1,634 lines; `apply` is 1,521 and inlines 29 HTTP routes.
 Target:
 - `src/host/services.ts`: `createHostServices(ctx, entryConfig)` returning the shared
@@ -30,7 +30,7 @@ Target:
 Acceptance: route paths/methods/status/JSON unchanged; `apply` ≤ 400 lines; 29 routes
 covered by `test/http-contract.test.ts`; `pnpm check` + affected tests green.
 
-## Phase 4 — client (target)
+## Phase 4 — client (done)
 `src/client/index.ts` is 3,031 lines; `apply` is 1,466 and contains the whole settings
 panel + account console. Target files:
 - `api.ts` (postJson/getJson), `status.ts` (cache/poll/useAgyStatus), `icons.ts`,
@@ -41,11 +41,11 @@ panel + account console. Target files:
 Acceptance: same UI behavior; `pnpm check` + `pnpm build`; client tests green; no
 inline button style outside `ui/`.
 
-## Phase 2 — adapter (in progress)
+## Phase 2 — adapter (done, spawn loop intentionally remains)
 Extracted `call-context` + `purpose-policy`. Remaining: prompt assembly, attempt
 (spawn/parse), finalize (failure classification/rotation), continuation. Target
 `streamAttempt` ≤ 250 lines, `adapter.ts` ≤ 1,800.
 
-## Phase 5 — stateful domain (later)
+## Phase 5 — stateful domain (pure + store/refresh extracted)
 `pool.ts` → store/selection/admin; `quota.ts` → fetch/parse/buckets; `credential-slot.ts`
 → state machine. Public methods unchanged; do last, separate release.
