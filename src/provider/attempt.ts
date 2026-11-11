@@ -414,6 +414,20 @@ export function abortableDelay(ms: number, signal: AbortSignal | undefined, abor
   })
 }
 
+/**
+ * Bounded wait for an aborted run to settle, so a steer replacement never
+ * overlaps the process it just killed on the same agy conversation.
+ * Returns whether the run actually settled before the deadline.
+ */
+export async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (run.isSettled) return true
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  return run.isSettled
+}
+
 export interface SpawnedAttempt {
   proc: RunningProcess
   runLogHome: string
