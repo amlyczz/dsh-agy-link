@@ -12,8 +12,8 @@
     "src/host/image.ts": 730,
     "src/host/mapper.ts": 609,
     "src/host/mirror-tool.ts": 755,
-    "src/host/pool.ts": 1052,
-    "src/host/quota.ts": 1245,
+    "src/host/pool.ts": 851,
+    "src/host/quota.ts": 826,
     "src/host/runner.ts": 852,
     "src/host/translate.ts": 1138,
     "src/host/warmup.ts": 642

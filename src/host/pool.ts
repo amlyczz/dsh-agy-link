@@ -1,12 +1,11 @@
 // AccountPoolManager: multi-profile credential isolation, family-scoped cooldown,
 // and sticky sequential drain scheduling for Google Antigravity accounts.
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { isAbsolute, join, relative } from 'node:path'
 import { homedir } from 'node:os'
 import {
   AUTH_CONFIRM_STRIKES,
   accountHasArgon,
-  defaultPoolData,
   isArgonModel,
   modelFamilyOf,
   type AccountPoolData,
@@ -16,7 +15,8 @@ import {
   type ModelFamily,
 } from '../common/pool-types.ts'
 import { parseResetDurationMs } from '../common/types.ts'
-import { defaultPoolDir, writeJsonAtomic } from '../domain/accounts/paths.ts'
+import { defaultPoolDir } from '../domain/accounts/paths.ts'
+import { PoolStore } from '../domain/accounts/store.ts'
 import {
   LOW_QUOTA_5H,
   LOW_QUOTA_WEEKLY,
@@ -40,14 +40,8 @@ export type { AccountIneligibilityReason }
 export class AccountPoolManager {
   private data: AccountPoolData
   private readonly baseDir: string
-  private readonly file: string
-  /**
-   * Account ids this process has seen (loaded from disk + created here). On
-   * persist, disk ids OUTSIDE this set were added by another host process and
-   * are preserved instead of being clobbered (same merge contract as
-   * sessions.json: web + headless share this file).
-   */
-  private readonly knownIds = new Set<string>()
+  /** Durable pool.json persistence (load/merge/atomic-write); owns the file bookkeeping. */
+  private readonly store: PoolStore
 
   /**
    * Consecutive non-authoritative auth failures per account id (noteAuthFailure).
@@ -56,19 +50,19 @@ export class AccountPoolManager {
    * blip that healed while the process was down.
    */
   private readonly authStrikes = new Map<string, number>()
-  /** Serialized snapshot of the last successful persist/load; skips no-op writes. */
-  private persistedJson = ''
   /** True when load() had to fall back to pool.json.last-good (observable for diagnostics). */
   recoveredFromLastGood = false
 
   constructor(baseDir = defaultPoolDir()) {
     this.baseDir = baseDir
-    this.file = join(baseDir, 'pool.json')
-    this.data = this.load()
-    this.bootstrapDefaultAccount()
-    this.normalizeLegacyPrimary()
-    this.persistedJson = JSON.stringify(this.data)
-    for (const acc of this.data.accounts) this.knownIds.add(acc.id)
+    this.store = new PoolStore(baseDir)
+    const loaded = this.store.load()
+    this.data = loaded.data
+    this.recoveredFromLastGood = loaded.recoveredFromLastGood
+    this.data = this.store.bootstrapDefaultAccount(this.data, detectSystemProxy)
+    this.data = this.store.normalizeLegacyPrimary(this.data)
+    this.store.snapshot(this.data)
+    for (const acc of this.data.accounts) this.store.markKnown(acc.id)
   }
 
   /**
@@ -80,203 +74,8 @@ export class AccountPoolManager {
     return this.baseDir
   }
 
-  private load(): AccountPoolData {
-    const primary = this.readPoolFile(this.file)
-    if (primary) return primary
-    // Torn or corrupt file (concurrent hosts, truncated download, manual edit):
-    // keep a forensic copy, then prefer the last snapshot this process wrote
-    // cleanly instead of presenting the user with an empty pool.
-    try {
-      if (existsSync(this.file)) copyFileSync(this.file, this.file + '.corrupt-' + Date.now())
-    } catch {
-      // best effort
-    }
-    const lastGood = this.readPoolFile(this.file + '.last-good')
-    if (lastGood) {
-      this.recoveredFromLastGood = true
-      return lastGood
-    }
-    return defaultPoolData()
-  }
-
-  private readPoolFile(file: string): AccountPoolData | null {
-    try {
-      if (existsSync(file)) {
-        const raw = readFileSync(file, 'utf8')
-        const parsed = JSON.parse(raw) as AccountPoolData
-        if (parsed && Array.isArray(parsed.accounts)) {
-          // Migration: the Gemini Web login feature was removed — drop any
-          // legacy web-session accounts entirely (and purge dangling active
-          // pointers to them) on next persist.
-          parsed.accounts = parsed.accounts.filter((acc) => acc && typeof acc === 'object' && (acc as { type?: string }).type !== 'gemini-web')
-          const liveIds = new Set(parsed.accounts.map((a) => a.id))
-          if (parsed.lastActiveAccountId && !liveIds.has(parsed.lastActiveAccountId)) parsed.lastActiveAccountId = undefined
-          if (parsed.primaryAccountId && !liveIds.has(parsed.primaryAccountId)) parsed.primaryAccountId = undefined
-          if (parsed.activeAccountIds) {
-            for (const [fam, id] of Object.entries(parsed.activeAccountIds)) {
-              if (!id || !liveIds.has(id)) delete parsed.activeAccountIds[fam as ModelFamily]
-            }
-          }
-          for (const acc of parsed.accounts) {
-            // Normalize PARTIAL records: a hand-edited or older pool.json whose
-            // account lacks cooldowns/quotas used to throw a TypeError inside
-            // isAccountEligible -> selectAccount, so EVERY turn failed with an
-            // opaque internal error and no failover at all.
-            if (!acc || typeof acc !== 'object') continue
-            if (acc.cooldowns === undefined || acc.cooldowns === null) acc.cooldowns = {}
-            if (acc.quotas === undefined || acc.quotas === null) acc.quotas = {}
-            if (acc.enabled === undefined) acc.enabled = true
-            // A hand-edited record may have written a non-object here; the
-            // eligibility checks index into it per family.
-            if (
-              acc.quotaGateClearedAt !== undefined
-              && (typeof acc.quotaGateClearedAt !== 'object' || acc.quotaGateClearedAt === null)
-            ) {
-              acc.quotaGateClearedAt = undefined
-            }
-            for (const [fam, cd] of Object.entries(acc.cooldowns)) {
-              if (cd && cd.reason === 'agy run aborted by caller') {
-                delete acc.cooldowns[fam as ModelFamily]
-              }
-            }
-          }
-          return {
-            ...defaultPoolData(),
-            ...parsed,
-          }
-        }
-      }
-    } catch {
-      // Unparsable: the caller decides whether a last-good snapshot exists.
-    }
-    return null
-  }
-
   private persist(): void {
-    const serialized = JSON.stringify(this.data)
-    // Merge with whatever another host process wrote since our last look so
-    // web + headless stop erasing each other's accounts/cooldowns: disk
-    // accounts this process has never seen are appended; everything else
-    // (including deletions of ids we know) stays as this process wrote it.
-    let merged: AccountPoolData = this.data
-    try {
-      if (existsSync(this.file)) {
-        const onDisk = JSON.parse(readFileSync(this.file, 'utf8')) as AccountPoolData
-        if (onDisk && Array.isArray(onDisk.accounts)) {
-          const ours = new Set(this.data.accounts.map((a) => a.id))
-          const foreign = onDisk.accounts.filter((a) => a && typeof a === 'object' && a.id !== undefined && !ours.has(a.id) && !this.knownIds.has(a.id))
-          if (foreign.length > 0) {
-            merged = { ...this.data, accounts: [...this.data.accounts, ...foreign] }
-            for (const acc of foreign) this.knownIds.add(acc.id as string)
-          }
-        }
-      }
-    } catch {
-      // unreadable/partial file: this process's view wins
-    }
-    try {
-      mkdirSync(dirname(this.file), { recursive: true })
-      if (serialized === this.persistedJson && merged === this.data) return
-      const body = JSON.stringify(merged, null, 2)
-      writeJsonAtomic(this.file, body)
-      this.persistedJson = JSON.stringify(merged)
-      if (merged !== this.data) this.data = merged
-      // Keep a clean snapshot beside the pool so a torn write elsewhere can be
-      // recovered on the next start (#90). Best effort: the primary write won.
-      try {
-        writeJsonAtomic(this.file + '.last-good', body)
-      } catch {
-        // recovery copy is optional
-      }
-    } catch (e) {
-      // Persistence failure used to be fully silent: cooldowns/quota state
-      // quietly evaporated on restart. Surface it once per failure instead.
-      try {
-        // No logger reaches this class; stderr is the honest channel.
-        console.error('[dsh-agy-link] pool persist failed: ' + String(e))
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  /**
-   * Bootstraps the primary account on first start.
-   *
-   * The primary account rides the REAL system HOME with no directory
-   * isolation: agy 1.1.15+ persists credentials in the macOS Keychain
-   * ("Antigravity Safe Storage"), not in a ~/.gemini token file, so copying
-   * files cannot migrate sign-in state. Injecting HOME would log the
-   * primary account out of agy entirely (observed: "Please sign in").
-   * Only SECONDARY pool accounts get isolated HOME directories, created
-   * and signed in via /agy add-account.
-   */
-  private bootstrapDefaultAccount(): void {
-    // The primary slot represents whatever account is currently logged into
-    // the REAL system HOME (`agy login` / `agy logout` outside DSH). It must
-    // ALWAYS exist: it used to be created only for an empty pool, so deleting
-    // it while other accounts remained made the system-HOME login invisible
-    // forever — the UI fell back to an isolated account and looked "stale"
-    // after every external re-login. Users who don't want it can disable it.
-    const hasSystemHome = this.data.accounts.some((a) => a.systemHome)
-    if (hasSystemHome) return
-
-    const sysProxy = detectSystemProxy()
-    const primary: ManagedAccount = {
-      id: 'acc_primary',
-      alias: 'Primary account (system sign-in)',
-      defaultAlias: true,
-      dir: '',
-      systemHome: true,
-      ...(sysProxy ? { proxyUrl: sysProxy } : {}),
-      enabled: true,
-      createdAt: Date.now(),
-      cooldowns: {},
-      quotas: {},
-    }
-
-    this.data.accounts.unshift(primary)
-    this.data.primaryAccountId = primary.id
-    this.persist()
-  }
-
-  /**
-   * Migrates pool files created before Keychain-aware primaries: an
-   * acc_primary that carries an isolated dir (and likely a broken token
-   * copy) is converted back to the system HOME so agy stays signed in.
-   * The stale directory is left untouched (never deletes user data).
-   */
-  private normalizeLegacyPrimary(): void {
-    const primary = this.data.accounts.find((a) => a.id === 'acc_primary' || a.systemHome)
-    if (!primary) return
-    let changed = false
-    // Locale changes must not rewrite existing account data.
-    if (!primary.systemHome || primary.dir) {
-      primary.dir = ''
-      primary.systemHome = true
-      primary.alias = 'Primary account (system sign-in)'
-      primary.defaultAlias = true
-      this.data.primaryAccountId = primary.id
-      changed = true
-    }
-    // On Windows, self-heal primary email from durable .primary-credential.json if present
-    if (process.platform === 'win32') {
-      try {
-        const credFile = join(this.baseDir, '.primary-credential.json')
-        if (existsSync(credFile)) {
-          const parsed = JSON.parse(readFileSync(credFile, 'utf8')) as { email?: string }
-          if (parsed && typeof parsed.email === 'string' && parsed.email && primary.email !== parsed.email) {
-            primary.email = parsed.email
-            changed = true
-          }
-        }
-      } catch {
-        // best-effort
-      }
-    }
-    if (changed) {
-      this.persist()
-    }
+    this.data = this.store.persist(this.data)
   }
 
   getPoolData(defaultProxy?: string): Readonly<AccountPoolData> {
@@ -338,7 +137,7 @@ export class AccountPoolManager {
     }
 
     this.data.accounts.push(newAccount)
-    this.knownIds.add(newAccount.id)
+    this.store.markKnown(newAccount.id)
     this.persist()
     return newAccount
   }
@@ -440,7 +239,7 @@ export class AccountPoolManager {
     }
 
     this.data.accounts.push(newAccount)
-    this.knownIds.add(newAccount.id)
+    this.store.markKnown(newAccount.id)
     this.persist()
     return newAccount
   }
