@@ -1246,12 +1246,32 @@ export class QuotaService {
       }
     }
 
+    // Argon only owns a quota row while the backend ships a dedicated group for
+    // it. agy >= 1.5.5 folds Argon (and the new Gemini 4 Carbon) into the shared
+    // `Gemini Models` group and stops returning the `Gemini 4 Argon` group, but
+    // `fetchAvailableModels` keeps listing the argon models with a per-model
+    // `quotaInfo` that is really the SHARED Gemini bucket. Projecting that onto
+    // the `argon` family painted a phantom "Argon <pct>%" row that `agy /usage`
+    // never reports (2026-11-11, agy 1.5.5: `/usage` returns two groups only).
+    const argonGroupPresent = summaryHasArgonGroup(summaryGroups)
+
     // 2. Ingest detailed model list from fetchAvailableModels / retrieveUserQuota
     const familyModels: Partial<Record<ModelFamily, ModelQuotaInfo[]>> = {}
     if (Object.keys(modelsCatalog).length > 0) {
       for (const [modelId, entry] of Object.entries(modelsCatalog)) {
-        const fam = modelFamilyOf(modelId)
-        if (fam === 'unknown') continue
+        const quotaFamily = modelFamilyOf(modelId)
+        if (quotaFamily === 'unknown') continue
+        // Without a dedicated Argon group there is no Argon pool to report: the
+        // model row describes the shared Gemini bucket. Keep the row under
+        // `google` (so `accountHasArgon()` still sees "this account lists an
+        // argon model" and the model picker detail stays truthful) but never
+        // invent an `argon` family for it. Only an AUTHORITATIVE summary (one
+        // that returned groups but no Argon group) may prove the fold; with no
+        // summary at all the legacy projection is kept so Argon access and its
+        // quota gate never disappear on a failed poll.
+        const argonSharesGemini =
+          quotaFamily === 'argon' && !argonGroupPresent && summaryGroups.length > 0
+        const fam: ModelFamily = argonSharesGemini ? 'google' : quotaFamily
         const rawRemaining = entry.quotaInfo?.remainingFraction
         // Clamp to [0,1]; non-numeric entries are skipped (same contract as
         // the summary path above).
@@ -1269,6 +1289,12 @@ export class QuotaService {
           remainingFraction: remaining,
           resetTime,
         })
+
+        // The shared-Argon row is listed for identity only. Its number carries
+        // no window label and mirrors the same bucket the summary already
+        // reports, so folding it into the Gemini fractions could only bench
+        // Gemini on a derived value.
+        if (argonSharesGemini) continue
 
         const isStale = stale5hFamilies.has(fam)
         // Fallback for family fraction if summary was unavailable.
@@ -1350,16 +1376,13 @@ export class QuotaService {
     // Track whether this account reports a dedicated Argon bucket, so a retired one
     // can be told apart from one that never existed (see shouldReleaseOrphanedCooldown).
     if (summaryGroups.length > 0) {
-      const argonGroupPresent = summaryHasArgonGroup(summaryGroups)
       if (argonGroupPresent) {
         this.pool.noteDedicatedGroup(account.id, 'argon')
       } else {
-        // The backend stopped reporting a dedicated Argon group. A synthesized
-        // `argon` row may still exist because the model-level fallback projects
-        // the shared Gemini bucket onto it — that row is NOT evidence that the
-        // group is present. Checking `familyQuotas.argon` here made this branch
-        // unreachable in exactly the Pro -> Ultra fold it was written for, so a
-        // cooldown taken against the retired pool was never released.
+        // The backend stopped reporting a dedicated Argon group. Argon model
+        // rows are no longer projected into a quota family of their own (see
+        // argonGroupPresent above), so a row left over from an older poll is
+        // dropped here and a cooldown taken against the retired pool released.
         const groupSeenBefore = this.pool.hasDedicatedGroup(account.id, 'argon')
         if (familyQuotas.argon === undefined) {
           this.pool.clearQuotaFamily(account.id, 'argon')

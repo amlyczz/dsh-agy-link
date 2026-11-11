@@ -169,7 +169,9 @@ test('bare gemini base without siblings gets no efforts', () => {
 
 test('buildFallbackCatalog carries configurable efforts', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
-  assert.equal(cat.length, 7)
+  assert.equal(cat.length, 8)
+  const carbon = cat.find((e) => e.id === 'gemini-4-carbon')
+  assert.deepEqual(carbon?.efforts, ['low', 'medium', 'high'])
   const flash38 = cat.find((e) => e.id === 'gemini-3.8-flash')
   assert.deepEqual(flash38?.efforts, ['low', 'medium', 'high'])
   const argon = cat.find((e) => e.id === 'gemini-4-argon')

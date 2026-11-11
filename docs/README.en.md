@@ -20,7 +20,7 @@
 
 ---
 
-Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the official, unmodified `agy` CLI: streaming, thinking, native tool cards, exact token metering, in-GUI OAuth login, a multi-account pool with automatic rotation, and official multi-bucket quota tracking (5h rolling + 7d weekly + Argon weekly).
+Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the official, unmodified `agy` CLI: streaming, thinking, native tool cards, exact token metering, in-GUI OAuth login, a multi-account pool with automatic rotation, and official multi-bucket quota tracking (5h rolling + 7d weekly).
 
 ## ✨ Features
 
@@ -28,7 +28,7 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the offi
 | --- | --- |
 | 🤖 **Antigravity models in DSH** | Gemini 3.8 Flash, Claude 5.5, GPT-OSS … selected from the normal `/model` picker; streaming, thinking blocks, tool cards and usage are native DSH chunks. |
 | 🔁 **Multi-account pool** | Sequential drain or round-robin; per-account isolated HOME, proxy and credentials; quota exhaustion cools the account and moves to the next one automatically. |
-| 📊 **Quota console** | 5h rolling, 7d weekly and Argon weekly buckets; countdowns, cooldowns and one-click sync from the header badge. |
+| 📊 **Quota console** | 5h rolling and 7d weekly buckets; countdowns, cooldowns and one-click sync from the header badge. Argon and Gemini 4 Carbon bill the shared Gemini pool on agy >= 1.5.5, so their own Argon row only appears while the backend still reports a dedicated `Gemini 4 Argon` group. |
 | 🔐 **In-GUI OAuth** | Add accounts without pasting credentials; headless paste-URL and manual code paths are also supported. |
 | 🗣 **Plain-language translation (`/tsl`)** | A native Gemini card anchored under the reply; per-session 1:1 translation conversation; auto mode and per-reply button. |
 | 🎨 **Image generation (`dsh-agy-image`)** | Bridges agy's built-in `generate_image` as a CLI that reuses the same adapter and account pool; strict artifact validation. |

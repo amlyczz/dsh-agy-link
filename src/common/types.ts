@@ -215,7 +215,10 @@ export interface PluginConfig {
 // so they are gone; Claude 5.5 is the current Anthropic line and IS effort
 // capable (verified on agy 1.5.3): the base slug takes `--effort`, while the
 // tiered slugs are the ones agy lists in `agy models`.
+// Gemini 4 Carbon shipped with agy 1.5.5 (2026-11-11) and, like Argon, is
+// listed only as tiered slugs; the bare id accepts `--effort` (verified live).
 export const DEFAULT_FALLBACK_MODELS: readonly FallbackModelDef[] = [
+  { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', efforts: ['low', 'medium', 'high'] },
   { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', efforts: ['low', 'medium', 'high'] },
   { id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['low', 'medium', 'high'] },
   { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)' },

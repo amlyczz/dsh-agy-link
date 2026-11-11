@@ -22,7 +22,7 @@
 
 # 中文
 
-把 **Google Antigravity 模型接入 DeepSeek Harness（DSH）** —— 支持**多账号智能池化轮换**、**官方多 Bucket 配额监控（5小时滚动 + 7天周额度 + Argon 独立周池）**、**浏览器免粘贴一键登录**与**浅色/深色主题高对比度自适应**，由官方未修改的 `agy` CLI 驱动，完整支持流式输出、思考折叠（thinking）、原生工具卡片与精确 token 用量。
+把 **Google Antigravity 模型接入 DeepSeek Harness（DSH）** —— 支持**多账号智能池化轮换**、**官方多 Bucket 配额监控（5小时滚动 + 7天周额度）**、**浏览器免粘贴一键登录**与**浅色/深色主题高对比度自适应**，由官方未修改的 `agy` CLI 驱动，完整支持流式输出、思考折叠（thinking）、原生工具卡片与精确 token 用量。
 
 <p align="center">
   <img src="./docs/assets/console.png" alt="Antigravity 管理控制台 - 多账号池化与配额监控" width="760" />
@@ -62,7 +62,7 @@
 - 🔄 **顺序耗尽故障转移 (Sequential Drain)**：当前账号额度用尽（触发 429 限流或 5h / 周额度耗尽）时，系统**自动平滑接力至下一个可用账号**，对话完全不中断！
 - 🕰 **额度到期优先轮换 (Quota-Expiry-First)**：多个账号可用时，优先切换到**重置窗口最早到期**的账号，把"还剩很久才重置"的额度留给后面，整体池化利用率最大化。
 - 🧠 **网络抖动智能甄别 (Jitter-Safe Auth)**：代理抖动导致的 keyring 鉴权超时会被自动识别为**可重试的网络错误**而非"登录失效"——基于 agy 本次运行日志的 `keyringAuth` 传输证据精准分类，且粘性"需重新登录"隔离需二次确认，健康账号绝不会被误标。
-- 📊 **官方多 Bucket 配额监控 (Multi-Bucket Quota)**：直接调用 Antigravity 官方专用的 `v1internal:retrieveUserQuotaSummary` 接口，同时展示 **5小时滚动额度**、**7天周额度**，以及付费 Pro/Ultra 账号专属的 **Gemini 4 Argon 独立周额度池**（不占用普通 Gemini 池）。
+- 📊 **官方多 Bucket 配额监控 (Multi-Bucket Quota)**：直接调用 Antigravity 官方专用的 `v1internal:retrieveUserQuotaSummary` 接口，同时展示 **5小时滚动额度** 与 **7天周额度**。agy 1.5.5 起 Argon 与新增的 Gemini 4 Carbon 都并入普通 Gemini 池（`/usage` 只返回 Gemini / Claude & GPT 两组），因此不再单独显示 Argon 行；只有服务端仍上报 `Gemini 4 Argon` 独立组时（旧版后端或特定套餐）才额外显示该周额度池。
 - 🔀 **手动切换当前账号 (Manual Switch-Active)**：控制台卡片一键「设为当前使用」，即刻把调度指针钉到指定账号。
 - 🔑 **GUI 内浏览器免粘贴登录 (In-GUI Zero-Paste OAuth)**：点击「➕ 添加账号」自动调起系统浏览器，本地回环监听自动捕获授权凭证，**全程无需手动复制粘贴授权码**。
 - 🎨 **多主题高对比度自适应 (Light & Dark Themes)**：原生适配 DSH 浅色/深色主题，告别发暗发灰与看不清文字，UI 视觉清晰锐利。
@@ -84,7 +84,7 @@
 | ⚡ **原生上下文缓存与真实计量** | 完整映射 Google Gemini 原生上下文缓存协议（`cache_read_tokens`），精准追踪缓存读取与物理上下文占用，深度适配 1M 超长上下文 |
 | 👥 **多账号池化轮换** | 支持主账号 + 多个备用账号；遇到 429 或配额耗尽自动平滑切换，模型族独立冷却，额度到期早的账号优先接班 |
 | 🧠 **抖动安全鉴权 (Jitter-Safe Auth)** | 基于 agy 运行日志的 keyring 传输证据区分"网络抖动"与"真登出"，抖动自动按可重试网络错误处理；粘性隔离需二次确认，杜绝误标"需重新登录" |
-| 📊 **官方多 Bucket 配额监控** | 实时拉取官方端点，同时呈现 **5h 滚动额度**、**7d 周额度**与 **Argon 独立周池**（付费 Pro/Ultra）多进度条与倒计时，单模型明细可展开 |
+| 📊 **官方多 Bucket 配额监控** | 实时拉取官方端点，呈现 **5h 滚动额度**与 **7d 周额度**多进度条与倒计时，单模型明细可展开（Argon 仅在服务端单独上报独立组时才有自己的行，否则与 Gemini 共池） |
 | 🔑 **浏览器一键登录** | 点击添加账号自动唤起 Google 授权页，本地回环自动捕获，全程无需复制粘贴任何代码 |
 | 🔀 **手动切换当前账号** | 控制台「设为当前使用」按钮即刻钉住调度指针；顶部徽标始终显示服务器实际调度的账号 |
 | 🎨 **多主题高对比 UI** | 浅色、深色主题自适应变色，纯矢量 SVG 图标（无 Emoji），字迹清晰不发暗 |
@@ -203,7 +203,7 @@ dsh-agy-image -p "把背景换成夜晚" -i ./day.png -n night_scene --json
 
 1. **短生命周期进程驱动**：每一轮 DSH 对话启动一个独立的官方 `agy -p --output-format stream-json` 进程，解析 NDJSON 事件流。
 2. **多账号沙箱机制**：除主账号沿用系统默认 Keychain / HOME 外，所有备用账号在插件私有目录下建立专属 HOME 隔离区，独立写入 agy 格式的标准 OAuth 凭证。Windows 上 agy 的凭据实际存放在机器级 Credential Manager（`gemini:antigravity`），插件因此以「身份级引用计数租约」接管该槽：**同一授权的多个会话并行运行**，只有账号**身份切换**才串行，且由最后一个持有者还原主账号凭据。
-3. **多 Bucket 官方配额汇总**：插件定时后台静默轮询官方 `v1internal:retrieveUserQuotaSummary`，精准掌控每个账号的 5h 滚动削峰水位、7d 账号阶梯周额度，以及付费账号的 Argon 独立周池。
+3. **多 Bucket 官方配额汇总**：插件定时后台静默轮询官方 `v1internal:retrieveUserQuotaSummary`，精准掌控每个账号的 5h 滚动削峰水位与 7d 账号阶梯周额度；Argon 与 Gemini 4 Carbon 计入 Gemini 池（服务端单独上报 Argon 组的旧后端才显示独立 Argon 行）。
 4. **会话级无缝故障转移**：当遭遇 HTTP 429、额度耗尽或凭证异常时，号池调度器自动标记当前账号家族进入冷却（或按额度到期时间择优轮换），并无缝将后续请求路由到池内下一个有效账号。
 5. **失败分类与自愈**：错误按 AUTH / NETWORK / RATE_LIMIT / ELIGIBILITY 等精确分类；网络抖动借由 agy 运行日志自动甄别为可重试故障，绝不误伤健康账号的登录状态。
 6. **辅助通道隔离**：`/tsl` 翻译、会话标题生成、任务目标推导等通过独立专用辅助通道执行，共享号池与冷却机制，不占主会话绑定与工具权限。

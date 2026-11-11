@@ -726,7 +726,12 @@ export class AccountPoolManager {
    * cached row is no newer than that stamp, so a fresh poll always re-arms it.
    */
   private isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
-    const quota = acc.quotas?.[family]
+    // Argon has no quota pool of its own once the backend folds it into the
+    // plain Gemini group (agy >= 1.5.5 stops reporting a dedicated group and
+    // quota.ts no longer projects one). Gate it on the Gemini row instead of
+    // pretending the family is unmetered — a drained shared pool must still
+    // rotate/bench Argon requests rather than let them bounce off a 429.
+    const quota = acc.quotas?.[family] ?? (family === 'argon' ? acc.quotas?.google : undefined)
     if (!quota) return false
     const clearedAt = acc.quotaGateClearedAt?.[family]
     if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) return false

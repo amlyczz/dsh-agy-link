@@ -1097,7 +1097,7 @@ test('fetchUserQuota integrates /v1internal:retrieveUserQuota per-model buckets 
   assert.equal(quotas.google?.models?.[0]?.modelId, 'gemini-2.5-flash')
 })
 
-test('Argon model quota populates weeklyFraction when summary has no weekly argon group (#46)', async () => {
+test('Argon model rows do not invent a quota family when the summary omits the group (agy 1.5.5)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-quota-argonmodel-'))
   const pool = new AccountPoolManager(dir)
   const acc = pool.createAccountSlot('argon-model-user')
@@ -1145,9 +1145,17 @@ test('Argon model quota populates weeklyFraction when summary has no weekly argo
   const svc = new ArgonModelService(pool)
   const quotas = await svc.refreshAccountQuota(pool.getAccount(acc.id)!, true)
   assert.ok(quotas)
-  assert.ok(quotas.argon, 'argon family should be discovered from models')
-  assert.equal(quotas.argon?.weeklyFraction, 0.85, 'Argon weeklyFraction should be populated from model quota')
-  assert.equal(quotas.argon?.weeklyResetTime, '2026-10-25T12:00:00Z')
+  // agy >= 1.5.5 meters Argon from the shared Gemini pool, so a per-model row
+  // must not manufacture an `argon` family (that was the phantom row /usage
+  // never reports). The row stays under Gemini as the access signal, and the
+  // summary numbers remain authoritative for the shared bucket.
+  assert.equal(quotas.argon, undefined, 'no separate argon family without a dedicated group')
+  assert.equal(quotas.google?.remainingFraction, 0.9, 'the summary row is untouched')
+  assert.equal(quotas.google?.weeklyFraction, undefined, 'no weekly bucket was invented')
+  assert.ok(
+    quotas.google?.models?.some((m) => m.modelId === 'gemini-4-argon'),
+    'the argon model stays listed under Gemini (accountHasArgon signal)',
+  )
 })
 
 test('Argon model quota must never fill the 5-hour slot when the summary has no argon group', async () => {
@@ -1218,17 +1226,22 @@ test('Argon model quota must never fill the 5-hour slot when the summary has no 
 
   const svc = new WeeklyArgonService(pool)
   const quotas = await svc.refreshAccountQuota(pool.getAccount(acc.id)!, true)
-  assert.ok(quotas?.argon)
-  assert.equal(quotas.argon.remainingFraction, undefined, 'weekly reading must not be filed under the 5-hour slot')
-  assert.equal(quotas.argon.resetTime, undefined, 'a 5-hour reset must not be invented')
-  assert.equal(quotas.argon.weeklyFraction, 0.093)
-  assert.equal(quotas.argon.weeklyResetTime, weeklyReset)
+  assert.ok(quotas)
+  // No dedicated group -> no `argon` family; the stale seeded row is dropped.
+  assert.equal(quotas.argon, undefined)
+  assert.equal(
+    quotas.google?.remainingFraction,
+    0.924,
+    'the argon model reading must not be filed under the shared Gemini 5-hour slot',
+  )
+  assert.equal(quotas.google?.weeklyFraction, 0.093)
 
   const stored = pool.getAccount(acc.id)!
+  assert.equal(stored.quotas.argon, undefined, 'the stale argon row is cleared')
   assert.equal(
     pool.isAccountEligible(stored, 'argon'),
     true,
-    'weekly 9.3% is above the 5% weekly floor, so Argon must stay serviceable',
+    'weekly 9.3% is above the 5% weekly floor, so Argon must stay serviceable (gated by Gemini)',
   )
 })
 
@@ -1293,7 +1306,7 @@ test('a retired Argon group releases its cooldown even when argon models synthes
   const stored = pool.getAccount(acc.id)!
   assert.equal(stored.cooldowns.argon, undefined, 'the retired pool’s 429 cooldown must be released')
   assert.equal(pool.hasDedicatedGroup(acc.id, 'argon'), false, 'the family is no longer dedicated')
-  assert.ok(stored.quotas.argon, 'the synthesized weekly projection may stay for the UI')
+  assert.equal(stored.quotas.argon, undefined, 'no synthesized argon row is kept for the UI')
 })
 
 
@@ -1651,4 +1664,193 @@ test('readCliUsageFamilies acquires credentialSlotMutex and degrades to REST on 
   } finally {
     release()
   }
+})
+
+test('agy 1.5.5: no Argon quota row is synthesized from the shared Gemini bucket', async () => {
+  // Live 2026-11-11 (agy 1.5.5): `/usage` returns only `Gemini Models` and
+  // `Claude and GPT models` — the dedicated `Gemini 4 Argon` group is gone
+  // (Argon and the new Gemini 4 Carbon both bill the shared Gemini pool). But
+  // `fetchAvailableModels` still lists the argon models with a per-model
+  // `quotaInfo` mirroring that shared bucket, and projecting it onto the
+  // `argon` family painted a phantom "Argon <pct>%" row the CLI never reports.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-argon-fold-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('argon-fold')
+  // Seed a stale argon row from a previous (three-group) backend to prove it is
+  // dropped once the summary stops reporting the dedicated group.
+  pool.updateAccountQuotas(acc.id, { argon: { weeklyFraction: 1 } }, 'fold@gmail.com')
+
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.argon_fold', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+
+  class NoArgonGroupService extends QuotaService {
+    override async fetchUserInfo(): Promise<{ email?: string } | null> {
+      return null
+    }
+    override async fetchUserQuota() {
+      return null
+    }
+    override async fetchQuotaSummary() {
+      return {
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            description: 'Models within this group: Gemini Flash, Gemini Pro',
+            buckets: [
+              { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.997_889_5, resetTime: '2026-11-11T07:53:21Z' },
+              { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.530_828_5, resetTime: '2026-11-14T01:18:35Z' },
+            ],
+          },
+          {
+            displayName: 'Claude and GPT models',
+            description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+            buckets: [
+              { bucketId: '3p-5h', window: '5h', remainingFraction: 1, resetTime: '2026-11-11T08:07:09Z' },
+              { bucketId: '3p-weekly', window: 'weekly', remainingFraction: 1, resetTime: '2026-11-18T03:07:09Z' },
+            ],
+          },
+        ],
+      } as never
+    }
+    override async fetchAvailableModels() {
+      return {
+        models: {
+          'gemini-4-argon-low': {
+            displayName: 'Gemini 4 Argon (Low)',
+            quotaInfo: { remainingFraction: 0.53, resetTime: '2026-11-14T01:18:35Z' },
+          },
+          'gemini-4-argon-high': {
+            displayName: 'Gemini 4 Argon (High)',
+            quotaInfo: { remainingFraction: 0.53, resetTime: '2026-11-14T01:18:35Z' },
+          },
+          'gemini-4-carbon-high': {
+            displayName: 'Gemini 4 Carbon (High)',
+            quotaInfo: { remainingFraction: 0.9, resetTime: '2026-11-11T07:53:21Z' },
+          },
+        },
+      } as never
+    }
+  }
+
+  const svc = new NoArgonGroupService(pool)
+  const out = await svc.refreshAccountQuota(pool.getAccount(acc.id)!, false)
+
+  assert.equal(out?.argon, undefined, 'no dedicated group -> no Argon family')
+  assert.equal(pool.getAccount(acc.id)!.quotas.argon, undefined, 'the stale Argon row is cleared')
+  assert.equal(out?.google?.weeklyFraction, 0.530_828_5, 'the shared Gemini bucket is untouched')
+  assert.ok(
+    out?.google?.models?.some((m) => m.modelId === 'gemini-4-carbon-high'),
+    'Carbon lands under the Gemini family',
+  )
+  assert.ok(
+    out?.google?.models?.some((m) => m.modelId === 'gemini-4-argon-low'),
+    'Argon model rows survive under Gemini (the accountHasArgon access signal)',
+  )
+})
+
+test('a dedicated Argon group still surfaces its own weekly pool (old backend)', async () => {
+  // Guard against over-fixing: while the backend keeps returning a separate
+  // `Gemini 4 Argon` group, its weekly row (and per-model detail) must survive.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-argon-group-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('argon-group')
+  pool.updateAccountQuotas(acc.id, { google: { remainingFraction: 0.8 } }, 'group@gmail.com')
+
+  const tokenDir = join(acc.dir!, '.gemini', 'antigravity-cli')
+  mkdirSync(tokenDir, { recursive: true })
+  writeFileSync(
+    join(tokenDir, 'antigravity-oauth-token'),
+    JSON.stringify({ access_token: 'ya29.argon_group', expiry: Date.now() + 3600_000 }),
+    'utf8',
+  )
+
+  class DedicatedArgonGroupService extends QuotaService {
+    override async fetchUserInfo(): Promise<{ email?: string } | null> {
+      return null
+    }
+    override async fetchUserQuota() {
+      return null
+    }
+    override async fetchQuotaSummary() {
+      return {
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            buckets: [
+              { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.8, resetTime: '2026-11-11T07:53:21Z' },
+              { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.7, resetTime: '2026-11-14T01:18:35Z' },
+            ],
+          },
+          {
+            displayName: 'Gemini 4 Argon',
+            description: 'Gemini 4 Argon quota bucket',
+            buckets: [
+              { bucketId: 'argon-weekly', window: 'weekly', remainingFraction: 0.42, resetTime: '2026-11-14T01:18:35Z' },
+            ],
+          },
+        ],
+      } as never
+    }
+    override async fetchAvailableModels() {
+      return {
+        models: {
+          'gemini-4-argon-low': {
+            displayName: 'Gemini 4 Argon (Low)',
+            quotaInfo: { remainingFraction: 0.42, resetTime: '2026-11-14T01:18:35Z' },
+          },
+        },
+      } as never
+    }
+  }
+
+  const svc = new DedicatedArgonGroupService(pool)
+  const out = await svc.refreshAccountQuota(pool.getAccount(acc.id)!, false)
+
+  assert.equal(out?.argon?.weeklyFraction, 0.42, 'the dedicated Argon weekly row survives')
+  assert.ok(
+    out?.argon?.models?.some((m) => m.modelId === 'gemini-4-argon-low'),
+    'per-model Argon detail is still attached when the group exists',
+  )
+  assert.equal(
+    pool.getAccount(acc.id)!.dedicatedGroups?.includes('argon'),
+    true,
+    'the account is remembered as Argon-capable',
+  )
+})
+
+test('a drained shared Gemini pool still benches Argon when it has no row of its own', () => {
+  // Argon's quota row is gone on agy >= 1.5.5, but it still bills the shared
+  // Gemini pool. The eligibility gate must therefore read the Gemini row —
+  // otherwise a drained pool would leave Argon "unmetered" and every argon turn
+  // would burn its first attempt on a 429.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-argon-gate-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('argon-gate')
+  const reset = new Date(Date.now() + 2 * 3600_000).toISOString()
+  pool.updateAccountQuotas(acc.id, {
+    google: {
+      remainingFraction: 0.5,
+      resetTime: reset,
+      weeklyFraction: 0.03,
+      weeklyResetTime: reset,
+      updatedAt: 1,
+      models: [
+        {
+          modelId: 'gemini-4-argon-low',
+          displayName: 'Gemini 4 Argon (Low)',
+          remainingFraction: 0.5,
+          resetTime: reset,
+        },
+      ],
+    },
+  }, 'argon-gate@example.com')
+
+  const stored = pool.getAccount(acc.id)!
+  assert.equal(pool.isAccountEligible(stored, 'argon'), false, 'the shared 3% weekly pool benches Argon')
+  assert.equal(pool.isAccountEligible(stored, 'google'), false, 'and the Gemini family itself')
 })

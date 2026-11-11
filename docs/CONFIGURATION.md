@@ -23,7 +23,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `''` (agy default) | Initial model slug |
 | `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | Initial thinking effort: `low` / `medium` / `high` / `auto`; overridable per model in the session menu |
 | `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | Slugs hidden from the model picker (comma separated) |
-| `fallbackModels` | `—` | Gemini 3.8/3.7/3.6/3.5 Flash, Gemini 4 Argon, Claude Sonnet 4.6, Claude Opus 4.6 (Thinking), GPT-OSS 120B | Catalog shown before `agy models` succeeds (signed out or offline) |
+| `fallbackModels` | `—` | Gemini 4 Carbon, Gemini 3.8 Flash, Gemini 4 Argon, Claude Sonnet 4.6, Claude Opus 4.6 (Thinking), GPT-OSS 120B | Catalog shown before `agy models` succeeds (signed out or offline) |
 | `autoFallbackModel` | `DSH_AGY_AUTO_FALLBACK_MODEL` | `false` | Retry on a fallback model when the selected one cannot run |
 | `modelsCacheTtlMs` | `—` | `300000` | Model catalog cache lifetime |
 
