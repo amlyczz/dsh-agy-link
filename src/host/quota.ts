@@ -12,13 +12,11 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  modelFamilyOf,
   needsAuthReverify,
   shouldPollAccount,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
-  type ModelQuotaInfo,
 } from '../common/pool-types.ts'
 import { shouldMarkAuthRequired } from '../common/types.ts'
 import type { AccountPoolManager } from './pool.ts'
@@ -30,19 +28,18 @@ import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
 import { buildAgyEnvWithProxy, pickProxy } from '../runtime/net/account-env.ts'
 
 import {
-  isStale5hBucket,
-  pickFamilyQuota,
-  sameQuotaWindow,
-  shouldReleaseOrphanedCooldown,
-  summaryHasArgonGroup,
-} from '../domain/quota/buckets.ts'
-import {
   agyUserAgent,
   normalizeStoredToken,
   sameCredentialGrant,
   staggerJitterMs,
   type StoredToken,
 } from '../domain/quota/identity.ts'
+import {
+  type DiscoveredModelsResponse,
+  type QuotaSummaryResponse,
+  type UserQuotaResponse,
+} from '../domain/quota/parse.ts'
+import { refreshAccountQuotaPipeline, type QuotaRefreshDeps } from '../features/quota/refresh.ts'
 
 export {
   isStale5hBucket,
@@ -97,52 +94,9 @@ export function detectEmailFromAgyLogs(homeDir: string): string | undefined {
 
 export const OAUTH_USERINFO_URL = 'https://www.googleapis.com/oauth2/v1/userinfo'
 
-interface DiscoveredModelEntry {
-  quotaInfo?: {
-    remainingFraction?: number
-    resetTime?: string
-  }
-  displayName?: string
-  modelName?: string
-}
-
-interface DiscoveredModelsResponse {
-  models?: Record<string, DiscoveredModelEntry>
-}
-
-interface QuotaSummaryBucket {
-  bucketId?: string
-  displayName?: string
-  window?: string
-  resetTime?: string
-  description?: string
-  remainingFraction?: number
-  remainingAmount?: number
-}
-
-interface QuotaSummaryGroup {
-  displayName?: string
-  description?: string
-  buckets?: QuotaSummaryBucket[]
-}
-
-interface QuotaSummaryResponse {
-  groups?: QuotaSummaryGroup[]
-  buckets?: QuotaSummaryBucket[]
-  description?: string
-}
-
-export interface UserQuotaBucket {
-  modelId?: string
-  tokenType?: string
-  remainingFraction?: number
-  remainingAmount?: number
-  resetTime?: string
-}
-
-export interface UserQuotaResponse {
-  buckets?: UserQuotaBucket[]
-}
+// Quota backend response shapes live in the pure parse module; keep the two
+// historically public types re-exported from here.
+export type { UserQuotaBucket, UserQuotaResponse } from '../domain/quota/parse.ts'
 
 /**
  * Parse a go-keyring payload (optionally "go-keyring-base64:" prefixed) into
@@ -770,404 +724,31 @@ export class QuotaService {
   }
 
   /**
-   * Fetch and aggregate live quota statistics (both 5-hour limit and weekly limit)
-   * for a single account across model families.
-   * Includes 10s cache throttle to avoid spamming Google APIs on fast clicks.
+   * Fetch and aggregate live quota statistics (both 5-hour limit and weekly
+   * limit) for a single account across model families.
+   *
+   * The pipeline itself lives in features/quota/refresh.ts; this method only
+   * wires QuotaService's I/O seams (which tests may override) into it, so the
+   * public signature and every override point stay unchanged.
    */
   async refreshAccountQuota(account: ManagedAccount, force = false): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
-    const now = Date.now()
-    if (!force && account.quotas) {
-      const latestUpdate = Math.max(
-        ...Object.values(account.quotas).map((q) => q?.updatedAt ?? 0),
-      )
-      if (latestUpdate > 0 && now - latestUpdate < 10_000) {
-        return account.quotas
-      }
+    const deps: QuotaRefreshDeps = {
+      pool: this.pool,
+      shouldUseCli: () => this.cliDeps.viaCli?.() !== false,
+      readCliUsageFamilies: (a) => this.readCliUsageFamilies(a),
+      getValidAccessToken: (a) => this.getValidAccessToken(a),
+      proxyFor: (a) => this.proxyFor(a),
+      fetchUserInfo: (token, proxyUrl) => this.fetchUserInfo(token, proxyUrl),
+      fetchQuotaSummary: (token, proxyUrl) => this.fetchQuotaSummary(token, proxyUrl),
+      fetchAvailableModels: (token, proxyUrl) => this.fetchAvailableModels(token, proxyUrl),
+      fetchUserQuota: (token, proxyUrl) => this.fetchUserQuota(token, proxyUrl),
+      getTokenFilePath: (a) => this.getTokenFilePath(a),
+      detectEmailFromLogs: (home) => detectEmailFromAgyLogs(home),
+      readPrimaryCredential: (baseDir) => readPrimaryCredential(baseDir),
+      writePrimaryCredential: (cred, baseDir) => writePrimaryCredential(cred, baseDir),
+      credentialFingerprint: (raw) => credentialFingerprint(raw),
     }
-    const home = account.systemHome || !account.dir ? homedir() : account.dir
-
-    // An isolated pool account must never carry the SAME OAuth grant as the
-    // primary. When it does, its login was overwritten by the shared Windows
-    // credential slot, and every number fetched under this row would actually
-    // belong to the primary. Quarantine the slot instead of displaying — and
-    // failing over onto — someone else's quota. Deterministic and offline.
-    if (account.dir && process.platform === 'win32') {
-      const stored = readPrimaryCredential(this.pool.dir)
-      const file = this.getTokenFilePath(account)
-      const own = existsSync(file) ? readFileSync(file, 'utf8') : null
-      const ownFingerprint = own ? credentialFingerprint(own) : null
-      if (
-        stored &&
-        ownFingerprint !== null &&
-        ownFingerprint === credentialFingerprint(stored.raw)
-      ) {
-        this.pool.markAuthRequired(
-          account.id,
-          "stored credential is the primary account's — this login was overwritten, sign in again",
-        )
-        return null
-      }
-    }
-
-    let email = account.email
-    // On Windows, the primary account rides the durable store (.primary-credential.json)
-    // whose identity is verified directly against Google. That verified identity
-    // wins over stale account labels and never relies on ambiguous log scraping.
-    if ((account.systemHome || !account.dir) && process.platform === 'win32') {
-      const stored = readPrimaryCredential(this.pool.dir)
-      if (stored?.email) {
-        email = stored.email
-      }
-    }
-
-    // Only inspect logs when the email is completely missing. Never adopt a
-    // sibling account's email: log scraping can pick up secondary account runs
-    // that temporarily executed under the same profile.
-    if (!email) {
-      const detected = detectEmailFromAgyLogs(home)
-      const siblingEmails = new Set(
-        this.pool
-          .getAccounts()
-          .filter((a) => a.id !== account.id && a.email)
-          .map((a) => a.email!),
-      )
-      if (detected && !siblingEmails.has(detected)) {
-        email = detected
-      }
-    }
-
-    // 1. CLI-FIRST PATH (Anti-Risk Control):
-    // When CLI is available and enabled (default), run official `agy -p /usage`.
-    // 100% official Google binary, real Go TLS fingerprint, native token refresh by agy Go runtime.
-    // Zero Node.js REST calls to Google's internal APIs.
-    if (this.cliDeps.viaCli?.() !== false) {
-      const cliFamilies = await this.readCliUsageFamilies(account)
-      if (cliFamilies !== null && Object.keys(cliFamilies).length > 0) {
-        if (account.authRequired) {
-          this.pool.clearAuthRequired(account.id)
-        }
-        if (cliFamilies.argon) {
-          this.pool.noteDedicatedGroup(account.id, 'argon')
-        } else {
-          this.pool.clearQuotaFamily(account.id, 'argon')
-          this.pool.forgetDedicatedGroup(account.id, 'argon')
-          this.pool.clearCooldown(account.id, 'argon')
-        }
-        this.pool.updateAccountQuotas(account.id, cliFamilies, email)
-        return cliFamilies
-      }
-    }
-
-    const accessToken = await this.getValidAccessToken(account)
-    if (!accessToken) {
-      return null
-    }
-
-    // Manual refresh (刷新/同步): the TOKEN is the only authoritative identity
-    // anchor. Log scraping lies — observed live: the slot was labeled
-    // q98…@gmail.com while the stored token actually belonged to
-    // elegantmanco@…, so every manual click fetched and displayed the WRONG
-    // account's quota under the primary's name. One userinfo call per
-    // explicit user click re-anchors the identity; background polls keep
-    // the zero-network log-scan path below.
-    if (force) {
-      const info = await this.fetchUserInfo(accessToken, this.proxyFor(account))
-      if (info?.email) {
-        email = info.email
-        if ((account.systemHome || !account.dir) && process.platform === 'win32') {
-          const stored = readPrimaryCredential(this.pool.dir)
-          if (stored && stored.email !== info.email) {
-            writePrimaryCredential({ ...stored, email: info.email, savedAt: Date.now() }, this.pool.dir)
-          }
-        }
-      }
-    }
-
-    // External re-login: the slot now hosts a DIFFERENT Google account.
-    // Identity-bound state (cooldowns / quotas / auth quarantine) belongs to
-    // the previous email and must be reset before anything else — otherwise
-    // the new account inherits the old one's restrictions (and poll gating
-    // would keep the slot quarantined forever after an invalid_grant).
-    if (email && email !== account.email) {
-      // An ISOLATED pool account's identity is fixed by the credential the user
-      // signed in with. If the resolved email matches ANOTHER slot's email,
-      // this account's token file was overwritten by that account (the
-      // documented Windows slot-corruption failure) — quarantine it instead of
-      // relabeling, which is how one corrupted token made every row report the
-      // same identity and spend the same quota.
-      const collisionsWithSibling =
-        Boolean(account.dir) &&
-        this.pool.getAccounts().some(
-          (other) =>
-            other.id !== account.id &&
-            other.email !== undefined &&
-            other.email === email &&
-            other.dir !== account.dir,
-        )
-      if (collisionsWithSibling) {
-        this.pool.markAuthRequired(
-          account.id,
-          `stored credential belongs to ${email} (another account's login) — sign in again`,
-        )
-        return null
-      }
-      this.pool.resetAccountIdentity(account.id, email)
-    }
-
-    const [summary, discovered, userQuota] = await Promise.all([
-      this.fetchQuotaSummary(accessToken, this.proxyFor(account)),
-      this.fetchAvailableModels(accessToken, this.proxyFor(account)),
-      this.fetchUserQuota(accessToken, this.proxyFor(account)).catch(() => null),
-    ])
-
-    // Query the userinfo endpoint ONLY when the email is still unknown.
-    // Account switching on systemHome accounts is already caught locally by
-    // detectEmailFromAgyLogs (no network); calling userinfo every poll cycle
-    // was pure risk-control exposure for a value that never changes.
-    if (!email) {
-      const info = await this.fetchUserInfo(accessToken, this.proxyFor(account))
-      if (info?.email) email = info.email
-    }
-
-    const modelsCatalog: Record<string, DiscoveredModelEntry> = {
-      ...(discovered?.models || {}),
-    }
-    if (userQuota && Array.isArray(userQuota.buckets)) {
-      for (const b of userQuota.buckets) {
-        if (!b.modelId) continue
-        const frac = typeof b.remainingFraction === 'number' && Number.isFinite(b.remainingFraction)
-          ? Math.min(1, Math.max(0, b.remainingFraction))
-          : undefined
-        if (frac !== undefined) {
-          const existing = modelsCatalog[b.modelId]
-          modelsCatalog[b.modelId] = {
-            ...existing,
-            quotaInfo: {
-              remainingFraction: frac,
-              resetTime: b.resetTime || existing?.quotaInfo?.resetTime,
-            },
-          }
-        }
-      }
-    }
-
-    if (!summary && Object.keys(modelsCatalog).length === 0) {
-      return null
-    }
-
-    // Authenticated backend calls just succeeded with this token: any stale
-    // authRequired flag (e.g. set while the OLD account was logging out) is
-    // disproven — clear it so the slot rejoins selection and polling.
-    if (account.authRequired) {
-      this.pool.clearAuthRequired(account.id)
-    }
-
-    const familyQuotas: Partial<Record<ModelFamily, FamilyQuotaInfo>> = {}
-    const stale5hFamilies = new Set<ModelFamily>()
-
-    // 1. Ingest official weekly & 5h limits from retrieveUserQuotaSummary
-    const summaryGroups: QuotaSummaryGroup[] = []
-    if (summary) {
-      if (Array.isArray(summary.groups)) summaryGroups.push(...summary.groups)
-      if (Array.isArray(summary.buckets) && summary.buckets.length > 0) {
-        summaryGroups.push({
-          displayName: summary.description || 'Quota',
-          buckets: summary.buckets,
-        })
-      }
-    }
-
-    if (summaryGroups.length > 0) {
-      for (const group of summaryGroups) {
-        const dName = (group.displayName || '').toLowerCase()
-        const desc = (group.description || '').toLowerCase()
-        // Gemini 4 Argon (Pro/Ultra-only) ships as its OWN quota group with a
-        // separate weekly bucket, but its display name still contains "gemini"
-        // ("Gemini 4 Argon"). Detect argon BEFORE the generic gemini gate or
-        // the group folds into — and overwrites — the plain Gemini family.
-        const hasArgonBucket = Array.isArray(group.buckets) && group.buckets.some((b) => (b.bucketId || '').toLowerCase().includes('argon') || (b.displayName || '').toLowerCase().includes('argon'))
-        const isArgon = dName.includes('argon') || desc.includes('argon') || hasArgonBucket
-        const isGoogle = !isArgon && (dName.includes('gemini') || desc.includes('gemini'))
-        const is3P = dName.includes('claude') || dName.includes('gpt') || desc.includes('claude') || desc.includes('gpt')
-
-        const targetFamilies: ModelFamily[] = isArgon
-          ? ['argon']
-          : isGoogle
-          ? ['google']
-          : is3P
-          ? ['anthropic', 'openai']
-          : []
-
-        let fiveHourFrac: number | undefined
-        let fiveHourReset: string | undefined
-        let weeklyFrac: number | undefined
-        let weeklyReset: string | undefined
-
-        for (const b of group.buckets || []) {
-          const w = (b.window || b.bucketId || '').toLowerCase()
-          // Server fractions are clamped to [0,1] and NaN rejected: a bogus
-          // remainingFraction (NaN/negative/>1) used to flow straight into
-          // isAccountEligible and the UI ("NaN%" rows, permanently ineligible).
-          const frac = typeof b.remainingFraction === 'number' && Number.isFinite(b.remainingFraction)
-            ? Math.min(1, Math.max(0, b.remainingFraction))
-            : undefined
-          if (w.includes('5h') || w.includes('five_hour') || w.includes('5-hour')) {
-            fiveHourFrac = frac
-            fiveHourReset = b.resetTime
-          } else if (w.includes('weekly') || w.includes('week')) {
-            weeklyFrac = frac
-            weeklyReset = b.resetTime
-          }
-        }
-
-        for (const fam of targetFamilies) {
-          if (isStale5hBucket(fiveHourFrac, fiveHourReset, now)) {
-            stale5hFamilies.add(fam)
-          }
-          familyQuotas[fam] = {
-            remainingFraction: fiveHourFrac,
-            resetTime: fiveHourReset,
-            weeklyFraction: weeklyFrac,
-            weeklyResetTime: weeklyReset,
-            description: group.description,
-            updatedAt: now,
-          }
-        }
-      }
-    }
-
-    // 2. Ingest detailed model list from fetchAvailableModels / retrieveUserQuota
-    const familyModels: Partial<Record<ModelFamily, ModelQuotaInfo[]>> = {}
-    if (Object.keys(modelsCatalog).length > 0) {
-      for (const [modelId, entry] of Object.entries(modelsCatalog)) {
-        const fam = modelFamilyOf(modelId)
-        if (fam === 'unknown') continue
-        const rawRemaining = entry.quotaInfo?.remainingFraction
-        // Clamp to [0,1]; non-numeric entries are skipped (same contract as
-        // the summary path above).
-        const remaining = typeof rawRemaining === 'number' && Number.isFinite(rawRemaining)
-          ? Math.min(1, Math.max(0, rawRemaining))
-          : undefined
-        const resetTime = entry.quotaInfo?.resetTime
-
-        if (remaining === undefined) continue
-
-        if (!familyModels[fam]) familyModels[fam] = []
-        familyModels[fam]!.push({
-          modelId,
-          displayName: entry.displayName || modelId,
-          remainingFraction: remaining,
-          resetTime,
-        })
-
-        const isStale = stale5hFamilies.has(fam)
-        // Fallback for family fraction if summary was unavailable.
-        if (!familyQuotas[fam]) {
-          if (fam === 'argon') {
-            // Argon is WEEKLY-ONLY whenever the backend does not publish a
-            // dedicated Argon group (a Pro -> Ultra plan folds it into the
-            // shared Gemini bucket). The per-model quotaInfo then carries the
-            // WEEKLY window, so it must never be filed under the 5-hour row:
-            // the 10% 5h floor would otherwise bench an account whose weekly
-            // quota is still above the 5% weekly floor.
-            familyQuotas.argon = {
-              ...(account.quotas.argon ?? {}),
-              remainingFraction: undefined,
-              resetTime: undefined,
-              weeklyFraction: remaining,
-              weeklyResetTime: resetTime,
-              updatedAt: now,
-            }
-          } else {
-            familyQuotas[fam] = pickFamilyQuota(
-              account.quotas[fam],
-              { remainingFraction: remaining, resetTime, updatedAt: now },
-              summaryGroups.length > 0,
-            )
-          }
-        } else {
-          // Window-aware merge. `quotaInfo` carries no window label, so the
-          // reset instant decides where the number belongs:
-          //   • reset == summary 5h reset  → a 5h reading: tighten the 5h row.
-          //   • reset == summary WEEKLY reset → a weekly reading: tighten the
-          //     weekly row ONLY. Filing it under the 5h row painted "5h 19% ·
-          //     weekly 19%" with the weekly reset on both lines (2026-10-22).
-          //   • neither / no summary resets → unmatchable: keep the old
-          //     conservative "lowest binding constraint" tighten on the 5h row.
-          const familyQuota = familyQuotas[fam]!
-          // Argon never carries a 5-hour window unless the backend reported one
-          // explicitly; when `resetTime` is absent the model-level reading is
-          // the WEEKLY window and must not tighten the 5-hour row.
-          const weeklyOnlyArgon = fam === 'argon' && familyQuota.resetTime === undefined
-          const modelIsWeekly =
-            weeklyOnlyArgon ||
-            (sameQuotaWindow(resetTime, familyQuota.weeklyResetTime) &&
-              !sameQuotaWindow(resetTime, familyQuota.resetTime))
-          if (modelIsWeekly) {
-            const curWeekly = familyQuota.weeklyFraction ?? 1
-            if (remaining < curWeekly) {
-              familyQuota.weeklyFraction = remaining
-              familyQuota.weeklyResetTime = resetTime
-            }
-            continue
-          }
-          // The binding constraint is the LOWEST reported remaining across all
-          // sources. A lower remaining is by definition more consumed —
-          // tighten to it and adopt its reset. If the coarse summary returned an
-          // unmetered 5h placeholder (stale 100% with now+5h), the live model
-          // window overrides it so the UI displays authentic numbers.
-          const curRemaining = familyQuota.remainingFraction ?? 1
-          if (remaining < curRemaining || isStale) {
-            familyQuota.remainingFraction = remaining
-            familyQuota.resetTime = resetTime
-            stale5hFamilies.delete(fam)
-          }
-          if (fam === 'argon' && familyQuota.weeklyFraction === undefined) {
-            familyQuota.weeklyFraction = remaining
-            familyQuota.weeklyResetTime = resetTime
-          }
-        }
-      }
-    }
-
-    for (const [famKey, list] of Object.entries(familyModels)) {
-      const fam = famKey as ModelFamily
-      if (familyQuotas[fam]) {
-        familyQuotas[fam]!.models = list
-      }
-    }
-
-    // Track whether this account reports a dedicated Argon bucket, so a retired one
-    // can be told apart from one that never existed (see shouldReleaseOrphanedCooldown).
-    if (summaryGroups.length > 0) {
-      const argonGroupPresent = summaryHasArgonGroup(summaryGroups)
-      if (argonGroupPresent) {
-        this.pool.noteDedicatedGroup(account.id, 'argon')
-      } else {
-        // The backend stopped reporting a dedicated Argon group. A synthesized
-        // `argon` row may still exist because the model-level fallback projects
-        // the shared Gemini bucket onto it — that row is NOT evidence that the
-        // group is present. Checking `familyQuotas.argon` here made this branch
-        // unreachable in exactly the Pro -> Ultra fold it was written for, so a
-        // cooldown taken against the retired pool was never released.
-        const groupSeenBefore = this.pool.hasDedicatedGroup(account.id, 'argon')
-        if (familyQuotas.argon === undefined) {
-          this.pool.clearQuotaFamily(account.id, 'argon')
-        }
-        if (shouldReleaseOrphanedCooldown({
-          summaryAuthoritative: true,
-          groupPresent: false,
-          groupSeenBefore,
-          hasCooldown: account.cooldowns?.argon !== undefined,
-        })) {
-          this.pool.clearCooldown(account.id, 'argon')
-        }
-        this.pool.forgetDedicatedGroup(account.id, 'argon')
-      }
-    }
-
-    this.pool.updateAccountQuotas(account.id, familyQuotas, email)
-    return familyQuotas
+    return refreshAccountQuotaPipeline(deps, account, force)
   }
 
   /**
