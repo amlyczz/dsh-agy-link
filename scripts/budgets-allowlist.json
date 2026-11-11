@@ -5,7 +5,7 @@
     "src/client/toolview.ts": 1882,
     "src/client/translate.ts": 949,
     "src/common/types.ts": 751,
-    "src/host/adapter.ts": 2987,
+    "src/host/adapter.ts": 2864,
     "src/host/agy-db.ts": 676,
     "src/host/commands.ts": 625,
     "src/host/credential-slot.ts": 1325,
