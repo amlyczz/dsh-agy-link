@@ -21,7 +21,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(fileURLToPath(import.meta.url), '..', '..')
-const src = readFileSync(join(root, 'src/client/index.ts'), 'utf8')
+// Phase 4 moved the account cards and the per-account quota wrapper into
+// src/client/sections/AccountsPanel.ts.
+const src = readFileSync(join(root, 'src/client/sections/AccountsPanel.ts'), 'utf8')
 
 function section(from: string, to: string): string {
 	const start = src.indexOf(from)

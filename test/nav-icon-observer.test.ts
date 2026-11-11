@@ -22,7 +22,8 @@ const root = join(fileURLToPath(import.meta.url), '..', '..')
 // Normalize CRLF -> LF: Windows checkouts under core.autocrlf=true hand us
 // `\r\n`, while every marker this test slices on is written as `\n`. Without
 // normalization the `'\n}\n'` function-closing search silently misses.
-const src = readFileSync(join(root, 'src/client/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+// Phase 4 moved the settings-nav icon installer into src/client/icons.ts.
+const src = readFileSync(join(root, 'src/client/icons.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 function installerBody(): string {
 	const start = src.indexOf('function installSettingsNavIcon')

@@ -18,6 +18,9 @@
 // The contract these tests pin: a full-screen overlay must (1) not use a
 // full-viewport backdrop-filter, (2) freeze the background scroll, (3) stop
 // wheel chaining, and (4) suspend the plugin's own scanners while it is open.
+//
+// Phase 4 moved the CSS to src/client/global-css.ts and the modal store /
+// overlay shell to src/client/ui/Modal.ts; the guards follow the code.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,17 +29,18 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(fileURLToPath(import.meta.url), '..', '..')
-const src = readFileSync(join(root, 'src/client/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+const cssSrc = readFileSync(join(root, 'src/client/global-css.ts'), 'utf8').replace(/\r\n/g, '\n')
+const modalSrc = readFileSync(join(root, 'src/client/ui/Modal.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Extract the body of a CSS rule by its selector from the GLOBAL_CSS literal. */
 function cssRule(selector: string): string {
-	const start = src.indexOf(selector + ' {')
+	const start = cssSrc.indexOf(selector + ' {')
 	assert.ok(start > 0, `CSS rule not found: ${selector}`)
-	const end = src.indexOf('}', start)
+	const end = cssSrc.indexOf('}', start)
 	assert.ok(end > start, `CSS rule not closed: ${selector}`)
 	// Comments carry the reasoning and sometimes name the very property we ban
 	// (e.g. "no contain: content here"); strip them before asserting.
-	return src.slice(start, end + 1).replace(/\/\*[\s\S]*?\*\//g, '')
+	return cssSrc.slice(start, end + 1).replace(/\/\*[\s\S]*?\*\//g, '')
 }
 
 test('REGRESSION: the full-viewport modal backdrop must not use backdrop-filter', () => {
@@ -63,7 +67,7 @@ test('REGRESSION: opening the console locks the conversation scroller behind it'
 	// A CSS rule keyed off a class toggled while the modal is open.
 	const re = /html\.agy-modal-open\s+\[data-conversation-scroll\][^{]*\{[^}]*overflow\s*:\s*hidden/i
 	assert.match(
-		src,
+		cssSrc,
 		re,
 		'while the console is open the conversation scroll element must be overflow:hidden ' +
 			'(scrollbar-gutter:stable keeps the width from jumping), so nothing moves behind the overlay',
@@ -71,11 +75,11 @@ test('REGRESSION: opening the console locks the conversation scroller behind it'
 })
 
 test('REGRESSION: setOpen suspends overlay scanners and toggles the scroll-lock class', () => {
-	const start = src.indexOf('const agyModalStore = {')
+	const start = modalSrc.indexOf('const agyModalStore = {')
 	assert.ok(start > 0, 'agyModalStore must exist')
-	const end = src.indexOf('\n};', start)
+	const end = modalSrc.indexOf('\n};', start)
 	assert.ok(end > start, 'agyModalStore must be a closed object literal')
-	const body = src.slice(start, end + 3)
+	const body = modalSrc.slice(start, end + 3)
 
 	assert.match(
 		body,
@@ -97,7 +101,7 @@ test('REGRESSION: setOpen suspends overlay scanners and toggles the scroll-lock 
 test('GUARDRAIL: no full-viewport backdrop-filter anywhere in the plugin CSS', () => {
 	// The whole class of flicker comes from filtering the full viewport. Keep the
 	// invariant global so a future overlay (or the lightbox) cannot reintroduce it.
-	for (const rel of ['src/client/index.ts', 'src/client/images.ts']) {
+	for (const rel of ['src/client/global-css.ts', 'src/client/images.ts']) {
 		const text = readFileSync(join(root, rel), 'utf8')
 		assert.equal(
 			/backdrop-filter\s*:/.test(text),
@@ -129,18 +133,18 @@ test('REGRESSION: wheel/touch over the overlay cannot scroll the page behind it'
 	// Non-passive native capture listener: React's onWheel is passive, so
 	// preventDefault() there is ignored. The console's own scroller is exempt.
 	assert.match(
-		src,
+		modalSrc,
 		/addEventListener\(['"]wheel['"][^)]*passive:\s*false[^)]*capture:\s*true/,
 		'the dialog must attach its own non-passive wheel blocker',
 	)
-	assert.match(src, /target\.closest\(['"]\.agy-modal-backdrop['"]\)/, 'the blocker only acts inside the overlay')
-	assert.match(src, /target\.closest\(['"]\.agy-modal-body['"]\)/, 'the console scroller keeps native wheel scrolling')
-	assert.match(src, /addEventListener\(['"]touchmove['"][^)]*passive:\s*false/, 'touch is blocked the same way')
+	assert.match(modalSrc, /target\.closest\(['"]\.agy-modal-backdrop['"]\)/, 'the blocker only acts inside the overlay')
+	assert.match(modalSrc, /target\.closest\(['"]\.agy-modal-body['"]\)/, 'the console scroller keeps native wheel scrolling')
+	assert.match(modalSrc, /addEventListener\(['"]touchmove['"][^)]*passive:\s*false/, 'touch is blocked the same way')
 })
 
 test('REGRESSION: the shell itself is locked while the console is open', () => {
 	assert.match(
-		src,
+		cssSrc,
 		/html\.agy-modal-open,\s*\n\s*html\.agy-modal-open body\s*\{[^}]*overflow\s*:\s*hidden\s*!important/,
 		'locking only [data-conversation-scroll] leaves a shell-level scroller free behind the overlay',
 	)
