@@ -97,7 +97,42 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
   img.alt = title;
   currentLightboxImg = img;
 
+  const errorCard = document.createElement('div');
+  errorCard.className = 'agy-lightbox-error-card';
+  errorCard.style.display = 'none';
+
+  const errorIcon = document.createElement('div');
+  errorIcon.className = 'agy-lightbox-error-icon';
+  errorIcon.textContent = '🖼️';
+
+  const errorTitle = document.createElement('div');
+  errorTitle.className = 'agy-lightbox-error-title';
+  errorTitle.textContent = '无法预览图片 / Image Preview Unavailable';
+
+  const errorDesc = document.createElement('div');
+  errorDesc.className = 'agy-lightbox-error-desc';
+  errorDesc.textContent = rawPath || src;
+
+  const errorHint = document.createElement('div');
+  errorHint.className = 'agy-lightbox-error-hint';
+  errorHint.textContent = '文件可能已被移动、尚未在本地生成或路径无法访问。';
+
+  errorCard.appendChild(errorIcon);
+  errorCard.appendChild(errorTitle);
+  errorCard.appendChild(errorDesc);
+  errorCard.appendChild(errorHint);
+
+  img.onerror = () => {
+    img.style.display = 'none';
+    errorCard.style.display = 'flex';
+  };
+  img.onload = () => {
+    img.style.display = '';
+    errorCard.style.display = 'none';
+  };
+
   imgWrap.appendChild(img);
+  imgWrap.appendChild(errorCard);
   body.appendChild(imgWrap);
   overlay.appendChild(body);
 

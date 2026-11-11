@@ -284,7 +284,10 @@ test('image scanner: enhances file:// image links but ignores non-images', () =>
 
 	scanAndEnhanceImages();
 	assert.equal(imgLink.dataset.agyLinkEnhanced, 'true');
-	assert.ok(imgLink.querySelector('.agy-image-link-icon'), 'preview chip');
+	const chip = imgLink.querySelector('.agy-image-link-icon') as HTMLElement;
+	assert.ok(chip, 'preview chip');
+	assert.equal(typeof chip.onclick, 'function', 'chip has click handler for lightbox');
+	assert.equal(imgLink.onclick, null, 'native link onclick is NOT hijacked');
 	assert.equal(txtLink.dataset.agyLinkEnhanced, undefined, 'non-image link untouched');
 	assert.equal(txtLink.querySelector('.agy-image-link-icon'), null);
 	scanAndEnhanceImages();

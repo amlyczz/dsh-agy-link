@@ -18,15 +18,24 @@ test('media-route: resolveLocalMediaPath handles Windows paths, file://, and rel
     assert.ok(resolvedDirect !== null, 'direct path should resolve');
     assert.ok(existsSync(resolvedDirect));
 
-    // 2. file:/// URL
+    // 2. Standard 3-slash file:/// URL (RFC 8089)
+    const stdFileUrl = 'file://' + (isWin ? '/' + sampleFile.replace(/\\/g, '/') : sampleFile);
+    const resolvedStd = resolveLocalMediaPath(stdFileUrl);
+    assert.ok(resolvedStd !== null, 'standard 3-slash file:/// URL should resolve');
+    assert.equal(resolvedStd, resolvedDirect);
+
+    // 2b. file:/// URL with drive or legacy 4 slashes
     const fileUrl = 'file:///' + (isWin ? sampleFile.replace(/\\/g, '/') : sampleFile);
     const resolvedUrl = resolveLocalMediaPath(fileUrl);
     assert.ok(resolvedUrl !== null, 'file:/// URL should resolve');
     assert.equal(resolvedUrl, resolvedDirect);
 
-    // 3. Relative path with workspaceRoot
+    // 3. Relative path with workspaceRoot or array of workspaceRoots
     const resolvedRel = resolveLocalMediaPath('test-image.png', tempDir);
     assert.ok(resolvedRel !== null, 'relative path should resolve against workspaceRoot');
+    const resolvedMulti = resolveLocalMediaPath('test-image.png', ['/invalid/path', tempDir]);
+    assert.ok(resolvedMulti !== null, 'relative path should resolve against candidate array');
+    assert.equal(resolvedMulti, resolvedDirect);
 
     // 4. Non-existent path returns null
     assert.equal(resolveLocalMediaPath('non-existent-image-12345.png'), null);

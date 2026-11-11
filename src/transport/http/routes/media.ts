@@ -28,8 +28,16 @@ function handleMermaid(services: HostServices, req: unknown, res: unknown): void
 }
 
 function handleMedia(services: HostServices, req: unknown, res: unknown): void {
-  const { getConfig } = services
-      handleMediaRequest(req as HttpRequestLike, res as HttpResponseLike, { workspaceRoot: getConfig().workspaceRoot })
+  const { getConfig, mediaDir } = services
+  const roots: string[] = []
+  const cfgRoot = getConfig().workspaceRoot
+  if (cfgRoot) roots.push(cfgRoot)
+  if (typeof mediaDir === 'function') {
+    const md = mediaDir()
+    if (md) roots.push(md)
+  }
+  roots.push(process.cwd())
+  handleMediaRequest(req as HttpRequestLike, res as HttpResponseLike, { workspaceRoots: roots })
 }
 
 function handleAssets(req: unknown, res: unknown, assetDir: string): void {

@@ -122,17 +122,33 @@ export function scanAndEnhanceImages(): void {
     const mediaUrl = buildMediaUrl(href);
     const linkText = link.textContent ?? 'Image';
 
-    link.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openLightbox(mediaUrl, linkText, href);
-    };
+    // Do NOT hijack link.onclick: preserving DSH's native link handling allows
+    // clicking the filename to open/reveal the file in the workspace or editor.
+    // The Lightbox preview is opened strictly through the attached preview button.
 
     // Add a visual preview indicator
     if (!link.querySelector('.agy-image-link-icon')) {
       const badge = document.createElement('span');
       badge.className = 'agy-image-link-chip agy-image-link-icon';
-      badge.textContent = '🖼️ 预览';
+      badge.setAttribute('role', 'button');
+      badge.setAttribute('tabindex', '0');
+      badge.title = `预览图片 / Preview (${linkText})`;
+      badge.innerHTML = '<span class="agy-image-chip-icon">🖼️</span><span class="agy-image-chip-text">预览</span>';
+
+      badge.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openLightbox(mediaUrl, linkText, href);
+      };
+
+      badge.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          openLightbox(mediaUrl, linkText, href);
+        }
+      };
+
       link.appendChild(badge);
     }
   }

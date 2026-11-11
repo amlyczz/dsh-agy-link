@@ -3,6 +3,7 @@
 // and static plugin assets (e.g. mermaid.min.js) safely to DSH Desktop and Web clients.
 import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MIME_MAP: Record<string, string> = {
   '.png': 'image/png',
@@ -35,27 +36,40 @@ function safeDecodeUri(s: string): string | null {
  * Normalize and resolve a raw path or file:// URL into a system file path.
  * Converts WSL /mnt/X/ and /home/ paths on Windows where possible.
  */
-export function resolveLocalMediaPath(rawPath: string, workspaceRoot?: string): string | null {
+export function resolveLocalMediaPath(
+  rawPath: string,
+  workspaceRoots?: string | readonly string[],
+): string | null {
   if (!rawPath || typeof rawPath !== 'string') return null;
   let p = rawPath.trim();
 
-  // Strip file:// prefix. decodeURIComponent throws on a malformed escape (e.g.
-  // a double-encoded query decodes to a literal 'file:///%E0%A4%A'); treat that
-  // as "not a usable path" instead of letting a URIError escape the route.
-  if (p.startsWith('file:///')) {
-    const decoded = safeDecodeUri(p.slice(8));
-    if (decoded === null) return null;
-    p = decoded;
-    // On Windows, file:///D:/foo -> D:/foo
-    if (IS_WIN && !/^[A-Za-z]:/.test(p) && /^\/[A-Za-z]:/.test(p)) {
-      p = p.slice(1);
+  // Strip file:// prefix safely
+  if (p.startsWith('file://')) {
+    let converted: string | null = null;
+    try {
+      converted = fileURLToPath(p);
+    } catch {
+      // Fallback manual parsing if URL constructor or fileURLToPath throws
     }
-  } else if (p.startsWith('file://')) {
-    const decoded = safeDecodeUri(p.slice(7));
-    if (decoded === null) return null;
-    p = decoded;
-    if (IS_WIN && p.startsWith('wsl.localhost/')) {
-      p = '\\\\' + p.replace(/\//g, '\\');
+
+    if (converted !== null) {
+      p = converted;
+    } else {
+      // Manual fallback
+      const withoutScheme = p.slice(7); // strip 'file://'
+      const decoded = safeDecodeUri(withoutScheme);
+      if (decoded === null) return null;
+      p = decoded;
+
+      if (IS_WIN) {
+        if (/^\/[A-Za-z]:/.test(p)) {
+          p = p.slice(1);
+        } else if (p.startsWith('wsl.localhost/')) {
+          p = '\\\\' + p.replace(/\//g, '\\');
+        } else if (p.startsWith('/wsl.localhost/')) {
+          p = '\\\\' + p.slice(1).replace(/\//g, '\\');
+        }
+      }
     }
   }
 
@@ -71,10 +85,28 @@ export function resolveLocalMediaPath(rawPath: string, workspaceRoot?: string): 
     }
   }
 
-  // If path is relative and workspaceRoot is provided, resolve against workspaceRoot
-  if (workspaceRoot && !p.startsWith('/') && !/^[A-Za-z]:/.test(p) && !p.startsWith('\\\\')) {
-    const candidate = resolve(workspaceRoot, p);
+  // If path is already absolute, check directly
+  if ((IS_WIN && (/^[A-Za-z]:/.test(p) || p.startsWith('\\\\'))) || (!IS_WIN && p.startsWith('/'))) {
+    const resolved = resolve(p);
+    if (existsSync(resolved)) return resolved;
+  }
+
+  // Resolve candidates against workspace roots / media directory
+  const roots: string[] = [];
+  if (typeof workspaceRoots === 'string' && workspaceRoots !== '') {
+    roots.push(workspaceRoots);
+  } else if (Array.isArray(workspaceRoots)) {
+    for (const r of workspaceRoots) {
+      if (typeof r === 'string' && r !== '') roots.push(r);
+    }
+  }
+
+  for (const root of roots) {
+    const candidate = resolve(root, p);
     if (existsSync(candidate)) return candidate;
+    // Also check basename in case p was prefixed or relative
+    const baseCandidate = resolve(root, extname(p) ? p.split(/[/\\]/).pop()! : p);
+    if (existsSync(baseCandidate)) return baseCandidate;
   }
 
   const resolved = resolve(p);
@@ -101,7 +133,7 @@ export interface HttpRequestLike {
 export function handleMediaRequest(
   req: HttpRequestLike,
   res: HttpResponseLike,
-  opts: { workspaceRoot?: string } = {},
+  opts: { workspaceRoot?: string; workspaceRoots?: string | readonly string[] } = {},
 ): void {
   const reqUrl = req.url ?? '';
   let targetPath = '';
@@ -120,7 +152,8 @@ export function handleMediaRequest(
     return;
   }
 
-  const filePath = resolveLocalMediaPath(targetPath, opts.workspaceRoot);
+  const roots = opts.workspaceRoots ?? opts.workspaceRoot;
+  const filePath = resolveLocalMediaPath(targetPath, roots);
   if (!filePath) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('file not found');
