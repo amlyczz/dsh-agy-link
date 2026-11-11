@@ -29,93 +29,39 @@ import { parseCredentialDoc, credentialFingerprint, readPrimaryCredential, write
 import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
 import { buildAgyEnvWithProxy, pickProxy } from '../runtime/net/account-env.ts'
 
-/**
- * When the quota-summary endpoint transiently fails, per-model fallback
- * data carries a SINGLE window (sometimes the weekly one) and no weekly
- * fields. Overwriting a previously COMPLETE family entry with that partial
- * shape dropped weeklyFraction to none and put wrong-window numbers into
- * the 5h row (observed: 5h=100% / reset a week out / weekly missing).
- * Rule: last-known-good complete data always wins over partial fallback.
- */
-export function mergeFallbackFamilyQuota(
-  prev: FamilyQuotaInfo | undefined,
-  fallback: FamilyQuotaInfo,
-): FamilyQuotaInfo {
-  if (prev && typeof prev.remainingFraction === 'number') return prev
-  return fallback
-}
+import {
+  isStale5hBucket,
+  pickFamilyQuota,
+  sameQuotaWindow,
+  shouldReleaseOrphanedCooldown,
+  summaryHasArgonGroup,
+} from '../domain/quota/buckets.ts'
+import {
+  agyUserAgent,
+  normalizeStoredToken,
+  sameCredentialGrant,
+  staggerJitterMs,
+  type StoredToken,
+} from '../domain/quota/identity.ts'
 
-/** Minimal shape of the quota groups `retrieveUserQuotaSummary` returns. */
-export interface QuotaGroupShape {
-  displayName?: string
-  description?: string
-  buckets?: readonly { bucketId?: string; displayName?: string }[]
-}
-
-/**
- * True when any returned group is the dedicated Argon bucket.
- *
- * The backend stops emitting that group once the plan folds Argon into the
- * larger Gemini bucket (Ultra). From then on the family is governed by the
- * shared bucket, so a cooldown recorded against the retired pool — e.g. a 429
- * taken minutes before an upgrade — must not keep blocking the family for days.
- */
-export function summaryHasArgonGroup(groups: readonly QuotaGroupShape[]): boolean {
-  return groups.some((group) => {
-    const fields: (string | undefined)[] = [group.displayName, group.description]
-    for (const bucket of group.buckets ?? []) fields.push(bucket.bucketId, bucket.displayName)
-    return fields.some((value) => typeof value === 'string' && value.toLowerCase().includes('argon'))
-  })
-}
-
-/**
- * Decide whether a family's cooldown belongs to a quota bucket that no longer exists.
- *
- * A cooldown is recorded against the pool that produced the 429. A plan change can
- * retire that pool — a Pro → Ultra upgrade folds Argon into the larger Gemini bucket
- * and the backend stops emitting the `Gemini 4 Argon` group — leaving a cooldown that
- * blocks the family until a reset that no longer applies:
- *
- *   All Antigravity accounts are unavailable: no account can serve argon right now
- *   (1 in cooldown) (earliest reset in 345338s)
- *
- * `groupSeenBefore` is what keeps this from firing on accounts that never had the
- * group at all (free tier, or any plan without an Argon bucket): their argon
- * cooldowns come from genuine 429s and must survive.
- */
-export function shouldReleaseOrphanedCooldown(state: {
-  summaryAuthoritative: boolean
-  groupPresent: boolean
-  groupSeenBefore: boolean
-  hasCooldown: boolean
-}): boolean {
-  return state.summaryAuthoritative
-    && !state.groupPresent
-    && state.groupSeenBefore
-    && state.hasCooldown
-}
-
-/**
- * Pick the family fraction when this poll's summary carried no group for it.
- *
- * An *authoritative* summary (at least one group returned) means the absence is
- * real: the family lost its own bucket — a Pro → Ultra upgrade folds the
- * separate Argon pool into the larger Gemini bucket, and the backend then stops
- * reporting a `Gemini 4 Argon` group entirely while `fetchAvailableModels`
- * keeps listing the argon models with fresh per-model fractions. Keeping the
- * last-known-good row there would freeze a dead window on screen (0%, a reset
- * time from the previous tier).
- *
- * A failed or empty summary is the case `mergeFallbackFamilyQuota` protects:
- * nothing authoritative arrived, so the previous complete value stays.
- */
-export function pickFamilyQuota(
-  prev: FamilyQuotaInfo | undefined,
-  fresh: FamilyQuotaInfo,
-  summaryAuthoritative: boolean,
-): FamilyQuotaInfo {
-  return summaryAuthoritative ? fresh : mergeFallbackFamilyQuota(prev, fresh)
-}
+export {
+  isStale5hBucket,
+  mergeFallbackFamilyQuota,
+  pickFamilyQuota,
+  QUOTA_WINDOW_MATCH_TOLERANCE_MS,
+  sameQuotaWindow,
+  shouldReleaseOrphanedCooldown,
+  summaryHasArgonGroup,
+} from '../domain/quota/buckets.ts'
+export type { QuotaGroupShape } from '../domain/quota/buckets.ts'
+export {
+  agyUserAgent,
+  AGY_UA_MIN_VERSION,
+  normalizeStoredToken,
+  sameCredentialGrant,
+  staggerJitterMs,
+} from '../domain/quota/identity.ts'
+export type { StoredToken } from '../domain/quota/identity.ts'
 
 export function detectEmailFromAgyLogs(homeDir: string): string | undefined {
   const logDir = join(homeDir, '.gemini', 'antigravity-cli', 'log')
@@ -150,99 +96,6 @@ export function detectEmailFromAgyLogs(homeDir: string): string | undefined {
 }
 
 export const OAUTH_USERINFO_URL = 'https://www.googleapis.com/oauth2/v1/userinfo'
-
-/**
- * The backend classifies the caller by its `User-Agent` and only returns the
- * separate `Gemini 4 Argon` quota group for the CLI product (`antigravity/cli/`)
- * at or above this version. Older/other product strings get the legacy two
- * groups, which is why Pro-plan users saw no Argon quota at all.
- */
-export const AGY_UA_MIN_VERSION = '1.3.0'
-/** Used when the installed agy version is unknown or older than AGY_UA_MIN_VERSION. */
-const AGY_UA_FALLBACK_VERSION = '1.4.5'
-
-function semverAtLeast(candidate: string | null | undefined, floor: string): boolean {
-  if (!candidate) return false
-  const a = candidate.match(/^(\d+)\.(\d+)\.(\d+)$/)
-  const b = floor.match(/^(\d+)\.(\d+)\.(\d+)$/)
-  if (!a || !b) return false
-  for (let i = 1; i <= 3; i += 1) {
-    const x = Number(a[i])
-    const y = Number(b[i])
-    if (x !== y) return x > y
-  }
-  return true
-}
-
-/** Platform-faithful agy User-Agent (hardcoding darwin/arm64 on Windows is a bad fingerprint). */
-export function agyUserAgent(version?: string | null): string {
-  const os = process.platform === 'win32' ? 'windows' : process.platform
-  const arch = process.arch === 'x64' ? 'amd64' : process.arch
-  const v = semverAtLeast(version, AGY_UA_MIN_VERSION) ? version! : AGY_UA_FALLBACK_VERSION
-  return `antigravity/cli/${v} (aidev_client; os_type=${os}; arch=${arch}; auth_method=consumer)`
-}
-
-/**
- * Raw on-disk token document. agy >= 1.1.15 writes a NESTED shape:
- *   {"token": {access_token, token_type, refresh_token, expiry}, "auth_method": "consumer"}
- * where expiry is a local ISO-8601 STRING ("2026-08-20T16:44:43.782+08:00").
- * Older and third-party writers use a flat shape with epoch millis.
- * Reading the nested `token` object as if it were the access token string
- * produced "Authorization: Bearer [object Object]" and silently broke every
- * quota fetch (UI permanently stuck at the 100% default) — hence the strict
- * type validation below.
- */
-export interface StoredToken {
-  accessToken?: string
-  refreshToken?: string
-  /** Epoch milliseconds, parsed from either ISO strings or numbers. */
-  expiryMs?: number
-}
-
-/** Coerce an expiry value (ISO string, epoch millis, or epoch seconds) to ms. */
-function parseExpiryMs(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    // Epoch seconds look like 1.7e9; millis like 1.7e12.
-    return value < 1e11 ? value * 1000 : value
-  }
-  if (typeof value === 'string') {
-    const parsed = Date.parse(value)
-    return Number.isNaN(parsed) ? undefined : parsed
-  }
-  return undefined
-}
-
-function stringField(obj: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const v = obj[key]
-    if (typeof v === 'string' && v) return v
-  }
-  return undefined
-}
-
-/**
- * Normalize the on-disk token document (nested agy shape or flat legacy
- * shape) to a flat StoredToken. Returns null when no usable string access
- * token is present.
- */
-export function normalizeStoredToken(raw: Record<string, unknown>): StoredToken | null {
-  const nested = raw.token
-  const source: Record<string, unknown> =
-    nested && typeof nested === 'object' && !Array.isArray(nested)
-      ? (nested as Record<string, unknown>)
-      : raw
-  const accessToken = stringField(source, 'access_token', 'accessToken')
-  const refreshToken =
-    stringField(source, 'refresh_token', 'refreshToken') ??
-    (source === raw ? undefined : stringField(raw, 'refresh_token', 'refreshToken'))
-  const expiryMs =
-    parseExpiryMs(source.expiry) ??
-    parseExpiryMs(source.expiresAt) ??
-    parseExpiryMs(source.expires_in ? Date.now() / 1000 + Number(source.expires_in) : undefined) ??
-    parseExpiryMs(raw.expiry)
-  if (!accessToken) return null
-  return { accessToken, refreshToken, expiryMs }
-}
 
 interface DiscoveredModelEntry {
   quotaInfo?: {
@@ -289,68 +142,6 @@ export interface UserQuotaBucket {
 
 export interface UserQuotaResponse {
   buckets?: UserQuotaBucket[]
-}
-
-/**
- * Detects whether a 5-hour quota bucket from retrieveUserQuotaSummary is an
- * unmetered placeholder (remainingFraction = 1.0 and resetTime = now + ~5h).
- * In unmetered environments (e.g. Cloud Code PA prod for free tier), the window
- * never starts billing and stays frozen at 100% forever.
- */
-export function isStale5hBucket(remainingFraction?: number, resetTime?: string, now = Date.now()): boolean {
-  if (remainingFraction !== 1 || !resetTime) return false
-  const resetMs = Date.parse(resetTime) - now
-  return resetMs > 4.5 * 3600_000 && resetMs < 5.2 * 3600_000
-}
-
-/**
- * True only when two token snapshots belong to the SAME OAuth grant.
- *
- * Used to decide whether the machine credential slot really holds the account
- * we are about to poll through the `agy` CLI. A refresh token identifies a
- * grant; an access token rotates, so it is only consulted when neither side
- * carries a refresh token. Mismatched shapes count as "not proven" — the
- * caller then takes the safe path instead of misattributing a quota row.
- */
-export function sameCredentialGrant(
-  a: StoredToken | null | undefined,
-  b: StoredToken | null | undefined,
-): boolean {
-  const fingerprint = (token: StoredToken | null | undefined): string | null => {
-    if (token?.refreshToken) return 'r:' + token.refreshToken
-    if (token?.accessToken) return 'a:' + token.accessToken
-    return null
-  }
-  const fa = fingerprint(a)
-  return fa !== null && fa === fingerprint(b)
-}
-
-/** How close two ISO reset stamps must be to name the SAME quota window. */
-export const QUOTA_WINDOW_MATCH_TOLERANCE_MS = 5 * 60_000
-
-/**
- * Organic stagger delay with randomized jitter for multi-account sequential polling.
- * Prevents rigid periodic cadence against Google Cloud Code endpoints (default: 2000~3500ms).
- */
-export function staggerJitterMs(baseMs = 2000, maxJitterMs = 1500): number {
-  return baseMs + Math.floor(Math.random() * maxJitterMs)
-}
-
-/**
- * True when two reset stamps point at the same quota window.
- *
- * `fetchAvailableModels` returns a per-model `quotaInfo` with NO window label:
- * for some accounts it carries the 5-hour bucket, for others the WEEKLY bucket
- * (live: daoxzeex@gmail.com reports the weekly fraction + weekly reset on every
- * Gemini model). The only reliable discriminator is the reset instant — it
- * matches exactly one of the `retrieveUserQuotaSummary` buckets.
- */
-export function sameQuotaWindow(a?: string, b?: string, toleranceMs = QUOTA_WINDOW_MATCH_TOLERANCE_MS): boolean {
-  if (!a || !b) return false
-  const ta = Date.parse(a)
-  const tb = Date.parse(b)
-  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return false
-  return Math.abs(ta - tb) <= toleranceMs
 }
 
 /**
