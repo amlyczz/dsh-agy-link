@@ -14,6 +14,7 @@ import { resolveCallContext } from '../provider/call-context.ts'
 import { purposePolicy } from '../provider/purpose-policy.ts'
 import { classifyFailure } from '../provider/failure.ts'
 import { finalizeAttempt } from '../provider/finalize.ts'
+import { driveSpan as driveSpanImpl, driveSpanBody as driveSpanBodyImpl } from '../provider/span.ts'
 export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
@@ -23,7 +24,6 @@ import { Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScope
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { conversationsDirFor, diffConversations, snapshotConversations } from './discovery.ts'
-import { EventMapper, toToolCallId } from './mapper.ts'
 import { parseMirrorCallId, type RunRecording, type RunRegistry } from './recording.ts'
 import { accountHasArgon, defaultEffortFor, findEntry, isArgonModel, ModelCatalog, resolveModelSlug, sanitizeCatalogEntries } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
@@ -33,8 +33,6 @@ import { detectSystemProxy } from './wincred.ts'
 import { AbortedWaitError, WaitTimeoutError, acquireCredentialSlot, credentialSlotMutex, SlotUnavailableError, armSlotHandoff, type SlotHandoff } from './credential-slot.ts'
 import { agyHomeDirFor, readAgyRunLogText, snapshotAgyLogs } from './agy-log.ts'
 import { type SessionStore } from './sessions.ts'
-import { readFullToolArgs, readStepThoughts, clearAgyDbCache } from './agy-db.ts'
-import { getGitHeadContent, unwrapMcpTool } from './mirror-tool.ts'
 import { isGoalToolContinuation, isPlanToolContinuation, isPlanMode, resolveGoalContext, type GoalContext } from './dsh-goal.ts'
 import type { CompactionNotice } from '../common/compaction.ts'
 
@@ -1766,30 +1764,13 @@ export class AgyAdapter extends LlmAdapter {
     signal?: AbortSignal,
     compactionNotice?: CompactionNotice,
   ): AsyncIterable<StreamChunk> {
-    if (signal?.aborted) {
-      rec.requestAbort?.()
-      yield {
-        type: 'finish',
-        reason: { kind: 'aborted', failure: { code: 'ABORTED', message: 'aborted by caller' } },
-      }
-      return
-    }
-    // A span can wait hours for a wedged agy tool step. Pin the recording for
-    // its whole lifetime so the shared registry can never evict a run whose
-    // mirror calls are still queued behind that cut, and refresh its recency
-    // on the way out so the agy_tool dispatch that follows the final cut
-    // still resolves (flash-blast incident, 2026-10-10).
-    this.deps.runs.remember(rec)
-    this.deps.runs.pin(rec.runId)
-    try {
-      yield* this.driveSpanBody(rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice)
-    } finally {
-      this.deps.runs.unpin(rec.runId)
-      this.deps.runs.remember(rec)
-    }
+    yield* driveSpanImpl(this.deps, rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice)
   }
 
-  /** Body of {@link driveSpan}: map recorded events until the span finishes. */
+  /**
+   * Body of {@link driveSpan}. Thin delegate to provider/span.ts kept for
+   * signature compatibility; the class itself no longer calls it.
+   */
   private async *driveSpanBody(
     rec: RunRecording,
     from: number,
@@ -1801,173 +1782,7 @@ export class AgyAdapter extends LlmAdapter {
     signal?: AbortSignal,
     compactionNotice?: CompactionNotice,
   ): AsyncIterable<StreamChunk> {
-    const queue = new ChunkQueue()
-    let abortedLocally = false
-    const onAbort = () => {
-      abortedLocally = true
-      rec.requestAbort?.()
-      queue.push({
-        type: 'finish',
-        reason: { kind: 'aborted', failure: { code: 'ABORTED', message: 'aborted by caller' } },
-      })
-      queue.close()
-    }
-    signal?.addEventListener('abort', onAbort, { once: true })
-
-    void (async () => {
-      // Resolve FULL tool args and thoughts from the agy conversation DB (agy's
-      // stream output strips CodeContent/TargetContent/ReplacementContent via
-      // filterToolParameters, and strips thought text from print mode). We
-      // pre-resolve them so diff cards and reasoning blocks render real content.
-      const resolved = new Map<number, Record<string, unknown>>()
-      const resolvedThoughts = new Map<number, string>()
-      const convId = rec.conversationId
-      const mapper = new EventMapper({
-        runId: rec.runId,
-        cutOnTool,
-        initialSawText: rec.sawTextBefore(from),
-        useCodeWrapper,
-        usage: rec,
-        resolvedFullArgs: resolved,
-        resolvedThoughts,
-        mediaBaseUrl: this.deps.getMediaBaseUrl?.() ?? undefined,
-        goalContext,
-        supportsGoalUpdate,
-        supportsPlanExit,
-        compactionNotice: from === 0 ? compactionNotice : undefined,
-      })
-      let i = from
-      const pendingThoughtSteps = new Map<number, string>()
-      try {
-        for await (const ev of rec.eventsFrom(from)) {
-          if (abortedLocally || signal?.aborted) break
-          const recordedThought = rec.getThoughts(i)
-          if (recordedThought !== undefined) {
-            resolvedThoughts.set(i, recordedThought)
-          } else if (ev.kind === 'step') {
-            const rawObj = 'raw' in ev && ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
-            const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
-            const activeConvId =
-              rec.conversationId ??
-              (typeof rawObj?.conversation_id === 'string' ? rawObj.conversation_id : null) ??
-              (typeof stepUpdate?.conversation_id === 'string' ? stepUpdate.conversation_id : null)
-            const stepIdx = parseInt(ev.stepKey, 10)
-            if (activeConvId !== null && Number.isFinite(stepIdx)) {
-              try {
-                let th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
-                if (th === null && (ev.state === 'DONE' || (ev.usage?.thinking_tokens ?? 0) > 0 || ev.stepKind === 'thinking')) {
-                  await new Promise((r) => setTimeout(r, 60))
-                  th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
-                  if (th === null) {
-                    await new Promise((r) => setTimeout(r, 100))
-                    th = await readStepThoughts(activeConvId, stepIdx, rec.accountHome)
-                  }
-                }
-                if (th !== null && th.trim() !== '') {
-                  resolvedThoughts.set(i, th)
-                  rec.setThoughts(i, th)
-                } else if ((ev.usage?.thinking_tokens ?? 0) > 0 || ev.stepKind === 'thinking') {
-                  pendingThoughtSteps.set(i, ev.stepKey)
-                }
-              } catch {
-                // DB read failure is non-fatal; fallback to token annotation.
-              }
-            }
-          }
-          if (pendingThoughtSteps.size > 0) {
-            const rawObj = 'raw' in ev && ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
-            const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
-            const activeConvId =
-              rec.conversationId ??
-              (typeof rawObj?.conversation_id === 'string' ? rawObj.conversation_id : null) ??
-              (typeof stepUpdate?.conversation_id === 'string' ? stepUpdate.conversation_id : null)
-            if (activeConvId !== null) {
-              for (const [prevI, prevStepKey] of Array.from(pendingThoughtSteps.entries())) {
-                const prevStepIdx = parseInt(prevStepKey, 10)
-                if (Number.isFinite(prevStepIdx)) {
-                  try {
-                    const th = await readStepThoughts(activeConvId, prevStepIdx, rec.accountHome)
-                    if (th !== null && th.trim() !== '') {
-                      resolvedThoughts.set(prevI, th)
-                      rec.setThoughts(prevI, th)
-                      pendingThoughtSteps.delete(prevI)
-                    }
-                  } catch {
-                    // non-fatal
-                  }
-                }
-              }
-            }
-          }
-          if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool) {
-            const rawObj = 'raw' in ev && ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
-            const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
-            const activeConvId =
-              rec.conversationId ??
-              (typeof rawObj?.conversation_id === 'string' ? rawObj.conversation_id : null) ??
-              (typeof stepUpdate?.conversation_id === 'string' ? stepUpdate.conversation_id : null)
-            const stepIdx = parseInt(ev.stepKey, 10)
-            if (activeConvId !== null && Number.isFinite(stepIdx)) {
-              try {
-                let full = await readFullToolArgs(activeConvId, stepIdx, rec.accountHome)
-                if (full === null) {
-                  await new Promise((r) => setTimeout(r, 50))
-                  full = await readFullToolArgs(activeConvId, stepIdx, rec.accountHome)
-                }
-                if (full !== null && full.args !== undefined) {
-                  resolved.set(i, full.args)
-                  rec.setFullArgs(i, full.args)
-                }
-              } catch {
-                // DB read failure is non-fatal; stream args still render.
-              }
-            }
-            // For write_to_file / create_file: if old content is not already present, resolve from git HEAD
-            const unwrapped = unwrapMcpTool(ev.tool.name, resolved.get(i) ?? ev.tool.args)
-            const toolName = unwrapped.tool
-            if (toolName === 'write_to_file' || toolName === 'write_file' || toolName === 'create_file') {
-              const currentArgs = unwrapped.input
-              const targetFile = (currentArgs.TargetFile ?? currentArgs.target_file ?? currentArgs.path ?? currentArgs.AbsolutePath) as string | undefined
-              if (targetFile && typeof targetFile === 'string' && !currentArgs.oldText && !currentArgs.old_string && !currentArgs.TargetContent) {
-                const head = getGitHeadContent(targetFile)
-                if (head !== null) {
-                  const updated = { ...currentArgs, old_string: head }
-                  resolved.set(i, updated)
-                  rec.setFullArgs(i, updated)
-                }
-              }
-            }
-          }
-          for (const ch of mapper.map(ev, i)) queue.push(ch)
-          i++
-          if (mapper.isFinished) {
-            // Remember where the span stopped so a duplicate-debounce rescue
-            // can re-drive this recording from exactly the cut point without
-            // a parseable mirror callId (see RunRecording.lastCutIndex).
-            rec.lastCutIndex = i - 1
-            break
-          }
-        }
-        if (!mapper.isFinished && !abortedLocally && !signal?.aborted) {
-          const f = rec.failureInfo
-          if (f !== null) {
-            for (const ch of mapper.emitFailure(f.kind, f.code, f.message, f.retryAfterMs)) queue.push(ch)
-          } else {
-            for (const ch of mapper.emitFailure('error', Err.INVALID_OUTPUT, 'agy stream ended without a result event')) queue.push(ch)
-          }
-        }
-      } catch (err) {
-        if (!abortedLocally && !signal?.aborted) {
-          for (const ch of mapper.emitFailure('error', Err.PROCESS_EXIT, 'internal error: ' + brief(String(err)))) queue.push(ch)
-        }
-      }
-      queue.close()
-    })()
-    try {
-      yield* queue.drain()
-    } finally {
-      signal?.removeEventListener('abort', onAbort)
-    }
+    yield* driveSpanBodyImpl(this.deps, rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice)
   }
 }
 
