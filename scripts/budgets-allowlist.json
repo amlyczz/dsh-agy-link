@@ -1,18 +1,3 @@
 {
-  "files": {
-    "src/client/images.ts": 602,
-    "src/client/mermaid.ts": 650,
-    "src/client/toolview.ts": 1882,
-    "src/client/translate.ts": 949,
-    "src/common/types.ts": 751,
-    "src/host/adapter.ts": 1090,
-    "src/host/agy-db.ts": 676,
-    "src/host/commands.ts": 625,
-    "src/host/image.ts": 730,
-    "src/host/mapper.ts": 609,
-    "src/host/mirror-tool.ts": 755,
-    "src/host/runner.ts": 852,
-    "src/host/translate.ts": 1138,
-    "src/host/warmup.ts": 642
-  }
+  "files": {}
 }
