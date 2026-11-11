@@ -149,6 +149,66 @@ export function accountHasArgon(
   return false
 }
 
+const EFFORT_SUFFIX_RE = /-(?:low|medium|high|tiered|thinking)$/i
+
+/**
+ * Return the un-tiered base model slug (e.g. claude-opus-4-6-thinking -> claude-opus-4-6,
+ * claude-opus-5-5-high -> claude-opus-5-5).
+ */
+export function baseModelSlug(id: string): string {
+  const s = id.trim().toLowerCase().replace(/\./g, '-')
+  if (s === 'claude-opus-4-6' || s === 'claude-opus-4-8' || s === 'claude-opus-4-5') return 'claude-opus-4-6'
+  if (s === 'claude-sonnet-4-5') return 'claude-sonnet-4-6'
+  return s.replace(EFFORT_SUFFIX_RE, '')
+}
+
+/**
+ * Test whether a requested model matches a candidate model id (accounting for
+ * aliases, effort variants, and base model families).
+ */
+export function modelMatches(requestedModel: string, candidateModelId: string): boolean {
+  if (!requestedModel || !candidateModelId) return false
+  const r = requestedModel.trim().toLowerCase()
+  const c = candidateModelId.trim().toLowerCase()
+  if (r === c) return true
+  return baseModelSlug(r) === baseModelSlug(c)
+}
+
+/**
+ * Determine whether a managed account supports a specific model.
+ * If the account's quota or discovered catalog enumerates models for that family,
+ * the list is authoritative: the model must match an available entry.
+ */
+export function accountSupportsModel(
+  acc?: ManagedAccount | null,
+  model?: string,
+  pool?: { hasDedicatedGroup?: (id: string, family: ModelFamily) => boolean } | null,
+  catalog?: { source?: string; models?: readonly { id: string }[] } | null,
+): boolean {
+  if (!acc) return false
+  if (!model || model.trim() === '') return true
+  const clean = model.trim()
+
+  if (isArgonModel(clean)) {
+    return accountHasArgon(acc, pool, catalog)
+  }
+
+  const family = modelFamilyOf(clean)
+  const familyModels = acc.quotas?.[family]?.models
+  if (Array.isArray(familyModels) && familyModels.length > 0) {
+    return familyModels.some((m) => modelMatches(clean, m.modelId))
+  }
+
+  if (catalog && catalog.source === 'discovered' && Array.isArray(catalog.models) && catalog.models.length > 0) {
+    const catFamilyModels = catalog.models.filter((m) => modelFamilyOf(m.id) === family)
+    if (catFamilyModels.length > 0) {
+      return catFamilyModels.some((m) => modelMatches(clean, m.id))
+    }
+  }
+
+  return true
+}
+
 export type AccountHealthStatus = 'healthy' | 'cooldown' | 'auth_required' | 'disabled'
 
 export interface AccountHealthInfo {

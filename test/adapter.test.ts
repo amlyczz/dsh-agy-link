@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, parseEffortUnsupported, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, parseEffortUnsupported, parseModelNotRecognized, type AgyAdapterDeps } from '../src/host/adapter.ts'
 import { utf8Bytes } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
 import { DEFAULT_FALLBACK_MODELS } from '../src/common/types.ts'
@@ -943,6 +943,53 @@ test('parseEffortUnsupported reads the real agy refusal text', () => {
   // A command echo that contains --effort but fails for an unrelated reason (quota, auth, rate limit) must NOT be learned as an effort refusal.
   assert.equal(parseEffortUnsupported('invalid model selection (--model "gemini-3.8-flash" --effort "high"): quota exhausted'), null)
   assert.equal(parseEffortUnsupported('invalid model selection (--model "gemini-3.8-flash" --effort "high"): rate limit exceeded'), null)
+})
+
+test('parseModelNotRecognized reads the real agy model refusal text', () => {
+  const real = 'agy exited with code 1: invalid model selection (--model "claude-opus-4-6-thinking" --effort ""): model claude-opus-4-6-thinking is not recognized as a known model or custom model in settings Available models: Gemini 4 Argon (Medium)'
+  assert.equal(parseModelNotRecognized(real), 'claude-opus-4-6-thinking')
+  assert.equal(parseModelNotRecognized('model claude-opus-4-6 is not recognized as a known model'), 'claude-opus-4-6')
+  assert.equal(parseModelNotRecognized('quota exhausted'), null)
+  assert.equal(parseModelNotRecognized(''), null)
+})
+
+test('unrecognized model refusal on attempt 0 marks unsupported and replays on eligible account', async () => {
+  const invocations = join(workDir, 'model-unsupported-invocations.txt')
+  rmSync(invocations, { force: true })
+  process.env.FAKE_AGY_MODE = 'model-unsupported'
+  process.env.FAKE_AGY_INVOCATION_FILE = invocations
+
+  const poolDir = mkdtempSync(join(tmpdir(), 'agy-model-replay-pool-'))
+  const pool = new AccountPoolManager(poolDir)
+  const acc1 = pool.getAccounts()[0]!
+  const acc2 = pool.createAccountSlot('Secondary Account')
+  pool.updateAccountQuotas(acc1.id, { anthropic: { remainingFraction: 1 } })
+  pool.updateAccountQuotas(acc2.id, { anthropic: { remainingFraction: 1 } })
+
+  try {
+    const { adapter } = makeAdapter({}, { pool })
+    const chunks = await collect(
+      adapter.stream(
+        opts([msg('user', 'hi')], { model: 'claude-opus-4-6-thinking' } as Partial<GenerateOptions>),
+      ),
+    )
+    const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+    const finish = chunks[chunks.length - 1] as { type: string; reason: { kind: string } }
+    assert.equal(finish.type, 'finish')
+    assert.equal(finish.reason.kind, 'stop', 'the replay must end as a normal stop, not an error')
+    assert.match(text, /answered on supported account/)
+
+    // Two spawns: refused attempt on acc1, replay on acc2
+    const spawns = readFileSync(invocations, 'utf8').split('\n').filter(Boolean).length
+    assert.equal(spawns, 2, 'refusal on attempt 0 must trigger exactly one replay')
+
+    // acc1 must be marked unsupported for claude-opus-4-6
+    assert.equal(pool.isModelSupported(acc1, 'claude-opus-4-6-thinking'), false)
+    assert.equal(pool.isModelSupported(acc2, 'claude-opus-4-6-thinking'), true)
+  } finally {
+    delete process.env.FAKE_AGY_INVOCATION_FILE
+    process.env.FAKE_AGY_MODE = 'ok'
+  }
 })
 
 test('buildDigest bounds output and keeps newest turns', () => {

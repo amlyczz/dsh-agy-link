@@ -379,6 +379,21 @@ export function parseEffortUnsupported(text: string): string | null {
   return null
 }
 
+/**
+ * Detect when agy refuses a model because the current active account/settings
+ * do not have access to it:
+ * `invalid model selection (--model "claude-opus-4-6-thinking" --effort ""): model claude-opus-4-6-thinking is not recognized as a known model or custom model in settings`
+ *
+ * @param text - stdout envelope error, stderr tail, or a mapped failure message.
+ * @returns the unrecognized model id, or null when this is not a model-recognition refusal.
+ */
+export function parseModelNotRecognized(text: string): string | null {
+  if (text === '' || !/not recognized as a known model/i.test(text)) return null
+  const m = text.match(/invalid model selection.*?model\s+["']?([^\s"':]+)["']?\s+is not recognized as a known model/i)
+    ?? text.match(/model\s+["']?([^\s"':]+)["']?\s+is not recognized as a known model/i)
+  return m && m[1] ? m[1] : null
+}
+
 /** Same-model comparison that ignores a provider prefix and case. */
 export function sameModelId(a: string, b: string): boolean {
   const norm = (s: string): string => s.trim().toLowerCase().replace(/^.*\//, '')
@@ -851,6 +866,9 @@ export class AgyAdapter extends LlmAdapter {
 
   constructor(private readonly deps: AgyAdapterDeps) {
     super()
+    if (deps.pool && deps.catalog && typeof (deps.pool as any).setCatalog === 'function') {
+      (deps.pool as any).setCatalog(deps.catalog)
+    }
   }
 
   private warnOnce(key: string, msg: string): void {
@@ -1213,6 +1231,15 @@ export class AgyAdapter extends LlmAdapter {
           this.learnEffortUnsupported(refused)
           continue
         }
+        const unrecog = parseModelNotRecognized(String(failure?.message ?? ''))
+        if (unrecog !== null) {
+          const fam = modelFamilyOf(unrecog)
+          const pool = this.deps.pool
+          if (pool) {
+            pool.selectAccount(fam, unrecog)
+            continue
+          }
+        }
       }
       for (const chunk of telemetry) yield chunk
       yield finish
@@ -1459,7 +1486,7 @@ export class AgyAdapter extends LlmAdapter {
       // pool's current active healthy candidate so they share the slot under
       // `parallelSameAccount: true` and run with 100% lock-free concurrency.
       if (process.platform === 'win32' && cfg.parallelSameAccount) {
-        const poolActive = this.deps.pool.selectAccount(family)
+        const poolActive = this.deps.pool.selectAccount(family, activeModel)
         if (poolActive) {
           account = poolActive
         }
@@ -1483,14 +1510,19 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
 
-        if (mostRecentAccount && this.deps.pool.isAccountEligible(mostRecentAccount, family)) {
+        if (
+          mostRecentAccount
+          && (typeof this.deps.pool.isAccountEligibleForModel === 'function'
+            ? this.deps.pool.isAccountEligibleForModel(mostRecentAccount, family, activeModel)
+            : this.deps.pool.isAccountEligible(mostRecentAccount, family))
+        ) {
           account = mostRecentAccount
         }
       }
     }
 
     if (!account && this.deps.pool) {
-      account = this.deps.pool.selectAccount(family) ?? undefined
+      account = this.deps.pool.selectAccount(family, activeModel) ?? undefined
     }
 
     if (account && this.deps.pool) {
@@ -1535,7 +1567,7 @@ export class AgyAdapter extends LlmAdapter {
         const disabled = allAccounts.length - accounts.length
         const reasons = accounts.map((a) =>
           typeof pool.explainIneligibility === 'function'
-            ? pool.explainIneligibility(a, family)
+            ? pool.explainIneligibility(a, family, Date.now(), activeModel)
             : (pool.isAccountEligible(a, family) ? null : 'cooldown'),
         )
         const cooling = reasons.filter((r) => r === 'cooldown').length
@@ -1548,7 +1580,7 @@ export class AgyAdapter extends LlmAdapter {
         // user resend. Longer waits still fail fast with an accurate ETA.
         if (countdown !== null && countdown > 0 && countdown <= 20_000) {
           await new Promise((r) => setTimeout(r, countdown + 250))
-          account = pool.selectAccount(family) ?? undefined
+          account = pool.selectAccount(family, activeModel) ?? undefined
         }
         if (!account) {
           let why: string
@@ -2687,13 +2719,22 @@ export class AgyAdapter extends LlmAdapter {
           // leave users with a bare "agy exited with code 1" and no cause.
           // Prefer the envelope's error text, then the stderr tail.
           const detail = parser.stats.lastResultError ?? (outcome.stderrTail !== '' ? brief(outcome.stderrTail) : '')
-          failure = transportFailure
-            ? {
-                kind: 'error',
-                code: Err.NETWORK,
-                message: 'agy hit a network error while talking to Google — the automatic retry usually succeeds. ' + (detail !== '' ? detail : brief(rawErrText)),
-              }
-            : { kind: 'error', code: Err.PROCESS_EXIT, message: 'agy exited with code ' + outcome.code + (detail !== '' ? ': ' + detail : '') }
+          const unrecog = parseModelNotRecognized(rawErrText) ?? parseModelNotRecognized(detail)
+          if (unrecog) {
+            failure = {
+              kind: 'error',
+              code: Err.ELIGIBILITY,
+              message: `Model ${unrecog} is not recognized for this account: ${detail !== '' ? detail : brief(rawErrText)}`,
+            }
+          } else {
+            failure = transportFailure
+              ? {
+                  kind: 'error',
+                  code: Err.NETWORK,
+                  message: 'agy hit a network error while talking to Google — the automatic retry usually succeeds. ' + (detail !== '' ? detail : brief(rawErrText)),
+                }
+              : { kind: 'error', code: Err.PROCESS_EXIT, message: 'agy exited with code ' + outcome.code + (detail !== '' ? ': ' + detail : '') }
+          }
         } else if (transportFailure) {
           failure = {
             kind: 'error',
@@ -2771,7 +2812,11 @@ export class AgyAdapter extends LlmAdapter {
         // primary's direct connection, take a proxied account). Rotate so the
         // automatic retry cannot land back on the refused account.
         if (account && failure.code === Err.ELIGIBILITY) {
-          this.deps.pool?.advanceAccount(account.id, family)
+          const unrecog = parseModelNotRecognized(rawErrText) ?? (parser.stats.lastResultError ? parseModelNotRecognized(parser.stats.lastResultError) : null)
+          if (unrecog && typeof this.deps.pool?.markModelUnsupported === 'function') {
+            this.deps.pool.markModelUnsupported(account.id, unrecog)
+          }
+          this.deps.pool?.advanceAccount(account.id, family, activeModel)
         }
         // Account-scoped failures must not let the retry land back on the
         // account that could not serve this turn. One rotation per failure:

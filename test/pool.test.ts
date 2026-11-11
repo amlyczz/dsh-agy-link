@@ -826,6 +826,68 @@ test('selectAccount for family=argon routes only to Argon-capable accounts', () 
   assert.equal(pool.selectAccount('google')?.id, primary.id, 'google requests can still use primary')
 })
 
+test('selectAccount routes to account supporting requested model (Opus 4.6 vs Opus 5.5)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-models-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts()[0]!
+  // Primary has Claude 5.5 only
+  pool.updateAccountQuotas(primary.id, {
+    anthropic: {
+      remainingFraction: 1,
+      models: [
+        { modelId: 'claude-opus-5-5-low' },
+        { modelId: 'claude-opus-5-5-medium' },
+        { modelId: 'claude-opus-5-5-high' },
+      ],
+    },
+  })
+
+  // Secondary has Claude 4.6
+  const secondary = pool.createAccountSlot('Legacy Opus Account')
+  pool.updateAccountQuotas(secondary.id, {
+    anthropic: {
+      remainingFraction: 1,
+      models: [
+        { modelId: 'claude-opus-4-6-thinking' },
+        { modelId: 'claude-sonnet-4-6' },
+      ],
+    },
+  })
+
+  assert.equal(
+    pool.selectAccount('anthropic', 'claude-opus-4-6-thinking')?.id,
+    secondary.id,
+    'must route claude-opus-4-6-thinking to secondary account supporting it',
+  )
+  assert.equal(
+    pool.selectAccount('anthropic', 'claude-opus-5-5')?.id,
+    primary.id,
+    'must route claude-opus-5-5 to primary account supporting it',
+  )
+  assert.equal(
+    pool.getActiveAccountId('anthropic', 'claude-opus-4-6-thinking'),
+    secondary.id,
+    'getActiveAccountId must reflect model-scoped account',
+  )
+})
+
+test('markModelUnsupported excludes failed model from account and rotates', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-unsupported-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts()[0]!
+  const secondary = pool.createAccountSlot('Backup Account')
+  pool.updateAccountQuotas(primary.id, { anthropic: { remainingFraction: 1 } })
+  pool.updateAccountQuotas(secondary.id, { anthropic: { remainingFraction: 1 } })
+
+  assert.equal(pool.selectAccount('anthropic', 'claude-opus-4-6')?.id, primary.id)
+  pool.markModelUnsupported(primary.id, 'claude-opus-4-6')
+  assert.equal(
+    pool.selectAccount('anthropic', 'claude-opus-4-6')?.id,
+    secondary.id,
+    'must rotate away from account marked unsupported for that model',
+  )
+})
+
 test('defaultPoolDir recovers when home directory is inside an isolated account path', () => {
   assert.equal(
     defaultPoolDir('C:\\Users\\kybco\\.dsh\\agy-accounts\\acc_1793341113485_51ytc'),

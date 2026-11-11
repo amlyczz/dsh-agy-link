@@ -223,6 +223,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     getConfig().modelsCacheTtlMs,
     notifyPicker,
   )
+  pool.setCatalog(catalog)
   const auth = new AuthHelper(bin, () => getConfig().suppressAgyAutoUpdate)
   const poolAuth = new PoolAuthFlow(pool, quota, log)
   const runs = new RunRegistry()

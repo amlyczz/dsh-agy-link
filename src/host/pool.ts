@@ -6,6 +6,8 @@ import { homedir } from 'node:os'
 import {
   AUTH_CONFIRM_STRIKES,
   accountHasArgon,
+  accountSupportsModel,
+  baseModelSlug,
   defaultPoolData,
   isArgonModel,
   modelFamilyOf,
@@ -67,7 +69,7 @@ function writeJsonAtomic(file: string, body: string): void {
 }
 
 export function defaultPoolDir(home = homedir()): string {
-  if (process.env.DSH_STATE_DIR) {
+  if (process.env.DSH_STATE_DIR && home === homedir()) {
     return join(process.env.DSH_STATE_DIR, 'agy-accounts')
   }
   // Guard against isolated sub-account environments where HOME/USERPROFILE
@@ -101,10 +103,16 @@ export class AccountPoolManager {
    * blip that healed while the process was down.
    */
   private readonly authStrikes = new Map<string, number>()
+  private readonly unsupportedModels = new Map<string, Set<string>>()
+  private catalog?: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }
   /** Serialized snapshot of the last successful persist/load; skips no-op writes. */
   private persistedJson = ''
   /** True when load() had to fall back to pool.json.last-good (observable for diagnostics). */
   recoveredFromLastGood = false
+
+  setCatalog(catalog: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }): void {
+    this.catalog = catalog
+  }
 
   constructor(baseDir = defaultPoolDir()) {
     this.baseDir = baseDir
@@ -758,6 +766,24 @@ export class AccountPoolManager {
     return accountHasArgon(acc, this)
   }
 
+  /** Determine whether a managed account supports a specific model. */
+  isModelSupported(acc: ManagedAccount, model: string): boolean {
+    if (this.unsupportedModels.get(acc.id)?.has(baseModelSlug(model))) {
+      return false
+    }
+    const cat = this.catalog?.get(acc.id)
+    return accountSupportsModel(acc, model, this, cat)
+  }
+
+  markModelUnsupported(accountId: string, model: string): void {
+    let set = this.unsupportedModels.get(accountId)
+    if (!set) {
+      set = new Set()
+      this.unsupportedModels.set(accountId, set)
+    }
+    set.add(baseModelSlug(model))
+  }
+
   /**
    * Why this account cannot serve `family` right now, or null when it can.
    *
@@ -769,10 +795,12 @@ export class AccountPoolManager {
     acc: ManagedAccount,
     family: ModelFamily,
     now = Date.now(),
+    model?: string,
   ): AccountIneligibilityReason | null {
     if (!acc.enabled) return 'disabled'
     if (acc.authRequired) return 'auth'
     if (family === 'argon' && !this.accountHasArgon(acc)) return 'unsupported'
+    if (model && !this.isModelSupported(acc, model)) return 'unsupported'
     const cd = acc.cooldowns?.[family]
     if (cd && cd.cooldownUntil > now) return 'cooldown'
     if (this.isQuotaBenched(acc, family, now)) return 'quota'
@@ -787,20 +815,27 @@ export class AccountPoolManager {
   }
 
   /**
+   * Check whether an account is eligible to serve requests for the given family and model.
+   */
+  isAccountEligibleForModel(acc: ManagedAccount, family: ModelFamily, model?: string, now = Date.now()): boolean {
+    return this.explainIneligibility(acc, family, now, model) === null
+  }
+
+  /**
    * Returns the currently active and healthy account ID.
    * If the recorded lastActiveAccountId is healthy, returns it;
    * otherwise falls back to selectAccount(family) to advance to the next healthy candidate,
    * or primaryAccountId if all are exhausted.
    */
-  getActiveAccountId(family: ModelFamily = 'google'): string | undefined {
+  getActiveAccountId(family: ModelFamily = 'google', model?: string): string | undefined {
     const now = Date.now()
     if (this.data.lastActiveAccountId) {
       const active = this.getAccount(this.data.lastActiveAccountId)
-      if (active && this.isAccountEligible(active, family, now)) {
+      if (active && this.isAccountEligibleForModel(active, family, model, now)) {
         return active.id
       }
     }
-    const next = this.selectAccount(family)
+    const next = this.selectAccount(family, model)
     if (next) return next.id
     return this.data.accounts.find((a) => a.id === this.data.primaryAccountId && a.enabled)?.id
       ?? this.data.accounts.find((a) => a.enabled)?.id
@@ -892,10 +927,10 @@ export class AccountPoolManager {
    * account, but a healthy account should not be punished with a cooldown
    * because the network blipped.
    */
-  advanceAccount(fromId: string, family: ModelFamily): string | null {
+  advanceAccount(fromId: string, family: ModelFamily, model?: string): string | null {
     const now = Date.now()
     const candidates = this.data.accounts.filter(
-      (a) => a.id !== fromId && this.isAccountEligible(a, family, now),
+      (a) => a.id !== fromId && this.isAccountEligibleForModel(a, family, model, now),
     )
     if (candidates.length === 0) return null
     const next = this.orderByExpiry(candidates, family, fromId)[0]!
@@ -1077,9 +1112,9 @@ export class AccountPoolManager {
    * Sticks to the current active account until it runs out of quota/rate-limited,
    * then smoothly advances to the next available account in cyclic order.
    */
-  selectAccount(family: ModelFamily): ManagedAccount | null {
+  selectAccount(family: ModelFamily, model?: string): ManagedAccount | null {
     const now = Date.now()
-    const candidates = this.data.accounts.filter((acc) => this.isAccountEligible(acc, family, now))
+    const candidates = this.data.accounts.filter((acc) => this.isAccountEligibleForModel(acc, family, model, now))
 
     if (candidates.length === 0) return null
 
