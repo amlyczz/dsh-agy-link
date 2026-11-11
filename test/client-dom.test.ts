@@ -625,7 +625,7 @@ test('translate action: click posts, transitions to done, and early-returns whil
 	await act(async () => { btn().click(); await Promise.resolve(); });
 	await wait(10);
 	assert.equal(btn().getAttribute('data-state'), 'done');
-	assert.ok(postCalls >= 1, 'at least one POST to /translate');
+	assert.equal(postCalls, 1, 'exactly one POST to /translate (no double submit)');
 	assert.ok(stateCalls >= 1, 'at least one state probe on mount');
 	assert.equal(actionStateOf(ACTION_KEY), 'done');
 
