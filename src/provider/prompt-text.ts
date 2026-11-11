@@ -249,6 +249,13 @@ export function collectUnsentImageRefs(
   return out
 }
 
+/** agy 1.4.x silently truncates a single user message at 192,000 UTF-8 bytes
+ * (measured: a 300 KB ASCII prompt kept exactly 192,000 B; a 490 KB CJK prompt
+ * kept 191,998 B) and the cut lands on the TAIL. Every prompt we build must
+ * stay under that with margin, and the live request must sit at the HEAD. */
+export const AGY_SINGLE_MESSAGE_MAX_BYTES = 192_000
+export const AGY_PROMPT_SAFE_BYTES = 180_000
+
 export function utf8Bytes(s: string): number {
   return Buffer.byteLength(s, 'utf8')
 }

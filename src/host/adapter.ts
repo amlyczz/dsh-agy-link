@@ -9,29 +9,25 @@ import { dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
-import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { resolveCallContext } from '../provider/call-context.ts'
 import { purposePolicy } from '../provider/purpose-policy.ts'
-import { classifyFailure } from '../provider/failure.ts'
-import { finalizeAttempt } from '../provider/finalize.ts'
 import { driveSpan as driveSpanImpl, driveSpanBody as driveSpanBodyImpl } from '../provider/span.ts'
 export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
+import { buildAgyArgs, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
+import { runAgyAttempt } from '../provider/attempt-outcome.ts'
+export { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from '../provider/notices.ts'
 import { isToolResultMessage, utf8Bytes, trimToUtf8Bytes, writeContextTransferFile, type ForeignSource, type UnknownBlock } from '../provider/prompt-text.ts'
-export { buildDigest, collectUnsentImageRefs, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserMessageAny, latestUserTaskText, utf8Bytes } from '../provider/prompt-text.ts'
-import { Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+export { AGY_PROMPT_SAFE_BYTES, AGY_SINGLE_MESSAGE_MAX_BYTES, buildDigest, collectUnsentImageRefs, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserMessageAny, latestUserTaskText, utf8Bytes } from '../provider/prompt-text.ts'
+import { Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
-import { conversationsDirFor, diffConversations, snapshotConversations } from './discovery.ts'
 import { parseMirrorCallId, type RunRecording, type RunRegistry } from './recording.ts'
 import { accountHasArgon, defaultEffortFor, findEntry, isArgonModel, ModelCatalog, resolveModelSlug, sanitizeCatalogEntries } from './models.ts'
 import { StreamJsonParser } from './parser.ts'
 import { type ImageRefLike } from './media.ts'
-import { ensureIsolatedKeychain, startAgyProcess, buildStreamInputLine, shouldUsePromptStdin, stripNulBytes } from './runner.ts'
 import { detectSystemProxy } from './wincred.ts'
-import { AbortedWaitError, WaitTimeoutError, acquireCredentialSlot, credentialSlotMutex, SlotUnavailableError, armSlotHandoff, type SlotHandoff } from './credential-slot.ts'
-import { agyHomeDirFor, readAgyRunLogText, snapshotAgyLogs } from './agy-log.ts'
 import { type SessionStore } from './sessions.ts'
 import { isGoalToolContinuation, isPlanToolContinuation, isPlanMode, resolveGoalContext, type GoalContext } from './dsh-goal.ts'
 import type { CompactionNotice } from '../common/compaction.ts'
@@ -84,13 +80,6 @@ export function sameModelId(a: string, b: string): boolean {
   const norm = (s: string): string => s.trim().toLowerCase().replace(/^.*\//, '')
   return norm(a) === norm(b) && norm(a) !== ''
 }
-
-/** agy 1.4.x silently truncates a single user message at 192,000 UTF-8 bytes
- * (measured: a 300 KB ASCII prompt kept exactly 192,000 B; a 490 KB CJK prompt
- * kept 191,998 B) and the cut lands on the TAIL. Every prompt we build must
- * stay under that with margin, and the live request must sit at the HEAD. */
-export const AGY_SINGLE_MESSAGE_MAX_BYTES = 192_000
-export const AGY_PROMPT_SAFE_BYTES = 180_000
 
 export interface AgyAdapterDeps {
   getConfig: () => PluginConfig
@@ -176,129 +165,6 @@ class ChunkQueue {
       });
     }
   }
-}
-
-function brief(s: string): string {
-  const flat = s.trim().replace(/\s+/g, ' ')
-  return flat.length > 300 ? flat.slice(0, 300) + '...' : flat
-}
-
-/**
- * Reserved block index for pre-spawn status notices.
- *
- * Negative on purpose: the mapper's own blocks count up from 0, so a negative
- * index can never be closed by a mapper `block-end` later in the run (the
- * assembler ignores deltas for a closed index). Deltas alone are enough — the
- * assembler explicitly tolerates delta-only protocols — so the notices land as
- * one growing reasoning block at the top of the turn.
- */
-export const STATUS_NOTICE_BLOCK_INDEX = -1
-
-/**
- * Await `work` while periodically yielding a SESSION-VISIBLE notice.
- *
- * Why this exists: Windows has ONE machine-global credential slot, so every
- * session's agy run is serialized behind whichever session got there first.
- * A healthy long run (a 15-minute build, a 240-minute long tool) made the
- * OTHER sessions sit with a completely empty transcript for up to
- * `dispatchTimeoutMinutes` — indistinguishable from a freeze. The console
- * heartbeat was invisible to the user, so the only honest signal was "nothing
- * is happening" (2026-10-22: two sessions looked hung for 15 minutes while
- * another project's agy run held the slot).
- *
- * Resolves with `work`'s value; rejects with `work`'s rejection untouched, so
- * the caller's existing error classification is unchanged.
- */
-export async function* awaitWithNotices<T>(
-  work: Promise<T>,
-  opts: {
-    /** Delay before the FIRST notice (and the base for later ones). */
-    intervalMs: number
-    /** Growth factor between notices (default 1 = constant cadence). */
-    escalate?: number
-    /** Upper bound for the cadence after escalation. */
-    maxIntervalMs?: number
-    /** Text for the current wait duration in milliseconds. */
-    notice: (elapsedMs: number) => string
-  },
-): AsyncGenerator<StreamChunk, T, void> {
-  const baseInterval = opts.intervalMs > 0 ? opts.intervalMs : 30_000
-  const escalate = opts.escalate !== undefined && opts.escalate > 1 ? opts.escalate : 1
-  const maxInterval = opts.maxIntervalMs !== undefined && opts.maxIntervalMs > baseInterval ? opts.maxIntervalMs : baseInterval * 100
-  let intervalMs = baseInterval
-  const startedAt = Date.now()
-  type Settled = { ok: true; value: T } | { ok: false; error: unknown }
-  let settled: Settled | null = null
-  let wake: (() => void) | null = null
-  const ping = (): void => {
-    const resume = wake
-    wake = null
-    resume?.()
-  }
-  void work.then(
-    (value) => {
-      if (settled === null) {
-        settled = { ok: true, value }
-        ping()
-      }
-    },
-    (error) => {
-      if (settled === null) {
-        settled = { ok: false, error }
-        ping()
-      }
-    },
-  )
-  let pendingNotices = 0
-  let timer: NodeJS.Timeout | null = null
-  const arm = (): void => {
-    if (timer !== null || settled !== null) return
-    timer = setTimeout(() => {
-      timer = null
-      pendingNotices++
-      intervalMs = Math.min(Math.round(intervalMs * escalate), maxInterval)
-      ping()
-    }, intervalMs)
-    timer.unref?.()
-  }
-  try {
-    arm()
-    for (;;) {
-      if (settled !== null) break
-      if (pendingNotices > 0) {
-        pendingNotices--
-        yield {
-          type: 'reasoning-delta',
-          index: STATUS_NOTICE_BLOCK_INDEX,
-          text: opts.notice(Date.now() - startedAt) + '\n',
-        }
-        // Re-arm AFTER resuming: a generator suspended at the yield must not
-        // swallow the next tick (that bug produced exactly one notice and then
-        // silence for the rest of the wait).
-        arm()
-        continue
-      }
-      await new Promise<void>((resolve) => {
-        wake = resolve
-      })
-    }
-  } finally {
-    if (timer !== null) {
-      clearTimeout(timer)
-      timer = null
-    }
-  }
-  const done = settled as Settled | null
-  if (done === null) throw new Error('awaitWithNotices lost its completion signal')
-  if (done.ok) return done.value
-  throw done.error
-}
-
-function sawAuthFailure(parser: StreamJsonParser, outcome: { stderrTail: string }): boolean {
-  if (parser.stats.sawAuthFailure) return true
-  if (looksLikeAuthFailure(outcome.stderrTail)) return true
-  if (parser.stats.lastResultError && looksLikeAuthFailure(parser.stats.lastResultError)) return true
-  return false
 }
 
 /**
@@ -709,28 +575,7 @@ export class AgyAdapter extends LlmAdapter {
     /** Omit `-p <prompt>` and add `--input-format stream-json` (prompt rides stdin). */
     promptViaStdin?: boolean
   }): string[] {
-    const ptMins = opts.printTimeoutMinutes ?? Math.max(1, Math.ceil(opts.timeoutMs / 60_000))
-    const args: string[] = ['--output-format', 'stream-json', '--print-timeout', ptMins + 'm']
-    if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
-    else args.push('--mode', opts.permissionMode)
-    const effectiveModel = resolveModelSlug(opts.model)
-    if (effectiveModel !== '') args.push('--model', effectiveModel)
-    // Claude 5.5 accepts --effort on its base slug (verified against agy 1.5.3);
-    // a tiered slug plus the flag is rejected upstream, so callers must pass the
-    // base slug here — the catalog folds the tiers for exactly that reason.
-    const effortModel = effectiveModel.toLowerCase()
-    // Claude 5.5 only: 4.6 keeps its documented no-effort behaviour.
-    const isEffortCapable = effectiveModel === '' || effortModel.startsWith('gemini') || effortModel.startsWith('argon') || /^claude-(?:sonnet|opus)-5-5$/.test(effortModel)
-    if (isEffortCapable && opts.effort && opts.effort !== '') args.push('--effort', opts.effort)
-    if (opts.conversationId) args.push('--conversation', opts.conversationId)
-    for (const d of opts.addDirs ?? []) args.push('--add-dir', d)
-    args.push(...opts.extraArgs)
-    if (opts.promptViaStdin) {
-      args.push('--input-format', 'stream-json')
-    } else {
-      args.push('-p', opts.prompt)
-    }
-    return args
+    return buildAgyArgs(opts)
   }
 
   /**
@@ -1113,633 +958,57 @@ export class AgyAdapter extends LlmAdapter {
       this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
     }
 
-    // ---- spawn + record (v0.3: spans consume a shared recording) ----
-    const rec = this.deps.runs.create()
-    rec.accountHome = account && account.dir ? account.dir : undefined
-    // The fallback conversation-id discovery must watch the SAME HOME the
-    // child runs under: an isolated pool account's conversation DB lives in
-    // its own HOME and the system-HOME snapshot never sees it.
-    const conversationsDir = conversationsDirFor(rec.accountHome)
-    const before = snapshotConversations(conversationsDir)
-    const parser = new StreamJsonParser()
-    this.deps.onParser?.(parser)
-    let streamCid: string | null = null
-    // In-progress agy tool steps (ACTIVE without DONE/ERROR). While any is
-    // outstanding the child is legitimately silent on stdout (maven compile,
-    // language-server build, …) — issue #33. Raise the idle budget so the
-    // watchdog does not kill healthy long tools. The budget is configurable
-    // (`longToolIdleMinutes`, 0 = keep the normal timeout) so a wedged step
-    // can be bounded instead of holding a session for hours.
-    const openToolKeys = new Set<string>()
-    const openToolSince = new Map<string, number>()
-    const longToolIdleMinutes = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes : 0
-    const printTimeoutMinutes = Math.max(
-      longToolIdleMinutes > 0 ? longToolIdleMinutes : 240,
-      Math.ceil(cfg.timeoutMs / 60_000),
-    )
-    const longToolIdleMs = longToolIdleMinutes > 0 ? longToolIdleMinutes * 60_000 : cfg.timeoutMs
-    let runningProc: ReturnType<typeof startAgyProcess> | null = null
-    /**
-     * True once agy produced ANY output for this run. A run that has already
-     * emitted events is demonstrably alive and authenticated; a silent gap
-     * after that is a long model/tool phase, not a dead process. The idle
-     * watchdog used to kill those at the 10-minute default — 12 of the 37
-     * failures in one week of this user's logs were exactly
-     * "agy run was idle for 600000ms without output", each one costing the
-     * whole turn and a resend. Before the first event the strict budget stays:
-     * that is the genuinely wedged/unreachable-Google shape.
-     */
-    let sawAnyEvent = false
-    /** Timestamp of the most recent stdout line — drives the silence heartbeat. */
-    let lastOutputAt = 0
-    /**
-     * Generation-phase silence budget: after the first event but with NO open
-     * tool step, a hung SSE stream (quota-wall stalls hang instead of
-     * returning a 429 — observed 2026-10-17 01:17: the last
-     * streamGenerateContent simply never answered) used to sit for the full
-     * 240-minute long-tool budget because "sawAnyEvent" upgraded it. Long
-     * silence is only legitimate while a TOOL is running; bare generation
-     * gets a bounded floor so the turn can fail, classify and rotate.
-     */
-    const generationIdleMs = Math.max(cfg.timeoutMs, 15 * 60_000)
-    const applyToolIdleBudget = (): void => {
-      runningProc?.noteActivity(openToolKeys.size > 0 ? longToolIdleMs : generationIdleMs)
-    }
-    // Long-tool heartbeat: while a tool step is open nothing else is
-    // observable, so log its age every few minutes. A 3h silent hang used to
-    // look like a dead session (flash-blast incident, 2026-10-10).
-    const TOOL_HEARTBEAT_MS = 5 * 60_000
-    let toolHeartbeat: NodeJS.Timeout | null = null
-    const stopToolHeartbeat = (): void => {
-      if (toolHeartbeat !== null) {
-        clearInterval(toolHeartbeat)
-        toolHeartbeat = null
-      }
-    }
-    const startToolHeartbeat = (): void => {
-      if (toolHeartbeat !== null) return
-      toolHeartbeat = setInterval(() => {
-        if (openToolKeys.size === 0 && !sawAnyEvent) {
-          stopToolHeartbeat()
-          return
-        }
-        let oldest = Date.now()
-        for (const startedAt of openToolSince.values()) {
-          if (startedAt < oldest) oldest = startedAt
-        }
-        // With no tool step open the interesting number is time since the LAST
-        // output, not since a tool start: an empty openToolSince map used to
-        // leave `oldest` at "now" and the log permanently claimed "1m" of
-        // silence while the run had actually been quiet for hours.
-        if (openToolKeys.size === 0 && lastOutputAt > 0) oldest = lastOutputAt
-        const mins = Math.max(1, Math.round((Date.now() - oldest) / 60_000))
-        this.deps.log?.(
-          openToolKeys.size > 0
-            ? 'agy tool step still running: ' + openToolKeys.size + ' open, oldest ' + mins +
-              'm (idle budget ' + Math.round(longToolIdleMs / 60_000) + 'm) — the turn is waiting on agy'
-            : 'agy run still working: no new output for ' + mins + 'm (idle budget ' +
-              Math.round(longToolIdleMs / 60_000) + 'm) — the turn is waiting on agy; press Stop to cancel',
-        )
-      }, TOOL_HEARTBEAT_MS)
-      toolHeartbeat.unref?.()
-    }
-    const activeModelForArgs = activeModel === '' ? cfg.defaultModel : activeModel
-    // agy does not treat process cwd as its Active Workspace — it requires
-    // --add-dir. buildPromptPlan always attaches the resolved workspace root
-    // plus any staged media/context-transfer roots (issue #26).
-    const effectiveAddDirs = plan.addDirs
-    // Single choke point: every prompt reaches the child through here, so a NUL
-    // that slipped in from anywhere (tool output, a file path, a pasted blob)
-    // is removed before it can make `spawn` throw ERR_INVALID_ARG_VALUE and
-    // fail the turn ("failed to spawn agy"). NULs are also illegal inside the
-    // stream-json stdin payload, so this covers both transports.
-    prompt = stripNulBytes(prompt)
-    // Defense in depth: agy silently truncates a single message at 192,000
-    // UTF-8 bytes (tail side). The live request sits at the head, so trimming
-    // the tail only sheds background history.
-    if (utf8Bytes(prompt) > AGY_PROMPT_SAFE_BYTES) {
-      this.deps.log?.(
-        'prompt is ' + utf8Bytes(prompt) + ' B (> agy single-message budget) — trimming the tail',
-      )
-      prompt = trimToUtf8Bytes(prompt, AGY_PROMPT_SAFE_BYTES)
-    }
-    const argsBase = this.buildArgs({
-      prompt,
-      model: activeModelForArgs,
-      effort,
-      conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
-      permissionMode,
-      timeoutMs: cfg.timeoutMs,
-      printTimeoutMinutes,
-      extraArgs: cfg.extraArgs,
-      addDirs: effectiveAddDirs,
-    })
-    // Decide transport: keep `-p <prompt>` for normal turns; switch to stdin
-    // stream-json when the argv would approach the CreateProcess limit.
-    const promptViaStdin = shouldUsePromptStdin(argsBase)
-    const args = promptViaStdin
-      ? this.buildArgs({
-          prompt,
-          model: activeModelForArgs,
-          effort,
-          conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
-          permissionMode,
-          timeoutMs: cfg.timeoutMs,
-          printTimeoutMinutes,
-          extraArgs: cfg.extraArgs,
-          addDirs: effectiveAddDirs,
-          promptViaStdin: true,
-        })
-      : argsBase
-    const stdinPayload = promptViaStdin ? buildStreamInputLine(prompt) : undefined
-    // ---- dispatch phase: concurrency slot → credential slot → (spawn) ----
-    //
-    // 2026-10-16 zombie-turn incident: a request queued for the credential
-    // slot while another session held it, the queue wake-up was lost, and the
-    // turn pended FOREVER — no process, no watchdog (those arm only after
-    // spawn), and Stop did nothing because nothing in the wait observed the
-    // abort signal. Three defenses live in this block now:
-    //   1. the credential-slot wait is abort-aware (Stop works) and polls for
-    //      liveness (a lost wake-up self-heals within seconds);
-    //   2. a heartbeat logs the queue state every few minutes, so a stuck
-    //      dispatch is VISIBLE instead of a silent spinner;
-    //   3. an optional hard cap (dispatchTimeoutMinutes) turns a still-stuck
-    //      dispatch into a release → backoff → retry cycle, and finally into a
-    //      VISIBLE turn failure — never a silent infinite wait.
-    const dispatchHardCapMs = cfg.dispatchTimeoutMinutes > 0 ? cfg.dispatchTimeoutMinutes * 60_000 : 0
-    const dispatchStartedAt = Date.now()
-    const DISPATCH_HEARTBEAT_MS = 2 * 60_000
-    /** First session-visible "waiting for the slot" notice (then ×3 each time). */
-    const DISPATCH_NOTICE_MS = 20_000
-    let dispatchHeartbeat: NodeJS.Timeout | null = null
-    const stopDispatchHeartbeat = (): void => {
-      if (dispatchHeartbeat !== null) {
-        clearInterval(dispatchHeartbeat)
-        dispatchHeartbeat = null
-      }
-    }
-    const startDispatchHeartbeat = (): void => {
-      if (dispatchHeartbeat !== null) return
-      dispatchHeartbeat = setInterval(() => {
-        const mins = Math.max(1, Math.round((Date.now() - dispatchStartedAt) / 60_000))
-        const mutex = credentialSlotMutex
-        this.deps.log?.(
-          'agy dispatch still waiting: ' + mins + 'm — credential slot queue: ' + mutex.waiting +
-          ' waiter(s), ' + (mutex.pending - mutex.waiting) + ' holder(s) (another session may be running a long agy tool)' +
-          ' — the turn is waiting for the slot; press Stop to cancel',
-        )
-      }, DISPATCH_HEARTBEAT_MS)
-      dispatchHeartbeat.unref?.()
-    }
-    const dispatchSleep = async (ms: number): Promise<void> => {
-      if (options.signal?.aborted) throw new LlmError('request aborted during dispatch backoff', Err.AGY_ERROR)
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          options.signal?.removeEventListener('abort', onAbort)
-          resolve()
-        }, ms)
-        const onAbort = () => {
-          clearTimeout(timer)
-          reject(new LlmError('request aborted during dispatch backoff', Err.AGY_ERROR))
-        }
-        options.signal?.addEventListener('abort', onAbort, { once: true })
-      })
-    }
-    let release: (() => void) | null = null
-    let released = false
-    let slotLease: Awaited<ReturnType<typeof acquireCredentialSlot>>
-    let granted = false
-    let dispatchBackoffMs = 2_000
-    const maxDispatchAttempts = 1 + Math.max(0, cfg.dispatchRetries)
-    // Set when the CALLER abandons this generator (Stop / stream closed) while
-    // the wait below is suspended. A grant that lands after that point has
-    // nobody left to release it, so it is handed straight back — otherwise one
-    // semaphore slot leaks per abandoned wait and the pool dead-locks.
-    let abandonedDuringDispatch = false
-    let dispatchSettled = false
-    try {
-      for (let attempt = 1; attempt <= maxDispatchAttempts && !granted; attempt++) {
-        try {
-          const pendingConcurrencySlot = this.deps.acquire(options.signal)
-          void pendingConcurrencySlot.then(
-            (late) => {
-              if (abandonedDuringDispatch) {
-                try {
-                  late()
-                } catch {
-                  // best-effort
-                }
-              }
-            },
-            () => {},
-          )
-          release = yield* awaitWithNotices(pendingConcurrencySlot, {
-            // Fast dispatches never emit anything: the notice only exists for
-            // waits the user would otherwise read as a freeze. The cadence
-            // escalates (20s → 60s → 3m → 9m) so a 15-minute queue leaves a
-            // handful of lines instead of a wall of them.
-            intervalMs: DISPATCH_NOTICE_MS,
-            escalate: 3,
-            maxIntervalMs: 9 * 60_000,
-            notice: (waitedMs) =>
-              '[agy] 正在等待 agy 凭据槽：另一个会话正在运行（已等待 ' + Math.max(1, Math.round(waitedMs / 60_000)) +
-              ' 分钟）。同一台机器同一时刻只能有一个 agy 身份占用系统凭据槽；稍候会自动开始，按 Stop 可取消。\n' +
-              '[agy] waiting for the agy credential slot: another session is running (' +
-              Math.max(1, Math.round(waitedMs / 60_000)) + 'm elapsed).',
-          })
-          startDispatchHeartbeat()
-          // Windows has ONE process-global credential slot that every agy
-          // process reads. Ownership is serialized for the whole run and only
-          // handed over when it can provably be handed back. This throws
-          // instead of signing in as the wrong account, which would silently
-          // spend that account's quota.
-          //
-          // Never engage the real Credential Manager from a test run: node:test
-          // sets NODE_TEST_CONTEXT, and the fake-agy pool tests build accounts that
-          // do not own the machine's system login (handing those over would write
-          // test credentials into the developer's real slot). Their credential-slot
-          // unit tests inject a fake IO and still exercise the handoff directly.
-          slotLease = process.env.NODE_TEST_CONTEXT === undefined
-            ? await acquireCredentialSlot(account ?? undefined, this.deps.pool, {
-                baseDir: this.deps.pool?.dir,
-                proxyUrl: account?.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined,
-                log: (msg) => this.deps.log?.(msg),
-                signal: options.signal,
-                dispatchTimeoutMs: dispatchHardCapMs,
-                parallel: cfg.parallelSameAccount,
-              })
-            : undefined
-          granted = true
-        } catch (e) {
-          // Return the concurrency slot before deciding: a retry re-acquires.
-          release?.()
-          release = null
-          if (e instanceof AbortedWaitError) {
-            throw new LlmError('request aborted while waiting for the agy credential slot', Err.AGY_ERROR)
-          }
-          if (e instanceof WaitTimeoutError) {
-            // The slot never arrived within the hard cap. Retry if allowed,
-            // otherwise fail the turn VISIBLY — never park it silently.
-            if (attempt < maxDispatchAttempts) {
-              this.deps.log?.(
-                'agy dispatch attempt ' + attempt + '/' + maxDispatchAttempts + ' timed out after ' +
-                cfg.dispatchTimeoutMinutes + 'm waiting for the credential slot — releasing and retrying in ' +
-                Math.round(dispatchBackoffMs / 1000) + 's',
-              )
-              // Console-only logs are invisible in the session; say it in the
-              // transcript too, or the turn looks hung for another full cap.
-              yield {
-                type: 'reasoning-delta',
-                index: STATUS_NOTICE_BLOCK_INDEX,
-                text: '[agy] 等待 agy 凭据槽已超过 ' + cfg.dispatchTimeoutMinutes + ' 分钟，正在重新排队（' +
-                  Math.round(dispatchBackoffMs / 1000) + ' 秒后重试 ' + (attempt + 1) + '/' + maxDispatchAttempts +
-                  '）。\n[agy] credential-slot wait exceeded ' + cfg.dispatchTimeoutMinutes + 'm — re-queueing (attempt ' +
-                  (attempt + 1) + '/' + maxDispatchAttempts + ').\n',
-              }
-              stopDispatchHeartbeat()
-              await dispatchSleep(dispatchBackoffMs)
-              dispatchBackoffMs = Math.min(dispatchBackoffMs * 2, 15_000)
-              continue
-            }
-            throw new LlmError(
-              'could not take the agy credential slot within ' + cfg.dispatchTimeoutMinutes +
-              'm (another run may be wedged holding it). Check the console for the dispatch heartbeat, restart DSH if a run is truly stuck.',
-              Err.TIMEOUT,
-            )
-          }
-          const detail = e instanceof SlotUnavailableError ? e.message : brief(String(e))
-          throw new LlmError(detail, Err.AGY_ERROR)
-        }
-      }
-      dispatchSettled = true
-    } catch (e) {
-      dispatchSettled = true
-      stopDispatchHeartbeat()
-      this.clearInFlightPrompt(sessionKey, prompt)
-      throw e
-    } finally {
-      // Reached with dispatchSettled still false ONLY when the caller
-      // abandoned this generator mid-wait (Stop / stream closed): flag it so a
-      // grant that lands afterwards is handed back instead of leaking.
-      if (!dispatchSettled) abandonedDuringDispatch = true
-    }
-    stopDispatchHeartbeat()
-    // The machine-wide credential slot only has to stay ours until the child
-    // has READ it: measured on agy 1.4.3, print mode resolves its credential
-    // once at startup ("silent auth succeeded", +3.2s) and performs ZERO
-    // further token/auth work for the rest of a 14-minute run. Releasing the
-    // lease on the first event is what turns "one run per machine" into
-    // "one STARTUP per machine" — different accounts then run concurrently.
-    let slotHandoff: SlotHandoff | null = null
-    const releaseSlotLease = (): void => {
-      if (slotHandoff !== null) {
-        slotHandoff.dispose()
-        return
-      }
-      try {
-        slotLease?.release()
-      } catch {
-        // best-effort
-      }
-    }
-    const releaseOnce = (): void => {
-      if (released) return
-      released = true
-      releaseSlotLease()
-      release?.()
-      release = null
-    }
-    // The acquire→spawn window can be arbitrarily long (all slots busy on
-    // long tool runs). Two failure shapes used to leak permanently:
-    //  1. the caller abandons this generator while it is suspended after
-    //     acquire (steer abort / DSH closing the stream) — with no try/finally
-    //     the release closure was simply dropped and one maxConcurrent slot
-    //     leaked per incident, dead-locking every future run once enough
-    //     slots piled up;
-    //  2. the caller's signal aborted DURING the wait — addEventListener on an
-    //     already-aborted signal never fires, so the spawn below ran a full
-    //     turn for a request nobody was reading any more.
-    // Both are fixed by re-checking the signal here and by the try/finally
-    // that owns releaseOnce() until the process-outcome closure takes over.
-    if (options.signal?.aborted) {
-      releaseOnce()
-      throw new LlmError('request aborted before the agy process was spawned', Err.AGY_ERROR)
-    }
-    // Only SECONDARY pool accounts get an isolated HOME. The primary
-    // account rides the real system HOME (agy 1.1.15 keeps credentials in
-    // the macOS Keychain); injecting HOME there signs agy out ("Please
-    // sign in") and every turn fails with an auth error.
-    if (account && account.dir) ensureIsolatedKeychain(account.dir)
-    // Snapshot agy's per-run log set BEFORE spawning so evidence found after
-    // the run can be attributed to THIS run (each invocation writes a fresh
-    // cli-*.log). The stderr banner for a failed silent auth is byte-identical
-    // for a genuine sign-out and for a keyring validation that died on the
-    // network; only this log separates the two.
-    const runLogHome = agyHomeDirFor(account)
-    const runLogsBefore = snapshotAgyLogs(runLogHome)
-    // One shared precedence + env assembly (runtime/net/account-env.ts). The
-    // MCP session id rides along so the bridge can resolve the calling agent
-    // (issue #55); telemetry flags keep their historical behaviour here.
-    const env = buildAgyEnv({
-      ...(account === undefined ? {} : { account }),
-      cfg,
-      ...(sessionKey === '' ? {} : { sessionId: sessionKey }),
-      telemetryFlags: cfg.disableTelemetry,
-    })
-
-    let proc: ReturnType<typeof startAgyProcess>
-    let spawned = false
-    try {
-      // Per-account burst spacing throttle with randomized jitter (prevents
-      // high-frequency flood to Google endpoints). Suspension point INSIDE the
-      // slot-owning window: a generator abandoned here must still give the
-      // slot back — the finally below owns that.
-      if (account) {
-        const lastSpawn = this.lastAccountSpawnTime.get(account.id) ?? 0
-        const elapsed = Date.now() - lastSpawn
-        const jitter = Math.floor(Math.random() * 300) // 100~400ms organic jitter
-        const targetInterval = this.minSpawnIntervalMs + jitter
-        if (elapsed < targetInterval) {
-          if (options.signal?.aborted) throw new LlmError('request aborted before the agy process was spawned', Err.AGY_ERROR)
-          await new Promise<void>((r, reject) => {
-            const timer = setTimeout(() => {
-              options.signal?.removeEventListener('abort', onAbort)
-              r()
-            }, targetInterval - elapsed)
-            const onAbort = () => {
-              clearTimeout(timer)
-              reject(new LlmError('request aborted before the agy process was spawned', Err.AGY_ERROR))
-            }
-            options.signal?.addEventListener('abort', onAbort, { once: true })
-          })
-        }
-        this.lastAccountSpawnTime.set(account.id, Date.now())
-      }
-      // Arm the narrow hand-off BEFORE the spawn: stdout can deliver the first
-      // line before startAgyProcess() even returns, and that first line is the
-      // proof that agy is past its credential read.
-      if (slotLease !== undefined) {
-        slotHandoff = armSlotHandoff({
-          release: () => {
-            try {
-              slotLease?.release()
-            } catch {
-              // best-effort
-            }
-          },
-          log: (msg) => this.deps.log?.(msg),
-        })
-      }
-      proc = startAgyProcess({
-      bin,
-      args,
-      cwd: workspaceRoot,
-      timeoutMs: cfg.timeoutMs,
-      // Wall-clock cap for the whole turn (issue #92): the idle watchdog is
-      // re-armed by every output line, so a self-driving loop that keeps
-      // printing never trips it. 0 disables (behaviour unchanged).
-      maxTurnMs: cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined,
-      signal: options.signal,
-      env,
-      stdinPayload,
-      preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
-      // stderr is liveness too: agy prints progress/diagnostics there while a
-      // long step is running, and a run that only talks on stderr used to be
-      // "idle" as far as the watchdog was concerned.
-      stderrKeepalive: true,
-      onLine: (line) => {
-        sawAnyEvent = true
-        // First output = agy resolved its credential; give the machine-wide
-        // slot back so other accounts' sessions can run concurrently.
-        slotHandoff?.onFirstEvent()
-        lastOutputAt = Date.now()
-        startToolHeartbeat()
-        applyToolIdleBudget()
-        for (const ev of parser.feed(line + '\n')) {
-          if (ev.kind === 'init' && ev.conversationId) streamCid = ev.conversationId
-          if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
-          if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool) {
-            // Mirror mapper's completion rule: DONE/ERROR state, or legacy
-            // events that carry output/error without an explicit state.
-            const completed =
-              ev.state === 'DONE' ||
-              ev.state === 'ERROR' ||
-              (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
-            if (!completed) {
-              if (!openToolKeys.has(ev.stepKey)) {
-                openToolKeys.add(ev.stepKey)
-                openToolSince.set(ev.stepKey, Date.now())
-                applyToolIdleBudget()
-                startToolHeartbeat()
-              }
-            } else if (openToolKeys.delete(ev.stepKey)) {
-              openToolSince.delete(ev.stepKey)
-              applyToolIdleBudget()
-              if (openToolKeys.size === 0) stopToolHeartbeat()
-            }
-          }
-          rec.append(ev)
-          const onEvent = options.agyOnEvent
-          if (typeof onEvent === 'function') {
-            try {
-              onEvent(ev)
-            } catch {
-              // contained: a listener must never break the stream
-            }
-          }
-        }
+    // ---- spawn + parse + outcome: delegated to provider/attempt-outcome.ts ----
+    // The attempt machinery owns argv/transport, the credential-slot dispatch,
+    // child spawn, parser feed and the detached outcome closure. The adapter
+    // injects its private state as callbacks so it stays the single owner of
+    // activeRuns, failover budgets and network streaks.
+    const attemptDeps: AttemptDeps = {
+      acquire: (signal?: AbortSignal) => this.deps.acquire(signal),
+      pool: this.deps.pool,
+      runs: this.deps.runs,
+      store: this.deps.store,
+      log: this.deps.log,
+      onParser: this.deps.onParser,
+      onRun: this.deps.onRun,
+      clearInFlightPrompt: (key: string, p: string) => this.clearInFlightPrompt(key, p),
+      registerActiveRun: (key: string, r: RunRecording) => this.activeRuns.set(key, r),
+      unregisterActiveRun: (key: string, r: RunRecording) => {
+        if (this.activeRuns.get(key) === r) this.activeRuns.delete(key)
       },
-      })
-      spawned = true
-      runningProc = proc
-      // stdout can deliver the first lines before this assignment lands —
-      // re-apply whatever tool-idle budget those events already requested.
-      applyToolIdleBudget()
-      if (!isAux && sessionKey !== '') {
-        rec.requestAbort = () => proc.kill('abort')
-        this.activeRuns.set(sessionKey, rec)
-      }
-      // The abort listener in the runner never fires on an ALREADY-aborted
-      // signal: an abort that arrived while this call queued on the semaphore
-      // (or during the throttle sleep above) would otherwise run a full turn
-      // nobody is reading. Kill immediately so the outcome closure settles
-      // this run as ABORTED and returns the slot.
-      if (options.signal?.aborted) proc.kill('abort')
-    } catch (e) {
-      releaseOnce()
-      this.clearInFlightPrompt(sessionKey, prompt)
-      throw new LlmError('failed to spawn agy: ' + brief(String(e)), Err.PROCESS_EXIT)
-    } finally {
-      // Generator abandoned while suspended inside the try (throttle sleep):
-      // the async outcome closure below was never created, so nothing else
-      // would ever return the concurrency slot. releaseOnce() no-ops when the
-      // catch already released.
-      if (!spawned) {
-        releaseOnce()
-        this.clearInFlightPrompt(sessionKey, prompt)
-      }
+      isSuperseded: (key: string, r: RunRecording) =>
+        this.activeRuns.get(key) !== undefined && this.activeRuns.get(key) !== r,
+      noteNetworkFailure: (key: string) => this.noteNetworkFailure(key),
+      clearNetworkStreak: (key: string) => this.clearNetworkStreak(key),
+      dropFailoverBudget: (key: string) => this.failoverBudget.delete(key),
+      clearRateLimitFailover: (key: string) => this.rateLimitFailover.delete(key),
+      sharesSingleEgress: () => this.sharesSingleEgress(),
+      lastAccountSpawnTime: this.lastAccountSpawnTime,
+      minSpawnIntervalMs: this.minSpawnIntervalMs,
     }
-
-    void (async () => {
-      const outcome = await proc.outcome
-      releaseOnce()
-      stopToolHeartbeat()
-      openToolKeys.clear()
-      openToolSince.clear()
-      if (this.activeRuns.get(sessionKey) === rec) this.activeRuns.delete(sessionKey)
-      this.clearInFlightPrompt(sessionKey, prompt)
-      for (const ev of parser.flush()) {
-        if (ev.kind === 'result' && ev.conversationId !== '') streamCid = ev.conversationId
-        rec.append(ev)
-        const onEvent = options.agyOnEvent
-        if (typeof onEvent === 'function') {
-          try {
-            onEvent(ev)
-          } catch {
-            // contained
-          }
-        }
-      }
-      const diffed = diffConversations(before, conversationsDir).conversationId
-      const conversationId = streamCid ?? diffed
-      // A result envelope the mapper will finish on: ok, or an error that
-      // still carries a usable response. Anything else leaves the live span
-      // un-finished, so the failure below reaches it through the recording.
-      const r = rec.getResultEvent()
-      const consumable = r !== null && (r.ok || r.response !== '')
-      // Error classification scans ONLY stderr and the result envelope's
-      // error field. stdout is model prose + event JSON: a run whose streamed
-      // text merely MENTIONED "rate limit"/"quota" (or contained a hash with
-      // "429") used to be misclassified as a quota failure, masking the real
-      // error and slapping a ghost cooldown on a healthy account.
-      const rawErrText = [outcome.stderrTail, parser.stats.lastResultError].filter(Boolean).join(' ')
-      const isRateLimit = looksLikeRateLimit(rawErrText)
-      // Transport evidence anywhere in the run: stderr, the result envelope, or
-      // the auth-shaped banner agy prints on stdout ("silent auth failed").
-      // A flaky proxy makes agy report "not logged into Antigravity" for a
-      // login that is perfectly fine, so this decides AUTH vs NETWORK below.
-      // This run's agy log is the decisive extra input: keyring-auth timeout /
-      // userinfo transport failure proves a credential was present and only
-      // the network was down (2026-10-16 quarantine incident).
-      const runLogText = readAgyRunLogText(runLogHome, runLogsBefore)
-      const keyringJitter = looksLikeAuthVerificationJitter(runLogText)
-      // One pure decision seam (issue #71): the wide transport regex used to
-      // miss the run log, so a proxy blip that agy logs as "token validation
-      // failed due to network error" was classified AUTH and quarantined a
-      // healthy account.
-      const transportFailure = isTransportFailure({
-        rawErrText,
-        authFailureText: parser.stats.authFailureText ?? '',
-        stderrTail: outcome.stderrTail,
-        stdoutHead: outcome.stdout,
-        runLogText,
-      })
-      // A timeout that never produced a single stdout event is an account-level
-      // black hole (unreachable Google / wedged credential), not a long tool:
-      // the retry must try a different account rather than the same dead one.
-      const silentTimeout = outcome.timedOut === true && outcome.stdout.trim() === ''
-      const failure = classifyFailure({
-        cfg,
-        outcome,
-        parser,
-        sawAuthFailure: sawAuthFailure(parser, outcome),
-        consumable,
-        transportFailure,
-        keyringJitter,
-        rawErrText,
-        isRateLimit,
-        silentTimeout,
-      })
-      // Transport failures carry their own backoff. DSH's generic schedule
-      // (2s, doubling) cannot outlast an egress outage: on 2026-10-21 a proxy
-      // flapped for ~14 minutes and the whole retry budget was spent in four
-      // seconds, so every turn died mid-outage. The streak resets on success
-      // and on any non-transport failure, so only a sustained outage escalates.
-      if (failure !== null) {
-        if (failure.code === Err.NETWORK) {
-          failure.retryAfterMs = networkRetryDelayMs(this.noteNetworkFailure(sessionKey))
-        } else {
-          this.clearNetworkStreak(sessionKey)
-        }
-      }
-      rec.settle(failure)
-      // A newer run may already own this session (steer preemption whose
-      // bounded settle wait expired). Its own handler writes the authoritative
-      // binding — letting this stale closure write afterwards used to regress
-      // lastMessageCount/sentImageIds and re-digest or re-attach old images.
-      const superseded = this.activeRuns.get(sessionKey) !== undefined
-        && this.activeRuns.get(sessionKey) !== rec
-      await finalizeAttempt({
-        rec,
-        outcome,
-        failure,
-        store: this.deps.store,
-        pool: this.deps.pool,
-        account,
-        family,
-        persistBinding,
-        sessionAccountKey,
-        binding,
-        conversationId,
-        messages,
-        model,
-        activeModel,
-        superseded,
-        newlySentImageIds,
-        rawErrText,
-        runLogText,
-        silentTimeout,
-        sessionKey,
-        clearNetworkStreak: (key) => this.clearNetworkStreak(key),
-        dropFailoverBudget: (key) => this.failoverBudget.delete(key),
-        clearRateLimitFailover: (key) => this.rateLimitFailover.delete(key),
-        sharesSingleEgress: () => this.sharesSingleEgress(),
-        ...(this.deps.onRun === undefined ? {} : { onRun: this.deps.onRun }),
-      })
-    })().catch((err) => {
-      releaseOnce()
-      rec.settle({ kind: 'error', code: Err.PROCESS_EXIT, message: 'internal error: ' + brief(String(err)) })
-    })
+    const attemptInput: AttemptInput = {
+      cfg,
+      bin,
+      permissionMode,
+      sessionKey,
+      workspaceRoot,
+      isAux,
+      account,
+      prompt,
+      model,
+      activeModel,
+      effort,
+      addDirs: plan.addDirs,
+      persistBinding,
+      binding,
+      messages,
+      newlySentImageIds,
+      sessionAccountKey,
+      family,
+      signal: options.signal,
+      agyOnEvent: options.agyOnEvent,
+    }
+    const rec = yield* runAgyAttempt(attemptDeps, attemptInput)
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
