@@ -201,6 +201,8 @@ dsh-agy-image -p "把背景换成夜晚" -i ./day.png -n night_scene --json
 
 ## 🧩 架构与工作原理
 
+> 分层、依赖方向与各模块职责见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)；开发与重构门禁见 [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)。
+
 1. **短生命周期进程驱动**：每一轮 DSH 对话启动一个独立的官方 `agy -p --output-format stream-json` 进程，解析 NDJSON 事件流。
 2. **多账号沙箱机制**：除主账号沿用系统默认 Keychain / HOME 外，所有备用账号在插件私有目录下建立专属 HOME 隔离区，独立写入 agy 格式的标准 OAuth 凭证。Windows 上 agy 的凭据实际存放在机器级 Credential Manager（`gemini:antigravity`），插件因此以「身份级引用计数租约」接管该槽：**同一授权的多个会话并行运行**，只有账号**身份切换**才串行，且由最后一个持有者还原主账号凭据。
 3. **多 Bucket 官方配额汇总**：插件定时后台静默轮询官方 `v1internal:retrieveUserQuotaSummary`，精准掌控每个账号的 5h 滚动削峰水位、7d 账号阶梯周额度，以及付费账号的 Argon 独立周池。
