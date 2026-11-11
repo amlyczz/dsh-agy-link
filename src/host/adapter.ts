@@ -11,6 +11,8 @@ import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
+import { resolveCallContext } from '../provider/call-context.ts'
+import { purposePolicy } from '../provider/purpose-policy.ts'
 import { type RawUsage, Err, NETWORK_RETRY_DELAYS_MS, accountsShareSingleEgress, isAccountScopedFailure, isAuthoritativeAuthError, looksLikeAuthFailure, looksLikeAuthVerificationJitter, looksLikeContextWindowExceeded, looksLikeEligibilityFailure, looksLikeHardRateLimit, isTransportFailure, looksLikeRateLimit, networkRetryDelayMs, shouldMarkAuthRequired, ELIGIBILITY_ERROR_HINT, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
@@ -1223,85 +1225,22 @@ export class AgyAdapter extends LlmAdapter {
   }
 
   private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false): AsyncIterable<StreamChunk> {
-    const cfg = this.deps.getConfig()
-    const bin = this.deps.bin()
-    if (!bin) throw new LlmError('agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install', Err.AGY_NOT_INSTALLED)
-    const isReview = typeof options.system === 'string' && options.system.includes('REVIEW_POLICY')
-    const isTitle = options.purpose === 'session-title'
-    const isCompaction = options.purpose === 'compaction'
-    // Translation (`purpose:'translation'`, this plugin's own auxiliary route):
-    // rides the aux channel so it joins no conversation binding, sees no tools
-    // and runs in plan mode, but keeps the caller's explicit reasoning effort
-    // (aux calls are otherwise pinned to 'low') and is never gated by
-    // `allowAuxiliary` — it is a user-invoked feature, not a background helper.
-    const isTranslate = (options.purpose as string | undefined) === 'translation'
-    // Image generation (`purpose:'image'`, the `dsh-agy-image` CLI): rides the
-    // same aux route as translation (account pool, cooldown/rotation, proxy,
-    // failure classification), but it must be able to call the built-in
-    // `generate_image` tool, so it keeps the configured permission mode instead
-    // of being forced into read-only plan mode. The caller hands the exact
-    // bridge prompt and receives agy events through `agyOnEvent`.
-    const isImage = (options.purpose as string | undefined) === 'image'
-    // Title calls are aux, but must not be forced into plan mode (that drops the
-    // length/format constraints): see the mode selection below.
-    const isAux = isCompaction || isTitle || isReview || isTranslate || isImage
-    // The image CLI may override the configured mode for one call (headless
-    // callers often need `skip`). Everything else keeps the historical rules:
-    // aux runs are read-only plan mode, titles keep the configured mode.
-    const imageModeRaw = isImage ? options.agyPermissionMode : undefined
-    const effectivePermissionMode: PluginConfig['permissionMode'] =
-      imageModeRaw === 'skip' || imageModeRaw === 'plan' || imageModeRaw === 'accept-edits'
-        ? imageModeRaw
-        : isAux && !isTitle && !isImage
-          ? 'plan'
-          : cfg.permissionMode
-    // Translation with its OWN agy conversation (1:1 with the DSH session). The
-    // host hands over two strings: `setup` (persona + the DSH session id + how to
-    // read that session's history) and `text` (this reply's source). The setup is
-    // sent ONCE, when the conversation is created; every later translation sends
-    // only the text, because agy already holds the persona. The conversation is
-    // bound under `${sessionKey}#tsl` so it never collides with the turn
-    // conversation of the same DSH session.
-    const translateSessionRaw = options.agyTranslateSession
-    const translateSession =
-      isTranslate && translateSessionRaw !== undefined
-        ? {
-            setup: String(translateSessionRaw.setup ?? ''),
-            text: String(translateSessionRaw.text ?? ''),
-          }
-        : null
+    const ctx = resolveCallContext({
+      options,
+      cfg: this.deps.getConfig(),
+      bin: this.deps.bin(),
+      ...(this.deps.sessionCwd === undefined
+        ? {}
+        : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
+      warnOnce: (key: string, message: string) => this.warnOnce(key, message),
+    })
+    const { cfg, bin, isReview, isTitle, isCompaction, isTranslate, isImage, isAux } = ctx
+    const { permissionMode, sessionKey, workspaceRoot, isCodeMode, hasToolSupport } = ctx
+    const policy = purposePolicy(ctx)
+    // Keep the local alias: TypeScript's aliased-condition narrowing makes
+    // `else if (isTranslateSession)` narrow `translateSession` below.
+    const translateSession = ctx.translateSession
     const isTranslateSession = translateSession !== null
-    if (isAux && !isReview && !isTranslate && !isImage && !cfg.allowAuxiliary) {
-      throw new LlmError('auxiliary calls are disabled for the antigravity route (allowAuxiliary: false)', Err.AUX_DISABLED)
-    }
-    // Prefer direct native agy_tool cards when the host registered the mirror
-    // tool. Code Mode (`run_code` only) still wraps, because that host rejects
-    // non-run_code tool-call blocks — but when agy_tool is callable we emit it
-    // so DSH's toolview can render terminal/diff cards instead of "replay agy
-    // tool step N · run_command" code rows.
-    const toolNames = new Set((options.tools ?? []).map((t) => t.name))
-    const isCodeMode = toolNames.has('run_code') && !toolNames.has('agy_tool')
-    const hasToolSupport = options.tools === undefined || toolNames.has('agy_tool') || toolNames.has('run_code')
-    const sessionKey = options.sessionId !== undefined ? String(options.sessionId) : ''
-    // cwd precedence: explicit config > the DSH session's own workspace >
-    // the host process cwd. The last fallback can land agy in an UNRELATED
-    // directory (wherever the DSH server was started) — with permissionMode
-    // 'skip' that is a silent wrong-workspace write path, so log it loudly
-    // once per session instead of failing the turn.
-    let workspaceRoot = cfg.workspaceRoot
-    if (workspaceRoot === '') {
-      const fromSession = sessionKey !== '' ? this.deps.sessionCwd?.(sessionKey) : undefined
-      if (fromSession) {
-        workspaceRoot = fromSession
-      } else {
-        workspaceRoot = process.cwd()
-        this.warnOnce(
-          'cwd:' + (sessionKey || 'anon'),
-          'session workspace unresolved (sessionId=' + (sessionKey || 'none') + ') — running agy in the DSH process cwd: ' + workspaceRoot,
-        )
-      }
-    }
-
     // DSH synthetic lifecycle tool continuation: if the trailing message is
     // the tool-result of an update_goal or exit_plan_mode bridge call, the
     // DSH state machine has accepted the transition. Finish cleanly without
@@ -1378,7 +1317,7 @@ export class AgyAdapter extends LlmAdapter {
         // would fail the whole invocation, so the flag is dropped silently —
         // the requested level is simply not selectable on this agy build.
         effort = undefined
-      } else if (isAux && !isTranslate && !isImage) {
+      } else if (policy.pinLowEffort) {
         effort = 'low'
       } else if (options.reasoningEffort !== undefined) {
         const wanted = String(options.reasoningEffort)
@@ -1600,7 +1539,7 @@ export class AgyAdapter extends LlmAdapter {
     // A translation conversation is keyed apart from the turn conversation of the
     // same DSH session, and it persists like one (the point of the 1:1 mapping).
     const bindingKey = isTranslateSession && sessionKey !== '' ? `${sessionKey}#tsl` : sessionKey
-    const persistBinding = !isAux || isTranslateSession
+    const persistBinding = policy.persistBinding(isTranslateSession)
     const sessionAccountKey = account ? `${bindingKey}:${account.id}` : bindingKey
     let binding = sessionAccountKey !== '' ? this.deps.store.get(sessionAccountKey) : undefined
     if (binding === undefined && bindingKey !== '') {
@@ -2139,7 +2078,7 @@ export class AgyAdapter extends LlmAdapter {
       model: activeModelForArgs,
       effort,
       conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
-      permissionMode: effectivePermissionMode,
+      permissionMode,
       timeoutMs: cfg.timeoutMs,
       printTimeoutMinutes,
       extraArgs: cfg.extraArgs,
@@ -2154,7 +2093,7 @@ export class AgyAdapter extends LlmAdapter {
           model: activeModelForArgs,
           effort,
           conversationId: persistBinding && binding !== undefined ? binding.conversationId : undefined,
-          permissionMode: effectivePermissionMode,
+          permissionMode,
           timeoutMs: cfg.timeoutMs,
           printTimeoutMinutes,
           extraArgs: cfg.extraArgs,
@@ -2883,7 +2822,7 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* this.driveSpan(rec, 0, !isAux && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice)
+    yield* this.driveSpan(rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice)
   }
 
   /**
