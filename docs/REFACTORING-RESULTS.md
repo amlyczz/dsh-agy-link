@@ -14,8 +14,8 @@ Branch `refactor/modular-monolith` (git worktree), based on `main` @ v0.6.18.
 | Longest function (`streamAttempt`) | 1,673 | **384** |
 | Modules | 54 | **205** |
 | Import cycles | 0 | **0** |
-| Tests | 754 | **791** |
-| Coverage (lines / branches / functions) | 78.79 / 75.73 / 75.82 | **80.38 / 76.83 / 76.45** |
+| Tests | 754 | **1021** |
+| Coverage (lines / branches / functions) | 78.79 / 75.73 / 75.82 | **88.44 / 80.94 / 84.09** |
 | Files > 600 lines | 19 | **0** (largest: 597) |
 
 New modules:
@@ -38,7 +38,7 @@ npm run lint:arch      # 103 modules, 0 cycles, 0 direction violations
 npm run lint:budget    # 103 files, 17 legacy ratchet entries
 npm run build          # host + client + bridge + image CLI
 npm test               # 788 pass / 0 fail
-npm run test:coverage  # Node coverage thresholds
+npm run test:coverage  # Node coverage gate (85/80/80)
 npm run verify         # check + arch + budget + build + test
 ```
 
