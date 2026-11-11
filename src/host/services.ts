@@ -282,6 +282,11 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     notifyPicker,
   )
 
+  pool.onAccountSwitch = (newActiveId: string) => {
+    notifyPicker()
+    void catalog.forceRefreshAndNotify(newActiveId).catch(() => undefined)
+  }
+
   const auth = new AuthHelper(bin, () => getConfig().suppressAgyAutoUpdate)
   const poolAuth = new PoolAuthFlow(pool, quota, log)
   const runs = new RunRegistry()

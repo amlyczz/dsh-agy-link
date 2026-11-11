@@ -193,17 +193,23 @@ export function accountSupportsModel(
     return accountHasArgon(acc, pool, catalog)
   }
 
-  const family = modelFamilyOf(clean)
-  const familyModels = acc.quotas?.[family]?.models
-  if (Array.isArray(familyModels) && familyModels.length > 0) {
-    return familyModels.some((m) => modelMatches(clean, m.modelId))
+  // If the account has an authoritative discovered catalog from `agy models`:
+  if (catalog && catalog.source === 'discovered' && Array.isArray(catalog.models) && catalog.models.length > 0) {
+    return catalog.models.some((m) => modelMatches(clean, m.id))
   }
 
-  if (catalog && catalog.source === 'discovered' && Array.isArray(catalog.models) && catalog.models.length > 0) {
-    const catFamilyModels = catalog.models.filter((m) => modelFamilyOf(m.id) === family)
-    if (catFamilyModels.length > 0) {
-      return catFamilyModels.some((m) => modelMatches(clean, m.id))
+  const family = modelFamilyOf(clean)
+  const familyQuota = acc.quotas?.[family]
+  if (familyQuota) {
+    if (Array.isArray(familyQuota.models) && familyQuota.models.length > 0) {
+      return familyQuota.models.some((m) => modelMatches(clean, m.modelId))
     }
+    return true
+  }
+
+  // Quota was polled for this account, but this family (e.g. anthropic) is completely missing:
+  if (acc.quotas && Object.keys(acc.quotas).length > 0 && acc.quotas.google !== undefined) {
+    return false
   }
 
   return true

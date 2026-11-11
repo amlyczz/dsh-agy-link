@@ -6,7 +6,7 @@
 // advisory effort levels minus learned refusals) is unchanged.
 import type { LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import { PROVIDER_ID, type PluginConfig } from '../common/types.ts'
-import type { ManagedAccount } from '../common/pool-types.ts'
+import { accountSupportsModel, type ManagedAccount } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import { defaultEffortFor, findEntry, sanitizeCatalogEntries, type ModelCatalog } from '../host/models.ts'
 
@@ -30,11 +30,21 @@ export function listAvailableModels(deps: ModelResolutionDeps): readonly LlmMode
   const pool = deps.pool
   const accounts = pool ? pool.getAccounts().filter((a) => a.enabled) : []
   const cfg = deps.getConfig()
-  // Model picker exposes the UNION of all models available across all pool accounts.
-  // Keep listing synchronous and side-effect-free: catalog refresh can emit
-  // llm/adapters-updated, which asks DSH to list models again. Freshness is
-  // handled by startup, TTL, account switches, and explicit refresh paths.
-  const models = deps.catalog.getUnion(accounts, pool)
+  const activeAcc = activeAccount(deps)
+
+  // When an active account is selected, the picker shows only the models supported
+  // by that specific account (e.g. an account without Argon access will not display
+  // Argon in its picker). If no active account is resolved, falls back to the union.
+  const allModels = deps.catalog.getUnion(accounts, pool)
+  const models = (activeAcc && pool)
+    ? allModels.filter((m) => {
+        if (typeof (pool as any).isModelSupported === 'function') {
+          return (pool as any).isModelSupported(activeAcc, m.id)
+        }
+        return accountSupportsModel(activeAcc, m.id, pool, deps.catalog.get(activeAcc.id))
+      })
+    : allModels
+
   const { entries, dropped } = sanitizeCatalogEntries(models)
   if (dropped.length > 0) {
     deps.warnOnce(

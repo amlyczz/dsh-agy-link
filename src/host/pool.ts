@@ -59,6 +59,8 @@ export class AccountPoolManager {
   private catalog?: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }
   /** True when load() had to fall back to pool.json.last-good (observable for diagnostics). */
   recoveredFromLastGood = false
+  /** Callback fired whenever the active/primary account changes. */
+  onAccountSwitch?: (accountId: string, family?: ModelFamily) => void
 
   setCatalog(catalog: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }): void {
     this.catalog = catalog
@@ -236,7 +238,12 @@ export class AccountPoolManager {
    * eligibility, so pinning an ineligible slot simply does not stick.
    */
   setActiveAccount(id: string, family: ModelFamily = 'google'): boolean {
-    return this.admin.setActiveAccount(id, family)
+    const prev = this.getActiveAccountId(family)
+    const ok = this.admin.setActiveAccount(id, family)
+    if (ok && id !== prev) {
+      this.onAccountSwitch?.(id, family)
+    }
+    return ok
   }
 
   markAuthRequired(id: string, reason?: string): void {
@@ -270,11 +277,24 @@ export class AccountPoolManager {
   }
 
   setPrimaryAccount(id: string): boolean {
-    return this.admin.setPrimaryAccount(id)
+    const prev = this.data.primaryAccountId
+    const ok = this.admin.setPrimaryAccount(id)
+    if (ok && id !== prev) {
+      this.onAccountSwitch?.(id)
+    }
+    return ok
   }
 
   reorderAccounts(ids: string[]): boolean {
-    return this.admin.reorderAccounts(ids)
+    const prevActive = this.getActiveAccountId('google')
+    const ok = this.admin.reorderAccounts(ids)
+    if (ok) {
+      const nextActive = this.getActiveAccountId('google')
+      if (nextActive && nextActive !== prevActive) {
+        this.onAccountSwitch?.(nextActive)
+      }
+    }
+    return ok
   }
 
   setMode(mode: 'sequential' | 'round-robin'): void {
@@ -360,7 +380,11 @@ export class AccountPoolManager {
    * account down, and return the account the next run should use (see PoolAdmin).
    */
   advanceAccount(fromId: string, family: ModelFamily, model?: string): string | null {
-    return this.admin.advanceAccount(fromId, family, model)
+    const nextId = this.admin.advanceAccount(fromId, family, model)
+    if (nextId && nextId !== fromId) {
+      this.onAccountSwitch?.(nextId, family)
+    }
+    return nextId
   }
 
   updateAccountQuotas(id: string, quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>, email?: string): void {

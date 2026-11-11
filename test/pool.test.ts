@@ -902,3 +902,22 @@ test('markModelUnsupported excludes failed model from account and rotates', () =
     'must rotate away from account marked unsupported for that model',
   )
 })
+
+test('onAccountSwitch callback is invoked when active, primary, or advanced account changes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-switch-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts()[0]!
+  const secondary = pool.createAccountSlot('Secondary Account')
+
+  const switches: string[] = []
+  pool.onAccountSwitch = (id) => switches.push(id)
+
+  pool.setActiveAccount(secondary.id)
+  assert.deepEqual(switches, [secondary.id])
+
+  pool.setPrimaryAccount(primary.id)
+  assert.equal(switches.length, 1, 'setting primary to current primary should not fire extra switch')
+
+  pool.advanceAccount(secondary.id, 'google')
+  assert.ok(switches.length >= 2)
+})

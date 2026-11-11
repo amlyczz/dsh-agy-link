@@ -1717,6 +1717,7 @@ test('listModels exposes union of models across all accounts while resolveModel 
     hasDedicatedGroup: (id: string, fam: string) => id === 'acc_pro' && fam === 'argon',
     accountHasArgon: (acc: any) => acc.id === 'acc_pro',
     isAccountEligible: (acc: any, fam: string) => fam === 'argon' ? acc.id === 'acc_pro' : true,
+    isModelSupported: (acc: any, model: string) => model === 'gemini-4-argon' ? acc.id === 'acc_pro' : true,
     selectAccount: (fam: string) => {
       if (fam === 'argon') return accounts['acc_pro']
       return accounts[activeId]
@@ -1730,13 +1731,19 @@ test('listModels exposes union of models across all accounts while resolveModel 
     ],
   }, { pool: fakePool as any })
 
-  // 1. With free account active, but pro account in pool: gemini-4-argon is included in the union!
+  // 1. With free account active: only models supported by acc_free are listed (argon excluded)
   activeId = 'acc_free'
-  const models = await adapter.listModels('antigravity')
-  assert.ok(models.some((m) => m.id === 'gemini-3.8-flash'))
-  assert.ok(models.some((m) => m.id === 'gemini-4-argon'), 'model picker must show gemini-4-argon from pool union')
+  const freeModels = await adapter.listModels('antigravity')
+  assert.ok(freeModels.some((m) => m.id === 'gemini-3.8-flash'))
+  assert.ok(!freeModels.some((m) => m.id === 'gemini-4-argon'), 'free account without argon must not advertise argon in picker')
 
-  // 2. Resolving gemini-4-argon succeeds from union models without mutating active account (pure query)
+  // 2. When switched to pro account: argon is listed in the picker
+  activeId = 'acc_pro'
+  const proModels = await adapter.listModels('antigravity')
+  assert.ok(proModels.some((m) => m.id === 'gemini-4-argon'), 'pro account must advertise argon in picker')
+
+  // 3. Resolving gemini-4-argon succeeds from union models without mutating active account (pure query)
+  activeId = 'acc_free'
   const resolved = await adapter.resolveModel('antigravity', 'gemini-4-argon')
   assert.equal(resolved.id, 'gemini-4-argon')
   assert.equal(activeId, 'acc_free', 'resolveModel must remain side-effect free')
