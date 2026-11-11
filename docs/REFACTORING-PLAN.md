@@ -41,11 +41,11 @@ panel + account console. Target files:
 Acceptance: same UI behavior; `pnpm check` + `pnpm build`; client tests green; no
 inline button style outside `ui/`.
 
-## Phase 2 — adapter (done, spawn loop intentionally remains)
+## Phase 2 — adapter (done: spawn/parse/outcome extracted)
 Extracted `call-context` + `purpose-policy`. Remaining: prompt assembly, attempt
 (spawn/parse), finalize (failure classification/rotation), continuation. Target
 `streamAttempt` ≤ 250 lines, `adapter.ts` ≤ 1,800.
 
-## Phase 5 — stateful domain (pure + store/refresh extracted)
+## Phase 5 — stateful domain (done: store/admin/refresh/http/token/credentials extracted)
 `pool.ts` → store/selection/admin; `quota.ts` → fetch/parse/buckets; `credential-slot.ts`
 → state machine. Public methods unchanged; do last, separate release.
