@@ -1,18 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.6.18 (2026-11-11)
 
 ### English
 
-- **Fix(catalog): expose pool-wide models and route by selected model.**
-  - The model picker exposes the union of models available across enabled accounts; Argon appears when an account in the pool supports it.
-  - Model resolution is side-effect-free, and turn dispatch selects an eligible account for the chosen model family, reporting distinct `unsupported` reasons when no account has access.
+- **Fix(catalog): the model picker shows the pool-wide model set, and dispatch routes Argon to an account that actually has it.** (thanks @Ronnoc, #95)
+  - The picker now exposes the **union** of models across enabled accounts (fallback + discovered + quota-reported), so Argon is visible whenever *some* account in the pool can serve it — not only when the currently active account can. Listing stays synchronous and side-effect-free (no probing).
+  - **Model resolution is pure again**: an earlier revision switched the active account inside `resolveModel()`; that now happens only at turn dispatch, so rendering the picker or inspecting a model can never rewrite `lastActiveAccountId`.
+  - Eligibility gained an explicit `unsupported` reason (distinct from `quota`/`cooldown`): when no enabled account has access to the family, the error says so and the hint no longer suggests a quota fix. Argon requests route via family eligibility (accounts without Argon are `unsupported` for that family).
 
 ### 中文
 
-- **修复(目录)：展示号池模型全集，并按所选模型路由。**
-  - 模型选单合并启用账号可用的模型；号池中有账号支持 Argon 时即可显示。
-  - 模型解析保持纯读无副作用，请求调度按具体模型分类路由可用账号，并在全池无权限时明确报告 `unsupported`（区分于额度耗尽）。
+- **修复(目录)：模型选单展示号池全集，Argon 请求路由到真正具备权限的账号。**（感谢 @Ronnoc，#95）
+  - 选单合并所有启用账号的模型（回退 + 发现 + 配额上报），只要池中有账号支持 Argon 就可见；列举仍为同步、无副作用（不探测）。
+  - **模型解析恢复纯读**：早期修订在 `resolveModel()` 里切换活动账号，现只在**请求派发**时切换，渲染选单/查看模型不会再改 `lastActiveAccountId`。
+  - 资格判定新增 `unsupported` 原因（区别于 `quota`/`cooldown`）：全池都无该族权限时错误会明确说明，提示也不再误导为配额问题；Argon 请求按族资格路由。
 
 ## 0.6.17 (2026-11-11)
 
