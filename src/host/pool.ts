@@ -1,21 +1,22 @@
 // AccountPoolManager: multi-profile credential isolation, family-scoped cooldown,
 // and sticky sequential drain scheduling for Google Antigravity accounts.
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
-import { isAbsolute, join, relative } from 'node:path'
+//
+// Persistence lives in domain/accounts/store.ts, pure selection/ordering in
+// domain/accounts/selection.ts, and CRUD/admin scheduling in
+// domain/accounts/admin.ts. This class owns the in-memory cache and delegates,
+// keeping every public method signature unchanged.
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { homedir } from 'node:os'
 import {
-  AUTH_CONFIRM_STRIKES,
   accountHasArgon,
-  isArgonModel,
-  modelFamilyOf,
   type AccountPoolData,
-  type FamilyCooldownState,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
 } from '../common/pool-types.ts'
-import { parseResetDurationMs } from '../common/types.ts'
 import { defaultPoolDir } from '../domain/accounts/paths.ts'
+import { PoolAdmin } from '../domain/accounts/admin.ts'
 import { PoolStore } from '../domain/accounts/store.ts'
 import {
   LOW_QUOTA_5H,
@@ -42,6 +43,8 @@ export class AccountPoolManager {
   private readonly baseDir: string
   /** Durable pool.json persistence (load/merge/atomic-write); owns the file bookkeeping. */
   private readonly store: PoolStore
+  /** CRUD/admin scheduling over the cache, persisted through `store`. */
+  private readonly admin: PoolAdmin
 
   /**
    * Consecutive non-authoritative auth failures per account id (noteAuthFailure).
@@ -63,6 +66,16 @@ export class AccountPoolManager {
     this.data = this.store.normalizeLegacyPrimary(this.data)
     this.store.snapshot(this.data)
     for (const acc of this.data.accounts) this.store.markKnown(acc.id)
+    this.admin = new PoolAdmin({
+      baseDir,
+      authStrikes: this.authStrikes,
+      getData: () => this.data,
+      persist: () => this.persist(),
+      markKnown: (id) => this.store.markKnown(id),
+      ensureIsolatedKeychain,
+      pool: { hasDedicatedGroup: (id, family) => this.hasDedicatedGroup(id, family) },
+      selectAccount: (family) => this.selectAccount(family),
+    })
   }
 
   /**
@@ -95,80 +108,23 @@ export class AccountPoolManager {
     return this.data.accounts.find((a) => a.id === id)
   }
 
-  /**
-   * Create an isolated staging directory for an unverified account login attempt.
-   */
+  /** Create an isolated staging directory for an unverified account login attempt. */
   createStagingSlot(): { id: string; dir: string } {
-    const id = `acc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    const dir = join(this.baseDir, `staging_${id}`)
-    mkdirSync(join(dir, '.gemini', 'antigravity-cli'), { recursive: true })
-    return { id, dir }
+    return this.admin.createStagingSlot()
   }
 
-  /**
-   * Commit a successfully authenticated staging account into the pool.
-   */
+  /** Commit a successfully authenticated staging account into the pool. */
   commitStagingAccount(id: string, dir: string, alias?: string, email?: string, proxyUrl?: string): ManagedAccount {
-    const finalDir = join(this.baseDir, id)
-    try {
-      if (existsSync(dir)) {
-        renameSync(dir, finalDir)
-      }
-    } catch {
-      // If rename fails, keep dir
-    }
-    const count = this.data.accounts.length + 1
-    const newAccount: ManagedAccount = {
-      id,
-      // Defaults are canonical server data, never client-localized text.
-      alias: alias?.trim() || `Backup Google account ${count}`,
-      defaultAlias: !alias?.trim(),
-      dir: existsSync(finalDir) ? finalDir : dir,
-      ...(email ? { email } : {}),
-      ...(proxyUrl ? { proxyUrl } : {}),
-      enabled: true,
-      createdAt: Date.now(),
-      cooldowns: {},
-      quotas: {},
-    }
-
-    if (process.platform === 'darwin' && newAccount.dir) {
-      ensureIsolatedKeychain(newAccount.dir)
-    }
-
-    this.data.accounts.push(newAccount)
-    this.store.markKnown(newAccount.id)
-    this.persist()
-    return newAccount
+    return this.admin.commitStagingAccount(id, dir, alias, email, proxyUrl)
   }
 
   cleanupStagingSlot(dir: string): void {
-    try {
-      if (existsSync(dir)) {
-        rmSync(dir, { recursive: true, force: true })
-      }
-    } catch {
-      // Ignore cleanup error
-    }
+    this.admin.cleanupStagingSlot(dir)
   }
 
-  /**
-   * Remove every staging_* directory left behind by interrupted add-account
-   * attempts. Staging dirs are never referenced by committed accounts, so
-   * sweeping them at boot is always safe. Returns the number removed.
-   */
+  /** Remove every staging_* directory left behind by interrupted add-account attempts. */
   sweepStaleStaging(): number {
-    let removed = 0
-    try {
-      for (const entry of readdirSync(this.baseDir)) {
-        if (!entry.startsWith('staging_')) continue
-        rmSync(join(this.baseDir, entry), { recursive: true, force: true })
-        removed++
-      }
-    } catch {
-      // Ignore sweep errors
-    }
-    return removed
+    return this.admin.sweepStaleStaging()
   }
 
   /**
@@ -215,105 +171,25 @@ export class AccountPoolManager {
     return removed
   }
 
-  /**
-   * Create a new isolated account slot and prepare its filesystem home.
-   */
+  /** Create a new isolated account slot and prepare its filesystem home. */
   createAccountSlot(alias?: string): ManagedAccount {
-    const id = `acc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    const dir = join(this.baseDir, id)
-    mkdirSync(join(dir, '.gemini', 'antigravity-cli'), { recursive: true })
-    if (process.platform === 'darwin') {
-      ensureIsolatedKeychain(dir)
-    }
-
-    const count = this.data.accounts.length + 1
-    const newAccount: ManagedAccount = {
-      id,
-      alias: alias?.trim() || `Backup Google account ${count}`,
-      defaultAlias: !alias?.trim(),
-      dir,
-      enabled: true,
-      createdAt: Date.now(),
-      cooldowns: {},
-      quotas: {},
-    }
-
-    this.data.accounts.push(newAccount)
-    this.store.markKnown(newAccount.id)
-    this.persist()
-    return newAccount
+    return this.admin.createAccountSlot(alias)
   }
 
   deleteAccount(id: string): boolean {
-    const idx = this.data.accounts.findIndex((a) => a.id === id)
-    if (idx === -1) return false
-    const [removed] = this.data.accounts.splice(idx, 1)
-    if (removed) {
-      // Only ever delete directories the pool itself created under baseDir.
-      // pool.json is hand-editable by design, and a hostile or typo'd `dir`
-      // ("~", "/", an unrelated project folder) used to be rmSync'd
-      // recursively — a data-destruction foot-gun. Out-of-base or system-HOME
-      // directories are left untouched.
-      const rel = removed.dir !== '' ? relative(this.baseDir, removed.dir) : ''
-      const contained = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
-      if (removed.dir && contained && !removed.systemHome && existsSync(removed.dir)) {
-        try {
-          rmSync(removed.dir, { recursive: true, force: true })
-        } catch {
-          // Ignore deletion errors
-        }
-      }
-    }
-    if (this.data.primaryAccountId === id) {
-      // Never promote an isolated account to "primary": the primary slot is
-      // reserved for the system-HOME login and is re-bootstrapped on load.
-      this.data.primaryAccountId = undefined
-    }
-    if (this.data.lastActiveAccountId === id) {
-      this.data.lastActiveAccountId = undefined
-    }
-    if (this.data.activeAccountIds) {
-      for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
-        if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
-      }
-    }
-    this.persist()
-    return true
+    return this.admin.deleteAccount(id)
   }
 
   setAccountProxy(id: string, proxyUrl?: string): boolean {
-    const acc = this.getAccount(id)
-    if (!acc) return false
-    acc.proxyUrl = proxyUrl?.trim() ? proxyUrl.trim() : undefined
-    this.persist()
-    return true
+    return this.admin.setAccountProxy(id, proxyUrl)
   }
 
   setAccountAlias(id: string, alias: string): boolean {
-    const acc = this.getAccount(id)
-    if (!acc) return false
-    acc.alias = alias.trim()
-    acc.defaultAlias = false
-    this.persist()
-    return true
+    return this.admin.setAccountAlias(id, alias)
   }
 
   setAccountEnabled(id: string, enabled: boolean): boolean {
-    const acc = this.getAccount(id)
-    if (!acc) return false
-    acc.enabled = enabled
-    if (!enabled) {
-      if (this.data.lastActiveAccountId === id) {
-        this.data.lastActiveAccountId = undefined
-      }
-      if (this.data.activeAccountIds) {
-        for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
-          if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
-        }
-      }
-    }
-    this.persist()
-    return true
+    return this.admin.setAccountEnabled(id, enabled)
   }
 
   /**
@@ -321,9 +197,7 @@ export class AccountPoolManager {
    * single "in use" badge from this; exactly one account runs agy at a time.
    */
   markAccountActive(id: string): void {
-    if (this.data.lastActiveAccountId === id) return
-    this.data.lastActiveAccountId = id
-    this.persist()
+    this.admin.markAccountActive(id)
   }
 
   /**
@@ -333,143 +207,49 @@ export class AccountPoolManager {
    * eligibility, so pinning an ineligible slot simply does not stick.
    */
   setActiveAccount(id: string, family: ModelFamily = 'google'): boolean {
-    const acc = this.getAccount(id)
-    if (!acc || !acc.enabled || acc.authRequired) return false
-    if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
-    this.data.activeAccountIds[family] = id
-    this.data.lastActiveAccountId = id
-    this.persist()
-    return true
+    return this.admin.setActiveAccount(id, family)
   }
 
   markAuthRequired(id: string, reason?: string): void {
-    const acc = this.getAccount(id)
-    if (!acc) return
-    acc.authRequired = true
-    acc.authMarkedAt = Date.now()
-    acc.authError = reason || 'Authentication expired or revoked (invalid_grant)'
-    if (this.data.lastActiveAccountId === id) {
-      this.data.lastActiveAccountId = undefined
-    }
-    if (this.data.activeAccountIds) {
-      for (const [fam, accId] of Object.entries(this.data.activeAccountIds)) {
-        if (accId === id) delete this.data.activeAccountIds[fam as ModelFamily]
-      }
-    }
-    this.authStrikes.delete(id)
-    this.persist()
+    this.admin.markAuthRequired(id, reason)
   }
 
   /**
    * Confirmation-gated quarantine for auth-classified failures that carry NO
    * authoritative evidence (no invalid_grant / revoked / unauthorized_client).
-   *
-   * agy prints the same "not signed in" banner whether the login is really
-   * dead or its keyring validation merely missed a 10s window on a flaky
-   * network, so one banner used to sticky-quarantine healthy accounts — the
-   * user then saw a red 需重新登录 and could not even 设为当前使用. A single
-   * strike now only rotates the account away for the current retry; the flag
-   * hardens into a real quarantine only when the failure repeats with no
-   * success in between. Authoritative OAuth paths keep calling
-   * markAuthRequired directly and quarantine on first sight.
-   *
    * Returns true when the account is now hard-quarantined.
    */
   noteAuthFailure(id: string, reason?: string): boolean {
-    const strikes = (this.authStrikes.get(id) ?? 0) + 1
-    if (strikes < AUTH_CONFIRM_STRIKES) {
-      this.authStrikes.set(id, strikes)
-      return false
-    }
-    this.markAuthRequired(id, reason)
-    return true
+    return this.admin.noteAuthFailure(id, reason)
   }
 
   /**
-   * External re-login detected (agy logout + new login): identity-bound
-   * state from the PREVIOUS account (cooldowns, quotas, auth quarantine)
-   * must not leak onto the new one. Resets everything email-bound while
-   * keeping slot config (alias, dir, proxy, enabled).
+   * External re-login detected (agy logout + new login): identity-bound state
+   * from the PREVIOUS account must not leak onto the new one.
    */
   resetAccountIdentity(id: string, newEmail: string): void {
-    const acc = this.getAccount(id)
-    if (!acc) return
-    acc.email = newEmail
-    acc.cooldowns = {}
-    acc.quotas = {}
-    delete acc.authRequired
-    delete acc.authError
-    delete acc.authMarkedAt
-    this.persist()
+    this.admin.resetAccountIdentity(id, newEmail)
   }
 
   clearAuthRequired(id: string): void {
-    const acc = this.getAccount(id)
-    if (!acc) return
-    delete acc.authRequired
-    delete acc.authError
-    delete acc.authMarkedAt
-    this.authStrikes.delete(id)
-    this.persist()
+    this.admin.clearAuthRequired(id)
   }
 
-  /**
-   * Drop an email label that is provably wrong — e.g. an isolated account
-   * whose token file was overwritten by another account's credential. The row
-   * then shows its user-chosen alias instead of a foreign address.
-   */
+  /** Drop an email label that is provably wrong (e.g. a foreign token overwrote it). */
   clearAccountEmail(id: string): void {
-    const acc = this.getAccount(id)
-    if (!acc) return
-    delete acc.email
-    this.persist()
+    this.admin.clearAccountEmail(id)
   }
 
   setPrimaryAccount(id: string): boolean {
-    const idx = this.data.accounts.findIndex((a) => a.id === id)
-    if (idx === -1) return false
-    const [acc] = this.data.accounts.splice(idx, 1)
-    if (!acc) return false
-    acc.enabled = true
-    this.data.primaryAccountId = id
-    // Move to front of accounts list
-    this.data.accounts.unshift(acc)
-    // Make primary immediately active for all families
-    this.data.activeAccountIds = {
-      google: id,
-      anthropic: id,
-      openai: id,
-    }
-    this.data.lastActiveAccountId = id
-    this.persist()
-    return true
+    return this.admin.setPrimaryAccount(id)
   }
 
   reorderAccounts(ids: string[]): boolean {
-    const map = new Map(this.data.accounts.map((a) => [a.id, a]))
-    const reordered: ManagedAccount[] = []
-    for (const id of ids) {
-      const acc = map.get(id)
-      if (acc) {
-        reordered.push(acc)
-        map.delete(id)
-      }
-    }
-    // Append any unmentioned accounts
-    for (const remaining of map.values()) {
-      reordered.push(remaining)
-    }
-    this.data.accounts = reordered
-    // Clear stale sticky pointers so the user-prioritized 1st account immediately takes primary effect
-    this.data.activeAccountIds = {}
-    this.data.lastActiveAccountId = undefined
-    this.persist()
-    return true
+    return this.admin.reorderAccounts(ids)
   }
 
   setMode(mode: 'sequential' | 'round-robin'): void {
-    this.data.mode = mode
-    this.persist()
+    this.admin.setMode(mode)
   }
 
   /**
@@ -503,31 +283,14 @@ export class AccountPoolManager {
     return explainIneligibility(acc, family, now, this)
   }
 
-  /**
-   * Check whether an account is eligible to serve requests for the given family.
-   */
+  /** Check whether an account is eligible to serve requests for the given family. */
   isAccountEligible(acc: ManagedAccount, family: ModelFamily, now = Date.now()): boolean {
     return isAccountEligible(acc, family, now, this)
   }
 
-  /**
-   * Returns the currently active and healthy account ID.
-   * If the recorded lastActiveAccountId is healthy, returns it;
-   * otherwise falls back to selectAccount(family) to advance to the next healthy candidate,
-   * or primaryAccountId if all are exhausted.
-   */
+  /** Returns the currently active and healthy account ID (see PoolAdmin). */
   getActiveAccountId(family: ModelFamily = 'google'): string | undefined {
-    const now = Date.now()
-    if (this.data.lastActiveAccountId) {
-      const active = this.getAccount(this.data.lastActiveAccountId)
-      if (active && this.isAccountEligible(active, family, now)) {
-        return active.id
-      }
-    }
-    const next = this.selectAccount(family)
-    if (next) return next.id
-    return this.data.accounts.find((a) => a.id === this.data.primaryAccountId && a.enabled)?.id
-      ?? this.data.accounts.find((a) => a.enabled)?.id
+    return this.admin.getActiveAccountId(family)
   }
 
   /**
@@ -559,23 +322,10 @@ export class AccountPoolManager {
 
   /**
    * Move the active pointer past `fromId` for one family WITHOUT cooling the
-   * account down, and return the account the next run should use. Used when a
-   * run produced no output at all (silent timeout): the retry must try another
-   * account, but a healthy account should not be punished with a cooldown
-   * because the network blipped.
+   * account down, and return the account the next run should use (see PoolAdmin).
    */
   advanceAccount(fromId: string, family: ModelFamily): string | null {
-    const now = Date.now()
-    const candidates = this.data.accounts.filter(
-      (a) => a.id !== fromId && this.isAccountEligible(a, family, now),
-    )
-    if (candidates.length === 0) return null
-    const next = this.orderByExpiry(candidates, family, fromId)[0]!
-    if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
-    this.data.activeAccountIds[family] = next.id
-    this.data.lastActiveAccountId = next.id
-    this.persist()
-    return next.id
+    return this.admin.advanceAccount(fromId, family)
   }
 
   updateAccountQuotas(id: string, quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>, email?: string): void {
@@ -623,65 +373,14 @@ export class AccountPoolManager {
     this.persist()
   }
 
-  /**
-   * Records a rate-limit / 429 error and sets cooldown for the requested model family.
-   */
+  /** Records a rate-limit / 429 error and sets cooldown for the requested model family. */
   recordFailure(id: string, family: ModelFamily, reason: string, serverResetTime?: string): void {
-    const acc = this.getAccount(id)
-    if (!acc) return
-    acc.cooldowns ??= {}
-
-    const prev = acc.cooldowns[family]
-    const failures = (prev?.consecutiveFailures ?? 0) + 1
-
-    let cooldownUntil: number
-    const parsedDuration = parseResetDurationMs(serverResetTime || reason)
-
-    if (serverResetTime && !parsedDuration) {
-      const parsed = Date.parse(serverResetTime)
-      if (!Number.isNaN(parsed) && parsed > Date.now()) {
-        cooldownUntil = parsed + 10_000 // 10s safety buffer
-      } else {
-        cooldownUntil = Date.now() + Math.min(this.data.defaultCooldownMs * failures, this.data.maxCooldownMs)
-      }
-    } else if (parsedDuration && parsedDuration > 0) {
-      // Add a 10s safety buffer to avoid hitting Google at the exact millisecond of reset
-      cooldownUntil = Date.now() + parsedDuration + 10_000
-    } else {
-      cooldownUntil = Date.now() + Math.min(this.data.defaultCooldownMs * failures, this.data.maxCooldownMs)
-    }
-
-    acc.cooldowns[family] = {
-      cooldownUntil,
-      reason,
-      consecutiveFailures: failures,
-    }
-    // If the failed account was the active one, advance to the next candidate immediately
-    if (this.data.activeAccountIds?.[family] === id || this.data.lastActiveAccountId === id) {
-      this.advanceAccount(id, family)
-    }
-    this.persist()
+    this.admin.recordFailure(id, family, reason, serverResetTime)
   }
 
-  /**
-   * Records a successful run, clearing failure counter and authRequired flag for the family.
-   */
+  /** Records a successful run, clearing failure counter and authRequired flag for the family. */
   recordSuccess(id: string, family: ModelFamily): void {
-    const acc = this.getAccount(id)
-    if (!acc) return
-    acc.lastUsedAt = Date.now()
-    if (acc.authRequired) {
-      delete acc.authRequired
-      delete acc.authError
-      delete acc.authMarkedAt
-    }
-    if (acc.cooldowns?.[family]) {
-      delete acc.cooldowns[family]
-    }
-    // A successful run is positive proof the login is alive: drop any pending
-    // auth-confirmation streak so an old blip cannot harden later.
-    this.authStrikes.delete(id)
-    this.persist()
+    this.admin.recordSuccess(id, family)
   }
 
   /** True when this account has reported a dedicated quota group for `family`. */
@@ -794,9 +493,7 @@ export class AccountPoolManager {
     return nextAccount
   }
 
-  /**
-   * Get countdown in milliseconds until the earliest account in cooldown resets.
-   */
+  /** Get countdown in milliseconds until the earliest account in cooldown resets. */
   getEarliestResetCountdown(family: ModelFamily): number | null {
     const now = Date.now()
     let earliest: number | null = null
