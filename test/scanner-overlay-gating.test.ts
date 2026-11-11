@@ -19,7 +19,7 @@ const SCANNERS = [
 	'src/client/decisions.ts',
 	'src/client/images.ts',
 	'src/client/reasoning.ts',
-	'src/client/mermaid.ts',
+	'src/client/mermaid-render.ts',
 ]
 
 for (const rel of SCANNERS) {
