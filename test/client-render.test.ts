@@ -35,7 +35,7 @@ import {
 	trimTrailingBlankLines,
 } from '../src/client/toolview/format.ts';
 import { AgyMirrorToolView } from '../src/client/toolview/index.ts';
-import { AgyCodeToolView, AgyRunCodeToolView } from '../src/client/toolview/run-code-view.ts';
+import { AgyCodeToolView, AgyRunCodeToolView, runCodeModel } from '../src/client/toolview/run-code-view.ts';
 import { clearExpandedToolBlockKeysForTest, expandToolBlockKeyForTest } from '../src/client/toolview/toggle.ts';
 import { TranslationCard } from '../src/client/translate-card.ts';
 import { actionStateOf, setActionState, TranslateAction } from '../src/client/translate-state.ts';
@@ -594,3 +594,109 @@ test('translate action state publishes and settles across instances', () => {
 	setActionState(ACTION_KEY, 'idle');
 	assert.equal(actionStateOf(ACTION_KEY), 'idle');
 });
+
+// ---------------------------------------------------------------------------
+// run_code view branches (runCodeModel / AgyCodeToolView / mirror detection)
+// ---------------------------------------------------------------------------
+
+function runCodeBlock(argsRaw: string, extra: Record<string, unknown> = {}): AnyBlock {
+	return { kind: 'tool-result', call: { name: 'run_code', argsRaw }, content: [], isError: false, ...extra };
+}
+
+function renderCode(props: Record<string, unknown>): string {
+	return renderToStaticMarkup(createElement(AgyCodeToolView, props));
+}
+
+test('runCodeModel: raw fallback, description, empty and multiline code', () => {
+	// Non-JSON raw args are shown verbatim; the first non-empty line titles it.
+	assert.deepEqual(runCodeModel({ call: { name: 'run_code', argsRaw: 'not json at all' } } as never), {
+		code: 'not json at all',
+		title: 'not json at all',
+	});
+	// A description wins over the code as the title.
+	assert.deepEqual(runCodeModel(runCodeBlock(JSON.stringify({ code: 'print(1)', description: 'demo' })) as never), {
+		code: 'print(1)',
+		title: 'demo',
+	});
+	// Empty description is ignored; a multiline program titles on its first non-empty line.
+	const multi = runCodeModel(runCodeBlock(JSON.stringify({ code: '\n\n  first line  \nsecond', description: '' })) as never);
+	assert.equal(multi.code, '\n\n  first line  \nsecond');
+	assert.equal(multi.title, 'first line');
+	// Missing block / empty program fall back to a literal / the run_code label.
+	assert.deepEqual(runCodeModel(undefined), { code: '{}', title: '{}' });
+	assert.deepEqual(runCodeModel({ call: { name: 'run_code', argsRaw: '' } } as never), { code: '', title: 'run_code' });
+});
+
+test('code view: collapsed settled-ok, expanded body, no inspect when unwired', () => {
+	clearExpandedToolBlockKeysForTest();
+	const block = runCodeBlock(JSON.stringify({ code: 'print(1)', description: 'demo' }));
+	const collapsed = renderCode({ block, callId: 'cv1' });
+	assert.match(collapsed, /data-kind="code"/);
+	assert.ok(collapsed.includes('data-state="ok"'));
+	assert.equal(collapsed.includes('agy-tv-body-wrap'), false);
+	assert.equal(collapsed.includes('agy-tv-inspect-btn'), false);
+
+	expandToolBlockKeyForTest('call:cv1');
+	const open = renderCode({ block, callId: 'cv1' });
+	assert.match(open, /agy-tv-root agy-tv-open/);
+	assert.match(open, /agy-tv-body-wrap/);
+	assert.match(open, /agy-tv-card-content/);
+	assert.ok(open.includes('print(1)'));
+	assert.equal(open.includes('agy-tv-inspect-btn'), false);
+});
+
+test('code view: settled error marks state/summary and running is not settled', () => {
+	const err = renderCode({ block: runCodeBlock(JSON.stringify({ code: 'boom' }), { isError: true }), callId: 'cv-err' });
+	assert.ok(err.includes('data-state="err"'));
+	assert.match(err, /agy-tv-summary-err/);
+
+	const running = renderCode({ block: { name: 'run_code', argsRaw: JSON.stringify({ code: 'sleep 1' }), subCalls: [] }, callId: 'cv-run' });
+	assert.ok(running.includes('data-state="run"'));
+	assert.match(running, /data-kind="code"/);
+
+	// No props at all still renders (block undefined -> run state).
+	assert.doesNotThrow(() => renderCode({}));
+});
+
+test('code view: inspect affordance and translation fallbacks', () => {
+	clearExpandedToolBlockKeysForTest();
+	expandToolBlockKeyForTest('call:cv-ins');
+	const withInspect = renderCode({ block: runCodeBlock(JSON.stringify({ code: 'x' })), callId: 'cv-ins', inspect: () => undefined });
+	assert.match(withInspect, /agy-tv-inspect-btn/);
+
+	// Without a `t` function the translate() seam falls back to the raw keys.
+	assert.ok(withInspect.includes('code.inspect'));
+	assert.ok(withInspect.includes('code.title'));
+
+	expandToolBlockKeyForTest('call:cv-t');
+	const t = (k: string): string => ({ 'code.title': 'Code', 'code.copy': 'Copy', 'code.copied': 'Copied', 'code.inspect': 'Inspect' } as Record<string, string>)[k] ?? k;
+	const withT = renderCode({ block: runCodeBlock(JSON.stringify({ code: 'y' })), callId: 'cv-t', t, inspect: () => undefined });
+	assert.ok(withT.includes('Code'));
+	assert.ok(withT.includes('Inspect'));
+});
+
+test('run_code view: mirror detection falls back to the code card on non-mirror input', () => {
+	const renderRun = (block: AnyBlock): string => renderToStaticMarkup(createElement(AgyRunCodeToolView, { block }));
+
+	// Invalid JSON argsRaw.
+	assert.match(renderRun({ kind: 'tool-result', call: { name: 'run_code', argsRaw: '{not json' }, content: [], isError: false }), /data-kind="code"/);
+	// Valid JSON but no mirror call.
+	assert.match(renderRun(runCodeBlock(JSON.stringify({ code: 'print(1)' }))), /data-kind="code"/);
+	// A non-string code member.
+	assert.match(renderRun(runCodeBlock(JSON.stringify({ code: 42 }))), /data-kind="code"/);
+	// Mirror envelope missing "step".
+	assert.match(renderRun(runCodeBlock(JSON.stringify({ code: "return await tools['agy_tool']({\"run\":\"r\"})" }))), /data-kind="code"/);
+	// Mirror envelope with a malformed inner JSON object.
+	assert.match(renderRun(runCodeBlock(JSON.stringify({ code: 'return await tools[\'agy_tool\']({bad "step":1})' }))), /data-kind="code"/);
+	// Inner JSON present but run/step have the wrong types.
+	assert.match(renderRun(runCodeBlock(JSON.stringify({ code: "return await tools['agy_tool']({\"run\":1,\"step\":\"x\"})" }))), /data-kind="code"/);
+});
+
+test('run_code view: a valid mirror wrapper without a tool hint still renders the native card', () => {
+	const code = "return await tools['agy_tool']({\"run\":\"r\",\"step\":2})";
+	const block = runCodeBlock(JSON.stringify({ code, description: 'replay' }));
+	const html = renderToStaticMarkup(createElement(AgyRunCodeToolView, { block }));
+	assert.match(html, /class="agy-tv-root"/);
+	assert.equal(html.includes('data-kind="code"'), false);
+});
+

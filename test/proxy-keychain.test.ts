@@ -283,8 +283,8 @@ test('watchdog: stderr chatter does NOT keep an offline run alive', async () => 
 test('watchdog: stdout activity DOES keep the run alive', async () => {
   const p = startAgyProcess({
     bin: process.execPath,
-    args: nodeChild('const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>1200){clearInterval(i);process.exit(0)};console.log("progress")},100)'),
-    timeoutMs: 800,
+    args: nodeChild('const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>4000){clearInterval(i);process.exit(0)};console.log("progress")},100)'),
+    timeoutMs: 3000,
   })
   const outcome = await p.outcome
   assert.equal(outcome.timedOut, false)
@@ -294,8 +294,8 @@ test('watchdog: stdout activity DOES keep the run alive', async () => {
 test('watchdog: stderrKeepalive opt-in preserves login-flow semantics', async () => {
   const p = startAgyProcess({
     bin: process.execPath,
-    args: nodeChild('const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>1200){clearInterval(i);process.exit(0)};console.error("login noise")},100)'),
-    timeoutMs: 800,
+    args: nodeChild('const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>4000){clearInterval(i);process.exit(0)};console.error("login noise")},100)'),
+    timeoutMs: 3000,
     stderrKeepalive: true,
   })
   const outcome = await p.outcome

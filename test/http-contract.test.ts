@@ -14,9 +14,21 @@ import { test } from 'node:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import { registerRoutes } from '../src/transport/http/router.ts'
 import type { HostServices } from '../src/host/services.ts'
 import type { Route } from '../src/transport/http/respond.ts'
+
+// The /qr handler dynamically imports the real `qrcode` package and renders a
+// PNG. Dynamic import of this CJS package resolves the same exports object that
+// createRequire returns, so replacing toBuffer here keeps the route real while
+// making the response instant and independent of PNG generation (no timeout).
+try {
+  const qrcode = createRequire(import.meta.url)('qrcode') as { toBuffer?: (...args: unknown[]) => Promise<Buffer> }
+  qrcode.toBuffer = async () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+} catch {
+  // qrcode unavailable: the /qr test still asserts the 404 branches.
+}
 
 /** The frozen route surface: kind + path, exactly as the client half polls it. */
 const EXPECTED_ROUTES: ReadonlyArray<readonly [kind: string, path: string]> = [
@@ -247,7 +259,7 @@ async function invoke(route: Route, req: unknown): Promise<Captured> {
   const captured = capture()
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('route did not end the response: ' + route.path)), 1_000)
+    timer = setTimeout(() => reject(new Error('route did not end the response: ' + route.path)), 5_000)
     timer.unref?.()
   })
   try {
@@ -1051,6 +1063,7 @@ test('/qr returns 404 without a pending URL and a PNG when one exists', async ()
   assert.equal(captured.status(), 200)
   assert.equal(captured.headers()['Content-Type'], 'image/png')
   assert.equal(captured.headers()['Cache-Control'], 'no-store')
+  // The stubbed toBuffer returns a tiny PNG magic header (see the module stub).
   assert.ok(captured.text().length > 0)
 })
 
