@@ -229,7 +229,7 @@ function exitCodeFor(res: ImageResult): number {
   }
 }
 
-interface AdapterLike {
+export interface AdapterLike {
   stream: (options: GenerateOptions) => AsyncIterable<StreamChunk>
 }
 
@@ -263,7 +263,7 @@ function subagentsFrom(ev: AgyEvent): Array<{ conversationId?: string; logUri?: 
  * One image attempt through the real adapter. This is the only place that
  * knows how to turn an `AgyAdapter` stream into the service's event contract.
  */
-async function runViaAdapter(adapter: AdapterLike, call: ImageAgentCall): Promise<ImageAgentResult> {
+export async function runViaAdapter(adapter: AdapterLike, call: ImageAgentCall): Promise<ImageAgentResult> {
   const started = Date.now()
   const toolCalls: ImageAgentToolCall[] = []
   const subagents: Array<{ conversationId?: string; logUri?: string }> = []
@@ -392,31 +392,75 @@ export function createImageAdapter(cfg: ReturnType<typeof resolveConfig>, log?: 
   })
 }
 
-export async function runImageCli(argv: readonly string[]): Promise<number> {
+export interface ImageCliStreams {
+  /** Write to standard output (defaults to process.stdout). */
+  stdout: (text: string) => void
+  /** Write to standard error (defaults to process.stderr). */
+  stderr: (text: string) => void
+}
+
+/** Minimal generation-service surface the CLI drives. */
+export interface ImageServiceLike {
+  generate(req: ImageRequest): Promise<ImageResult>
+}
+
+/**
+ * Test seam: everything the CLI touches outside its own logic. The default path
+ * (no io passed) is byte-for-byte the previous behaviour — process.stdout /
+ * process.stderr and the real adapter-backed ImageService.
+ */
+export interface ImageCliIo extends ImageCliStreams {
+  /** Build the generation service; defaults to the real adapter-backed service. */
+  createService: (args: ImageCliArgs, req: ImageRequest) => ImageServiceLike
+}
+
+/** Build the real adapter-backed service (same deps as the smoke scripts / host). */
+export function createDefaultImageService(
+  args: ImageCliArgs,
+  _req: ImageRequest,
+  writeErr: (text: string) => void,
+): ImageServiceLike {
+  const cfg = resolveConfig(undefined)
+  // No DSH session backs the CLI: pin the workspace so the adapter does not
+  // warn about an unresolved session cwd and agy runs somewhere predictable.
+  if (cfg.workspaceRoot === '') cfg.workspaceRoot = process.cwd()
+  const bin = resolveAgyBin(cfg)
+  const adapter = createImageAdapter(cfg, args.quiet ? undefined : (m) => writeErr('[agy] ' + m + '\n'))
+  return new ImageService({
+    cfg: () => cfg,
+    bin: () => bin,
+    run: (call) => runViaAdapter(adapter, call),
+    ...(args.quiet ? {} : { log: (m: string) => writeErr('[image] ' + m + '\n') }),
+  })
+}
+
+export async function runImageCli(argv: readonly string[], io: Partial<ImageCliIo> = {}): Promise<number> {
+  const write = io.stdout ?? ((text: string) => { process.stdout.write(text) })
+  const writeErr = io.stderr ?? ((text: string) => { process.stderr.write(text) })
   let args: ImageCliArgs
   try {
     args = parseImageCliArgs(argv)
   } catch (e) {
-    process.stderr.write(String(e instanceof Error ? e.message : e) + '\n\n' + USAGE)
+    writeErr(String(e instanceof Error ? e.message : e) + '\n\n' + USAGE)
     return 2
   }
   if (args.help) {
-    process.stdout.write(USAGE)
+    write(USAGE)
     return 0
   }
   if (args.version) {
-    process.stdout.write(packageVersion() + '\n')
+    write(packageVersion() + '\n')
     return 0
   }
   if (args.prompt === undefined || args.prompt.trim() === '') {
-    process.stderr.write('missing --prompt\n\n' + USAGE)
+    writeErr('missing --prompt\n\n' + USAGE)
     return 2
   }
   const req = toRequest(args)
   if (args.dryRun) {
     const name = normalizeImageName(args.name, Date.now())
     const refs = (args.imagePaths ?? []).map((p) => resolvePath(p))
-    process.stdout.write(
+    write(
       buildImageAgentPrompt({
         prompt: args.prompt,
         name,
@@ -427,18 +471,9 @@ export async function runImageCli(argv: readonly string[]): Promise<number> {
     return 0
   }
 
-  const cfg = resolveConfig(undefined)
-  // No DSH session backs the CLI: pin the workspace so the adapter does not
-  // warn about an unresolved session cwd and agy runs somewhere predictable.
-  if (cfg.workspaceRoot === '') cfg.workspaceRoot = process.cwd()
-  const bin = resolveAgyBin(cfg)
-  const adapter = createImageAdapter(cfg, args.quiet ? undefined : (m) => process.stderr.write('[agy] ' + m + '\n'))
-  const service = new ImageService({
-    cfg: () => cfg,
-    bin: () => bin,
-    run: (call) => runViaAdapter(adapter, call),
-    ...(args.quiet ? {} : { log: (m: string) => process.stderr.write('[image] ' + m + '\n') }),
-  })
+  const service = io.createService !== undefined
+    ? io.createService(args, req)
+    : createDefaultImageService(args, req, writeErr)
 
   let res: ImageResult
   try {
@@ -446,22 +481,22 @@ export async function runImageCli(argv: readonly string[]): Promise<number> {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     if (args.json) {
-      process.stdout.write(JSON.stringify({ ok: false, code: 'AGY_ERROR', error: message, prompt: req.prompt }) + '\n')
+      write(JSON.stringify({ ok: false, code: 'AGY_ERROR', error: message, prompt: req.prompt }) + '\n')
     } else {
-      process.stderr.write('image generation failed: ' + message + '\n')
+      writeErr('image generation failed: ' + message + '\n')
     }
     return 4
   }
   if (args.json) {
-    process.stdout.write(jsonOf(res) + '\n')
+    write(jsonOf(res) + '\n')
   } else if (res.ok) {
-    process.stdout.write(res.path + '\n')
+    write(res.path + '\n')
     if (!args.quiet) {
-      process.stderr.write(imageSummary(res).split('\n').slice(1).join('\n') + '\n')
+      writeErr(imageSummary(res).split('\n').slice(1).join('\n') + '\n')
     }
   } else {
-    process.stderr.write('image generation failed: ' + (res.error ?? 'unknown error') + '\n')
-    if (res.code !== undefined) process.stderr.write('code: ' + res.code + '\n')
+    writeErr('image generation failed: ' + (res.error ?? 'unknown error') + '\n')
+    if (res.code !== undefined) writeErr('code: ' + res.code + '\n')
   }
   return exitCodeFor(res)
 }
