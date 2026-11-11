@@ -17,28 +17,25 @@ import {
 } from '../common/pool-types.ts'
 import { parseResetDurationMs } from '../common/types.ts'
 import { defaultPoolDir, writeJsonAtomic } from '../domain/accounts/paths.ts'
+import {
+  LOW_QUOTA_5H,
+  LOW_QUOTA_WEEKLY,
+  cyclicDistance,
+  explainIneligibility,
+  isAccountEligible,
+  isQuotaBenched,
+  nextQuotaResetAt,
+  orderByExpiry,
+  type AccountIneligibilityReason,
+} from '../domain/accounts/selection.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { ensureIsolatedKeychain } from './runner.ts'
 
 export { defaultPoolDir } from '../domain/accounts/paths.ts'
-
-/**
- * Proactive rotation thresholds: an account at or below these remaining
- * fractions is benched until its reset instead of being served
- * (isAccountEligible / updateAccountQuotas / getEarliestAvailableCountdown).
- *
- * The old 2%/1% values only benched an account AFTER it had already died:
- * 2026-10-17 01:42 — the primary sat at 4.07% (above the old gate), so the
- * sticky affinity kept every session pinned to it while three parallel turns
- * slammed into the wall together and stalled in agy-internal retries, with
- * q98 idle at 100%. Benching at 10%/5% rotates while the successor still has
- * runway; the benched account comes back at its own reset.
- */
-export const LOW_QUOTA_5H = 0.10
-export const LOW_QUOTA_WEEKLY = 0.05
-
-/** Why a pool account cannot serve a family right now (diagnostics only). */
-export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported'
+// Re-exported so the public surface of this module is unchanged: these used to
+// be defined here and are still reachable from `src/host/pool.ts`.
+export { LOW_QUOTA_5H, LOW_QUOTA_WEEKLY }
+export type { AccountIneligibilityReason }
 
 export class AccountPoolManager {
   private data: AccountPoolData
@@ -684,31 +681,7 @@ export class AccountPoolManager {
    * cached row is no newer than that stamp, so a fresh poll always re-arms it.
    */
   private isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
-    const quota = acc.quotas?.[family]
-    if (!quota) return false
-    const clearedAt = acc.quotaGateClearedAt?.[family]
-    if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) return false
-    // If 5h quota remaining is at/below the proactive rotation threshold and
-    // reset time is in future (or missing), treat as in cooldown
-    if (typeof quota.remainingFraction === 'number' && quota.remainingFraction <= LOW_QUOTA_5H) {
-      if (quota.resetTime) {
-        const resetMs = Date.parse(quota.resetTime)
-        if (Number.isNaN(resetMs) || resetMs > now) return true
-      } else {
-        return true
-      }
-    }
-    // If weekly quota remaining is at/below the rotation threshold and weekly
-    // reset time is in future (or missing), treat as in cooldown
-    if (typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= LOW_QUOTA_WEEKLY) {
-      if (quota.weeklyResetTime) {
-        const resetMs = Date.parse(quota.weeklyResetTime)
-        if (Number.isNaN(resetMs) || resetMs > now) return true
-      } else {
-        return true
-      }
-    }
-    return false
+    return isQuotaBenched(acc, family, now)
   }
 
   /** Determine whether a managed account has confirmed access to Gemini 4 Argon. */
@@ -728,20 +701,14 @@ export class AccountPoolManager {
     family: ModelFamily,
     now = Date.now(),
   ): AccountIneligibilityReason | null {
-    if (!acc.enabled) return 'disabled'
-    if (acc.authRequired) return 'auth'
-    if (family === 'argon' && !this.accountHasArgon(acc)) return 'unsupported'
-    const cd = acc.cooldowns?.[family]
-    if (cd && cd.cooldownUntil > now) return 'cooldown'
-    if (this.isQuotaBenched(acc, family, now)) return 'quota'
-    return null
+    return explainIneligibility(acc, family, now, this)
   }
 
   /**
    * Check whether an account is eligible to serve requests for the given family.
    */
   isAccountEligible(acc: ManagedAccount, family: ModelFamily, now = Date.now()): boolean {
-    return this.explainIneligibility(acc, family, now) === null
+    return isAccountEligible(acc, family, now, this)
   }
 
   /**
@@ -769,23 +736,12 @@ export class AccountPoolManager {
    * sooner of the 5h window reset and the weekly cap reset. NaN when unknown.
    */
   private nextQuotaResetAt(acc: ManagedAccount, family: ModelFamily): number {
-    const q = acc.quotas?.[family]
-    const stamps = [q?.resetTime, q?.weeklyResetTime]
-      .filter((v): v is string => typeof v === 'string' && v !== '')
-      .map((v) => Date.parse(v))
-      .filter((t) => !Number.isNaN(t))
-    return stamps.length === 0 ? Number.NaN : Math.min(...stamps)
+    return nextQuotaResetAt(acc, family)
   }
 
   /** Cyclic distance from `fromId` (0 = itself), so ties keep pool order. */
   private cyclicDistance(fromId: string | undefined, id: string): number {
-    const total = this.data.accounts.length
-    const idx = this.data.accounts.findIndex((a) => a.id === id)
-    if (idx === -1) return Number.MAX_SAFE_INTEGER
-    if (fromId === undefined) return idx
-    const start = this.data.accounts.findIndex((a) => a.id === fromId)
-    if (start === -1) return idx
-    return (idx - start + total) % total
+    return cyclicDistance(this.data.accounts, fromId, id)
   }
 
   /**
@@ -799,48 +755,7 @@ export class AccountPoolManager {
     family: ModelFamily,
     fromId?: string,
   ): ManagedAccount[] {
-    const now = Date.now()
-    return candidates
-      .map((acc, index) => {
-        const q = acc.quotas?.[family]
-        const weeklyMs = q?.weeklyResetTime ? Date.parse(q.weeklyResetTime) : Number.NaN
-        const fiveHourMs = q?.resetTime ? Date.parse(q.resetTime) : Number.NaN
-        const weeklyRemaining = !Number.isNaN(weeklyMs) ? Math.max(0, weeklyMs - now) : Number.POSITIVE_INFINITY
-        const fiveHourRemaining = !Number.isNaN(fiveHourMs) ? Math.max(0, fiveHourMs - now) : Number.POSITIVE_INFINITY
-        return {
-          acc,
-          index,
-          weeklyRemaining,
-          fiveHourRemaining,
-          weeklyKnown: Number.isFinite(weeklyRemaining),
-          fiveHourKnown: Number.isFinite(fiveHourRemaining),
-        }
-      })
-      .sort((a, b) => {
-        // Priority 1: Weekly quota reset time (least remaining time until reset first)
-        if (a.weeklyKnown && b.weeklyKnown) {
-          if (a.weeklyRemaining !== b.weeklyRemaining) {
-            return a.weeklyRemaining - b.weeklyRemaining
-          }
-        } else if (a.weeklyKnown !== b.weeklyKnown) {
-          return a.weeklyKnown ? -1 : 1
-        }
-
-        // Priority 2: 5-hour quota reset time (least remaining time until reset first)
-        if (a.fiveHourKnown && b.fiveHourKnown) {
-          if (a.fiveHourRemaining !== b.fiveHourRemaining) {
-            return a.fiveHourRemaining - b.fiveHourRemaining
-          }
-        } else if (a.fiveHourKnown !== b.fiveHourKnown) {
-          return a.fiveHourKnown ? -1 : 1
-        }
-
-        // Priority 3: Fallback to cyclic distance / pool order
-        const da = this.cyclicDistance(fromId, a.acc.id)
-        const db = this.cyclicDistance(fromId, b.acc.id)
-        return da !== db ? da - db : a.index - b.index
-      })
-      .map((e) => e.acc)
+    return orderByExpiry(this.data.accounts, candidates, family, fromId, Date.now())
   }
 
   /**
