@@ -2,6 +2,7 @@ import type { HostServices } from '../../../host/services.ts'
 import { type RawRes, type RouteRegistrar } from '../respond.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { handleMediaRequest, handleAssetRequest, type HttpRequestLike, type HttpResponseLike } from '../../../host/media-route.ts'
 
 function handleMermaid(services: HostServices, req: unknown, res: unknown): void {
@@ -37,6 +38,12 @@ function handleMedia(services: HostServices, req: unknown, res: unknown): void {
     if (md) roots.push(md)
   }
   roots.push(process.cwd())
+  const home = homedir()
+  const desktop = join(home, 'Desktop')
+  const downloads = join(home, 'Downloads')
+  if (existsSync(desktop)) roots.push(desktop)
+  if (existsSync(downloads)) roots.push(downloads)
+  roots.push(home)
   handleMediaRequest(req as HttpRequestLike, res as HttpResponseLike, { workspaceRoots: roots })
 }
 

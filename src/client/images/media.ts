@@ -3,15 +3,26 @@
 // Split out of src/client/images.ts; logic is unchanged.
 export function getOrigin(): string {
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
+    const o = window.location.origin;
+    if (o === 'null' || o === 'file://') {
+      return '';
+    }
+    return o;
   }
   return '';
 }
 
+/** Check if a string is a remote web URL */
+export function isRemoteUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
+}
+
 /** Build media URL from path */
 export function buildMediaUrl(rawPath: string): string {
+  const p = rawPath.trim();
+  if (isRemoteUrl(p)) return p;
   const origin = getOrigin();
-  return `${origin}/plugins/agy-link/media?path=${encodeURIComponent(rawPath.trim())}`;
+  return `${origin}/plugins/agy-link/media?path=${encodeURIComponent(p)}`;
 }
 
 /** Check if a URL or path is an image */

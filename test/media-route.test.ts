@@ -37,6 +37,36 @@ test('media-route: resolveLocalMediaPath handles Windows paths, file://, and rel
     assert.ok(resolvedMulti !== null, 'relative path should resolve against candidate array');
     assert.equal(resolvedMulti, resolvedDirect);
 
+    // 3b. Relative path with leading slash or file:/// prefix against roots
+    const resolvedSlash = resolveLocalMediaPath('/test-image.png', tempDir);
+    assert.equal(resolvedSlash, resolvedDirect);
+    const resolvedFileRel = resolveLocalMediaPath('file:///test-image.png', tempDir);
+    assert.equal(resolvedFileRel, resolvedDirect);
+
+    // 3c. 2-slash POSIX file:// URL
+    if (!isWin) {
+      const twoSlash = 'file://' + sampleFile.replace(/^\/+/, '');
+      const resolvedTwoSlash = resolveLocalMediaPath(twoSlash);
+      assert.equal(resolvedTwoSlash, resolvedDirect, '2-slash file:// URL should resolve');
+    }
+
+    // 3d. Shallow 1-level subfolder search in roots
+    const subFolder = join(tempDir, 'subproject');
+    mkdirSync(subFolder, { recursive: true });
+    const subFile = join(subFolder, 'sub-image.png');
+    writeFileSync(subFile, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const resolvedSub = resolveLocalMediaPath('sub-image.png', tempDir);
+    assert.equal(resolvedSub, subFile, 'shallow search should locate image in subfolder');
+
+    // 3e. Percent-encoded UTF-8 path
+    const utf8Folder = join(tempDir, '中文目录');
+    mkdirSync(utf8Folder, { recursive: true });
+    const utf8File = join(utf8Folder, '测试.png');
+    writeFileSync(utf8File, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const encodedUrl = 'file://' + (isWin ? '/' + utf8File.replace(/\\/g, '/') : utf8File).replace(/中文目录/, '%E4%B8%AD%E6%96%87%E7%9B%AE%E5%BD%95').replace(/测试/, '%E6%B5%8B%E8%AF%95');
+    const resolvedUtf8 = resolveLocalMediaPath(encodedUrl);
+    assert.equal(resolvedUtf8, utf8File, 'percent-encoded path should decode and resolve');
+
     // 4. Non-existent path returns null
     assert.equal(resolveLocalMediaPath('non-existent-image-12345.png'), null);
     assert.equal(resolveLocalMediaPath(''), null);

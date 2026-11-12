@@ -91,6 +91,10 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
   const imgWrap = document.createElement('div');
   imgWrap.className = 'agy-lightbox-img-wrap';
 
+  const spinner = document.createElement('div');
+  spinner.className = 'agy-lightbox-spinner';
+  spinner.innerHTML = '<div class="agy-lightbox-spinner-ring"></div><div class="agy-lightbox-spinner-text">加载图片中...</div>';
+
   const img = document.createElement('img');
   img.className = 'agy-lightbox-img';
   img.src = src;
@@ -123,14 +127,17 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
   errorCard.appendChild(errorHint);
 
   img.onerror = () => {
+    spinner.style.display = 'none';
     img.style.display = 'none';
     errorCard.style.display = 'flex';
   };
   img.onload = () => {
+    spinner.style.display = 'none';
     img.style.display = '';
     errorCard.style.display = 'none';
   };
 
+  imgWrap.appendChild(spinner);
   imgWrap.appendChild(img);
   imgWrap.appendChild(errorCard);
   body.appendChild(imgWrap);

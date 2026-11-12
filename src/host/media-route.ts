@@ -1,7 +1,7 @@
 // Media and asset route handler for dsh-agy-link.
 // Serves local images referenced by Antigravity (file://, absolute paths, WSL paths, staged media)
 // and static plugin assets (e.g. mermaid.min.js) safely to DSH Desktop and Web clients.
-import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -69,6 +69,13 @@ export function resolveLocalMediaPath(
         } else if (p.startsWith('/wsl.localhost/')) {
           p = '\\\\' + p.slice(1).replace(/\//g, '\\');
         }
+      } else {
+        // POSIX: if missing leading slash (e.g. file://Users/... -> Users/...), restore it
+        if (!p.startsWith('/')) {
+          if (existsSync('/' + p) || /^(Users|home|private|tmp|var|opt|Applications)\//.test(p)) {
+            p = '/' + p;
+          }
+        }
       }
     }
   }
@@ -83,6 +90,12 @@ export function resolveLocalMediaPath(
       // /home/... -> \\wsl.localhost\Ubuntu\home\...
       p = `\\\\wsl.localhost\\Ubuntu\\${p.replace(/\//g, '\\')}`;
     }
+  }
+
+  // If path contains percent escapes, decode it safely
+  if (p.includes('%')) {
+    const decoded = safeDecodeUri(p);
+    if (decoded !== null) p = decoded;
   }
 
   // If path is already absolute, check directly
@@ -101,12 +114,41 @@ export function resolveLocalMediaPath(
     }
   }
 
+  const strippedRel = p.replace(/^[/\\]+/, '');
+  const baseName = extname(p) ? p.split(/[/\\]/).pop()! : p;
+
   for (const root of roots) {
     const candidate = resolve(root, p);
     if (existsSync(candidate)) return candidate;
+
+    if (strippedRel !== p) {
+      const relCandidate = resolve(root, strippedRel);
+      if (existsSync(relCandidate)) return relCandidate;
+    }
+
     // Also check basename in case p was prefixed or relative
-    const baseCandidate = resolve(root, extname(p) ? p.split(/[/\\]/).pop()! : p);
+    const baseCandidate = resolve(root, baseName);
     if (existsSync(baseCandidate)) return baseCandidate;
+  }
+
+  // Shallow 1-level directory search in roots for project subfolders
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    try {
+      const entries = readdirSync(root, { withFileTypes: true });
+      for (const ent of entries) {
+        if (ent.isDirectory() && !ent.name.startsWith('.') && ent.name !== 'node_modules') {
+          if (strippedRel !== p) {
+            const subRel = resolve(root, ent.name, strippedRel);
+            if (existsSync(subRel)) return subRel;
+          }
+          const subBase = resolve(root, ent.name, baseName);
+          if (existsSync(subBase)) return subBase;
+        }
+      }
+    } catch {
+      // ignore readdir errors
+    }
   }
 
   const resolved = resolve(p);

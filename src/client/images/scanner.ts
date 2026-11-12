@@ -109,18 +109,20 @@ export function scanAndEnhanceImages(): void {
     }
   }
 
-  // 3. Scan for <a> links to file:// images
-  const links = document.querySelectorAll<HTMLAnchorElement>('a[href^="file://"]');
+  // 3. Scan for <a> links pointing to image files
+  const links = document.querySelectorAll<HTMLAnchorElement>('a[href]');
   for (let i = 0; i < links.length; i++) {
     const link = links[i];
     if (!link || link.dataset.agyLinkEnhanced === 'true') continue;
 
-    const href = link.href ?? '';
-    if (!isImageFile(href)) continue;
+    const rawHref = link.getAttribute('href') ?? '';
+    const resolvedHref = link.href ?? '';
+    if (!isImageFile(rawHref) && !isImageFile(resolvedHref)) continue;
 
     link.dataset.agyLinkEnhanced = 'true';
-    const mediaUrl = buildMediaUrl(href);
-    const linkText = link.textContent ?? 'Image';
+    const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
+    const mediaUrl = buildMediaUrl(pathToUse);
+    const linkText = (link.textContent ?? 'Image').replace(/预览$/, '').trim();
 
     // Do NOT hijack link.onclick: preserving DSH's native link handling allows
     // clicking the filename to open/reveal the file in the workspace or editor.
@@ -133,19 +135,19 @@ export function scanAndEnhanceImages(): void {
       badge.setAttribute('role', 'button');
       badge.setAttribute('tabindex', '0');
       badge.title = `预览图片 / Preview (${linkText})`;
-      badge.innerHTML = '<span class="agy-image-chip-icon">🖼️</span><span class="agy-image-chip-text">预览</span>';
+      badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;display:inline-block;"><path d="M1 8s3-5.5 7-5.5S15 8 15 8s-3 5.5-7 5.5S1 8 1 8z"/><circle cx="8" cy="8" r="2.5"/></svg></span><span class="agy-image-chip-text">预览</span>';
 
       badge.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openLightbox(mediaUrl, linkText, href);
+        openLightbox(mediaUrl, linkText, pathToUse);
       };
 
       badge.onkeydown = (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           e.stopPropagation();
-          openLightbox(mediaUrl, linkText, href);
+          openLightbox(mediaUrl, linkText, pathToUse);
         }
       };
 
