@@ -4,21 +4,53 @@
 
 ### English
 
-- **Fix(client, media): clickable local file links, video playback, and redesigned modern glassmorphic lightbox.**
-  - **Clickable local links in DSH**: Intercept clicks on `file://` and local relative file links (`.png`, `.mp4`, `.md`, `.txt`, `.pdf`, etc.) so clicking them in DSH chat never triggers Chromium's blocked "Not allowed to load local resource" error or 404 page navigation. Images and videos open in the built-in Lightbox preview, while documents and code open in the host OS default editor or reveal in Finder/Explorer with toast feedback.
-  - **Video streaming & Range 206 support**: Added video MIME mappings (`.mp4`, `.webm`, `.mov`, `.mkv`) and HTTP 206 Partial Content Range streaming to `/plugins/agy-link/media`. Videos render in Lightbox with smooth playback controls and timeline scrubbing.
-  - **Deep project media resolution**: `resolveLocalMediaPath` now inspects active DSH session working directories (`header.cwd`) and performs bounded recursive searching (up to depth 3) across project subfolders, resolving nested assets (e.g. `tmp/master_continuous/master_montage_6panel.png` and `eren_rumbling_master_78s.mp4`) and preventing 404 black screens.
-  - **Host OS file opener endpoint**: Added `/plugins/agy-link/open` route with native OS launchers (`open` / `open -R` on macOS, `explorer` / `start` on Windows, `xdg-open` on Linux).
-  - **Modern preview redesign**: Redesigned Lightbox and link chips into sleek Apple/Linear-style glassmorphism with a floating pill toolbar, crisp vector SVG icons (Zoom in/out, 1:1, Reveal in Finder, Open in default app, Copy path with checkmark animation, Close), and elegant toast notifications.
+- **Major Architecture: Full-Repository Modular Monolith Refactoring (`refactor/modular-monolith`).**
+  - **Zero Monolithic Files**: Refactored the entire codebase into 207 focused, decoupled modules. Every single source file now strictly obeys `<= 600` lines (empty ratchet list, 0 legacy overrides), with target functions `<= 120` lines.
+  - **Acyclic Layered Domain Architecture**: Enforced strict unidirectional dependency rules via `scripts/check-architecture.mjs` (0 cyclic dependencies, 0 direction violations) across clearly separated layers:
+    - `src/domain/`: Extracted slot state machines, leasing, atomic file locks, and pool administrative scheduling from the legacy monolithic `AccountPoolManager`.
+    - `src/provider/`: Decomposed the multi-turn attempt loop into dedicated context assembly, retry policies, and DSH tool event mappers.
+    - `src/runtime/`: Modularized agy process execution and SQLite DB trajectory parsing.
+    - `src/features/`: Isolated autonomous agent features including the Image Agent, Translation Service, and Warmup Engine.
+    - `src/transport/`: Modularized HTTP route handlers across 31 typed REST endpoints.
+    - `src/client/`: Split the monolithic frontend bundle into standalone UI panels, toolview renderers, decisions, and compaction components.
+  - **Two-Tier Test Suite (Aligned with academic-agent)**:
+    - **Inner Loop (TDD Fast-Ring, 0.3s - 1.5s)**: Introduced `pnpm run test:fast` for lightning-fast incremental test execution targeted by Git diff or module keywords.
+    - **Outer Loop (Full Regression Gate, 1018 Tests)**: Expanded the comprehensive test suite to 1,018 automated tests with 85%+ branch coverage, including JSDOM browser simulation, SSR DOM rendering fixtures, injectable CLI exit-code harnesses, and 100% route contract coverage.
+- **Feat & Fix(client, media): Clickable local file links, native OS launching, and redesigned glassmorphic lightbox.**
+  - **In-App Clickable Local Links**: Intercept clicks on `file://` and local relative links (`.png`, `.mp4`, `.md`, `.txt`, `.pdf`, etc.) in DSH chat, overcoming Chromium's `Not allowed to load local resource` restriction and relative URL 404 navigations. Clicking media opens the in-app Lightbox, while documents/code trigger the native host editor or file manager with instant Toast feedback.
+  - **Video Streaming & Range 206 Support**: Added video MIME mappings (`.mp4`, `.webm`, `.mov`, `.mkv`) and HTTP 206 Partial Content Range streaming to `/plugins/agy-link/media`. Built-in Lightbox video player supports instant seeking and smooth scrubbing.
+  - **Session-Aware Deep Media Resolution**: `resolveLocalMediaPath` dynamically inspects active DSH session working directories (`header.cwd`) and performs bounded recursive search (up to depth 3) across project folders, resolving deeply nested assets (e.g. `master_continuous/master_montage_6panel.png`) without 404 black screens.
+  - **Host OS File Opener API**: Added `/plugins/agy-link/open` endpoint using native platform openers (`open` / `open -R` on macOS, `explorer` / `start` on Windows, `xdg-open` on Linux).
+  - **Modern UI Redesign**: Replaced retro monospace/emoji controls with an Apple/Linear-style glassmorphism interface featuring a floating pill island toolbar, crisp vector SVG icons (Zoom, 1:1, Reveal in Finder, Open in App, Copy Path with checkmark animation, Close), and refined chat chips.
+- **Feat(auth, catalog): Direct Token Import, Credential Auto-Healing & Dynamic Model Filtering (#102).**
+  - **Direct Token Import**: Add accounts by directly pasting a `refresh_token` string or OAuth JSON document via CLI (`/agy import`), HTTP API, or Settings UI.
+  - **Credential Auto-Healing**: Corrupted or missing credentials automatically restore from adjacent `.bak` backup files.
+  - **Dynamic Model Scoping**: The model picker and status catalog dynamically synchronize on account switch, isolating Argon permissions per active account.
 
 ### 中文
 
-- **修复(客户端与媒体)：支持 DSH 对话内直接点击本地文件链接、视频播放、深度路径解析与全新现代化毛玻璃预览 UI。**
-  - **DSH 对话内链接直接点击可用**：拦截 `file://` 与本地文件链接（`.png`、`.mp4`、`.md`、`.txt`、`.pdf` 等）的点击事件，彻底解决 Chromium 浏览器安全限制阻止访问 `file:///`（"Not allowed to load local resource"）或相对路径 404 导致的链接无法点击问题。点击图片/视频直接拉起应用内预览，点击文档/代码直接在系统默认编辑器中打开或在访达/资源管理器中定位，并带有 Toast 提示反馈。
-  - **视频播放与 HTTP 206 Range 边下边播**：`/plugins/agy-link/media` 路由新增对视频格式（`.mp4`、`.webm`、`.mov`、`.mkv`）的支持，并实现 HTTP 206 Partial Content Range 分段传输，支持任意时间点平滑拖拽进度条播放。
-  - **会话工作区与多层嵌套文件深度解析**：`resolveLocalMediaPath` 现自动采集 DSH 各活动会话的工作目录（`header.cwd`）与常用工程目录，支持最多 3 层的有界递归检索，彻底解决多层子目录资源（如 `tmp/master_continuous/master_montage_6panel.png` 与 `eren_rumbling_master_78s.mp4`）404 找不到导致黑屏的问题。
+- **重大架构重构：全仓模块化单体重构（`refactor/modular-monolith`）。**
+  - **全仓彻底消除单体大文件**：全代码库拆解重构为 207 个高内聚、低耦合的独立模块。全量源文件严格恪守 `<= 600` 行预算红线（清空历史棘轮，0 遗留违规），目标函数严格 `<= 120` 行。
+  - **无环分层领域架构**：通过 `scripts/check-architecture.mjs` 门禁实现单向依赖约束（0 循环依赖，0 越级调用），清晰划分六大层次：
+    - `src/domain/`：从原重型 `AccountPoolManager` 中剥离出凭据槽状态机、租约管理、原子文件锁与号池调度管理；
+    - `src/provider/`：将多轮请求循环解耦为上下文组装、重试策略与 DSH 原生工具事件映射管道；
+    - `src/runtime/`：模块化底层 `agy` 进程执行与 SQLite 数据库轨迹提取；
+    - `src/features/`：独立图像生成智能体、划词翻译服务与模型预热保活引擎；
+    - `src/transport/`：模块化注册 31 个类型安全的 HTTP REST 接口；
+    - `src/client/`：将庞大前端代码拆分为独立的设置面板、工具卡片渲染器、决策流与历史折叠组件。
+  - **两级双环极速测试体系（对齐 academic-agent）**：
+    - **内环（TDD 极速环，0.3s ~ 1.5s）**：引入 `pnpm run test:fast`，精准基于 Git 变更或关键字毫秒级执行关联单测，告别漫长等待；
+    - **外环（全量回归门禁，1018 项测试）**：单测规模跃升至 1,018 项，分支覆盖率突破 85%+，涵盖 JSDOM 前端交互用例、SSR 渲染断言、CLI 退出码矩阵与全部 31 个 HTTP 路由边界测试。
+- **功能与体验重构(客户端与媒体)：支持 DSH 对话内直接点击本地文件链接、视频播放、深度路径解析与全新现代化毛玻璃预览 UI。**
+  - **DSH 对话内链接直接点击可用**：拦截 `file://` 与本地文件链接（`.png`、`.mp4`、`.md`、`.txt`、`.pdf`、代码文件等）的点击事件，彻底解决 Chromium 浏览器安全沙箱拦截 `file:///`（"Not allowed to load local resource"）或相对路径 404 导致的链接无法点击问题。点击媒体直接唤起应用内预览，点击文档/代码直接在系统默认编辑器中打开或在访达中定位，并带有全局 Toast 操作反馈。
+  - **视频播放与 HTTP 206 Range 边下边播**：`/plugins/agy-link/media` 路由全面支持视频格式（`.mp4`、`.webm`、`.mov`、`.mkv`），并实现 HTTP 206 Partial Content Range 分段传输，支持进度条任意时间点平滑拖拽即时播放。
+  - **会话工作区动态感知与 3 层嵌套有界检索**：`resolveLocalMediaPath` 现自动采集 DSH 各活动会话工作目录（`header.cwd`）与常用工作区，支持最多 3 层深度的有界递归匹配，毫秒级定位深层嵌套产物（如 `master_continuous/master_montage_6panel.png` 与 `eren_rumbling_master_78s.mp4`），彻底根除 404 黑屏。
   - **本地系统打开与定位接口**：新增 `/plugins/agy-link/open` 路由，调用系统原生指令（macOS `open` / `open -R`、Windows `explorer` / `start`、Linux `xdg-open`）即时打开文件或在访达中显示。
-  - **现代化毛玻璃预览重构**：全面重构 Lightbox 预览与链接胶囊样式，采用 Apple / Linear 风格高透毛玻璃与顶部悬浮药丸工具栏，搭配纯正矢量 SVG 图标（放大、缩小、1:1 复位、访达定位、系统打开、复制路径打勾动画、ESC 关闭），彻底摒弃粗糙的旧式文本按钮，并提供操作反馈 Toast 浮层。
+  - **现代化毛玻璃预览重构**：全面重构 Lightbox 预览与链接胶囊样式，采用 Apple / Linear 风格高透毛玻璃与顶部悬浮药丸工具栏，搭配纯正矢量 SVG 图标（放大、缩小、1:1 复位、访达定位、系统打开、复制路径打勾动画、ESC 关闭），彻底替换粗糙的旧式文本按钮，并提供操作反馈 Toast 浮层。
+- **新增(认证与目录)：支持直接导入 Refresh Token / OAuth JSON 快捷登录与凭据备份自愈（#102）。**
+  - **Token 直接导入**：支持直接粘贴 `refresh_token` 字符串或 OAuth JSON 凭据导入账号。提供 CLI 命令（`/agy import <token> [别名]` 与 `/agy import-token`）、HTTP API 接口（`POST /plugins/agy-link/pool/import`）以及设置面板（"Token 导入" 选项卡）。系统自动换取 Token、验证 Google 身份并就地更新或创建账号，并即时拉取额度。
+  - **凭据文件自愈修复**：当凭据文件缺失、截断或损坏时，自动从同目录 `.bak` 备份文件中恢复；启动自检中自动为凭据完整有效的账号清除误标的 `authRequired` 异常标记。
+  - **切号动态同步模型列表与权限**：切换活动账号时即时依据新账号权限动态过滤可用模型列表，无 Argon 权限的账号不再在当前状态中残留展示不可用模型；切到不支持 Argon 的账号时自动清理过期的 Argon 活动指针。
 
 ## 0.6.19 (2026-11-12)
 
