@@ -243,36 +243,39 @@ export class ModelCatalog {
   }
 
   /**
-   * Return the complete full set of all known models across fallbacks, base
-   * discovered catalog, per-account discovered catalogs, and quota-reported models.
-   * Nothing is excluded, providing the true superset ("全集") for settings and manual picking.
+   * Return the deduplicated set of all real models discovered from `agy models`
+   * across base and per-account catalogs. Quotas are never treated as models,
+   * and fallback definitions are only used when discovery failed everywhere.
    */
   getAllKnownModels(accounts: readonly ManagedAccount[] = []): readonly CatalogEntry[] {
     const list: CatalogEntry[] = []
+    const seen = new Set<string>()
 
-    // 1. Seed with fallback definitions
-    const fallbacks = buildFallbackCatalog(this.fallbackDefs)
-    for (const m of fallbacks) list.push(m)
+    const addEntries = (entries: readonly CatalogEntry[]) => {
+      for (const m of entries) {
+        if (!m || !m.id || seen.has(m.id)) continue
+        seen.add(m.id)
+        list.push(m)
+      }
+    }
 
-    // 2. Base discovered catalog
-    for (const m of this.current.models) list.push(m)
+    // 1. Current discovered catalog (if discovered from real agy models)
+    if (this.current.source === 'discovered') {
+      addEntries(this.current.models)
+    }
 
-    // 3. For each account, merge its discovered catalog & quota-reported models
+    // 2. Each account's discovered catalog (from real agy models)
     for (const acc of accounts) {
       if (!acc.enabled) continue
       const cat = this.accountCatalogs.get(acc.id)
-      if (cat) {
-        for (const m of cat.models) list.push(m)
+      if (cat && cat.source === 'discovered') {
+        addEntries(cat.models)
       }
-      if (acc.quotas) {
-        for (const fam of ['argon', 'anthropic', 'google'] as const) {
-          const models = acc.quotas[fam]?.models
-          if (models?.length) {
-            const raw: RawModel[] = models.map((m) => ({ slug: m.modelId, label: m.displayName || m.modelId }))
-            for (const m of foldEfforts(raw)) list.push(m)
-          }
-        }
-      }
+    }
+
+    // 3. Fallback definitions ONLY if NO catalog was discovered anywhere
+    if (list.length === 0) {
+      addEntries(buildFallbackCatalog(this.fallbackDefs))
     }
 
     return list
@@ -280,8 +283,7 @@ export class ModelCatalog {
 
   /**
    * Return the union of all models available across all pool accounts,
-   * merged with discovered catalogs, per-account quota models, and fallback models.
-   * If any enabled account in the pool has Argon access, Argon is included in the union.
+   * without Argon if no enabled account in the pool has Argon access.
    */
   getUnion(accounts: readonly ManagedAccount[] = [], pool?: AccountPoolManager | null): readonly CatalogEntry[] {
     if (accounts.length === 0 && !pool) {
@@ -294,6 +296,31 @@ export class ModelCatalog {
       if (isArgonModel(entry.id) && !hasAnyArgon) {
         return false
       }
+      return true
+    })
+  }
+
+  /**
+   * Return the authoritative real models for a specific managed account.
+   * If the account's catalog was discovered from `agy models`, returns its models directly.
+   * If not yet discovered, uses current discovered models filtered by account capabilities.
+   */
+  getModelsForAccount(acc: ManagedAccount, pool?: AccountPoolManager | null): readonly CatalogEntry[] {
+    const accountCat = this.accountCatalogs.get(acc.id)
+    if (accountCat && accountCat.source === 'discovered' && accountCat.models.length > 0) {
+      return accountCat.models
+    }
+
+    const hasArgon = accountHasArgon(acc, pool, this.current)
+    if (this.current.source === 'discovered' && this.current.models.length > 0) {
+      return this.current.models.filter((m) => {
+        if (isArgonModel(m.id) && !hasArgon) return false
+        return true
+      })
+    }
+
+    return buildFallbackCatalog(this.fallbackDefs).filter((m) => {
+      if (isArgonModel(m.id) && !hasArgon) return false
       return true
     })
   }
@@ -351,6 +378,18 @@ export class ModelCatalog {
     return this.get(accountId);
   }
 
+  /**
+   * Warm account catalogs in the background so switching between accounts is instant.
+   */
+  async warmAccounts(accounts: readonly ManagedAccount[]): Promise<void> {
+    for (const acc of accounts) {
+      if (!acc.enabled || acc.authRequired) continue
+      if (!this.accountCatalogs.has(acc.id)) {
+        await this.refresh(acc.id, false).catch(() => undefined)
+      }
+    }
+  }
+
   private async refresh(accountId?: string, announce = true): Promise<void> {
     try {
       const ac = new AbortController();
@@ -368,6 +407,9 @@ export class ModelCatalog {
             prev.models.some((m, i) => m.id !== newModels[i]?.id);
           if (accountId) {
             this.accountCatalogs.set(accountId, newCatalog);
+            if (this.current.source !== 'discovered') {
+              this.current = newCatalog;
+            }
           } else {
             this.current = newCatalog;
           }

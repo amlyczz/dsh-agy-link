@@ -426,4 +426,78 @@ test('forceRefreshAndNotify re-announces the picker even when the account catalo
   assert.equal(updates, before)
 })
 
+test('getAllKnownModels never treats quota buckets as runnable models and excludes fallbacks once discovered', async () => {
+  const accountWithQuotaPollution = {
+    id: 'acc_polluted',
+    alias: 'Polluted',
+    dir: '/tmp/polluted',
+    enabled: true,
+    createdAt: Date.now(),
+    cooldowns: {},
+    quotas: {
+      google: {
+        remainingFraction: 1,
+        models: [
+          { modelId: 'gemini-2.5-flash-thinking', displayName: 'Gemini 3.5 Flash Lite' },
+          { modelId: 'gemini-3.8-flash-tiered', displayName: 'gemini-3.8-flash-tiered' },
+          { modelId: 'gemini-3.5-flash-lite', displayName: 'Gemini 3.5 Flash Lite' },
+          { modelId: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+        ],
+      },
+    },
+  }
+
+  const catalog = new ModelCatalog(
+    async () => ({ stdout: 'gemini-3.8-flash\tGemini 3.8 Flash\nclaude-sonnet-5-5\tClaude Sonnet 5.5', stderr: '' }),
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+  )
+
+  await catalog.forceRefresh('acc_polluted')
+  const allKnown = catalog.getAllKnownModels([accountWithQuotaPollution as any])
+  const ids = allKnown.map((m) => m.id)
+
+  // Real discovered models from agy models must be present
+  assert.ok(ids.includes('gemini-3.8-flash'))
+  assert.ok(ids.includes('claude-sonnet-5-5'))
+
+  // Quota buckets MUST NEVER be included in known models
+  assert.equal(ids.includes('gemini-2.5-flash-thinking'), false)
+  assert.equal(ids.includes('gemini-3.8-flash-tiered'), false)
+  assert.equal(ids.includes('gemini-3.5-flash-lite'), false)
+  assert.equal(ids.includes('gemini-2.5-pro'), false)
+
+  // Fallbacks MUST NOT pollute the discovered catalog
+  assert.equal(ids.includes('claude-sonnet-4-6'), false)
+})
+
+test('getModelsForAccount returns exact models for that specific account without cross-pollution', async () => {
+  const outputs: Record<string, string> = {
+    acc_primary: 'gemini-4-argon\tGemini 4 Argon\ngemini-3.8-flash\tGemini 3.8 Flash\nclaude-sonnet-5-5\tClaude Sonnet 5.5',
+    acc_secondary: 'gemini-3.8-flash\tGemini 3.8 Flash\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+  }
+
+  const catalog = new ModelCatalog(
+    async (_signal, id) => ({ stdout: outputs[id ?? 'acc_primary'] ?? '', stderr: '' }),
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+  )
+
+  await catalog.forceRefresh('acc_primary')
+  await catalog.forceRefresh('acc_secondary')
+
+  const primaryModels = catalog.getModelsForAccount({ id: 'acc_primary', enabled: true } as any)
+  const primaryIds = primaryModels.map((m) => m.id)
+  assert.ok(primaryIds.includes('gemini-4-argon'))
+  assert.ok(primaryIds.includes('claude-sonnet-5-5'))
+  assert.equal(primaryIds.includes('claude-sonnet-4-6'), false, 'primary must NOT have Claude 4.6')
+
+  const secondaryModels = catalog.getModelsForAccount({ id: 'acc_secondary', enabled: true } as any)
+  const secondaryIds = secondaryModels.map((m) => m.id)
+  assert.ok(secondaryIds.includes('gemini-3.8-flash'))
+  assert.ok(secondaryIds.includes('claude-sonnet-4-6'))
+  assert.equal(secondaryIds.includes('gemini-4-argon'), false, 'secondary must NOT have Argon')
+  assert.equal(secondaryIds.includes('claude-sonnet-5-5'), false, 'secondary must NOT have Claude 5.5')
+})
+
 

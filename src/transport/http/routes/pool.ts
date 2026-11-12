@@ -294,14 +294,12 @@ function handlePoolSetActive(services: HostServices, req: unknown, res: unknown)
         const id = typeof body.id === 'string' ? body.id : ''
         const ok = id !== '' && pool.setActiveAccount(id)
         if (ok) {
-          // Switching the active account changes BOTH the discovered catalog
-          // (per-account plans differ, e.g. Gemini 4 Argon) AND the Argon
-          // visibility gate in listModels(). Discover this account, then emit
-          // the update unconditionally — otherwise the composer's cached model
-          // snapshot keeps showing the previous account's models (Argon
-          // missing after switching to a Pro/Ultra account).
           notifyPicker()
-          void catalog.forceRefreshAndNotify(id).catch(() => undefined)
+          if (typeof catalog.forceRefreshAndNotify === 'function') {
+            void catalog.forceRefreshAndNotify(id).catch(() => undefined)
+          } else if (typeof catalog.forceRefresh === 'function') {
+            void catalog.forceRefresh(id).catch(() => undefined)
+          }
         }
         sendJson(res as RawRes, ok ? 200 : 400, { ok, pool: pool.getPoolData() })
       })()
@@ -321,7 +319,11 @@ function handlePoolReorder(services: HostServices, req: unknown, res: unknown): 
           // account may change; refresh it and re-announce the model list.
           const activeId = pool.getActiveAccountId('google')
           notifyPicker()
-          if (activeId) void catalog.forceRefreshAndNotify(activeId).catch(() => undefined)
+          if (activeId && typeof catalog.forceRefreshAndNotify === 'function') {
+            void catalog.forceRefreshAndNotify(activeId).catch(() => undefined)
+          } else if (activeId && typeof catalog.forceRefresh === 'function') {
+            void catalog.forceRefresh(activeId).catch(() => undefined)
+          }
         }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })()

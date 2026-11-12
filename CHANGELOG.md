@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.21 (2026-11-12)
+
+### English
+
+- **Fix(catalog, models): Strict real model discovery from `agy models` CLI, account-scoped catalog isolation & eliminated quota pollution.**
+  - **Authoritative CLI Discovery**: Completely removed `acc.quotas` injection into runnable model catalogs. Quota buckets (such as `gemini-2.5-flash-thinking`, `gemini-3.8-flash-tiered`, and duplicate `Gemini 3.5 Flash Lite` entries returned by Google Cloud quota APIs) are strictly restricted to quota telemetry and never treated as runnable LLM models.
+  - **Account-Scoped Catalog Isolation (`getModelsForAccount`)**: The DSH model picker and Settings panel ("Model visibility") now reflect strictly the active account's models discovered from `agy models`. Claude 4.6 and Claude 5.5 no longer cross-pollinate, and Argon is only shown on Argon-eligible accounts.
+  - **Real-Time Account Switch Synchronization**: Switching accounts immediately resolves and refreshes the target account's catalog, updating both the picker and the settings panel with zero redundancy and no ghost models.
+
+### 中文
+
+- **修复(目录与模型)：严格从真实 `agy models` 提取模型列表、账号专属目录隔离与彻底根除配额分桶污染。**
+  - **真实 CLI 权威探测**：彻底移除 `getAllKnownModels()` 中对 `acc.quotas` 配额分桶的合流读取。Google Cloud 配额接口返回的内部资源分桶（如 `gemini-2.5-flash-thinking`、`gemini-3.8-flash-tiered` 以及重复命名的 4 个 `Gemini 3.5 Flash Lite`）严格仅用于额度条展示，绝不再当作可运行 LLM 模型混入目录。
+  - **账号专属目录隔离（`getModelsForAccount`）**：DSH 右下角模型选择器与设置面板“模型显示”直接绑定当前活动账号通过 `agy models` 真实探查到的模型列表。主账号（Claude 5.5 + Argon）与子账号（Claude 4.6，无 Argon）彻底实现互不污染，消除跨账号冗余。
+  - **切账号即时同步**：切换活动账号时，立即在后台以新账号环境执行权威探测、写入账号专属缓存并即时触发 `notifyPicker()` 广播，实现毫秒级无缝刷新。
+
 ## 0.6.20 (2026-11-12)
 
 ### English

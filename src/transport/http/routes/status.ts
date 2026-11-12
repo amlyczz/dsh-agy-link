@@ -9,20 +9,18 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
       void (async () => {
         const cfg = getConfig()
         const cat = catalog.get()
-        const allKnown = catalog.getAllKnownModels(pool?.getAccounts ? pool.getAccounts() : [])
         const poolData = pool?.getPoolData ? pool.getPoolData(cfg.proxyUrl?.trim() || undefined) : undefined
         const activeId = (typeof pool?.getActiveAccountId === 'function')
           ? pool.getActiveAccountId('google')
           : (poolData?.lastActiveAccountId ?? poolData?.primaryAccountId)
         const activeAcc = (activeId && typeof pool?.getAccount === 'function') ? pool.getAccount(activeId) : undefined
-        const supportedModels = (activeAcc && pool)
-          ? allKnown.filter((m) => {
-              if (typeof (pool as any).isModelSupported === 'function') {
-                return (pool as any).isModelSupported(activeAcc, m.id)
-              }
-              return accountSupportsModel(activeAcc, m.id, pool, catalog.get(activeAcc.id))
-            })
-          : allKnown
+        const supportedModels = (activeAcc && pool && typeof catalog.getModelsForAccount === 'function')
+          ? catalog.getModelsForAccount(activeAcc, pool)
+          : (typeof catalog.getUnion === 'function'
+              ? catalog.getUnion(pool?.getAccounts ? pool.getAccounts() : [], pool)
+              : (typeof catalog.getAllKnownModels === 'function'
+                  ? catalog.getAllKnownModels(pool?.getAccounts ? pool.getAccounts() : [])
+                  : (catalog.get().models ?? [])))
         sendJson(res as RawRes, 200, {
           plugin: 'dsh-agy-link',
           bin: bin(),

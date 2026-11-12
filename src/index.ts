@@ -70,8 +70,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       } catch {
         log('version probe failed — continuing with fallback catalog')
       }
-      await catalog.refreshIfNeeded().catch(() => undefined)
+      const poolData = services.pool.getPoolData()
+      const activeId = services.pool.getActiveAccountId('google') ?? poolData.lastActiveAccountId ?? poolData.primaryAccountId
+      await catalog.refreshIfNeeded(activeId).catch(() => undefined)
       notifyPicker()
+      void catalog.warmAccounts(services.pool.getAccounts()).catch(() => undefined)
     })();
   }, 4_000)
   bootProbeTimer.unref?.()
