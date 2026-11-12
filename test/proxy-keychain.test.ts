@@ -281,10 +281,14 @@ test('watchdog: stderr chatter does NOT keep an offline run alive', async () => 
 })
 
 test('watchdog: stdout activity DOES keep the run alive', async () => {
+  // A fully parallel `npm test` can starve the parent event loop for >800ms,
+  // which used to fire the watchdog before the first progress line was even
+  // delivered (flaky false timeout that blocked the Publish gate). The child
+  // still outlives the idle budget, so the keep-alive semantics stay intact.
   const p = startAgyProcess({
     bin: process.execPath,
-    args: nodeChild('console.log("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>1000){clearInterval(i);process.exit(0)};console.log("progress")},80)'),
-    timeoutMs: 800,
+    args: nodeChild('console.log("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>3200){clearInterval(i);process.exit(0)};console.log("progress")},50)'),
+    timeoutMs: 2000,
   })
   const outcome = await p.outcome
   assert.equal(outcome.timedOut, false)
@@ -292,10 +296,11 @@ test('watchdog: stdout activity DOES keep the run alive', async () => {
 })
 
 test('watchdog: stderrKeepalive opt-in preserves login-flow semantics', async () => {
+  // Same concurrency margin as the stdout case above.
   const p = startAgyProcess({
     bin: process.execPath,
-    args: nodeChild('console.error("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>1000){clearInterval(i);process.exit(0)};console.error("login noise")},80)'),
-    timeoutMs: 800,
+    args: nodeChild('console.error("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>3200){clearInterval(i);process.exit(0)};console.error("login noise")},50)'),
+    timeoutMs: 2000,
     stderrKeepalive: true,
   })
   const outcome = await p.outcome

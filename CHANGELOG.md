@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(release): publishing now retries transient registry failures and verifies the version actually lands.**
+  - v0.6.19 and v0.6.20 both got GitHub Releases that were never installable: a single transient `404 Not Found - PUT https://registry.npmjs.org/dsh-agy-link` killed `npm publish`, and nothing checked whether the version was readable. v0.6.21 succeeded minutes later with the same token.
+  - `scripts/publish-retry.mjs` now: skips an already-published version (idempotent re-runs), retries only transient errors with backoff, fails fast on fatal auth/version errors, and polls `npm view <name>@<version> version` after a successful publish. Slow registry propagation (2–6 min observed) is a WARNING, not a failed run; `PUBLISH_STRICT_VERIFY=1` makes it fatal for canaries. Publish workflow uses the wrapper.
+  - 8 unit tests cover classification, retry/exhaustion, fatal fast-fail, idempotency, and post-publish verification.
+- **Fix(test): widen the watchdog keep-alive tests' timing margin.** Two `proxy-keychain` tests timed out at 800ms whenever a fully parallel `npm test` starved the parent event loop; they are a Publish gate, so the flake could block releases. Child activity now outlives a 2000ms idle budget with the same keep-alive semantics. Full suite: 1028/1028.
+
+### 中文
+
+- **修复(发布)：发布遇瞬态故障会自动重试，并校验版本真的可用。**
+  - 0.6.19/0.6.20 都建了 GitHub Release 却装不上：一次瞬态 `404 Not Found - PUT registry.npmjs.org` 直接打断 `npm publish`，且没有任何环节检查版本是否可读；0.6.21 用同一 token 几分钟后就成功了。
+  - `scripts/publish-retry.mjs`：已发布则跳过（可重复运行）、只对瞬态错误退避重试、鉴权/版本类致命错误立即失败，发布成功后轮询 `npm view` 确认。registry 传播慢（实测 2–6 分钟）只告警不误判失败，canary 可用 `PUBLISH_STRICT_VERIFY=1` 严格化。
+  - 8 项单测覆盖错误分类、重试/耗尽、致命快失败、幂等与发布后校验。
+- **修复(测试)：加宽 watchdog 保活用例的计时余量。** 两项 `proxy-keychain` 用例在满并发下会被父进程事件循环饿死导致 800ms 误超时；它们是发布门禁，flaky 会挡住发版。现子进程活动长于 2000ms 空闲预算且语义不变；全量 1028/1028。
+
 ## 0.6.21 (2026-11-12)
 
 ### English

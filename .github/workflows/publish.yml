@@ -30,6 +30,11 @@ jobs:
 
       - run: npm test
 
-      - run: npm publish --access public
+      # v0.6.19 / v0.6.20 shipped GitHub Releases that were never installable:
+      # a single transient `404 Not Found - PUT registry.npmjs.org` killed the
+      # publish step, and nothing verified the version was actually readable.
+      # The wrapper retries transient failures and polls `npm view` before the
+      # run may pass; fatal auth/version errors still fail fast.
+      - run: node scripts/publish-retry.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
