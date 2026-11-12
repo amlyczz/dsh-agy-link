@@ -59,6 +59,38 @@ export function parseCredentialDoc(raw: string | null | undefined): CredentialDo
 }
 
 /**
+ * Extract a refresh token from raw token string, full/partial JSON document,
+ * or token document.
+ */
+export function extractRefreshToken(input: string | null | undefined): string | null {
+  if (!input || typeof input !== 'string') return null
+  const trimmed = input.trim()
+  if (!trimmed) return null
+
+  // 1. Try parsing structured JSON
+  if (trimmed.startsWith('{') || trimmed.endsWith('}')) {
+    try {
+      const parsed = parseCredentialDoc(trimmed)
+      if (parsed?.refreshToken && parsed.refreshToken.trim()) {
+        return parsed.refreshToken.trim()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. Try JSON pattern match if parse failed (e.g. partial or escaped JSON)
+  const match = trimmed.match(/"refresh_token"\s*:\s*"([^"]+)"/i) ?? trimmed.match(/"refreshToken"\s*:\s*"([^"]+)"/i)
+  if (match && match[1]?.trim()) {
+    return match[1].trim()
+  }
+
+  // 3. Raw token string (strip enclosing quotes if any)
+  const unquoted = trimmed.replace(/^["']|["']$/g, '').trim()
+  return unquoted.length > 0 ? unquoted : null
+}
+
+/**
  * Identity anchor for a credential blob. A Google OAuth refresh token is
  * unique per account grant and stays the same across access-token refreshes,
  * so it is the right thing to compare. Falls back to the access token when a

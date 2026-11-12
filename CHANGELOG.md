@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.19 (2026-11-12)
+
+### English
+
+- **Feat(auth): import accounts directly via refresh token or OAuth JSON document; auto-heal credentials from backup (#102).**
+  - **Direct token import**: Added support for adding accounts by directly pasting a `refresh_token` string or token JSON payload. Available via CLI (`/agy import <token> [alias]`), HTTP API (`POST /plugins/agy-link/pool/import`), and the Settings UI ("Token" tab in the Add Account section). Token is exchanged, identity is verified, and the account is added or updated in place with full quota discovery.
+  - **Credential auto-healing**: When an account's credential file is missing or corrupted/truncated, it is automatically restored from the adjacent `.bak` backup file. Boot hygiene clears any false `authRequired` state when credentials are restored or valid.
+- **Fix(catalog): dynamically scope model picker and status catalog to the active account on switches.**
+  - When switching active accounts, model capabilities are re-evaluated immediately so models without permission (e.g. Argon on standard accounts) are properly filtered out of catalog status.
+  - Selecting an account without Argon automatically clears obsolete Argon active account pointers.
+
+### 中文
+
+- **新增(auth)：支持直接导入 Refresh Token / OAuth JSON 快捷登录与凭据备份自愈（#102）。**
+  - **Token 直接导入**：支持直接粘贴 `refresh_token` 字符串或 OAuth JSON 凭据导入账号。提供 CLI 命令（`/agy import <token> [别名]` 与 `/agy import-token`）、HTTP API 接口（`POST /plugins/agy-link/pool/import`）以及设置面板（"Token 导入" 选项卡）。系统自动换取 Token、验证 Google 身份并就地更新或创建账号，并即时拉取额度。
+  - **凭据文件自愈修复**：当凭据文件缺失、截断或损坏时，自动从同目录 `.bak` 备份文件中恢复；启动自检中自动为凭据完整有效的账号清除误标的 `authRequired` 异常标记。
+- **修复(目录)：切号时动态同步模型列表与权限状态。**
+  - 切换活动账号时即时依据新账号权限动态过滤可用模型列表，无 Argon 权限的账号不再在当前状态中残留展示不可用模型；切到不支持 Argon 的账号时自动清理过期的 Argon 活动指针。
+
 ## 0.6.18 (2026-11-11)
 
 ### English

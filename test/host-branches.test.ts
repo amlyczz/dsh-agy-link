@@ -657,7 +657,9 @@ test('getStoredToken: disk token, corrupted file, and isolated-account short cir
     assert.equal(tok?.refreshToken, 'r1')
 
     writeFileSync(file, '{broken json')
-    assert.equal(await getStoredToken(deps, acc), null)
+    // Issue #102: valid backup repairs the corrupted file automatically
+    const repaired = await getStoredToken(deps, acc)
+    assert.equal(repaired?.refreshToken, 'r1')
 
     rmSync(file, { force: true })
     rmSync(file + '.bak', { force: true })

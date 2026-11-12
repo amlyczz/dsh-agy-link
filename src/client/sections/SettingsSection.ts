@@ -170,6 +170,139 @@ function renderHeader(
 	);
 }
 
+function renderTokenImportForm(
+	t: Translator,
+	auth: ReturnType<typeof useAuthFlow>,
+	pool: AccountPoolData | undefined,
+	isBusy: boolean,
+	loadingAction: string | null,
+): unknown {
+	return h('div', null,
+		h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' } },
+			h('textarea', {
+				style: { ...S.input, minHeight: '68px', resize: 'vertical', fontFamily: 'monospace', fontSize: '11px' },
+				value: auth.tokenInput,
+				placeholder: t('auth.tokenPlaceholder'),
+				'aria-label': t('auth.tokenPlaceholder'),
+				onChange: (e: { target: { value: string } }) => auth.setTokenInput(e.target.value),
+			}),
+			h('input', {
+				style: S.input,
+				value: auth.aliasInput,
+				placeholder: t('account.aliasPlaceholder'),
+				'aria-label': t('aria.aliasInput'),
+				onChange: (e: { target: { value: string } }) => auth.setAliasInput(e.target.value),
+			}),
+			h('input', {
+				style: S.input,
+				value: auth.addProxyInput,
+				placeholder: pool?.systemProxy ? `${t('account.proxyPlaceholder')} (${pool.systemProxy})` : t('account.proxyPlaceholder'),
+				'aria-label': t('aria.proxyInput'),
+				onChange: (e: { target: { value: string } }) => auth.setAddProxyInput(e.target.value),
+			}),
+		),
+		h('div', { style: { display: 'flex', gap: '8px' } },
+			h(Button, {
+				variant: 'primary', className: 'agy-btn',
+				style: { gap: '4px' },
+				disabled: isBusy || !auth.tokenInput.trim(),
+				onClick: () => void auth.handleImportToken(),
+			}, loadingAction === 'pool:importToken' ? [Spinner(), t('auth.importingToken')] : [uiIcon('arrowDown', 12, '#ffffff'), ` ${t('auth.importToken')}`]),
+			h(Button, {
+				variant: 'default', className: 'agy-btn',
+				onClick: () => void auth.handleCancelAddAccount(),
+			}, t('cancel')),
+		),
+	);
+}
+
+function renderBrowserOAuthForm(
+	t: Translator,
+	auth: ReturnType<typeof useAuthFlow>,
+	pool: AccountPoolData | undefined,
+	isBusy: boolean,
+	loadingAction: string | null,
+): unknown {
+	const { flowPhase, poolAuth } = auth;
+	return h('div', null,
+		h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' } },
+			h('input', {
+				style: S.input,
+				value: auth.aliasInput,
+				placeholder: t('account.aliasPlaceholder'),
+				'aria-label': t('aria.aliasInput'),
+				onChange: (e: { target: { value: string } }) => auth.setAliasInput(e.target.value),
+			}),
+			h('input', {
+				style: S.input,
+				value: auth.addProxyInput,
+				placeholder: pool?.systemProxy ? `${t('account.proxyPlaceholder')} (${pool.systemProxy})` : t('account.proxyPlaceholder'),
+				'aria-label': t('aria.proxyInput'),
+				onChange: (e: { target: { value: string } }) => auth.setAddProxyInput(e.target.value),
+			}),
+		),
+		h('div', { style: { display: 'flex', gap: '8px' } },
+			h(Button, {
+				variant: 'primary', className: 'agy-btn',
+				style: { gap: '4px' },
+				disabled: isBusy,
+				onClick: () => void auth.handleBeginAddAccount(),
+			}, loadingAction === 'pool:beginAdd' ? [Spinner(), t('auth.openingBrowser')] : [uiIcon('externalLink', 12, '#ffffff'), ` ${t('auth.openBrowser')}`]),
+			h(Button, {
+				variant: 'default', className: 'agy-btn',
+				onClick: () => void auth.handleCancelAddAccount(),
+			}, t('cancel')),
+		),
+		flowPhase === 'failed' ? h('div', {
+			style: { ...S.muted!, color: 'var(--agy-danger-text)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 },
+		}, uiIcon('alert', 12, 'var(--agy-danger-text)'), auth.safeMessage(poolAuth?.code)) : null,
+	);
+}
+
+function renderWaitingCodeForm(
+	t: Translator,
+	auth: ReturnType<typeof useAuthFlow>,
+	isBusy: boolean,
+	loadingAction: string | null,
+): unknown {
+	const { flowPhase, poolAuth } = auth;
+	return h('div', null,
+		h('div', { style: { display: 'flex', alignItems: 'center', color: 'var(--agy-text-secondary)', marginBottom: '8px', lineHeight: 1.5, fontSize: '12px' } },
+			Spinner(),
+			flowPhase === 'exchanging' ? t('auth.exchanging') : t('auth.waiting'),
+		),
+		poolAuth?.url ? h('div', { style: { marginBottom: '8px' } },
+			h('a', {
+				href: poolAuth.url,
+				target: '_blank',
+				style: { color: 'var(--dsw-alias-state-business-primary, #2563eb)', textDecoration: 'underline', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' },
+			}, uiIcon('externalLink', 12, 'currentColor'), t('auth.openManual')),
+		) : null,
+		h('div', { style: { color: 'var(--agy-text-tertiary)', marginBottom: '6px', fontSize: '11px', fontWeight: 500 } },
+			t('auth.pasteHint'),
+		),
+		h('div', { style: { display: 'flex', gap: '8px' } },
+			h('input', {
+				style: S.input,
+				value: auth.authCodeInput,
+				placeholder: t('auth.codePlaceholder'),
+				'aria-label': t('aria.authCodeInput'),
+				onChange: (e: { target: { value: string } }) => auth.setAuthCodeInput(e.target.value),
+			}),
+			h(Button, {
+				variant: 'primary', className: 'agy-btn',
+				style: { gap: '4px' },
+				disabled: isBusy || !auth.authCodeInput.trim(),
+				onClick: () => void auth.handleCompleteAddAccount(),
+			}, loadingAction === 'pool:completeAdd' ? [Spinner(), t('auth.activating')] : [uiIcon('check', 12, '#ffffff'), ` ${t('auth.activate')}`]),
+			h(Button, {
+				variant: 'default', className: 'agy-btn',
+				onClick: () => void auth.handleCancelAddAccount(),
+			}, t('cancel')),
+		),
+	);
+}
+
 function renderAddAccountSection(
 	t: Translator,
 	auth: ReturnType<typeof useAuthFlow>,
@@ -177,88 +310,35 @@ function renderAddAccountSection(
 	isBusy: boolean,
 	loadingAction: string | null,
 ): unknown {
-	const { addingAccount, flowActive, flowPhase, poolAuth } = auth;
-	return addingAccount
-		? h('div', { style: S.authModal, role: 'group', 'aria-label': t('account.add') },
-			h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' } },
-				h('div', { style: { fontWeight: 700, fontSize: '13.5px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--agy-text-primary)' } },
-					uiIcon('plus', 13, 'var(--agy-btn-primary-bg)'),
-					t('account.add'),
-				),
+	const { addingAccount, flowActive } = auth;
+	if (!addingAccount) return null;
+	return h('div', { style: S.authModal, role: 'group', 'aria-label': t('account.add') },
+		h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' } },
+			h('div', { style: { fontWeight: 700, fontSize: '13.5px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--agy-text-primary)' } },
+				uiIcon('plus', 13, 'var(--agy-btn-primary-bg)'),
+				t('account.add'),
 			),
-			(!flowActive
-				? h('div', null,
-					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' } },
-						h('input', {
-							style: S.input,
-							value: auth.aliasInput,
-							placeholder: t('account.aliasPlaceholder'),
-							'aria-label': t('aria.aliasInput'),
-							onChange: (e: { target: { value: string } }) => auth.setAliasInput(e.target.value),
-						}),
-						h('input', {
-							style: S.input,
-							value: auth.addProxyInput,
-							placeholder: pool?.systemProxy ? `${t('account.proxyPlaceholder')} (${pool.systemProxy})` : t('account.proxyPlaceholder'),
-							'aria-label': t('aria.proxyInput'),
-							onChange: (e: { target: { value: string } }) => auth.setAddProxyInput(e.target.value),
-						}),
-					),
-					h('div', { style: { display: 'flex', gap: '8px' } },
-						h(Button, {
-							variant: 'primary', className: 'agy-btn',
-							style: { gap: '4px' },
-							disabled: isBusy,
-							onClick: () => void auth.handleBeginAddAccount(),
-						}, loadingAction === 'pool:beginAdd' ? [Spinner(), t('auth.openingBrowser')] : [uiIcon('externalLink', 12, '#ffffff'), ` ${t('auth.openBrowser')}`]),
-						h(Button, {
-							variant: 'default', className: 'agy-btn',
-							onClick: () => void auth.handleCancelAddAccount(),
-						}, t('cancel')),
-					),
-					flowPhase === 'failed' ? h('div', {
-						style: { ...S.muted!, color: 'var(--agy-danger-text)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 },
-					}, uiIcon('alert', 12, 'var(--agy-danger-text)'), auth.safeMessage(poolAuth?.code)) : null,
-				)
-				: h('div', null,
-					h('div', { style: { display: 'flex', alignItems: 'center', color: 'var(--agy-text-secondary)', marginBottom: '8px', lineHeight: 1.5, fontSize: '12px' } },
-						Spinner(),
-						flowPhase === 'exchanging'
-							? t('auth.exchanging')
-							: t('auth.waiting'),
-					),
-					poolAuth?.url ? h('div', { style: { marginBottom: '8px' } },
-						h('a', {
-							href: poolAuth.url,
-							target: '_blank',
-							style: { color: 'var(--dsw-alias-state-business-primary, #2563eb)', textDecoration: 'underline', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' },
-						}, uiIcon('externalLink', 12, 'currentColor'), t('auth.openManual')),
-					) : null,
-					h('div', { style: { color: 'var(--agy-text-tertiary)', marginBottom: '6px', fontSize: '11px', fontWeight: 500 } },
-						t('auth.pasteHint'),
-					),
-					h('div', { style: { display: 'flex', gap: '8px' } },
-						h('input', {
-							style: S.input,
-							value: auth.authCodeInput,
-							placeholder: t('auth.codePlaceholder'),
-							'aria-label': t('aria.authCodeInput'),
-							onChange: (e: { target: { value: string } }) => auth.setAuthCodeInput(e.target.value),
-						}),
-						h(Button, {
-							variant: 'primary', className: 'agy-btn',
-							style: { gap: '4px' },
-							disabled: isBusy || !auth.authCodeInput.trim(),
-							onClick: () => void auth.handleCompleteAddAccount(),
-						}, loadingAction === 'pool:completeAdd' ? [Spinner(), t('auth.activating')] : [uiIcon('check', 12, '#ffffff'), ` ${t('auth.activate')}`]),
-						h(Button, {
-							variant: 'default', className: 'agy-btn',
-							onClick: () => void auth.handleCancelAddAccount(),
-						}, t('cancel')),
-					),
-				))
-		)
-		: null;
+			!flowActive ? h('div', { style: { display: 'flex', gap: '4px' } },
+				h(Button, {
+					variant: !auth.importMode ? 'primary' : 'default',
+					size: 'sm', className: 'agy-btn',
+					style: { height: '22px', fontSize: '11px', padding: '1px 8px' },
+					onClick: () => auth.setImportMode(false),
+				}, t('auth.browserTab')),
+				h(Button, {
+					variant: auth.importMode ? 'primary' : 'default',
+					size: 'sm', className: 'agy-btn',
+					style: { height: '22px', fontSize: '11px', padding: '1px 8px' },
+					onClick: () => auth.setImportMode(true),
+				}, t('auth.tokenTab')),
+			) : null,
+		),
+		!flowActive
+			? (auth.importMode
+				? renderTokenImportForm(t, auth, pool, isBusy, loadingAction)
+				: renderBrowserOAuthForm(t, auth, pool, isBusy, loadingAction))
+			: renderWaitingCodeForm(t, auth, isBusy, loadingAction),
+	);
 }
 
 function segGroup(children: unknown[]): unknown {

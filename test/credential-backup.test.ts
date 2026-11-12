@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readAccountCredential, saveCredentialBackup } from '../src/host/credential-backup.ts'
+import { extractRefreshToken, readAccountCredential, saveCredentialBackup } from '../src/host/credential-backup.ts'
 
 const token = (refresh: string, access = 'access') =>
   JSON.stringify({ token: { refresh_token: refresh, access_token: access } })
@@ -40,15 +40,21 @@ test('backs up, preserves and restores an isolated credential when deleted', () 
   }
 })
 
-test('does not restore over an existing file or use a malformed backup', () => {
+test('restores valid backup over a broken/empty file and rejects malformed backup (issue #102)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-backup-invalid-'))
   const file = join(dir, 'token')
   try {
     writeFileSync(file + '.bak', token('grant'))
     writeFileSync(file, 'broken')
-    // Existing file is preserved
-    assert.equal(readAccountCredential(file), 'broken')
+    // Broken file lacking refresh token is repaired from valid backup
+    assert.equal(readAccountCredential(file), token('grant'))
+    assert.equal(readFileSync(file, 'utf8'), token('grant'))
     assert.equal(readFileSync(file + '.bak', 'utf8'), token('grant'))
+
+    // Valid file with a different grant is NOT overwritten
+    writeFileSync(file, token('grant2'))
+    assert.equal(readAccountCredential(file), token('grant2'))
+    assert.equal(readFileSync(file, 'utf8'), token('grant2'))
 
     unlinkSync(file)
     // Backup without a refresh token is not restored
@@ -58,4 +64,24 @@ test('does not restore over an existing file or use a malformed backup', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('extractRefreshToken handles raw tokens, full json, and quoted strings', () => {
+  assert.equal(extractRefreshToken('1//04abcdef'), '1//04abcdef')
+  assert.equal(extractRefreshToken('  "1//04abcdef"  '), '1//04abcdef')
+  assert.equal(
+    extractRefreshToken(JSON.stringify({ token: { refresh_token: '1//nested-tok' } })),
+    '1//nested-tok',
+  )
+  assert.equal(
+    extractRefreshToken(JSON.stringify({ refresh_token: '1//flat-tok' })),
+    '1//flat-tok',
+  )
+  assert.equal(
+    extractRefreshToken('{"token":{"refreshToken":"1//camel-tok"}}'),
+    '1//camel-tok',
+  )
+  assert.equal(extractRefreshToken(''), null)
+  assert.equal(extractRefreshToken('   '), null)
+  assert.equal(extractRefreshToken(null as any), null)
 })

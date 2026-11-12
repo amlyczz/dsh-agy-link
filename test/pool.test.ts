@@ -921,3 +921,35 @@ test('onAccountSwitch callback is invoked when active, primary, or advanced acco
   pool.advanceAccount(secondary.id, 'google')
   assert.ok(switches.length >= 2)
 })
+
+test('setActiveAccount clears activeAccountIds.argon when target account has no argon', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-argon-'))
+  const pool = new AccountPoolManager(dir)
+  const accWithArgon = pool.createAccountSlot('Argon User')
+  const accWithoutArgon = pool.createAccountSlot('Standard User')
+
+  // accWithArgon has argon quota
+  pool.updateAccountQuotas(accWithArgon.id, {
+    google: { remainingFraction: 1 },
+    argon: { remainingFraction: 1 },
+  })
+  // accWithoutArgon only has google quota
+  pool.updateAccountQuotas(accWithoutArgon.id, {
+    google: { remainingFraction: 1 },
+    anthropic: { remainingFraction: 1 },
+  })
+
+  // Activating accWithArgon sets both google and argon
+  pool.setActiveAccount(accWithArgon.id)
+  assert.equal(pool.getActiveAccountId('argon'), accWithArgon.id)
+  assert.equal(pool.getActiveAccountId('google'), accWithArgon.id)
+
+  // Switching active account to accWithoutArgon removes argon pin
+  pool.setActiveAccount(accWithoutArgon.id)
+  assert.equal(pool.getActiveAccountId('google'), accWithoutArgon.id)
+  // Since accWithoutArgon lacks argon, argon pin was removed and selectAccount routes to accWithArgon for argon requests
+  assert.equal(pool.getActiveAccountId('argon'), accWithArgon.id)
+  // And pool data activeAccountIds does not falsely point argon to accWithoutArgon
+  const data = pool.getPoolData()
+  assert.notEqual(data.activeAccountIds?.argon, accWithoutArgon.id)
+})

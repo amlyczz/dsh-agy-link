@@ -58,6 +58,7 @@ export const HELP = [
   '- `/agy auth [id|alias|email]` — login to the primary or reauthenticate an existing account',
   '- `/agy auth-status` — check the current or most recent login result',
   '- `/agy auth-code <code>` — finish login by pasting the code (fallback)',
+  '- `/agy import <refresh_token_or_json> [alias]` — import account via refresh token or token JSON',
   '- `/agy models` — refresh and list discovered models',
   '- `/agy mode <skip|plan|accept-edits>` — permission mode (next turn)',
   '- `/agy effort <low|medium|high|default>` — default reasoning effort',

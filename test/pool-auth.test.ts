@@ -178,3 +178,71 @@ test('cancelled reauthentication never deletes the existing account or commits a
   assert.equal(existsSync(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')), false)
   assert.equal(flow.status().phase, 'idle')
 })
+
+test('importRefreshToken adds a new account to pool and writes token + backup', async () => {
+  const { pool, quota } = fixture()
+  let notified = false
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    refreshTokens: async (rt) => ({ access_token: 'acc_' + rt, refresh_token: rt }),
+    fetchUserEmail: async () => 'imported@example.com',
+    onUpdate: () => { notified = true },
+  })
+
+  const res = await flow.importRefreshToken('1//my-fresh-refresh-token', 'Imported Alias')
+  assert.equal(res.ok, true)
+  assert.equal(res.isNew, true)
+  assert.equal(res.email, 'imported@example.com')
+  assert.equal(notified, true)
+
+  const acc = pool.getAccounts().find((a) => a.email === 'imported@example.com')
+  assert.ok(acc)
+  assert.equal(acc.alias, 'Imported Alias')
+  const tokenFile = join(acc.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+  assert.equal(existsSync(tokenFile), true)
+  assert.equal(existsSync(tokenFile + '.bak'), true)
+})
+
+test('importRefreshToken updates existing account in place and clears authRequired / cooldowns', async () => {
+  const { pool, quota } = fixture()
+  const existing = pool.createAccountSlot('Existing Slot')
+  pool.updateAccountQuotas(existing.id, {}, 'existing@example.com')
+  pool.markAuthRequired(existing.id, 'credential missing')
+  pool.recordFailure(existing.id, 'google', 'rate limit test')
+  assert.equal(existing.authRequired, true)
+
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    refreshTokens: async (rt) => ({ access_token: 'acc_' + rt, refresh_token: rt }),
+    fetchUserEmail: async () => 'EXISTING@example.com',
+  })
+
+  const tokenJson = JSON.stringify({
+    token: { refresh_token: '1//updated-token' },
+    auth_method: 'consumer',
+  })
+  const res = await flow.importRefreshToken(tokenJson, 'Updated Alias')
+  assert.equal(res.ok, true)
+  assert.equal(res.isNew, false)
+  assert.equal(res.account?.id, existing.id)
+
+  const updated = pool.getAccount(existing.id)!
+  assert.equal(updated.alias, 'Updated Alias')
+  assert.equal(updated.authRequired, undefined)
+  assert.equal(Object.keys(updated.cooldowns ?? {}).length, 0)
+  const tokenFile = join(updated.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+  assert.equal(existsSync(tokenFile), true)
+})
+
+test('importRefreshToken rejects empty/invalid input or failed token exchange', async () => {
+  const { pool, quota } = fixture()
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    refreshTokens: async () => { throw new Error('invalid_grant: Token has been expired or revoked') },
+    fetchUserEmail: async () => 'bad@example.com',
+  })
+
+  const invalid = await flow.importRefreshToken('')
+  assert.equal(invalid.ok, false)
+
+  const failed = await flow.importRefreshToken('1//revoked-token')
+  assert.equal(failed.ok, false)
+  assert.ok(failed.error?.includes('invalid_grant'))
+})

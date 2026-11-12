@@ -25,7 +25,7 @@ export const COMMAND_REGISTRY: readonly CommandEntry[] = [
     ],
     handle: handlePool,
   },
-  { subs: ['auth', 'auth-status', 'auth-code'], handle: handleAuth },
+  { subs: ['auth', 'auth-status', 'auth-code', 'import', 'import-token'], handle: handleAuth },
   { subs: ['models'], handle: handleModels },
   {
     subs: [

@@ -20,15 +20,17 @@ import {
   generatePkce,
   openBrowser,
   parsePastedCode,
+  refreshTokens,
   startCallbackListener,
   writeAgyTokenFile,
   type CallbackHandle,
 } from './oauth.ts'
+import type { ManagedAccount } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import type { QuotaService } from './quota.ts'
 import { detectSystemProxy, writeWindowsCredentialRaw } from './wincred.ts'
 import { writePrimaryCredential } from './credential-slot.ts'
-import { saveCredentialBackup } from './credential-backup.ts'
+import { extractRefreshToken, saveCredentialBackup } from './credential-backup.ts'
 
 export type PoolAuthPhase = 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed'
 export type PoolAuthStatusCode =
@@ -79,6 +81,8 @@ export interface PoolAuthFlowDeps {
   openBrowser?: (url: string) => Promise<boolean>
   exchangeCode?: typeof exchangeCode
   fetchUserEmail?: typeof fetchUserEmail
+  refreshTokens?: typeof refreshTokens
+  onUpdate?: () => void
 }
 
 export class PoolAuthFlow {
@@ -88,6 +92,8 @@ export class PoolAuthFlow {
   private readonly open: (url: string) => Promise<boolean>
   private readonly exchange: typeof exchangeCode
   private readonly userEmail: typeof fetchUserEmail
+  private readonly refresh: typeof refreshTokens
+  private readonly onUpdate?: () => void
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -98,6 +104,8 @@ export class PoolAuthFlow {
     this.open = deps.openBrowser ?? openBrowser
     this.exchange = deps.exchangeCode ?? exchangeCode
     this.userEmail = deps.fetchUserEmail ?? fetchUserEmail
+    this.refresh = deps.refreshTokens ?? refreshTokens
+    this.onUpdate = deps.onUpdate
   }
 
   status(): PoolAuthStatus {
@@ -203,6 +211,100 @@ export class PoolAuthFlow {
       stagingId: staging.id, dir: staging.dir, accountId, alias: account.alias,
       proxyUrl: account.proxyUrl || proxyUrl || detectSystemProxy(),
     })
+  }
+
+  /**
+   * Import an account using an existing refresh_token or OAuth token JSON document.
+   * If an account with matching email exists, its credential file is updated in place
+   * and any authRequired flag / cooldowns are cleared.
+   * If it is a new account, a staging slot is committed to pool.json.
+   */
+  async importRefreshToken(
+    tokenInput: string,
+    alias?: string,
+    proxyUrl?: string,
+  ): Promise<{
+    ok: boolean
+    account?: ManagedAccount
+    isNew?: boolean
+    email?: string
+    error?: string
+    code?: PoolAuthStatusCode
+  }> {
+    const refreshToken = extractRefreshToken(tokenInput)
+    if (!refreshToken) {
+      return { ok: false, error: 'Invalid refresh token or token JSON format', code: 'invalid_code' }
+    }
+    await this.abortActive()
+    this.setStatus({ phase: 'exchanging' })
+    try {
+      const tokens = await this.refresh(refreshToken, proxyUrl)
+      if (!tokens?.access_token) {
+        this.fail('exchange_failed', new Error('Token endpoint did not return an access token'))
+        return { ok: false, error: 'Failed to exchange refresh token', code: 'exchange_failed' }
+      }
+      const email = await this.userEmail(tokens.access_token, proxyUrl)
+      const normalizedEmail = email?.toLowerCase()
+
+      const existing = normalizedEmail
+        ? this.pool.getAccounts().find((a) => a.email?.toLowerCase() === normalizedEmail)
+        : undefined
+
+      if (existing) {
+        if (existing.dir && !existing.systemHome) {
+          const stagedFile = writeAgyTokenFile(existing.dir, tokens)
+          saveCredentialBackup(stagedFile)
+        } else if (process.platform === 'win32') {
+          try {
+            const docStr = JSON.stringify({
+              token: {
+                access_token: tokens.access_token,
+                token_type: tokens.token_type ?? 'Bearer',
+                refresh_token: tokens.refresh_token,
+              },
+              auth_method: 'consumer',
+            })
+            writeWindowsCredentialRaw(docStr, 'gemini:antigravity')
+            writePrimaryCredential({ raw: docStr, email, savedAt: Date.now() })
+          } catch {
+            // best effort
+          }
+        }
+        if (alias?.trim()) {
+          this.pool.setAccountAlias(existing.id, alias.trim())
+        }
+        if (proxyUrl?.trim()) {
+          this.pool.setAccountProxy(existing.id, proxyUrl.trim())
+        }
+        this.pool.clearAuthRequired(existing.id)
+        this.pool.clearCooldown(existing.id, undefined, true)
+        this.pool.updateAccountQuotas(existing.id, existing.quotas ?? {}, email)
+        void this.quota.refreshAccountQuota(existing).catch(() => undefined)
+        this.log(`imported refresh token for existing account ${existing.id}${email ? ` <${email}>` : ''}`)
+        this.setStatus({ phase: 'done', alias: existing.alias || email, code: 'account_activated' })
+        this.onUpdate?.()
+        return { ok: true, account: existing, isNew: false, email }
+      }
+
+      // New account: create staging slot -> write token -> commit
+      const staging = this.pool.createStagingSlot()
+      writeAgyTokenFile(staging.dir, tokens)
+      const targetAcc = this.pool.commitStagingAccount(staging.id, staging.dir, alias, email, proxyUrl)
+      const accountFile = join(targetAcc.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+      saveCredentialBackup(accountFile)
+      void this.quota.refreshAccountQuota(targetAcc).catch(() => undefined)
+      this.log(`imported refresh token as new account ${targetAcc.id}${email ? ` <${email}>` : ''}`)
+      this.setStatus({ phase: 'done', alias: targetAcc.alias || email, code: 'account_activated' })
+      this.onUpdate?.()
+      return { ok: true, account: targetAcc, isNew: true, email }
+    } catch (err) {
+      this.fail('exchange_failed', err)
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        code: 'exchange_failed',
+      }
+    }
   }
 
   /** Manual paste fallback: accepts a bare code or the full redirect URL. */

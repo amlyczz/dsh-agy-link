@@ -288,7 +288,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   }
 
   const auth = new AuthHelper(bin, () => getConfig().suppressAgyAutoUpdate)
-  const poolAuth = new PoolAuthFlow(pool, quota, log)
+  const poolAuth = new PoolAuthFlow(pool, quota, log, { onUpdate: notifyPicker })
   const runs = new RunRegistry()
 
   const webServerPort: { current?: number } = {}
@@ -566,36 +566,12 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   const bridgeState: { bridge: McpBridge | null; restores: Array<() => void> } = { bridge: null, restores: [] }
 
   return {
-    getConfig,
-    log,
-    notifyPicker,
-    bin,
-    version,
-    status,
-    store,
-    pool,
-    quota,
-    warmup,
-    catalog,
-    auth,
-    poolAuth,
-    runs,
-    adapter,
-    translation,
-    setOverride,
-    readEffortUnsupported,
-    rememberEffortUnsupported,
-    sessionsSvc,
-    sessionAuto,
-    get lastRun() {
-      return lastRun
-    },
-    get lastParser() {
-      return lastParser
-    },
-    mediaDir,
-    bridgeState,
-    webServerPort,
+    getConfig, log, notifyPicker, bin, version, status, store, pool, quota, warmup,
+    catalog, auth, poolAuth, runs, adapter, translation, setOverride,
+    readEffortUnsupported, rememberEffortUnsupported, sessionsSvc, sessionAuto,
+    get lastRun() { return lastRun },
+    get lastParser() { return lastParser },
+    mediaDir, bridgeState, webServerPort,
     // Filled in by the composition root (index.ts): the deployment-layout
     // anchor the media routes resolve mermaid/assets against, and the hook that
     // re-syncs the ask/mirror tools after a config write.

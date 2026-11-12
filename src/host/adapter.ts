@@ -187,19 +187,7 @@ export class AgyAdapter extends LlmAdapter {
   }
 
   /** Build the agy argv for one call. Exported for tests. */
-  buildArgs(opts: {
-    prompt: string
-    model: string
-    effort?: string
-    conversationId?: string
-    permissionMode: PluginConfig['permissionMode']
-    timeoutMs: number
-    extraArgs: readonly string[]
-    addDirs?: readonly string[]
-    printTimeoutMinutes?: number
-    /** Omit `-p <prompt>` and add `--input-format stream-json` (prompt rides stdin). */
-    promptViaStdin?: boolean
-  }): string[] {
+  buildArgs(opts: Parameters<typeof buildAgyArgs>[0]): string[] {
     return buildAgyArgs(opts)
   }
 

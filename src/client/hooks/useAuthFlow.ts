@@ -20,31 +20,48 @@ export interface AuthFlowDeps {
 export interface AuthFlow {
 	addingAccount: boolean;
 	setAddingAccount: (value: boolean) => void;
+	importMode: boolean;
+	setImportMode: (value: boolean) => void;
 	aliasInput: string;
 	setAliasInput: (value: string) => void;
 	addProxyInput: string;
 	setAddProxyInput: (value: string) => void;
 	authCodeInput: string;
 	setAuthCodeInput: (value: string) => void;
+	tokenInput: string;
+	setTokenInput: (value: string) => void;
 	safeMessage: (code?: string) => string;
 	handleBeginAddAccount: () => Promise<void>;
 	handleCompleteAddAccount: () => Promise<void>;
 	handleCancelAddAccount: () => Promise<void>;
+	handleImportToken: () => Promise<void>;
 	poolAuth: StatusPayload['poolAuth'] | undefined;
 	flowPhase: 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed';
 	flowActive: boolean;
 }
 
+function toSafeMessage(t: Translator, code?: string): string {
+	const key = `auth.code.${code ?? ''}` as AgyLocaleKey;
+	return code && key in en ? t(key) : t('api.genericError');
+}
+
 export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }: AuthFlowDeps): AuthFlow {
 	const [aliasInput, setAliasInput] = useState('');
 	const [addingAccount, setAddingAccount] = useState(false);
+	const [importMode, setImportMode] = useState(false);
 	const [authCodeInput, setAuthCodeInput] = useState('');
 	const [addProxyInput, setAddProxyInput] = useState('');
+	const [tokenInput, setTokenInput] = useState('');
 	const flowStartedRef = useRef(false);
 
-	const safeMessage = (code?: string): string => {
-		const key = `auth.code.${code ?? ''}` as AgyLocaleKey;
-		return code && key in en ? t(key) : t('api.genericError');
+	const safeMessage = (code?: string): string => toSafeMessage(t, code);
+
+	const resetForm = () => {
+		setAuthCodeInput('');
+		setAliasInput('');
+		setAddProxyInput('');
+		setTokenInput('');
+		setImportMode(false);
 	};
 
 	useEffect(() => {
@@ -54,9 +71,7 @@ export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }:
 		if (pa.phase === 'done') {
 			flowStartedRef.current = false;
 			setAddingAccount(false);
-			setAuthCodeInput('');
-			setAliasInput('');
-			setAddProxyInput('');
+			resetForm();
 			showToast(safeMessage(pa.code), 'success');
 		} else if (pa.phase === 'failed') {
 			flowStartedRef.current = false;
@@ -77,11 +92,7 @@ export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }:
 		if (res && res.ok) {
 			flowStartedRef.current = true;
 			await refresh();
-			if (res.browserOpened) {
-				showToast(t('auth.browserOpened'), 'info');
-			} else {
-				showToast(t('auth.browserManual'), 'warn');
-			}
+			showToast(res.browserOpened ? t('auth.browserOpened') : t('auth.browserManual'), res.browserOpened ? 'info' : 'warn');
 		} else {
 			showToast(res?.code ? safeMessage(res.code) : t('auth.startFailed'), 'error');
 		}
@@ -94,9 +105,7 @@ export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }:
 		setLoadingAction(null);
 		if (res && res.ok) {
 			flowStartedRef.current = false;
-			setAuthCodeInput('');
-			setAliasInput('');
-			setAddProxyInput('');
+			resetForm();
 			setAddingAccount(false);
 			await refresh();
 			showToast(safeMessage(res.code), 'success');
@@ -108,32 +117,39 @@ export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }:
 	const handleCancelAddAccount = async (): Promise<void> => {
 		flowStartedRef.current = false;
 		await postPool('cancel-add', {});
-		setAuthCodeInput('');
-		setAliasInput('');
-		setAddProxyInput('');
+		resetForm();
 		setAddingAccount(false);
 		await refresh();
 	};
 
+	const handleImportToken = async (): Promise<void> => {
+		if (!tokenInput.trim()) return;
+		setLoadingAction('pool:importToken');
+		const res = await postPool('import', {
+			token: tokenInput.trim(),
+			...(aliasInput.trim() ? { alias: aliasInput.trim() } : {}),
+			...(addProxyInput.trim() ? { proxyUrl: addProxyInput.trim() } : {}),
+		});
+		setLoadingAction(null);
+		if (res && res.ok) {
+			resetForm();
+			setAddingAccount(false);
+			await refresh();
+			showToast(`${t('auth.importSuccess')}${res.email ? ` (${res.email})` : ''}`, 'success');
+		} else {
+			showToast(res?.error ? `${t('auth.importFailed')}: ${res.error}` : t('auth.importFailed'), 'error');
+		}
+	};
+
 	const poolAuth = status?.poolAuth;
 	const flowPhase = poolAuth?.phase ?? 'idle';
-	const flowActive = flowPhase === 'waiting' || flowPhase === 'exchanging';
 
 	return {
-		addingAccount,
-		setAddingAccount,
-		aliasInput,
-		setAliasInput,
-		addProxyInput,
-		setAddProxyInput,
-		authCodeInput,
-		setAuthCodeInput,
-		safeMessage,
-		handleBeginAddAccount,
-		handleCompleteAddAccount,
-		handleCancelAddAccount,
-		poolAuth,
-		flowPhase,
-		flowActive,
+		addingAccount, setAddingAccount, importMode, setImportMode,
+		aliasInput, setAliasInput, addProxyInput, setAddProxyInput,
+		authCodeInput, setAuthCodeInput, tokenInput, setTokenInput,
+		safeMessage, handleBeginAddAccount, handleCompleteAddAccount,
+		handleCancelAddAccount, handleImportToken,
+		poolAuth, flowPhase, flowActive: flowPhase === 'waiting' || flowPhase === 'exchanging',
 	};
 }

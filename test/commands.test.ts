@@ -207,3 +207,37 @@ test('agy session commands inspect and drop conversation bindings', async () => 
   assert.equal(storeData['session-xyz'], undefined)
 })
 
+test('agy import subcommand parses token and alias and calls poolAuth.importRefreshToken', async () => {
+  let importedToken = ''
+  let importedAlias: string | undefined
+  const flow = {
+    importRefreshToken: async (token: string, alias?: string) => {
+      importedToken = token
+      importedAlias = alias
+      return { ok: true, isNew: true, email: 'cli@example.com', account: { alias: alias || 'cli@example.com' } }
+    },
+  }
+  const def = agyCommandDefinition({
+    ...baseDeps,
+    store: () => ({ clear: () => {} }),
+    poolAuth: () => flow,
+  } as never)
+
+  // Empty input returns usage
+  const emptyRes = await def.handler({ rawInput: 'import' } as never)
+  assert.match(emptyRes.text ?? '', /用法|Usage/)
+
+  // Raw token + alias
+  const res = await def.handler({ rawInput: 'import 1//my-token My CLI Account' } as never)
+  assert.equal(importedToken, '1//my-token')
+  assert.equal(importedAlias, 'My CLI Account')
+  assert.match(res.text ?? '', /成功导入凭据/)
+
+  // JSON token input
+  const jsonToken = '{"token":{"refresh_token":"1//json-tok"}}'
+  const jsonRes = await def.handler({ rawInput: `import ${jsonToken} JSON Account` } as never)
+  assert.equal(importedToken, jsonToken)
+  assert.equal(importedAlias, 'JSON Account')
+  assert.match(jsonRes.text ?? '', /成功导入凭据/)
+})
+

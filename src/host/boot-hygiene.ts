@@ -43,6 +43,9 @@ export function runBootHygiene(services: HostServices): void {
       if (!token && !acc.authRequired) {
         pool.markAuthRequired?.(acc.id, 'credential file is missing or corrupted')
         log(`account ${acc.alias || acc.id} has no valid credential file; marked as auth_required`)
+      } else if (token && acc.authRequired && (acc.authError?.includes('credential file') || acc.authError?.includes('stored credential'))) {
+        pool.clearAuthRequired?.(acc.id)
+        log(`account ${acc.alias || acc.id} credential restored; cleared auth_required flag`)
       }
     }
   }

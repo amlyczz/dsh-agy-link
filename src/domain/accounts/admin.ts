@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import {
   AUTH_CONFIRM_STRIKES,
+  accountHasArgon,
   type AccountPoolData,
   type ManagedAccount,
   type ModelFamily,
@@ -247,6 +248,11 @@ export class PoolAdmin {
     if (!data.activeAccountIds) data.activeAccountIds = {}
     data.activeAccountIds[family] = id
     data.lastActiveAccountId = id
+    if (!accountHasArgon(acc, this.deps.pool)) {
+      delete data.activeAccountIds.argon
+    } else {
+      data.activeAccountIds.argon = id
+    }
     this.deps.persist()
     return true
   }
@@ -477,6 +483,13 @@ export class PoolAdmin {
   getActiveAccountId(family: ModelFamily = 'google', model?: string): string | undefined {
     const data = this.deps.getData()
     const now = Date.now()
+    const pinnedId = data.activeAccountIds?.[family]
+    if (pinnedId) {
+      const pinned = data.accounts.find((a) => a.id === pinnedId)
+      if (pinned && isAccountEligible(pinned, family, now, this.deps.pool, model)) {
+        return pinned.id
+      }
+    }
     if (data.lastActiveAccountId) {
       const active = data.accounts.find((a) => a.id === data.lastActiveAccountId)
       if (active && isAccountEligible(active, family, now, this.deps.pool, model)) {

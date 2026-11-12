@@ -327,11 +327,47 @@ function handlePoolReorder(services: HostServices, req: unknown, res: unknown): 
       })()
 }
 
+function handlePoolImport(services: HostServices, req: unknown, res: unknown): void {
+  const { poolAuth, pool, notifyPicker } = services
+  void (async () => {
+    if (methodOf(req) !== 'POST') {
+      sendJson(res as RawRes, 405, { error: 'POST only' })
+      return
+    }
+    const body = await readBody(req)
+    const token = typeof body.token === 'string' ? body.token.trim() : ''
+    const alias = typeof body.alias === 'string' ? body.alias.trim() : undefined
+    const proxyUrl = typeof body.proxyUrl === 'string' ? body.proxyUrl.trim() : undefined
+    if (!token) {
+      sendJson(res as RawRes, 400, { ok: false, error: 'Token is required' })
+      return
+    }
+    const result = await poolAuth.importRefreshToken(token, alias, proxyUrl)
+    if (result.ok) {
+      notifyPicker()
+      sendJson(res as RawRes, 200, {
+        ok: true,
+        account: result.account,
+        isNew: result.isNew,
+        email: result.email,
+        pool: pool.getPoolData(),
+      })
+    } else {
+      sendJson(res as RawRes, 400, {
+        ok: false,
+        error: result.error || 'Import failed',
+        code: result.code,
+      })
+    }
+  })()
+}
+
 export function register(reg: RouteRegistrar, services: HostServices): void {
   reg({ kind: 'exact', path: '/plugins/agy-link/pool', handler: (req, res) => handlePoolList(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/begin-add', handler: (req, res) => handlePoolBeginAdd(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/complete-add', handler: (req, res) => handlePoolCompleteAdd(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/cancel-add', handler: (req, res) => handlePoolCancelAdd(services, req, res) })
+  reg({ kind: 'exact', path: '/plugins/agy-link/pool/import', handler: (req, res) => handlePoolImport(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/add', handler: (req, res) => handlePoolAdd(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/open-terminal', handler: (req, res) => handlePoolOpenTerminal(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/remove', handler: (req, res) => handlePoolRemove(services, req, res) })

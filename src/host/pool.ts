@@ -101,11 +101,8 @@ export class AccountPoolManager {
   }
 
   markModelUnsupported(accountId: string, model: string): void {
-    let set = this.unsupportedModels.get(accountId)
-    if (!set) {
-      set = new Set()
-      this.unsupportedModels.set(accountId, set)
-    }
+    const set = this.unsupportedModels.get(accountId) ?? new Set()
+    this.unsupportedModels.set(accountId, set)
     set.add(baseModelSlug(model))
   }
 
@@ -518,10 +515,14 @@ export class AccountPoolManager {
       const sorted = candidates.slice().sort((a, b) => (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0))
       const picked = sorted[0] ?? null
       if (picked) {
+        const prevId = this.data.activeAccountIds?.[family]
         if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
         this.data.activeAccountIds[family] = picked.id
         this.data.lastActiveAccountId = picked.id
         this.persist()
+        if (prevId && prevId !== picked.id) {
+          this.onAccountSwitch?.(picked.id, family)
+        }
       }
       return picked
     }
@@ -549,6 +550,9 @@ export class AccountPoolManager {
     this.data.activeAccountIds[family] = nextAccount.id
     this.data.lastActiveAccountId = nextAccount.id
     this.persist()
+    if (activeId && activeId !== nextAccount.id) {
+      this.onAccountSwitch?.(nextAccount.id, family)
+    }
     return nextAccount
   }
 
@@ -559,10 +563,8 @@ export class AccountPoolManager {
     for (const acc of this.data.accounts) {
       if (!acc.enabled) continue
       const cd = acc.cooldowns?.[family]
-      if (cd && cd.cooldownUntil > now) {
-        if (earliest === null || cd.cooldownUntil < earliest) {
-          earliest = cd.cooldownUntil
-        }
+      if (cd && cd.cooldownUntil > now && (earliest === null || cd.cooldownUntil < earliest)) {
+        earliest = cd.cooldownUntil
       }
     }
     return earliest !== null ? Math.max(0, earliest - now) : null
@@ -571,12 +573,6 @@ export class AccountPoolManager {
   /**
    * Earliest moment ANY enabled account could serve `family` again: the sooner
    * of a cooldown expiry and a quota-window reset.
-   *
-   * `getEarliestResetCountdown` only inspects cooldowns, while an account can
-   * be excluded by its remaining 5h/weekly fraction (isAccountEligible) — so a
-   * fully quota-drained pool reported NO wait at all ("Add an account or wait
-   * for reset") even though every account knew exactly when it resets. Signed
-   * out and disabled accounts are skipped: no countdown can fix them.
    */
   getEarliestAvailableCountdown(family: ModelFamily): number | null {
     const now = Date.now()
@@ -591,8 +587,6 @@ export class AccountPoolManager {
       if (cd && cd.cooldownUntil > now) bump(cd.cooldownUntil)
       const quota = acc.quotas?.[family]
       if (quota === undefined) continue
-      // An overridden snapshot has no enforceable reset yet: the gate is off
-      // until a poll writes fresher data.
       const clearedAt = acc.quotaGateClearedAt?.[family]
       if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) continue
       const drained5h = typeof quota.remainingFraction === 'number' && quota.remainingFraction <= LOW_QUOTA_5H
