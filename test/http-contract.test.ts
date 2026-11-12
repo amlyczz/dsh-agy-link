@@ -61,6 +61,7 @@ const EXPECTED_ROUTES: ReadonlyArray<readonly [kind: string, path: string]> = [
   ['exact', '/plugins/agy-link/translate/state'],
   ['exact', '/plugins/agy-link/qr'],
   ['exact', '/plugins/agy-link/media'],
+  ['exact', '/plugins/agy-link/open'],
   ['prefix', '/plugins/agy-link/assets'],
 ]
 
@@ -438,8 +439,8 @@ test('every POST-only route rejects GET/PUT/DELETE with 405 before touching serv
       assert.deepEqual(captured.json(), { error: 'POST only' }, path + ' ' + method)
     }
   }
-  // 20 POST-only + 9 method-agnostic routes = the frozen 29.
-  assert.equal(POST_ONLY_ROUTES.length + 9, EXPECTED_ROUTES.length)
+  // 21 POST-only + 10 method-agnostic routes = 31 routes total.
+  assert.equal(POST_ONLY_ROUTES.length + 10, EXPECTED_ROUTES.length)
 })
 
 test('GET-style routes do not gate on method (current contract, asserted verbatim)', async (t) => {
@@ -456,6 +457,7 @@ test('GET-style routes do not gate on method (current contract, asserted verbati
     ['/plugins/agy-link/qr', '/', 404],
     ['/plugins/agy-link/mermaid.min.js', '/', 404],
     ['/plugins/agy-link/media', '/', 400],
+    ['/plugins/agy-link/open', '/', 400],
     ['/plugins/agy-link/assets', '/plugins/agy-link/assets/none.js', 404],
   ]
   for (const [path, url, expected] of cases) {

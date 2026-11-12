@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.20 (2026-11-12)
+
+### English
+
+- **Fix(client, media): clickable local file links, video playback, and redesigned modern glassmorphic lightbox.**
+  - **Clickable local links in DSH**: Intercept clicks on `file://` and local relative file links (`.png`, `.mp4`, `.md`, `.txt`, `.pdf`, etc.) so clicking them in DSH chat never triggers Chromium's blocked "Not allowed to load local resource" error or 404 page navigation. Images and videos open in the built-in Lightbox preview, while documents and code open in the host OS default editor or reveal in Finder/Explorer with toast feedback.
+  - **Video streaming & Range 206 support**: Added video MIME mappings (`.mp4`, `.webm`, `.mov`, `.mkv`) and HTTP 206 Partial Content Range streaming to `/plugins/agy-link/media`. Videos render in Lightbox with smooth playback controls and timeline scrubbing.
+  - **Deep project media resolution**: `resolveLocalMediaPath` now inspects active DSH session working directories (`header.cwd`) and performs bounded recursive searching (up to depth 3) across project subfolders, resolving nested assets (e.g. `tmp/master_continuous/master_montage_6panel.png` and `eren_rumbling_master_78s.mp4`) and preventing 404 black screens.
+  - **Host OS file opener endpoint**: Added `/plugins/agy-link/open` route with native OS launchers (`open` / `open -R` on macOS, `explorer` / `start` on Windows, `xdg-open` on Linux).
+  - **Modern preview redesign**: Redesigned Lightbox and link chips into sleek Apple/Linear-style glassmorphism with a floating pill toolbar, crisp vector SVG icons (Zoom in/out, 1:1, Reveal in Finder, Open in default app, Copy path with checkmark animation, Close), and elegant toast notifications.
+
+### 中文
+
+- **修复(客户端与媒体)：支持 DSH 对话内直接点击本地文件链接、视频播放、深度路径解析与全新现代化毛玻璃预览 UI。**
+  - **DSH 对话内链接直接点击可用**：拦截 `file://` 与本地文件链接（`.png`、`.mp4`、`.md`、`.txt`、`.pdf` 等）的点击事件，彻底解决 Chromium 浏览器安全限制阻止访问 `file:///`（"Not allowed to load local resource"）或相对路径 404 导致的链接无法点击问题。点击图片/视频直接拉起应用内预览，点击文档/代码直接在系统默认编辑器中打开或在访达/资源管理器中定位，并带有 Toast 提示反馈。
+  - **视频播放与 HTTP 206 Range 边下边播**：`/plugins/agy-link/media` 路由新增对视频格式（`.mp4`、`.webm`、`.mov`、`.mkv`）的支持，并实现 HTTP 206 Partial Content Range 分段传输，支持任意时间点平滑拖拽进度条播放。
+  - **会话工作区与多层嵌套文件深度解析**：`resolveLocalMediaPath` 现自动采集 DSH 各活动会话的工作目录（`header.cwd`）与常用工程目录，支持最多 3 层的有界递归检索，彻底解决多层子目录资源（如 `tmp/master_continuous/master_montage_6panel.png` 与 `eren_rumbling_master_78s.mp4`）404 找不到导致黑屏的问题。
+  - **本地系统打开与定位接口**：新增 `/plugins/agy-link/open` 路由，调用系统原生指令（macOS `open` / `open -R`、Windows `explorer` / `start`、Linux `xdg-open`）即时打开文件或在访达中显示。
+  - **现代化毛玻璃预览重构**：全面重构 Lightbox 预览与链接胶囊样式，采用 Apple / Linear 风格高透毛玻璃与顶部悬浮药丸工具栏，搭配纯正矢量 SVG 图标（放大、缩小、1:1 复位、访达定位、系统打开、复制路径打勾动画、ESC 关闭），彻底摒弃粗糙的旧式文本按钮，并提供操作反馈 Toast 浮层。
+
 ## 0.6.19 (2026-11-12)
 
 ### English

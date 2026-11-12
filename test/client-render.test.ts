@@ -46,7 +46,15 @@ import {
 	looksLikeMermaidSource,
 	preferredMermaidTheme,
 } from '../src/client/mermaid-config.ts';
-import { buildMediaUrl, getOrigin, isImageFile } from '../src/client/images/media.ts';
+import {
+	buildMediaUrl,
+	getOrigin,
+	isImageFile,
+	isVideoFile,
+	isAudioFile,
+	isMediaFile,
+	isLocalFilePath,
+} from '../src/client/images/media.ts';
 
 const createElement = (React as { createElement: (type: unknown, props?: unknown) => unknown }).createElement;
 
@@ -564,6 +572,28 @@ test('images/media: image detection ignores queries and fragments', () => {
 	assert.equal(isImageFile('a.ts'), false);
 	assert.equal(isImageFile(''), false);
 	assert.equal(isImageFile(undefined as never), false);
+});
+
+test('images/media: video, audio and local file detection', () => {
+	assert.equal(isVideoFile('movie.mp4'), true);
+	assert.equal(isVideoFile('clip.WEBM?t=10'), true);
+	assert.equal(isVideoFile('video.mov'), true);
+	assert.equal(isVideoFile('doc.pdf'), false);
+
+	assert.equal(isAudioFile('voice.mp3'), true);
+	assert.equal(isAudioFile('sound.wav'), true);
+	assert.equal(isAudioFile('music.ogg'), true);
+
+	assert.equal(isMediaFile('movie.mp4'), true);
+	assert.equal(isMediaFile('photo.png'), true);
+	assert.equal(isMediaFile('audio.wav'), true);
+	assert.equal(isMediaFile('notes.txt'), false);
+
+	assert.equal(isLocalFilePath('file:///Users/zqy/doc.md'), true);
+	assert.equal(isLocalFilePath('/Users/zqy/video.mp4'), true);
+	assert.equal(isLocalFilePath('C:\\Users\\doc.pdf'), true);
+	assert.equal(isLocalFilePath('master_continuous_delivery.md'), true);
+	assert.equal(isLocalFilePath('https://example.com/file.md'), false);
 });
 
 test('images/media: buildMediaUrl encodes the path and keeps the origin', () => {

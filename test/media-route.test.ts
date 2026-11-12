@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLocalMediaPath, handleMediaRequest, handleAssetRequest } from '../src/host/media-route.ts';
+import {
+  resolveLocalMediaPath,
+  handleMediaRequest,
+  handleAssetRequest,
+  handleOpenFile,
+} from '../src/host/media-route.ts';
 import { existsSync, writeFileSync, mkdirSync, rmSync, symlinkSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -172,5 +177,94 @@ test('media-route: handleAssetRequest refuses a symlink that escapes the asset d
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
     try { rmSync(outside, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('media-route: resolves deeply nested project files up to depth 3', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-deep-root-'));
+  const nested = join(root, 'tmp', 'master_continuous');
+  mkdirSync(nested, { recursive: true });
+  const sample = join(nested, 'master_montage_6panel.png');
+  writeFileSync(sample, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  try {
+    const resolved = resolveLocalMediaPath('master_montage_6panel.png', [root]);
+    assert.equal(resolved, sample, 'deeply nested image should be found in project folder');
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('media-route: handleMediaRequest streams video with Range 206 support', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-video-root-'));
+  const videoFile = join(root, 'sample.mp4');
+  const buffer = Buffer.alloc(100, 0x42);
+  writeFileSync(videoFile, buffer);
+
+  try {
+    let status = 0;
+    let headers: Record<string, unknown> = {};
+    const mockRes = {
+      writeHead(s: number, h: Record<string, unknown>) {
+        status = s;
+        headers = h;
+      },
+      end() {},
+      on() { return this; },
+      once() { return this; },
+      emit() { return true; },
+      write() { return true; },
+    };
+
+    // Range request bytes=10-29 (20 bytes)
+    handleMediaRequest(
+      {
+        url: '/plugins/agy-link/media?path=' + encodeURIComponent(videoFile),
+        headers: { range: 'bytes=10-29' },
+      },
+      mockRes as never,
+    );
+
+    assert.equal(status, 206, 'range request responds with 206 Partial Content');
+    assert.equal(headers['Content-Type'], 'video/mp4');
+    assert.equal(headers['Content-Range'], 'bytes 10-29/100');
+    assert.equal(headers['Content-Length'], 20);
+    assert.equal(headers['Accept-Ranges'], 'bytes');
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('media-route: handleOpenFile validates path and returns JSON', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-open-root-'));
+  const testDoc = join(root, 'report.md');
+  writeFileSync(testDoc, '# Report');
+
+  try {
+    // 404 for missing file
+    let notFoundStatus = 0;
+    let notFoundBody = '';
+    const res404 = {
+      writeHead(s: number) { notFoundStatus = s; },
+      end(b?: unknown) { notFoundBody = String(b ?? ''); },
+    };
+    handleOpenFile(
+      { url: '/plugins/agy-link/open?path=' + encodeURIComponent('missing_file_xyz.md') },
+      res404 as never,
+      { workspaceRoots: [root] },
+    );
+    assert.equal(notFoundStatus, 404);
+    assert.ok(notFoundBody.includes('file not found'));
+
+    // Missing path query parameter
+    let badStatus = 0;
+    const resBad = {
+      writeHead(s: number) { badStatus = s; },
+      end() {},
+    };
+    handleOpenFile({ url: '/plugins/agy-link/open' }, resBad as never);
+    assert.equal(badStatus, 400);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 });

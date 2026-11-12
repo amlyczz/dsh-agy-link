@@ -4,8 +4,11 @@
 import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 
 const MIME_MAP: Record<string, string> = {
+  // Images
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -16,12 +19,28 @@ const MIME_MAP: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
   '.tiff': 'image/tiff',
+  // Videos
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  // Audios
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  // Text & Assets
   '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
 };
 
 const IS_WIN = process.platform === 'win32';
+
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '.cache', '.venv', 'dist', 'build', '.idea', '.vscode', '.next', '.nuxt', 'Library',
+]);
 
 /** decodeURIComponent that returns null instead of throwing on malformed input. */
 function safeDecodeUri(s: string): string | null {
@@ -32,18 +51,8 @@ function safeDecodeUri(s: string): string | null {
   }
 }
 
-/**
- * Normalize and resolve a raw path or file:// URL into a system file path.
- * Converts WSL /mnt/X/ and /home/ paths on Windows where possible.
- */
-export function resolveLocalMediaPath(
-  rawPath: string,
-  workspaceRoots?: string | readonly string[],
-): string | null {
-  if (!rawPath || typeof rawPath !== 'string') return null;
-  let p = rawPath.trim();
-
-  // Strip file:// prefix safely
+function parseRawMediaUri(raw: string): string | null {
+  let p = raw;
   if (p.startsWith('file://')) {
     let converted: string | null = null;
     try {
@@ -55,8 +64,7 @@ export function resolveLocalMediaPath(
     if (converted !== null) {
       p = converted;
     } else {
-      // Manual fallback
-      const withoutScheme = p.slice(7); // strip 'file://'
+      const withoutScheme = p.slice(7);
       const decoded = safeDecodeUri(withoutScheme);
       if (decoded === null) return null;
       p = decoded;
@@ -70,7 +78,6 @@ export function resolveLocalMediaPath(
           p = '\\\\' + p.slice(1).replace(/\//g, '\\');
         }
       } else {
-        // POSIX: if missing leading slash (e.g. file://Users/... -> Users/...), restore it
         if (!p.startsWith('/')) {
           if (existsSync('/' + p) || /^(Users|home|private|tmp|var|opt|Applications)\//.test(p)) {
             p = '/' + p;
@@ -80,23 +87,65 @@ export function resolveLocalMediaPath(
     }
   }
 
-  // Windows-specific WSL path mapping
   if (IS_WIN) {
-    // /mnt/c/... -> C:\...
     const mntMatch = p.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
     if (mntMatch) {
       p = `${mntMatch[1]!.toUpperCase()}:\\${mntMatch[2]!.replace(/\//g, '\\')}`;
     } else if (p.startsWith('/home/')) {
-      // /home/... -> \\wsl.localhost\Ubuntu\home\...
       p = `\\\\wsl.localhost\\Ubuntu\\${p.replace(/\//g, '\\')}`;
     }
   }
 
-  // If path contains percent escapes, decode it safely
   if (p.includes('%')) {
     const decoded = safeDecodeUri(p);
     if (decoded !== null) p = decoded;
   }
+  return p;
+}
+
+function searchInDirectory(
+  dir: string,
+  targetRel: string,
+  baseName: string,
+  maxDepth: number,
+  currentDepth = 0,
+): string | null {
+  if (currentDepth > maxDepth || !existsSync(dir)) return null;
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (ent.isFile() && (ent.name === targetRel || ent.name === baseName)) {
+        return join(dir, ent.name);
+      }
+    }
+    for (const ent of entries) {
+      if (ent.isDirectory() && !ent.name.startsWith('.') && !SKIP_DIRS.has(ent.name)) {
+        const sub = join(dir, ent.name);
+        if (targetRel !== '') {
+          const direct = join(sub, targetRel);
+          if (existsSync(direct)) return direct;
+        }
+        const found = searchInDirectory(sub, targetRel, baseName, maxDepth, currentDepth + 1);
+        if (found) return found;
+      }
+    }
+  } catch {
+    // ignore readdir errors
+  }
+  return null;
+}
+
+/**
+ * Normalize and resolve a raw path or file:// URL into a system file path.
+ * Converts WSL /mnt/X/ and /home/ paths on Windows where possible.
+ */
+export function resolveLocalMediaPath(
+  rawPath: string,
+  workspaceRoots?: string | readonly string[],
+): string | null {
+  if (!rawPath || typeof rawPath !== 'string') return null;
+  const p = parseRawMediaUri(rawPath.trim());
+  if (p === null) return null;
 
   // If path is already absolute, check directly
   if ((IS_WIN && (/^[A-Za-z]:/.test(p) || p.startsWith('\\\\'))) || (!IS_WIN && p.startsWith('/'))) {
@@ -126,29 +175,14 @@ export function resolveLocalMediaPath(
       if (existsSync(relCandidate)) return relCandidate;
     }
 
-    // Also check basename in case p was prefixed or relative
     const baseCandidate = resolve(root, baseName);
     if (existsSync(baseCandidate)) return baseCandidate;
-  }
 
-  // Shallow 1-level directory search in roots for project subfolders
-  for (const root of roots) {
-    if (!existsSync(root)) continue;
-    try {
-      const entries = readdirSync(root, { withFileTypes: true });
-      for (const ent of entries) {
-        if (ent.isDirectory() && !ent.name.startsWith('.') && ent.name !== 'node_modules') {
-          if (strippedRel !== p) {
-            const subRel = resolve(root, ent.name, strippedRel);
-            if (existsSync(subRel)) return subRel;
-          }
-          const subBase = resolve(root, ent.name, baseName);
-          if (existsSync(subBase)) return subBase;
-        }
-      }
-    } catch {
-      // ignore readdir errors
-    }
+    const home = homedir();
+    const isRootWide = root === home || root === '/' || (IS_WIN && /^[A-Za-z]:\\?$/.test(root));
+    const depth = isRootWide ? 1 : 3;
+    const found = searchInDirectory(root, strippedRel, baseName, depth);
+    if (found) return found;
   }
 
   const resolved = resolve(p);
@@ -167,6 +201,69 @@ export interface HttpResponseLike {
 export interface HttpRequestLike {
   url?: string;
   method?: string;
+  headers?: Record<string, string | string[] | undefined>;
+}
+
+function sendMediaResponse(
+  req: HttpRequestLike,
+  res: HttpResponseLike,
+  filePath: string,
+  contentType: string,
+  totalSize: number,
+): void {
+  const rangeHeader = req.headers?.range;
+  if (rangeHeader && typeof rangeHeader === 'string' && rangeHeader.startsWith('bytes=')) {
+    const parts = rangeHeader.slice(6).split('-');
+    const start = parseInt(parts[0] ?? '0', 10);
+    const end = parts[1] && parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
+
+    if (isNaN(start) || isNaN(end) || start > end || start >= totalSize) {
+      res.writeHead(416, {
+        'Content-Range': `bytes */${totalSize}`,
+        'Content-Type': 'text/plain',
+      });
+      res.end('requested range not satisfiable');
+      return;
+    }
+
+    const chunkSize = end - start + 1;
+    res.writeHead(206, {
+      'Content-Type': contentType,
+      'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Cache-Control': 'public, max-age=3600',
+      'Access-Control-Allow-Origin': '*',
+      'Content-Disposition': 'inline',
+      'X-Content-Type-Options': 'nosniff',
+    });
+
+    const stream = createReadStream(filePath, { start, end });
+    stream.on('error', () => {
+      try { res.end(); } catch { /* ignore */ }
+    });
+    // @ts-ignore
+    stream.pipe(res);
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': totalSize,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=3600',
+    'Access-Control-Allow-Origin': '*',
+    'Content-Disposition': 'inline',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+  });
+
+  const stream = createReadStream(filePath);
+  stream.on('error', () => {
+    try { res.end(); } catch { /* ignore */ }
+  });
+  // @ts-ignore
+  stream.pipe(res);
 }
 
 /**
@@ -213,35 +310,93 @@ export function handleMediaRequest(
     const ext = extname(filePath).toLowerCase();
     const contentType = MIME_MAP[ext] ?? 'application/octet-stream';
 
-    // Only allow media types or known formats
-    if (!contentType.startsWith('image/') && ext !== '.svg') {
+    // Allow images, videos, audios and SVG
+    const isMedia = contentType.startsWith('image/') || contentType.startsWith('video/') || contentType.startsWith('audio/') || ext === '.svg';
+    if (!isMedia) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       res.end('access denied: not an image');
       return;
     }
 
-    res.writeHead(200, {
-      'Content-Type': contentType,
-      'Content-Length': st.size,
-      'Cache-Control': 'public, max-age=3600',
-      'Access-Control-Allow-Origin': '*',
-      'Content-Disposition': 'inline',
-      'X-Content-Type-Options': 'nosniff',
-      // Sandbox defensively: an operator-supplied SVG served from the DSH origin
-      // must not execute scripts if opened/navigated directly.
-      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-    });
-
-    const stream = createReadStream(filePath);
-    stream.on('error', () => {
-      try { res.end(); } catch { /* ignore */ }
-    });
-    // @ts-ignore - pipe to response stream
-    stream.pipe(res);
+    sendMediaResponse(req, res, filePath, contentType, st.size);
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('failed to read media: ' + String(err));
   }
+}
+
+export function executeOpenInSystem(targetPath: string, reveal = false): { ok: boolean; error?: string } {
+  try {
+    if (process.platform === 'darwin') {
+      const args = reveal ? ['-R', targetPath] : [targetPath];
+      const child = spawn('open', args, { detached: true, stdio: 'ignore' });
+      child.unref();
+      return { ok: true };
+    }
+    if (process.platform === 'win32') {
+      if (reveal) {
+        const child = spawn('explorer.exe', ['/select,', targetPath], { detached: true, stdio: 'ignore' });
+        child.unref();
+      } else {
+        const child = spawn('cmd.exe', ['/c', 'start', '""', targetPath], { detached: true, stdio: 'ignore' });
+        child.unref();
+      }
+      return { ok: true };
+    }
+    const child = spawn('xdg-open', [targetPath], { detached: true, stdio: 'ignore' });
+    child.unref();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * Handle GET /plugins/agy-link/open?path=...&reveal=1
+ */
+export function handleOpenFile(
+  req: HttpRequestLike,
+  res: HttpResponseLike,
+  opts: { workspaceRoots?: string | readonly string[] } = {},
+): void {
+  const reqUrl = req.url ?? '';
+  let targetPath = '';
+  let reveal = false;
+  try {
+    const u = new URL(reqUrl, 'http://localhost');
+    targetPath = u.searchParams.get('path') ?? u.searchParams.get('url') ?? '';
+    reveal = u.searchParams.get('reveal') === '1' || u.searchParams.get('reveal') === 'true';
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: 'invalid url' }));
+    return;
+  }
+
+  if (!targetPath) {
+    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: 'missing path query parameter' }));
+    return;
+  }
+
+  const filePath = resolveLocalMediaPath(targetPath, opts.workspaceRoots);
+  if (!filePath) {
+    res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: 'file not found' }));
+    return;
+  }
+
+  const result = executeOpenInSystem(filePath, reveal);
+  if (!result.ok) {
+    res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ ok: false, error: result.error }));
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(JSON.stringify({ ok: true, path: filePath, revealed: reveal }));
 }
 
 /**

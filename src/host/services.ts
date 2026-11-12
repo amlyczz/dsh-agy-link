@@ -560,6 +560,22 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     return cfg.mediaDir !== '' ? cfg.mediaDir : defaultMediaDir(stateDir())
   }
 
+  const activeCwds = (): string[] => {
+    const list: string[] = []
+    try {
+      const svc = sessionsSvc() as { values?: () => Iterable<{ header?: { cwd?: string } }> } | undefined
+      if (typeof svc?.values === 'function') {
+        for (const s of svc.values()) {
+          const cwd = s?.header?.cwd
+          if (cwd && !list.includes(cwd)) list.push(cwd)
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return list
+  }
+
   // One bridge can publish to several registries (global, pool accounts, and/or
   // workspace), so keep every restore hook it produced. Created here so the pool
   // routes and the bridge lifecycle in index.ts share the same mutable state.
@@ -571,7 +587,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     readEffortUnsupported, rememberEffortUnsupported, sessionsSvc, sessionAuto,
     get lastRun() { return lastRun },
     get lastParser() { return lastParser },
-    mediaDir, bridgeState, webServerPort,
+    mediaDir, bridgeState, webServerPort, activeCwds,
     // Filled in by the composition root (index.ts): the deployment-layout
     // anchor the media routes resolve mermaid/assets against, and the hook that
     // re-syncs the ask/mirror tools after a config write.
