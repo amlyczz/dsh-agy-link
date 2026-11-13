@@ -237,6 +237,12 @@ export class ModelCatalog {
    */
   private static readonly FALLBACK_RETRY_MS = 60_000;
   private lastAttemptAt = 0;
+  /**
+   * Per-account probe timestamps. `refreshIfNeeded(accountId)` used to skip
+   * the throttle whenever the account had no catalog yet, so a signed-out /
+   * expired account could be probed on EVERY listModels() read (issue #106).
+   */
+  private readonly accountAttemptAt = new Map<string, number>();
 
   constructor(
     private readonly discover: DiscoverFn,
@@ -355,12 +361,34 @@ export class ModelCatalog {
       const age = now - targetCat.discoveredAt;
       if (targetCat.source === 'discovered' && age < this.ttlMs) return;
       if (targetCat.source === 'fallback' && now - this.lastAttemptAt < ModelCatalog.FALLBACK_RETRY_MS) return;
+    } else {
+      // No catalog for this account yet: a FAILED discovery must be throttled
+      // just like the fallback case, otherwise the missing entry is re-probed
+      // on every single read (issue #106).
+      const last = this.accountAttemptAt.get(accountId) ?? 0;
+      if (now - last < ModelCatalog.FALLBACK_RETRY_MS) return;
+      this.accountAttemptAt.set(accountId, now);
     }
     this.lastAttemptAt = now;
     this.refreshing = this.refresh(accountId).finally(() => {
       this.refreshing = null;
     });
     return this.refreshing;
+  }
+
+  /**
+   * Read-path discovery for one account (listModels). Unlike
+   * `forceRefreshAndNotify()` this is throttled and NEVER broadcasts on a
+   * failed probe: an unconditional `adapters-updated` made DSH's browser
+   * re-read the catalog, which called listModels() again — a self-exciting
+   * 1:1 read/probe/announce loop while signed out (issue #106). `refresh()`
+   * itself announces only when the catalog contents actually changed, so a
+   * successful first build still updates the picker exactly once.
+   */
+  async ensureAccountCatalog(accountId: string): Promise<Catalog> {
+    if (!accountId || this.accountCatalogs.has(accountId)) return this.get(accountId);
+    await this.refreshIfNeeded(accountId);
+    return this.get(accountId);
   }
 
   async forceRefresh(accountId?: string): Promise<Catalog> {
@@ -382,8 +410,14 @@ export class ModelCatalog {
    * switching to a Pro/Ultra account).
    */
   async forceRefreshAndNotify(accountId?: string): Promise<Catalog> {
+    const hadCatalog = accountId ? this.hasAccountCatalog(accountId) : true;
     await this.refresh(accountId, false);
-    this.onUpdate?.();
+    const hasCatalog = accountId ? this.hasAccountCatalog(accountId) : true;
+    // An account switch must announce even when the contents are unchanged,
+    // but a FAILED first discovery must not: announcing into a browser that
+    // re-reads the catalog closes the issue #106 loop. Once the account has a
+    // catalog (or on an explicit base refresh) the switch semantics are intact.
+    if (hadCatalog || hasCatalog) this.onUpdate?.();
     return this.get(accountId);
   }
 

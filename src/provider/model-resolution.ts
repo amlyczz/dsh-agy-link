@@ -40,7 +40,9 @@ export function listAvailableModels(deps: ModelResolutionDeps): readonly LlmMode
   if (activeAcc && pool) {
     models = deps.catalog.getModelsForAccount(activeAcc, pool)
     if (!deps.catalog.hasAccountCatalog(activeAcc.id)) {
-      void deps.catalog.forceRefreshAndNotify(activeAcc.id).catch(() => undefined)
+      // Read path: throttled, change-only announcements. Never use the
+      // always-broadcasting account-switch path here (issue #106).
+      void deps.catalog.ensureAccountCatalog(activeAcc.id).catch(() => undefined)
     }
   } else {
     models = deps.catalog.getUnion(accounts, pool)
