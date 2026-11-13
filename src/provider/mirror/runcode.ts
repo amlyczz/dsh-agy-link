@@ -26,7 +26,7 @@ export function buildMirrorRunCode(
       ' (' +
       toolName +
       ')\n' +
-      "return await tools['agy_tool'](" +
+      "await tools['agy_tool'](" +
       invocation +
       ')',
     // Keep the wire tool name visible but surface a human preview first so

@@ -4,6 +4,9 @@
 
 ### English
 
+- **Fix(mirror, ptc): Drop top-level `return` from `buildMirrorRunCode` (Fixes #103).**
+  - In PTC / Code Mode, the generated mirror wrapper emitted `return await tools['agy_tool'](...)`. When DSH's PTC runtime runs in `persistent-in-memory` (REPL format) or script format, top-level `return` is rejected as `Return statement is not allowed here`.
+  - Changed to `await tools['agy_tool'](...)` which evaluates cleanly in both REPL and function-body runtimes while preserving the tool result and native card rendering.
 - **Fix(release): publishing now retries transient registry failures and verifies the version actually lands.**
   - v0.6.19 and v0.6.20 both got GitHub Releases that were never installable: a single transient `404 Not Found - PUT https://registry.npmjs.org/dsh-agy-link` killed `npm publish`, and nothing checked whether the version was readable. v0.6.21 succeeded minutes later with the same token.
   - `scripts/publish-retry.mjs` now: skips an already-published version (idempotent re-runs), retries only transient errors with backoff, fails fast on fatal auth/version errors, and polls `npm view <name>@<version> version` after a successful publish. Slow registry propagation (2–6 min observed) is a WARNING, not a failed run; `PUBLISH_STRICT_VERIFY=1` makes it fatal for canaries. Publish workflow uses the wrapper.
@@ -12,6 +15,9 @@
 
 ### 中文
 
+- **修复(镜像, ptc)：移除 `buildMirrorRunCode` 中的顶层 `return`（修复 #103）。**
+  - 在 PTC / 代码模式下，镜像重放脚本此前生成了 `return await tools['agy_tool'](...)`。当 DSH PTC 运行时处于常驻内存 REPL 或脚本模式时，顶层 `return` 会被语法校验器拦截报错 `Return statement is not allowed here`。
+  - 改为 `await tools['agy_tool'](...)`，在 REPL 和函数体两种运行时下均可正常求值并透传结果，工具卡片渲染保持一致。
 - **修复(发布)：发布遇瞬态故障会自动重试，并校验版本真的可用。**
   - 0.6.19/0.6.20 都建了 GitHub Release 却装不上：一次瞬态 `404 Not Found - PUT registry.npmjs.org` 直接打断 `npm publish`，且没有任何环节检查版本是否可读；0.6.21 用同一 token 几分钟后就成功了。
   - `scripts/publish-retry.mjs`：已发布则跳过（可重复运行）、只对瞬态错误退避重试、鉴权/版本类致命错误立即失败，发布成功后轮询 `npm view` 确认。registry 传播慢（实测 2–6 分钟）只告警不误判失败，canary 可用 `PUBLISH_STRICT_VERIFY=1` 严格化。
