@@ -24,6 +24,19 @@ describe('unquoteArg helper', () => {
     assert.equal(unquoteArg('{"foo":"bar"}'), '{"foo":"bar"}')
     assert.equal(unquoteArg('"\\"nested\\""'), 'nested')
   })
+
+  test('keeps non-string JSON values, bad literals and malformed objects honest', () => {
+    // A quoted number/array is not a string: serialise it back instead of
+    // silently stringifying `[object Object]`-style values.
+    assert.equal(unquoteArg('"42"'), '42')
+    assert.equal(unquoteArg('"[1,2]"'), '[1,2]')
+    assert.equal(unquoteArg('"null"'), 'null')
+    // Quoted but invalid JSON: the parse failure must not eat the value.
+    assert.equal(unquoteArg('"bad\\x"'), '"bad\\x"')
+    // Object-shaped but invalid JSON: same fallback.
+    assert.equal(unquoteArg('{not json}'), '{not json}')
+    assert.equal(unquoteArg(true), 'true')
+  })
 })
 
 describe('formatSubagentStep', () => {
@@ -117,6 +130,42 @@ describe('formatSubagentStep', () => {
       '• [Investigator] 💭 First investigate the API endpoints.',
     )
   })
+
+  test('formats every remaining tool branch, truncates long text and ignores empty steps', () => {
+    const longCmd = 'x'.repeat(90)
+    const longThought = 'y'.repeat(100)
+    const line = JSON.stringify({
+      source: 'MODEL',
+      tool_calls: [
+        { name: 'run_command', args: { CommandLine: longCmd, toolSummary: 'sum' } },
+        { name: 'run_command', args: {} },
+        { name: 'read_file', args: { path: 'a.ts' } },
+        { name: 'edit_file', args: {} },
+        { name: 'write_file', args: {} },
+        { name: 'search_web', args: { Query: 'q' } },
+        { name: 'invoke_subagent', args: { TypeName: 'Worker' } },
+        { name: 'manage_task', args: { action: 'kill', taskId: 't-9' } },
+        { name: 'send_message', args: { recipient: 'agent-1' } },
+        { name: 'send_message', args: { Recipient: 'agent-2' } },
+        { name: 'mystery_tool', args: {} },
+        { args: {} },
+      ],
+    })
+    const out = formatSubagentStep('W', line) ?? ''
+    assert.match(out, /run_command: sum \(`x{67}\.\.\.`\)/)
+    assert.match(out, /🛠️ run_command$/m)
+    assert.match(out, /🤖 invoke_subagent: Worker/)
+    assert.match(out, /⚙️ manage_task: kill t-9/)
+    assert.match(out, /💬 send_message: agent-1/)
+    assert.match(out, /💬 send_message: agent-2/)
+    assert.match(out, /🛠️ mystery_tool/)
+    assert.match(out, /🛠️ tool/)
+
+    const thought = formatSubagentStep('W', JSON.stringify({ thinking: longThought }))
+    assert.equal(thought, '• [W] 💭 ' + 'y'.repeat(77) + '...')
+    assert.equal(formatSubagentStep('W', JSON.stringify({ thinking: '   \n# only a heading' })), null)
+    assert.equal(formatSubagentStep('W', JSON.stringify({ content: 'no tools, no thinking' })), null)
+  })
 })
 
 describe('readIncrementalTranscript', () => {
@@ -142,6 +191,22 @@ describe('readIncrementalTranscript', () => {
   test('handles missing or empty file gracefully', () => {
     const res = readIncrementalTranscript('/path/does/not/exist.jsonl', 0)
     assert.deepEqual(res, { lines: [], newOffset: 0 })
+  })
+
+  test('waits for a newline and ignores reads past EOF', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'subagent-partial-'))
+    const file = join(dir, 'transcript.jsonl')
+    try {
+      writeFileSync(file, '{"unfinished":')
+      assert.deepEqual(readIncrementalTranscript(file, 0), { lines: [], newOffset: 0 })
+      const eof = readIncrementalTranscript(file, 4096)
+      assert.deepEqual(eof, { lines: [], newOffset: 4096 })
+      const empty = join(dir, 'empty.jsonl')
+      writeFileSync(empty, '')
+      assert.deepEqual(readIncrementalTranscript(empty, 0), { lines: [], newOffset: 0 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -246,6 +311,59 @@ describe('SubagentWatcher polling & event dispatch', () => {
 
     watcher.stop()
     rmSync(dir, { recursive: true, force: true })
+  })
+  test('a watcher without a root conversation or db stays quiet and stops cleanly', async () => {
+    const events: AgyEvent[] = []
+    const watcher = new SubagentWatcher({
+      getRootConversationId: () => null,
+      pollIntervalMs: 5,
+      onEvent: (ev) => events.push(ev),
+      _findDb: () => null,
+      _findTranscript: () => null,
+    })
+    await watcher.tick()
+    assert.deepEqual(events, [])
+    watcher.trackExplicitSubagent('')
+    watcher.start()
+    watcher.stop()
+    // A stopped watcher never schedules another tick, even after an explicit track.
+    watcher.trackExplicitSubagent('late-sub')
+    assert.deepEqual(events, [])
+  })
+
+  test('a failed db query is transient; DONE/COMPLETED also announce finish', async () => {
+    const events: AgyEvent[] = []
+    const records: SubagentSummaryRecord[] = [
+      {
+        conversation_id: 'sub-done',
+        parent_conversation_id: 'root-1',
+        agent_name: 'Finisher',
+        nesting_depth: 1,
+        status: 'DONE',
+        step_count: 0,
+      },
+    ]
+    let calls = 0
+    const watcher = new SubagentWatcher({
+      getRootConversationId: () => 'root-1',
+      pollIntervalMs: 5,
+      onEvent: (ev) => events.push(ev),
+      _findDb: () => '/mock/db.sqlite',
+      _findTranscript: () => null,
+      _queryDb: async () => {
+        calls++
+        if (calls === 1) throw new Error('database is locked')
+        return records
+      },
+    })
+    await watcher.tick() // transient failure: swallowed
+    await watcher.tick() // success + start + finish
+    assert.ok(events.some((e) => e.kind === 'step' && e.text.includes('Subagent started')))
+    assert.ok(events.some((e) => e.kind === 'step' && e.text.includes('Finished')))
+    records[0]!.status = 'COMPLETED'
+    await watcher.tick()
+    assert.equal(events.filter((e) => e.kind === 'step' && e.text.includes('Finished')).length, 1, 'finish is announced once')
+    watcher.stop()
   })
 })
 

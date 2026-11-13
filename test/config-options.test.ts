@@ -10,6 +10,7 @@ import {
   type EffortLabels,
 } from '../src/client/config-options.ts'
 import { effortLabel, normalizeEfforts, splitEffortSuffix } from '../src/common/reasoning.ts'
+import { isGeminiFamilyModel } from '../src/common/model-lineup.ts'
 
 const labels: EffortLabels = { auto: 'Auto', level: (id) => effortLabel(id) }
 
@@ -112,4 +113,12 @@ test('normalizeEfforts orders canonically and keeps unknown levels last', () => 
   assert.deepEqual(normalizeEfforts(['ultra', 'low', 'ultra']), ['low', 'ultra'])
   assert.deepEqual(normalizeEfforts(null), [])
   assert.deepEqual(normalizeEfforts(undefined), [])
+})
+
+test('isGeminiFamilyModel accepts only Gemini ids and is total over junk input', () => {
+  assert.equal(isGeminiFamilyModel('gemini-4-hydrogen'), true)
+  assert.equal(isGeminiFamilyModel('claude-opus-5-5'), false)
+  assert.equal(isGeminiFamilyModel(''), false)
+  assert.equal(isGeminiFamilyModel(42 as unknown as string), false)
+  assert.equal(isGeminiFamilyModel(null as unknown as string), false)
 })
