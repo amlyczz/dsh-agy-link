@@ -13,6 +13,19 @@ import assert from 'node:assert/strict'
 import { runRoute, sendJson, ROUTE_TIMEOUT_MS } from '../src/transport/http/respond.ts'
 import type { RawRes } from '../src/transport/http/respond.ts'
 import { timedSignal, STATUS_TIMEOUT_MS, WRITE_TIMEOUT_MS } from '../src/client/api.ts'
+import { longRouteTimeout, ROUTE_DEADLINE_SLACK_MS, QUOTA_REFRESH_DEDUP_MS } from '../src/common/timeouts.ts'
+
+test('longRouteTimeout gives slow jobs their own budget, not the 30s general deadline', () => {
+  // A translation is a full agy turn (20–45s at medium, 120s cap by config).
+  // With ROUTE_TIMEOUT_MS the host answered 504 first and sendJson's
+  // exactly-once guard then discarded the real 200.
+  assert.equal(longRouteTimeout(120_000), 120_000 + ROUTE_DEADLINE_SLACK_MS)
+  assert.ok(longRouteTimeout(120_000) > ROUTE_TIMEOUT_MS)
+  assert.equal(longRouteTimeout(1), ROUTE_TIMEOUT_MS, 'short jobs keep the general deadline')
+  assert.equal(longRouteTimeout(Number.NaN), ROUTE_TIMEOUT_MS + ROUTE_DEADLINE_SLACK_MS)
+  assert.equal(longRouteTimeout(-1), ROUTE_TIMEOUT_MS + ROUTE_DEADLINE_SLACK_MS)
+  assert.ok(QUOTA_REFRESH_DEDUP_MS > ROUTE_TIMEOUT_MS, 'quota dedupe must outlive a 30s race')
+})
 
 interface Reply {
   status: number
