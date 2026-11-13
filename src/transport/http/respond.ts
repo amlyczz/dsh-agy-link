@@ -31,8 +31,14 @@ const answered = new WeakSet<object>();
 export const sendJson = (res: RawRes, status: number, body: unknown): void => {
   if (answered.has(res as object)) return;
   answered.add(res as object);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
-  res.end(JSON.stringify(body))
+  try {
+    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify(body))
+  } catch {
+    // The socket may have been aborted by the client (or closed by the host
+    // during shutdown). A late timeout/500 callback must never become an
+    // uncaught exception and take the whole process down.
+  }
 }
 
 /**

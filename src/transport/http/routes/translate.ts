@@ -1,8 +1,11 @@
 import type { HostServices } from '../../../host/services.ts'
+import { longRouteTimeout } from '../../../common/timeouts.ts'
 import { runRoute, sendJson, readBody, methodOf, queryParam, type RawRes, type RouteRegistrar } from '../respond.ts'
 
 function handleTranslate(services: HostServices, req: unknown, res: unknown): void {
-  const { translation } = services
+  const { translation, getConfig } = services
+      // A translation is a full agy turn, not a quick config write: give the
+      // route the job's OWN deadline plus slack (see longRouteTimeout).
       runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -63,7 +66,7 @@ function handleTranslate(services: HostServices, req: unknown, res: unknown): vo
         } catch (e) {
           sendJson(res as RawRes, 500, { error: String(e) })
         }
-      })
+      }, longRouteTimeout(getConfig().translateTimeoutMs))
 }
 
 function handleTranslatePending(services: HostServices, req: unknown, res: unknown): void {

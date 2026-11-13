@@ -10,12 +10,13 @@
 // validation, unknown ids, upstream failure mapping). Assertions describe the
 // CURRENT behaviour — no handler is changed by this file.
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test, mock } from 'node:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { registerRoutes } from '../src/transport/http/router.ts'
+import { QUOTA_REFRESH_DEDUP_MS } from '../src/common/timeouts.ts'
 import type { HostServices } from '../src/host/services.ts'
 import type { Route } from '../src/transport/http/respond.ts'
 
@@ -1100,6 +1101,38 @@ test('/qr returns 404 without a pending URL and a PNG when one exists', async ()
 // Translate
 // ---------------------------------------------------------------------------
 
+test('/translate waits out a slow agy turn instead of answering 504 at 30s', async () => {
+  // A translation is a full agy turn (translateTimeoutMs defaults to 120s).
+  // The general ROUTE_TIMEOUT_MS would answer 504 first and, because sendJson
+  // is exactly-once, discard the real 200 — every slow "译成人话" looked like
+  // a failure. Fake timers let us cross 30s without a 31-second test.
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let finish: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { finish = resolve })
+    const s = setup({
+      translation: {
+        translate: async () => { await gate; return { ok: true, text: '译文' } },
+        pendingFor: () => [], stats: () => ({}), isPending: () => false,
+        existingTurn: () => null, existingMessage: () => null,
+      },
+    }, { translateTimeoutMs: 120_000 })
+    const captured = capture()
+    s.route('/plugins/agy-link/translate').handler(fakeReq('POST', '/', { text: 'hello' }), captured.res)
+    // Let readBody + the async route body reach the pending translation.
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    mock.timers.tick(31_000)
+    await Promise.resolve()
+    assert.equal(captured.status(), 0, 'no 504 may be written while the job is still running')
+    finish()
+    await captured.done
+    assert.equal(captured.status(), 200, 'the real translation result wins')
+    assert.equal((captured.json() as Record<string, unknown>).ok, true)
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('/translate is strict about JSON and dispatches to the right translation call', async () => {
   const calls: Array<[string, unknown[]]> = []
   const make = (result: unknown) => async (...args: unknown[]) => {
@@ -1455,6 +1488,42 @@ test('REGRESSION: /pool/refresh-quota answers immediately even when the quota pi
   const again = await invoke(s.route('/plugins/agy-link/pool/refresh-quota'), fakeReq('POST', '/', { id: 'hanging' }))
   assert.equal(again.status(), 200)
   assert.equal(started, 1, 'in-flight refresh is deduped')
+})
+
+test('REGRESSION: quota dedupe outlives the old 30s race while its work still runs', async () => {
+  // The first version raced the work against ROUTE_TIMEOUT_MS and deleted the
+  // dedupe entry when the timer won — a second click then started a second
+  // `agy /usage` pipeline on top of the first. The entry now belongs to the
+  // work itself, with a much longer hard cap.
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let started = 0
+    const s = setup({
+      quota: {
+        refreshAccountQuota: async () => {
+          started++
+          await new Promise<void>(() => undefined) // never settles
+        },
+        refreshAllQuotas: async () => undefined,
+      },
+      catalog: {
+        get: () => ({ source: 'fallback', models: [], lastError: null }),
+        getAllKnownModels: () => [],
+        forceRefresh: async () => undefined,
+      },
+      pool: poolDouble({ getAccount: (id: unknown) => (id === 'slow' ? { id: 'slow' } : undefined) }).pool,
+    })
+    const route = s.route('/plugins/agy-link/pool/refresh-quota')
+    await invoke(route, fakeReq('POST', '/', { id: 'slow' }))
+    mock.timers.tick(31_000)
+    await invoke(route, fakeReq('POST', '/', { id: 'slow' }))
+    assert.equal(started, 1, 'no duplicate pipeline after 30s')
+    mock.timers.tick(QUOTA_REFRESH_DEDUP_MS + 1)
+    await invoke(route, fakeReq('POST', '/', { id: 'slow' }))
+    assert.equal(started, 2, 'a genuinely wedged refresh can be retried after the hard cap')
+  } finally {
+    mock.timers.reset()
+  }
 })
 
 test('REGRESSION: every route answers 500 when a dependency throws (no silent hang)', async () => {

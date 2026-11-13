@@ -1,5 +1,6 @@
 import type { HostServices } from '../../../host/services.ts'
-import { runRoute, sendJson, readBody, methodOf, ROUTE_TIMEOUT_MS, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { QUOTA_REFRESH_DEDUP_MS } from '../../../common/timeouts.ts'
 import type { WarmupResult } from '../../../host/warmup.ts'
 import { detectSystemProxy } from '../../../host/wincred.ts'
 import { openAccountTerminal } from '../../../host/runner.ts'
@@ -213,15 +214,12 @@ function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unkno
         const id = typeof body.id === 'string' ? body.id : ''
         const key = id || '__all__'
         if (!quotaRefreshInFlight.has(key)) {
-          // The dedupe entry must ALWAYS be released, even if a dependency
-          // never settles — otherwise every future sync on that account would
-          // be silently skipped. Bound the background work independently of
-          // the (already-answered) HTTP response.
-          let releaseTimer: ReturnType<typeof setTimeout> | undefined
-          const bounded = new Promise<void>((resolve) => {
-            releaseTimer = setTimeout(resolve, ROUTE_TIMEOUT_MS)
-            releaseTimer.unref?.()
-          })
+          // The dedupe entry is owned by the REAL work, not by a short race:
+          // a 30s race used to drop the entry while `agy /usage` was still
+          // running, so the next click started a second overlapping pipeline.
+          // A generous hard cap keeps a genuinely wedged dependency from
+          // blocking future syncs forever without opening the overlap window
+          // during any realistic refresh.
           const work = (async () => {
             if (id) {
               const acc = pool.getAccount(id)
@@ -235,18 +233,17 @@ function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unkno
             // the background poller never touches the catalog.
             // ModelCatalog emits notifyPicker internally ONLY when entries change.
             await catalog.forceRefresh().catch(() => undefined)
-          })()
-            .catch(() => undefined)
-            .finally(() => {
-              if (releaseTimer !== undefined) clearTimeout(releaseTimer)
-            })
-          // Whichever finishes first — real work or the deadline — owns the
-          // dedupe entry and releases it. A hung pipeline therefore cannot
-          // permanently block future syncs on this account.
-          quotaRefreshInFlight.set(
-            key,
-            Promise.race([work, bounded]).finally(() => quotaRefreshInFlight.delete(key)),
-          )
+          })().catch(() => undefined)
+          let releaseTimer: ReturnType<typeof setTimeout> | undefined
+          const entry: Promise<void> = work.finally(() => {
+            if (releaseTimer !== undefined) clearTimeout(releaseTimer)
+            if (quotaRefreshInFlight.get(key) === entry) quotaRefreshInFlight.delete(key)
+          })
+          quotaRefreshInFlight.set(key, entry)
+          releaseTimer = setTimeout(() => {
+            if (quotaRefreshInFlight.get(key) === entry) quotaRefreshInFlight.delete(key)
+          }, QUOTA_REFRESH_DEDUP_MS)
+          releaseTimer.unref?.()
         }
         // Answer IMMEDIATELY. The console polls /status every 3s, so the new
         // quota numbers appear on their own — no HTTP request needs to stay

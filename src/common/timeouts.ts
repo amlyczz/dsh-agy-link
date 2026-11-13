@@ -18,6 +18,24 @@ export const WRITE_TIMEOUT_MS = 20_000
 /** Host-side hard deadline for any plugin route; the last line of defence. */
 export const ROUTE_TIMEOUT_MS = 30_000
 
+/** Slack above a job's own deadline before its route may give up. */
+export const ROUTE_DEADLINE_SLACK_MS = 15_000
+
+/**
+ * Deadline for a route that fronts a genuinely long job (a translation is a
+ * full agy turn: `translateTimeoutMs` defaults to 120s and medium effort
+ * typically takes 20–45s). The general 30s route deadline would answer 504
+ * first, and because `sendJson` is exactly-once the real 200 would then be
+ * discarded — every slow translation would look like a failure.
+ */
+export function longRouteTimeout(jobTimeoutMs: number): number {
+  const budget = Number.isFinite(jobTimeoutMs) && jobTimeoutMs > 0 ? jobTimeoutMs : ROUTE_TIMEOUT_MS
+  return Math.max(ROUTE_TIMEOUT_MS, budget + ROUTE_DEADLINE_SLACK_MS)
+}
+
+/** How long a manual quota refresh keeps its dedupe entry when work never settles. */
+export const QUOTA_REFRESH_DEDUP_MS = 90_000
+
 /**
  * Grace the idle watchdog grants before killing a quiet child. libuv runs the
  * timers phase BEFORE the poll phase: when the DSH host's event loop is blocked
