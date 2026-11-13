@@ -291,10 +291,10 @@ test('image scanner: enhances file:// image links but ignores non-images', () =>
 	assert.equal(txtLink.dataset.agyLinkEnhanced, undefined, 'non-image link not marked as image enhanced');
 	assert.equal(txtLink.querySelector('.agy-image-link-icon'), null);
 	assert.equal(txtLink.dataset.agyFileEnhanced, 'true', 'marked as file enhanced');
-	assert.ok(txtLink.querySelector('.agy-file-link-icon'), 'file reveal chip attached');
+	assert.equal(txtLink.querySelector('.agy-file-link-icon'), null, 'no badge is injected — the link text is the affordance');
+	assert.equal(txtLink.textContent, 'notes', 'link text is left untouched');
 	scanAndEnhanceImages();
 	assert.equal(imgLink.querySelectorAll('.agy-image-link-icon').length, 1, 'idempotent chip');
-	assert.equal(txtLink.querySelectorAll('.agy-file-link-icon').length, 1, 'idempotent file chip');
 });
 
 test('image scanner: image load error restores the alt span', () => {
@@ -821,7 +821,7 @@ test('openInRightSidebar: declines when no preview tab type can claim the addres
 	setClientContext(null);
 });
 
-test('file links scanner: enhances file links with "边栏打开" badge and intercepts click to open sidebar', () => {
+test('file links scanner: clicking a local file link opens the native sidebar (no badge injected)', () => {
 	const opened: Array<{ url: string; options?: any }> = [];
 	const mockSidebarRight = {
 		mounted: { getSnapshot: () => 'session-beta-2' },
@@ -853,21 +853,20 @@ test('file links scanner: enhances file links with "边栏打开" badge and inte
 
 	scanAndEnhanceImages();
 
-	const badge = a.querySelector('.agy-file-link-icon') as HTMLElement;
-	assert.ok(badge, 'badge was injected');
-	assert.ok(badge.textContent?.includes('边栏打开'), 'badge text is "边栏打开"');
+	assert.equal(a.querySelector('.agy-file-link-icon'), null, 'no badge is injected any more');
+	assert.equal(a.textContent, 'plan.md', 'link text is left untouched');
 
-	// Clicking badge triggers openInRightSidebar
-	opened.length = 0;
-	badge.click();
-	assert.equal(opened.length, 1);
-	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-beta-2/plan.md');
-
-	// Clicking anchor directly also triggers openInRightSidebar
+	// Clicking the link text itself opens the native right Sidebar.
 	opened.length = 0;
 	a.click();
 	assert.equal(opened.length, 1);
 	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-beta-2/plan.md');
+
+	// The click is consumed: no navigation and the address is not opened twice.
+	assert.equal(a.dataset.agyFileEnhanced, 'true');
+	opened.length = 0;
+	a.click();
+	assert.equal(opened.length, 1);
 
 	document.body.removeChild(a);
 	setClientContext(null);

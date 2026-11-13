@@ -363,9 +363,11 @@ function enhanceFileLinks(links: NodeListOf<HTMLAnchorElement>): void {
 
     link.dataset.agyFileEnhanced = 'true';
     const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
-    const linkText = (link.textContent ?? 'File').replace(/边栏打开$|定位$/, '').trim();
 
-    const handleOpen = (e: Event) => {
+    // The link text is the affordance: clicking it opens the native right Sidebar
+    // (no extra badge), falling back to the OS opener when no Sidebar can take it.
+    link.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
       e.preventDefault();
       e.stopPropagation();
       const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
@@ -376,28 +378,7 @@ function enhanceFileLinks(links: NodeListOf<HTMLAnchorElement>): void {
       openInSystem(pathToUse, false).then((res) => {
         showToast(res.ok ? `已在系统程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
       });
-    };
-
-    link.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
-      handleOpen(e);
     });
-
-    if (!link.querySelector('.agy-file-link-icon')) {
-      const badge = document.createElement('span');
-      badge.className = 'agy-image-link-chip agy-chip-file agy-file-link-icon';
-      badge.setAttribute('role', 'button');
-      badge.setAttribute('tabindex', '0');
-      badge.title = `在原生右侧边栏打开 / Open in Sidebar (${linkText})`;
-      badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;display:inline-block;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg></span><span class="agy-image-chip-text">边栏打开</span>';
-
-      badge.onclick = handleOpen;
-      badge.onkeydown = (e: KeyboardEvent) => {
-        if (e.key === 'Enter' || e.key === ' ') handleOpen(e);
-      };
-
-      link.appendChild(badge);
-    }
   }
 }
 

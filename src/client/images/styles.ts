@@ -107,18 +107,6 @@ const IMAGE_CSS = `
   box-shadow: 0 2px 10px rgba(168, 85, 247, 0.25);
 }
 
-.agy-chip-file {
-  color: #34d399;
-  background: rgba(52, 211, 153, 0.1);
-  border-color: rgba(52, 211, 153, 0.28);
-}
-.agy-chip-file:hover {
-  background: rgba(52, 211, 153, 0.22);
-  border-color: rgba(52, 211, 153, 0.5);
-  color: #6ee7b7;
-  box-shadow: 0 2px 10px rgba(52, 211, 153, 0.25);
-}
-
 .agy-image-chip-icon {
   display: inline-flex;
   align-items: center;
