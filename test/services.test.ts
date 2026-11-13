@@ -30,6 +30,9 @@ function sandbox(t: TestContext): string {
   const saved: Record<string, string | undefined> = {}
   for (const k of Object.keys(process.env)) saved[k] = process.env[k]
   process.env.HOME = root
+  process.env.USERPROFILE = root
+  process.env.LOCALAPPDATA = root
+  process.env.APPDATA = root
   process.env.DSH_HOME = root
   process.env.DSH_STATE_DIR = root
   process.env.DSH_AGY_ACCOUNTS_DIR = root
@@ -37,6 +40,7 @@ function sandbox(t: TestContext): string {
   delete process.env.DSH_AGY_BIN
   delete process.env.DSH_AGY_ENABLED
   delete process.env.DSH_AGY_DEFAULT_MODEL
+  delete process.env.DSH_AGY_PROXY_URL
   t.after(() => {
     for (const k of Object.keys(process.env)) {
       if (!(k in saved)) delete process.env[k]

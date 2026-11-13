@@ -23,6 +23,21 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 	const { tool, input } = info;
 	const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary', 'Instruction', 'instruction');
 
+	if (tool === 'invoke_subagent') {
+		const directRole = pick(input, 'Role', 'role');
+		const directTypeName = pick(input, 'TypeName', 'typeName');
+		const effRole = directRole && directTypeName ? `${directRole} (${directTypeName})` : (directRole ?? directTypeName);
+		const prompt = pick(input, 'Prompt', 'prompt');
+		return {
+			kind: 'generic',
+			tool,
+			server: info.server,
+			title: desc ?? (effRole ? `Subagent · ${effRole}` : 'Invoke Subagent'),
+			command: prompt,
+			output: out,
+			raw: parsedArgsRaw(block),
+		};
+	}
 	if (QUESTION_TOOLS.has(tool)) {
 		const questionsRaw = (input as Record<string, unknown>).questions ?? (input as Record<string, unknown>).Questions;
 		const questions = Array.isArray(questionsRaw) ? (questionsRaw as Array<{ question?: string; options?: string[]; is_multi_select?: boolean }>) : [];

@@ -1344,7 +1344,14 @@ test('/assets rejects traversal, missing assets and directories; serves mermaid 
   mkdirSync(join(assets, 'nested'), { recursive: true })
   writeFileSync(join(assets, 'app.js'), 'console.log(1)')
   writeFileSync(join(root, 'secret.txt'), 'secret')
-  symlinkSync(join(root, 'secret.txt'), join(assets, 'escape.txt'))
+  let symlinked = true
+  try {
+    symlinkSync(join(root, 'secret.txt'), join(assets, 'escape.txt'))
+  } catch {
+    // Windows without Developer Mode refuses symlink creation (EPERM). The escape
+    // case below cannot be exercised there; the remaining assertions still run.
+    symlinked = false
+  }
 
   const s = setup({ hostDir: root })
   const assetRoute = s.route('/plugins/agy-link/assets')
@@ -1357,9 +1364,13 @@ test('/assets rejects traversal, missing assets and directories; serves mermaid 
   assert.equal(traversal.status(), 404, 'encoded traversal resolves to a literal name and is not served')
   assert.equal(traversal.text(), 'asset not found')
 
-  const escaped = await invoke(assetRoute, fakeReq('GET', '/plugins/agy-link/assets/escape.txt'))
-  assert.equal(escaped.status(), 403, 'symlink escape is forbidden')
-  assert.equal(escaped.text(), 'forbidden')
+  if (symlinked) {
+    const escaped = await invoke(assetRoute, fakeReq('GET', '/plugins/agy-link/assets/escape.txt'))
+    assert.equal(escaped.status(), 403, 'symlink escape is forbidden')
+    assert.equal(escaped.text(), 'forbidden')
+  } else {
+    t.diagnostic('symlink creation unavailable on this host: escape assertion skipped')
+  }
 
   const directory = await invoke(assetRoute, fakeReq('GET', '/plugins/agy-link/assets/nested'))
   assert.equal(directory.status(), 403)

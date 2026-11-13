@@ -13,14 +13,7 @@ import { scanAndEnhanceImages as scanAndEnhanceImagesImpl } from './images/scann
 
 export { buildMediaUrl, isImageFile } from './images/media.ts';
 export { openLightbox } from './images/lightbox.ts';
-export {
-  installImageEnhancer,
-  openInSidebar,
-  setClientContext,
-  fileAddressFor,
-  parseFilePathAndLine,
-  resolveSessionId,
-} from './images/scanner.ts';
+export { installImageEnhancer, setClientContext, openInRightSidebar } from './images/scanner.ts';
 
 /** Scan the DOM, gated by the shared scroll/overlay lock. */
 export function scanAndEnhanceImages(): void {

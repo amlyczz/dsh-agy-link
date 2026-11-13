@@ -194,7 +194,7 @@ export function apply(ctx: ClientContext): void {
 	// leaves them as plain code blocks). Same lifecycle contract as above.
 	ctx.effect(() => installMermaidRendering());
 
-	// Local image display + fullscreen lightbox + right sidebar file opener.
+	// Local image display + fullscreen lightbox + native right-sidebar file opener.
 	ctx.effect(() => installImageEnhancer(ctx));
 
 	// Interactive user decision & choice chips (recovered working tree).

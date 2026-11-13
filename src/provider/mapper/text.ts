@@ -20,3 +20,22 @@ export function rewriteImageMarkdown(text: string, mediaBaseUrl?: string): strin
     },
   )
 }
+
+/** Normalize Markdown file links: strip file:/// prefix so DSH's native markdown compiler treats them as local files and opens them in the native right sidebar. */
+export function normalizeFileLinks(text: string): string {
+  if (!text) return text
+  return text.replace(
+    /(^|[^\!])\[([^\]]+)\]\((file:\/\/\/[^\s)]+|file:\/\/[^\s)]+)\)/g,
+    (_, prefix, label, url) => {
+      let target = url.trim()
+      if (target.startsWith('file://')) {
+        target = target.slice(7)
+        if (/^\/[A-Za-z]:/.test(target)) {
+          target = target.slice(1)
+        }
+      }
+      target = target.replace(/\\/g, '/')
+      return `${prefix}[${label}](${target})`
+    },
+  )
+}

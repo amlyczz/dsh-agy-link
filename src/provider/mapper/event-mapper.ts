@@ -20,7 +20,7 @@ import { type CompactionNotice, renderCompactionMarker } from '../../common/comp
 import { type GoalContext, buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock } from '../../host/dsh-goal.ts'
 import { unwrapMcpTool } from '../../host/mirror-tool.ts'
 import { composeThinkingText } from './thoughts.ts'
-import { rewriteImageMarkdown, suffixDelta } from './text.ts'
+import { normalizeFileLinks, rewriteImageMarkdown, suffixDelta } from './text.ts'
 import { buildToolCallBlock } from './tool-block.ts'
 import { usageFromRaw } from './usage.ts'
 import type { ToolCallState } from './tool-calls.ts'
@@ -102,7 +102,6 @@ export class EventMapper {
   private totalTextOutput = ''
   private readonly toolCallStates = new Map<string, ToolCallState>()
   private emittedCompactionNotice = false
-  private sawSubagentBanner = false
 
   constructor(private readonly opts: EventMapperOptions) {
     this.sawTextStep = opts.initialSawText === true
@@ -258,7 +257,7 @@ export class EventMapper {
         this.sawTextStep = true
         yield* this.ensureBlock('text')
         let d: StreamChunk | null
-        const processedText = this.opts.mediaBaseUrl ? rewriteImageMarkdown(ev.text, this.opts.mediaBaseUrl) : ev.text
+        const processedText = normalizeFileLinks(this.opts.mediaBaseUrl ? rewriteImageMarkdown(ev.text, this.opts.mediaBaseUrl) : ev.text)
         if (ev.fragment === true) {
           // Sequential fragment (text_delta): append in arrival order.
           const acc = (this.emittedByKey.get(ev.stepKey) ?? '') + processedText
@@ -281,8 +280,8 @@ export class EventMapper {
         return
       }
       if (ev.stepKind === 'thinking' || ev.stepKind === 'subagent') {
+        yield* this.ensureBlock('reasoning')
         if (ev.stepKind === 'thinking') {
-          yield* this.ensureBlock('reasoning')
           const dbThought = this.opts.resolvedThoughts?.get(absIndex)
           if (dbThought && dbThought.trim() !== '') {
             const prev = this.emittedByKey.get(ev.stepKey) ?? ''
@@ -303,14 +302,10 @@ export class EventMapper {
           // duplicate the whole transcript. Track the step's accumulated text
           // and emit only the grown suffix (same contract as the thinking
           // branch), with the banner on the first emission only.
-          if (ev.text.trim() === '') return
           const prev = this.emittedByKey.get(ev.stepKey) ?? ''
           const deltaText = suffixDelta(prev, ev.text)
           this.emittedByKey.set(ev.stepKey, ev.text)
-          if (deltaText === '') return
-          yield* this.ensureBlock('reasoning')
-          const banner = !this.sawSubagentBanner ? (ev.text.startsWith('\n') ? '[agy subagent]' : '[agy subagent] ') : ''
-          this.sawSubagentBanner = true
+          const banner = prev === '' && !ev.text.startsWith('[') ? '[agy subagent] ' : ''
           const d = this.appendDelta(banner + deltaText)
           if (d) yield d
         }
@@ -386,9 +381,10 @@ export class EventMapper {
       // with no response stays passive here — the adapter owns terminal failures
       // (auth / process / invalid-output) and reads the envelope error from the parser.
       if (ev.response === '') return
+      const respText = normalizeFileLinks(ev.response)
       if (!this.sawTextStep) {
         yield* this.ensureBlock('text')
-        const d = this.appendDelta(ev.response)
+        const d = this.appendDelta(respText)
         if (d) yield d
       }
       if (ev.error !== undefined && ev.error !== '') {
@@ -398,7 +394,7 @@ export class EventMapper {
       }
     } else if (!this.sawTextStep && ev.response !== '') {
       yield* this.ensureBlock('text')
-      const d = this.appendDelta(ev.response)
+      const d = this.appendDelta(normalizeFileLinks(ev.response))
       if (d) yield d
     }
     yield* this.flushBannerOnlyThoughts()

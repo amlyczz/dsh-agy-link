@@ -24,6 +24,17 @@
   - `scripts/publish-retry.mjs` now: skips an already-published version (idempotent re-runs), retries only transient errors with backoff, fails fast on fatal auth/version errors, and polls `npm view <name>@<version> version` after a successful publish. Slow registry propagation (2–6 min observed) is a WARNING, not a failed run; `PUBLISH_STRICT_VERIFY=1` makes it fatal for canaries. Publish workflow uses the wrapper.
   - 8 unit tests cover classification, retry/exhaustion, fatal fast-fail, idempotency, and post-publish verification.
 - **Fix(test): widen the watchdog keep-alive tests' timing margin.** Two `proxy-keychain` tests timed out at 800ms whenever a fully parallel `npm test` starved the parent event loop; they are a Publish gate, so the flake could block releases. Child activity now outlives a 2000ms idle budget with the same keep-alive semantics. Full suite: 1028/1028.
+- **Feature: subagent activity streams live into DSH, and local file links open in the native right Sidebar.**
+  - **Live subagent progress.** New `src/features/subagent/tracker.ts` follows agy's `brain/<conversationId>/.system_generated/` tree while a run is active: it discovers every `subagents/*.json` descriptor (nesting included), then tails each worker's `transcript.jsonl` and emits one `stepKind: 'subagent'` event per tool call and per planner milestone. A 40-minute delegation no longer looks like a single frozen `invoke_subagent` card — the reasoning channel shows which file each worker reads or edits, which command it runs, which concept art it generates. Every emitted event also refreshes the idle watchdog, because a worker writing to disk is real progress.
+  - **Bounded tailing.** Each poll reads only the bytes appended since the previous one and buffers a half-written trailing line, so an hours-long transcript costs one small read per tick instead of a full re-read and re-parse.
+  - **Honest failure reporting.** Unexpected tracker errors go to the run logger instead of being swallowed; ordinary churn (a row still being written, a rotated file, a denied read) stays quiet.
+  - **Subagent cards.** `invoke_subagent` now reads the flat `Role`/`TypeName` argv agy actually sends, so the mirror presenter and the client card both title the call `Subagent: DeepInvestigator (Deep Game Investigator)`; `toolStepBrief` follows the same keys.
+- **Feature: local file links open in DSH's native right Sidebar.**
+  - The provider rewrites `[label](file:///…)` to the plain local path before DSH renders the Markdown (keeping a `#L…` anchor in the form DSH already parses), so a delivered artifact becomes a native file chip whose click opens the right Sidebar — no plugin code involved.
+  - Replies that already rendered a raw `file://` anchor are intercepted by the client scanner: clicking the link text opens the same `dsh-resource://file/session/<sessionId>/<path>` address through `ctx.sidebarRight.openResource` (no extra badge — the link is the affordance; a `#L12` anchor rides as `params.line`, and a path inside the workspace travels relative, exactly as `fileAddressFor` builds it). If no preview tab type can claim that address (web/headless profiles) the click falls back to the OS opener instead of reporting a false success.
+  - Opening no longer depends on the file's shell association: `/plugins/agy-link/open` resolves `~` paths, `#L12-L40` anchors and Antigravity's `brain/` directories (now media search roots), so an artifact under `~/.dsh/agy-accounts/…` stops 404ing.
+- **Fix(windows): opening a local file honours the registry's modern default app.** `cmd /c start` silently did nothing when the `.md` association pointed at an uninstalled program; the opener now tries PowerShell `Start-Process` first (the ShellExecute path that respects the user's current choice, e.g. VS Code), then `code`/`notepad` for text files, then reveals the file in Explorer, and passes `/select,<path>` as the single argument Explorer expects.
+- **Fix(test): the full suite is green on Windows.** Three cases redirected `HOME` alone although `os.homedir()` reads `USERPROFILE` there — they now redirect both (and no longer risk reading the developer's live token file); a path assertion compared `/`-separated prefixes against `path.join` output; the symlink-escape case is skipped where symlink creation is not permitted. Full suite: 1035/1035 (1 environment skip).
 
 ### 中文
 
@@ -47,6 +58,18 @@
   - `scripts/publish-retry.mjs`：已发布则跳过（可重复运行）、只对瞬态错误退避重试、鉴权/版本类致命错误立即失败，发布成功后轮询 `npm view` 确认。registry 传播慢（实测 2–6 分钟）只告警不误判失败，canary 可用 `PUBLISH_STRICT_VERIFY=1` 严格化。
   - 8 项单测覆盖错误分类、重试/耗尽、致命快失败、幂等与发布后校验。
 - **修复(测试)：加宽 watchdog 保活用例的计时余量。** 两项 `proxy-keychain` 用例在满并发下会被父进程事件循环饿死导致 800ms 误超时；它们是发布门禁，flaky 会挡住发版。现子进程活动长于 2000ms 空闲预算且语义不变；全量 1028/1028。
+
+- **新功能：子代理活动实时流式呈现，本地文件链接直接在 DSH 原生右侧边栏打开。**
+  - **子代理实时进度。** 新增 `src/features/subagent/tracker.ts`：运行期间跟随 agy 的 `brain/<会话ID>/.system_generated/` 目录树，自动发现每个 `subagents/*.json` 描述文件（含多层嵌套），并增量读取各专员的 `transcript.jsonl`；每次工具调用与每条规划里程碑都会产生一条 `stepKind: 'subagent'` 事件。40 分钟的委派不再只显示一张冻结的 `invoke_subagent` 卡片——思考区会实时显示专员正在读/改哪个文件、执行什么命令、生成哪张概念图。每条事件同时刷新空闲看门狗，因为专员在磁盘上写进度就是真实进展。
+  - **增量读取。** 每次轮询只读取上次之后新增的字节，并缓存未写完的最后一行；再长的会话记录每跳只付一次小读取，而不是整篇重读重解析。
+  - **失败不再静默。** 非预期的跟踪错误写入运行日志；正常抖动（行还没写完、文件被替换、读取被拒）保持安静。
+  - **子代理卡片。** `invoke_subagent` 现在读取 agy 实际发送的扁平 `Role`/`TypeName` 参数，镜像卡片与客户端卡片都显示 `Subagent: DeepInvestigator (Deep Game Investigator)`；`toolStepBrief` 同步。
+- **新功能：本地文件链接在 DSH 原生右侧边栏打开。**
+  - Provider 在交给 DSH 渲染前把 `[label](file:///…)` 改写为纯本地路径（行号锚点保留为 DSH 已支持的 `#L…` 形式），于是交付件直接渲染成原生文件 chip，点击即打开右侧边栏，全程无需插件脚本。
+  - 已经渲染成裸 `file://` 锚点的历史回复，由客户端扫描器接管点击：点击链接文字即通过 `ctx.sidebarRight.openResource` 打开同一个 `dsh-resource://file/session/<会话ID>/<路径>` 地址（不再挂额外胶囊——链接文字本身就是入口；`#L12` 锚点以 `params.line` 传递，工作区内路径按 `fileAddressFor` 的规则转为相对路径）。若当前配置没有任何预览类型能接收该地址（web/headless 配置），点击回退到系统打开，而不是谎报成功。
+  - 打开不再依赖文件关联：`/plugins/agy-link/open` 现在能解析 `~` 路径、`#L12-L40` 锚点与 Antigravity 的 `brain/` 目录（已并入媒体检索根），`~/.dsh/agy-accounts/…` 下的交付件不再 404。
+- **修复(Windows)：用系统现代默认程序打开本地文件。** 当 `.md` 关联指向一个已卸载的程序时，`cmd /c start` 会静默失败；现在优先用 PowerShell `Start-Process`（ShellExecute 路径，尊重用户当前选择，例如 VS Code），文本类文件再回退 `code`/`notepad`，最后回退到在资源管理器中定位，并把 `/select,<路径>` 作为 Explorer 期望的单个参数传入。
+- **修复(测试)：Windows 下全量回归全绿。** 三处用例只重定向了 `HOME`，而 Windows 的 `os.homedir()` 读的是 `USERPROFILE`——现在两个都重定向（也避免误读开发者真实 token 文件）；一处路径断言把 `/` 前缀与 `path.join` 的结果比较；符号链接逃逸用例在不允许创建符号链接的环境下跳过。全量：1035/1035（1 项环境跳过）。
 
 ## 0.6.21 (2026-11-12)
 

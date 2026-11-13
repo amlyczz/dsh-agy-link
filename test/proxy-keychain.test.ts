@@ -28,8 +28,10 @@ test('resolveConfig reads proxyUrl from entry, overrides and env', () => {
   // operator-configured proxy on this machine would otherwise win over the
   // entry layer and make this assertion environment-dependent.
   const prevHome = process.env.DSH_HOME
+  const prevAgyProxy = process.env.DSH_AGY_PROXY_URL
   const isolatedHome = mkdtempSync(join(tmpdir(), 'agy-cfg-home-'))
   process.env.DSH_HOME = isolatedHome
+  delete process.env.DSH_AGY_PROXY_URL
   try {
   assert.equal(resolveConfig({ proxyUrl: 'http://p:1' }).proxyUrl, 'http://p:1')
   const overrides = join(tmpdir(), `agy-ovr-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
@@ -49,6 +51,8 @@ test('resolveConfig reads proxyUrl from entry, overrides and env', () => {
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
+    if (prevAgyProxy === undefined) delete process.env.DSH_AGY_PROXY_URL
+    else process.env.DSH_AGY_PROXY_URL = prevAgyProxy
     rmSync(isolatedHome, { recursive: true, force: true })
   }
 })

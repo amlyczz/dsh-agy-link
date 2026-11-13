@@ -4,7 +4,7 @@
 import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
 const MIME_MAP: Record<string, string> = {
@@ -53,6 +53,9 @@ function safeDecodeUri(s: string): string | null {
 
 function parseRawMediaUri(raw: string): string | null {
   let p = raw;
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    p = join(homedir(), p.slice(2));
+  }
   if (p.startsWith('file://')) {
     let converted: string | null = null;
     try {
@@ -147,9 +150,12 @@ export function resolveLocalMediaPath(
   const p = parseRawMediaUri(rawPath.trim());
   if (p === null) return null;
 
+  // Strip query string and fragment/hash (e.g. #L123-L145 or ?v=1)
+  const cleanPath = p.split(/[?#]/)[0] ?? p;
+
   // If path is already absolute, check directly
-  if ((IS_WIN && (/^[A-Za-z]:/.test(p) || p.startsWith('\\\\'))) || (!IS_WIN && p.startsWith('/'))) {
-    const resolved = resolve(p);
+  if ((IS_WIN && (/^[A-Za-z]:/.test(cleanPath) || cleanPath.startsWith('\\\\'))) || (!IS_WIN && cleanPath.startsWith('/'))) {
+    const resolved = resolve(cleanPath);
     if (existsSync(resolved)) return resolved;
   }
 
@@ -163,14 +169,14 @@ export function resolveLocalMediaPath(
     }
   }
 
-  const strippedRel = p.replace(/^[/\\]+/, '');
-  const baseName = extname(p) ? p.split(/[/\\]/).pop()! : p;
+  const strippedRel = cleanPath.replace(/^[/\\]+/, '');
+  const baseName = extname(cleanPath) ? cleanPath.split(/[/\\]/).pop()! : cleanPath;
 
   for (const root of roots) {
-    const candidate = resolve(root, p);
+    const candidate = resolve(root, cleanPath);
     if (existsSync(candidate)) return candidate;
 
-    if (strippedRel !== p) {
+    if (strippedRel !== cleanPath) {
       const relCandidate = resolve(root, strippedRel);
       if (existsSync(relCandidate)) return relCandidate;
     }
@@ -185,7 +191,7 @@ export function resolveLocalMediaPath(
     if (found) return found;
   }
 
-  const resolved = resolve(p);
+  const resolved = resolve(cleanPath);
   if (existsSync(resolved)) {
     return resolved;
   }
@@ -335,13 +341,55 @@ export function executeOpenInSystem(targetPath: string, reveal = false): { ok: b
     }
     if (process.platform === 'win32') {
       if (reveal) {
-        const child = spawn('explorer.exe', ['/select,', targetPath], { detached: true, stdio: 'ignore' });
+        const child = spawn('explorer.exe', [`/select,${targetPath}`], { detached: true, stdio: 'ignore' });
         child.unref();
-      } else {
-        const child = spawn('cmd.exe', ['/c', 'start', '""', targetPath], { detached: true, stdio: 'ignore' });
-        child.unref();
+        return { ok: true };
       }
-      return { ok: true };
+
+      // 1. Try modern ShellExecute via PowerShell Start-Process (respects UserChoice e.g. VS Code, unlike legacy cmd.exe assoc)
+      try {
+        const psCmd = `Start-Process -FilePath "${targetPath.replace(/"/g, '`"')}" -ErrorAction Stop`;
+        const res = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], {
+          timeout: 4000,
+          encoding: 'utf-8',
+          windowsHide: true,
+        });
+        if (res.status === 0) {
+          return { ok: true };
+        }
+      } catch {
+        // Fall back below
+      }
+
+      // 2. If it is a text-like file and PowerShell failed, try opening with code or notepad
+      const ext = extname(targetPath).toLowerCase();
+      const isTextLike = ['.md', '.txt', '.json', '.jsonl', '.yaml', '.yml', '.ts', '.js', '.py', '.gd', '.log', '.env'].includes(ext);
+      if (isTextLike) {
+        try {
+          const codeRes = spawnSync('cmd.exe', ['/c', 'code', targetPath], { timeout: 3000, windowsHide: true });
+          if (codeRes.status === 0) {
+            return { ok: true };
+          }
+        } catch {
+          // ignore
+        }
+        try {
+          const child = spawn('notepad.exe', [targetPath], { detached: true, stdio: 'ignore' });
+          child.unref();
+          return { ok: true };
+        } catch {
+          // ignore
+        }
+      }
+
+      // 3. Fallback to explorer reveal if direct opening failed
+      try {
+        const child = spawn('explorer.exe', [`/select,${targetPath}`], { detached: true, stdio: 'ignore' });
+        child.unref();
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
     }
     const child = spawn('xdg-open', [targetPath], { detached: true, stdio: 'ignore' });
     child.unref();

@@ -10,6 +10,7 @@ import {
   type HttpRequestLike,
   type HttpResponseLike,
 } from '../../../host/media-route.ts'
+import { brainDirCandidates } from '../../../runtime/agy/db/paths.ts'
 
 function handleMermaid(services: HostServices, req: unknown, res: unknown): void {
   const { hostDir } = services
@@ -64,6 +65,14 @@ function collectWorkspaceRoots(services: HostServices): string[] {
   if (existsSync(desktop) && !roots.includes(desktop)) roots.push(desktop)
   if (existsSync(downloads) && !roots.includes(downloads)) roots.push(downloads)
   if (!roots.includes(home)) roots.push(home)
+
+  try {
+    for (const b of brainDirCandidates()) {
+      if (existsSync(b) && !roots.includes(b)) roots.push(b)
+    }
+  } catch {
+    // ignore
+  }
 
   return roots
 }

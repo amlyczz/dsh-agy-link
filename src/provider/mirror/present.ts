@@ -256,17 +256,17 @@ function cleanRole(raw?: string): string | undefined {
 }
 
 function presentSubagentCall(input: Record<string, unknown>): ToolCallView {
-  const directRole = pick(input, 'Role', 'role', 'TypeName', 'typeName')
   const subs = input.Subagents ?? input.subagents
-  const subRole =
-    Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown; role?: unknown }).Role === 'string'
-      ? ((subs[0] as { Role: string }).Role)
-      : Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { TypeName?: unknown; typeName?: unknown }).TypeName === 'string'
-        ? ((subs[0] as { TypeName: string }).TypeName)
-        : undefined
-  const firstRole = cleanRole(directRole) ?? cleanRole(subRole)
+  const subRole = Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown; role?: unknown }).Role === 'string'
+    ? ((subs[0] as { Role: string }).Role)
+    : Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { TypeName?: unknown; typeName?: unknown }).TypeName === 'string'
+      ? ((subs[0] as { TypeName: string }).TypeName)
+      : undefined
+  const directRole = cleanRole(pick(input, 'Role', 'role'))
+  const directTypeName = cleanRole(pick(input, 'TypeName', 'typeName'))
+  const effRole = cleanRole(subRole) ?? (directRole && directTypeName ? `${directRole} (${directTypeName})` : (directRole ?? directTypeName))
   const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
-  const title = desc ?? (firstRole ? `Subagent: ${firstRole}` : 'Invoke subagent')
+  const title = desc ?? (effRole ? `Subagent: ${effRole}` : 'Invoke subagent')
   return { card: 'generic', title, kind: 'execute', rawInput: input }
 }
 

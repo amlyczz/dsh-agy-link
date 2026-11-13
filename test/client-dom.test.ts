@@ -17,15 +17,7 @@ const ReactDOMClient = nodeRequire('react-dom/client') as any;
 const testUtils = nodeRequire('react-dom/test-utils') as any;
 
 import { openLightbox } from '../src/client/images/lightbox.ts';
-import {
-	installImageEnhancer,
-	scanAndEnhanceImages,
-	openInSidebar,
-	fileAddressFor,
-	parseFilePathAndLine,
-	resolveSessionId,
-	setClientContext,
-} from '../src/client/images/scanner.ts';
+import { installImageEnhancer, openInRightSidebar, scanAndEnhanceImages, setClientContext } from '../src/client/images/scanner.ts';
 import { installDecisionChips, insertTextIntoChatComposer, scanAndEnhanceDecisions } from '../src/client/decisions.ts';
 import {
 	buildCompactionRow,
@@ -303,8 +295,11 @@ test('image scanner: enhances file:// image links but ignores non-images', () =>
 	assert.ok(chip, 'preview chip');
 	assert.equal(typeof chip.onclick, 'function', 'chip has click handler for lightbox');
 	assert.equal(imgLink.onclick, null, 'native link onclick is NOT hijacked');
-	assert.equal(txtLink.dataset.agyLinkEnhanced, undefined, 'non-image link untouched');
+	assert.equal(txtLink.dataset.agyLinkEnhanced, undefined, 'non-image link not marked as image enhanced');
 	assert.equal(txtLink.querySelector('.agy-image-link-icon'), null);
+	assert.equal(txtLink.dataset.agyFileEnhanced, 'true', 'marked as file enhanced');
+	assert.equal(txtLink.querySelector('.agy-file-link-icon'), null, 'no badge is injected — the link text is the affordance');
+	assert.equal(txtLink.textContent, 'notes', 'link text is left untouched');
 	scanAndEnhanceImages();
 	assert.equal(imgLink.querySelectorAll('.agy-image-link-icon').length, 1, 'idempotent chip');
 });
@@ -365,106 +360,6 @@ test('image scanner: install early-returns without a window/document', () => {
 	delete (globalThis as unknown as Record<string, unknown>).document;
 	const dispose = installImageEnhancer();
 	assert.equal(typeof dispose, 'function');
-	dispose();
-});
-
-test('parseFilePathAndLine: extracts clean path and line number correctly', () => {
-	assert.deepEqual(parseFilePathAndLine('file:///Users/zqy/test.md#L10-L20'), { cleanPath: '/Users/zqy/test.md', line: 10 });
-	assert.deepEqual(parseFilePathAndLine('file:///Users/zqy/test.md:42'), { cleanPath: '/Users/zqy/test.md', line: 42 });
-	assert.deepEqual(parseFilePathAndLine('file:///C:/Users/zqy/test.md#L5'), { cleanPath: 'C:/Users/zqy/test.md', line: 5 });
-	assert.deepEqual(parseFilePathAndLine('file:///Users/zqy/path%20with%20spaces/test.md#L5'), { cleanPath: '/Users/zqy/path with spaces/test.md', line: 5 });
-	assert.deepEqual(parseFilePathAndLine('scripts/player.gd'), { cleanPath: 'scripts/player.gd', line: undefined });
-});
-
-test('fileAddressFor: formats session resource address correctly', () => {
-	const sessionId = 'test-session-123';
-	const cwd = '/Users/zqy/project';
-	assert.equal(fileAddressFor(sessionId, cwd, 'src/main.ts'), 'dsh-resource://file/session/test-session-123/src/main.ts');
-	assert.equal(fileAddressFor(sessionId, cwd, '/Users/zqy/project/src/main.ts'), 'dsh-resource://file/session/test-session-123/src/main.ts');
-	assert.equal(fileAddressFor(sessionId, cwd, '/Users/zqy/other/doc.md'), 'dsh-resource://file/session/test-session-123//Users/zqy/other/doc.md');
-});
-
-test('openInSidebar: routes file path into DSH sidebarRight service with line param', async () => {
-	let openedAddress = '';
-	let openedOptions: any = null;
-	const mockCtx = {
-		sidebarRight: {
-			mounted: { getSnapshot: () => 'sess-abc' },
-			openResource: (addr: string, opts: any) => {
-				openedAddress = addr;
-				openedOptions = opts;
-			},
-		},
-		sessions: {
-			list: { getSnapshot: () => ({ byId: { 'sess-abc': { cwd: '/Users/zqy/app' } } }) },
-		},
-	};
-
-	const ok = await openInSidebar('file:///Users/zqy/app/src/index.ts#L42', mockCtx);
-	assert.equal(ok, true);
-	assert.equal(openedAddress, 'dsh-resource://file/session/sess-abc/src/index.ts');
-	assert.deepEqual(openedOptions, { params: { line: 42 } });
-});
-
-test('openInSidebar: outside workspace file keeps absolute path and succeeds', async () => {
-	let openedAddress = '';
-	let openedOptions: any = null;
-	const mockCtx = {
-		sidebarRight: {
-			mounted: { getSnapshot: () => 'sess-xyz' },
-			openResource: (addr: string, opts: any) => {
-				openedAddress = addr;
-				openedOptions = opts;
-			},
-		},
-		sessions: {
-			list: { getSnapshot: () => ({ byId: { 'sess-xyz': { cwd: '/Users/zqy/app' } } }) },
-		},
-	};
-
-	const ok = await openInSidebar('file:///Users/zqy/.gemini/antigravity/scratch/notes.md', mockCtx);
-	assert.equal(ok, true);
-	assert.equal(openedAddress, 'dsh-resource://file/session/sess-xyz//Users/zqy/.gemini/antigravity/scratch/notes.md');
-	assert.deepEqual(openedOptions, {});
-});
-
-test('openInSidebar: graceful fallback to false when sidebarRight is missing', async () => {
-	const ok = await openInSidebar('file:///some/file.md', {});
-	assert.equal(ok, false);
-});
-
-test('handleGlobalLinkClick: intercepting file link calls openInSidebar', async () => {
-	let openedAddress = '';
-	let openedOptions: any = null;
-	const mockCtx = {
-		sidebarRight: {
-			mounted: { getSnapshot: () => 'sess-click' },
-			openResource: (addr: string, opts: any) => {
-				openedAddress = addr;
-				openedOptions = opts;
-			},
-		},
-		sessions: {
-			list: { getSnapshot: () => ({ byId: { 'sess-click': { cwd: '/Users/zqy/app' } } }) },
-		},
-	};
-	setClientContext(mockCtx);
-	const dispose = installImageEnhancer(mockCtx);
-
-	const link = document.createElement('a');
-	link.href = 'file:///Users/zqy/app/docs/spec.md#L15';
-	link.setAttribute('href', 'file:///Users/zqy/app/docs/spec.md#L15');
-	link.textContent = 'spec.md';
-	document.body.appendChild(link);
-
-	link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-
-	// Give async openInSidebar a tick to resolve
-	await new Promise((r) => setTimeout(r, 20));
-
-	assert.equal(openedAddress, 'dsh-resource://file/session/sess-click/docs/spec.md');
-	assert.deepEqual(openedOptions, { params: { line: 15 } });
-
 	dispose();
 });
 
@@ -894,4 +789,125 @@ test('session status header badge: hidden when showHeaderBadge=false and restore
 	await act(async () => { publishStatusSnapshot({ showHeaderBadge: true, pool: defaultPoolData() }); await Promise.resolve(); });
 	assert.ok(container.querySelector('.agy-session-status-btn'), 'header button restored when showHeaderBadge=true');
 	await act(() => { root.unmount(); });
+});
+
+test('openInRightSidebar: opens file in DSH native right sidebar with relativized path and line options', () => {
+	// Without context, returns false
+	setClientContext(null);
+	assert.equal(openInRightSidebar('D:/proj/test.md'), false);
+
+	const opened: Array<{ url: string; options?: any }> = [];
+	const mockSidebarRight = {
+		mounted: { getSnapshot: () => 'session-alpha-1' },
+		openResource: (url: string, options?: any) => {
+			opened.push({ url, options });
+		},
+	};
+	const mockSessions = {
+		list: {
+			getSnapshot: () => ({
+				byId: {
+					'session-alpha-1': { cwd: 'D:/proj/zombie-madness' },
+				},
+			}),
+		},
+	};
+	const mockTabs = {
+		get: (id: string) => (id === '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' ? { id } : undefined),
+	};
+
+	setClientContext({ sidebarRight: mockSidebarRight, sessions: mockSessions, sidebarRightTabs: mockTabs });
+
+	// 1. File inside cwd is relativized
+	opened.length = 0;
+	assert.equal(openInRightSidebar('file:///D:/proj/zombie-madness/zombie_madness_reconstruction_masterplan.md'), true);
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/zombie_madness_reconstruction_masterplan.md');
+	assert.equal(opened[0]?.options, undefined);
+
+	// 2. Line number hash is extracted into options.params.line
+	opened.length = 0;
+	assert.equal(openInRightSidebar('file:///D:/proj/zombie-madness/src/main.ts#L42'), true);
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/src/main.ts');
+	assert.deepEqual(opened[0]?.options, { params: { line: 42 } });
+
+	// 3. File outside cwd retains full normalized path
+	opened.length = 0;
+	assert.equal(openInRightSidebar('C:/Users/zand/documents/notes.md'), true);
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/C:/Users/zand/documents/notes.md');
+
+	// 4. Backslash spellings and `file://` with one slash also normalize
+	opened.length = 0;
+	assert.equal(openInRightSidebar('file://D:\\proj\\zombie-madness\\docs\\plan.md'), true);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/docs/plan.md');
+
+	// Clean up
+	setClientContext(null);
+});
+
+test('openInRightSidebar: declines when no preview tab type can claim the address', () => {
+	const opened: string[] = [];
+	const sidebarRight = {
+		mounted: { getSnapshot: () => 'session-gamma-3' },
+		openResource: (url: string) => {
+			opened.push(url);
+		},
+	};
+	setClientContext({ sidebarRight, sidebarRightTabs: { get: () => undefined } });
+	assert.equal(openInRightSidebar('D:/proj/plan.md'), false, 'no preview tab type → caller falls back');
+	assert.equal(opened.length, 0, 'nothing was opened');
+	setClientContext(null);
+});
+
+test('file links scanner: clicking a local file link opens the native sidebar (no badge injected)', () => {
+	const opened: Array<{ url: string; options?: any }> = [];
+	const mockSidebarRight = {
+		mounted: { getSnapshot: () => 'session-beta-2' },
+		openResource: (url: string, options?: any) => {
+			opened.push({ url, options });
+		},
+	};
+	const mockSessions = {
+		list: {
+			getSnapshot: () => ({
+				byId: {
+					'session-beta-2': { cwd: 'D:/workspace' },
+				},
+			}),
+		},
+	};
+	setClientContext({
+		sidebarRight: mockSidebarRight,
+		sessions: mockSessions,
+		sidebarRightTabs: {
+			get: (id: string) => (id === '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' ? { id } : undefined),
+		},
+	});
+
+	const a = document.createElement('a');
+	a.href = 'file:///D:/workspace/plan.md';
+	a.textContent = 'plan.md';
+	document.body.appendChild(a);
+
+	scanAndEnhanceImages();
+
+	assert.equal(a.querySelector('.agy-file-link-icon'), null, 'no badge is injected any more');
+	assert.equal(a.textContent, 'plan.md', 'link text is left untouched');
+
+	// Clicking the link text itself opens the native right Sidebar.
+	opened.length = 0;
+	a.click();
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-beta-2/plan.md');
+
+	// The click is consumed: no navigation and the address is not opened twice.
+	assert.equal(a.dataset.agyFileEnhanced, 'true');
+	opened.length = 0;
+	a.click();
+	assert.equal(opened.length, 1);
+
+	document.body.removeChild(a);
+	setClientContext(null);
 });
