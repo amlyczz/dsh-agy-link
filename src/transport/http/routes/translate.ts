@@ -1,9 +1,9 @@
 import type { HostServices } from '../../../host/services.ts'
-import { sendJson, readBody, methodOf, queryParam, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { runRoute, sendJson, readBody, methodOf, queryParam, type RawRes, type RouteRegistrar } from '../respond.ts'
 
 function handleTranslate(services: HostServices, req: unknown, res: unknown): void {
   const { translation } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -63,7 +63,7 @@ function handleTranslate(services: HostServices, req: unknown, res: unknown): vo
         } catch (e) {
           sendJson(res as RawRes, 500, { error: String(e) })
         }
-      })()
+      })
 }
 
 function handleTranslatePending(services: HostServices, req: unknown, res: unknown): void {

@@ -7,6 +7,8 @@
 import type { FallbackModelDef, PluginConfig } from '../common/types.ts'
 import type { ManagedAccount } from '../common/pool-types.ts'
 import { accountHasArgon, isArgonModel } from '../common/pool-types.ts'
+import { normalizeEfforts, splitEffortSuffix } from '../common/reasoning.ts'
+import { PREFERRED_CLAUDE, PREFERRED_CLAUDE_OPUS, PREFERRED_OPENAI } from '../common/model-lineup.ts'
 import type { AccountPoolManager } from './pool.ts'
 
 export { accountHasArgon, isArgonModel }
@@ -108,12 +110,17 @@ function extractModelList(parsed: unknown): RawModel[] | null {
   return out;
 }
 
-const EFFORT_SUFFIXES = ['low', 'medium', 'high']
 
 /** Fold Gemini/Argon/Claude effort variants into base + effort set (spec ADR-10).
  *  Claude 5.5 is listed only as tiered slugs by agy 1.5.3; the base slug is the
  *  one that accepts `--effort`, and passing a tiered slug together with the flag
- *  is rejected ("--model … conflicts with --effort=…"). */
+ *  is rejected ("--model … conflicts with --effort=…").
+ *
+ *  The effort vocabulary itself (including agy 1.5.7's `xhigh`, which its picker
+ *  labels "Extra") comes from `common/reasoning.ts` — folding must never carry
+ *  its own copy of the list, or a new level silently becomes a bogus MODEL:
+ *  a missed `xhigh` used to surface `gemini-4-hydrogen-xhigh` next to
+ *  `gemini-4-hydrogen` in DSH's picker. */
 export function foldEfforts(raw: readonly RawModel[]): CatalogEntry[] {
   const bases = new Map<string, { label: string; efforts: Set<string> }>()
   const verbatim: CatalogEntry[] = []
@@ -123,49 +130,48 @@ export function foldEfforts(raw: readonly RawModel[]): CatalogEntry[] {
       verbatim.push({ id: r.slug, name: r.label, efforts: null });
       continue;
     }
-    let folded = false
-    for (const eff of EFFORT_SUFFIXES) {
-      const suffix = '-' + eff;
-      if (r.slug.endsWith(suffix)) {
-        const base = r.slug.slice(0, -suffix.length)
-        // Only fold when the base is a real catalog member (either listed
-        // bare or via another variant); gpt-oss-120b-medium never reaches here
-        // (not gemini), but a lone gemini-x-medium with no siblings stays
-        // verbatim rather than inventing a base.
-        const hasBare = slugSet.has(base)
-        const hasSibling = raw.some(
-          (x) => x.slug.startsWith(base + '-') && EFFORT_SUFFIXES.some((e) => x.slug.endsWith('-' + e)) && x.slug !== r.slug,
-        );
-        if (hasBare || hasSibling) {
-        const entry = bases.get(base) ?? { label: stripEffortLabel(r.label, eff), efforts: new Set<string>() };
-          entry.efforts.add(eff)
-          bases.set(base, entry)
-          folded = true;
-          break;
-        }
+    const split = splitEffortSuffix(r.slug)
+    if (split.effort !== undefined) {
+      const base = split.base
+      const eff = split.effort
+      // Only fold when the base is a real catalog member (either listed bare
+      // or via another variant); gpt-oss-120b-medium never reaches here (not
+      // gemini), but a lone gemini-x-medium with no siblings stays verbatim
+      // rather than inventing a base.
+      const hasBare = slugSet.has(base)
+      const hasSibling = raw.some((x) => x.slug !== r.slug && splitEffortSuffix(x.slug).base === base)
+      if (hasBare || hasSibling) {
+        const entry = bases.get(base) ?? { label: stripEffortLabel(r.label, eff), efforts: new Set<string>() }
+        entry.efforts.add(eff)
+        bases.set(base, entry)
+        continue
       }
     }
-    if (!folded) verbatim.push({ id: r.slug, name: r.label, efforts: null });
+    verbatim.push({ id: r.slug, name: r.label, efforts: null });
   }
   const folded: CatalogEntry[] = []
   for (const [id, v] of bases) {
-    const efforts = EFFORT_SUFFIXES.filter((e) => v.efforts.has(e));
+    const efforts = normalizeEfforts(v.efforts)
     folded.push({ id, name: v.label !== '' ? v.label : id, efforts: efforts.length > 0 ? efforts : null });
   }
-  // Folded bases first, then verbatim, both stable by original order.
+  // Rank every output entry by the earliest raw slug it covers.
   const rawOrder = new Map(raw.map((r, i) => [r.slug, i] as const))
   const rank = (e: CatalogEntry): number => {
     let best = Infinity;
     for (const r of raw) if (r.slug === e.id || r.slug.startsWith(e.id + '-')) best = Math.min(best, rawOrder.get(r.slug) ?? Infinity)
     return best;
   };
-  folded.sort((a, b) => rank(a) - rank(b));
-  verbatim.sort((a, b) => rank(a) - rank(b));
   // A bare base listed alongside its variants (agy 1.1.13 shape) is already
   // represented by its folded entry; emitting it verbatim too would duplicate
   // the id and DSH's llm.listModels would reject the whole provider catalog
   // (INVALID_CATALOG), dropping every Antigravity model from the picker.
-  return [...folded, ...verbatim.filter((e) => !bases.has(e.id))];
+  //
+  // ONE list, ranked by the position of the first raw slug it covers: the
+  // picker then lists models in exactly the order `agy models` printed them
+  // (grouping folded-then-verbatim used to push Orchestrator to the bottom
+  // while agy shows it third).
+  return [...folded, ...verbatim.filter((e) => !bases.has(e.id))]
+    .sort((a, b) => rank(a) - rank(b));
 }
 
 function stripEffortLabel(label: string, eff: string): string {
@@ -190,11 +196,11 @@ export function buildFallbackCatalog(defs: readonly FallbackModelDef[]): Catalog
  * never disagree about which models exist.
  */
 export function sanitizeCatalogEntries(models: readonly CatalogEntry[]): {
-  entries: Array<{ id: string; name: string }>
+  entries: Array<{ id: string; name: string; efforts: string[] }>
   dropped: string[]
 } {
   const seen = new Set<string>()
-  const entries: Array<{ id: string; name: string }> = []
+  const entries: Array<{ id: string; name: string; efforts: string[] }> = []
   const dropped: string[] = []
   for (const m of models) {
     if (!m || typeof m.id !== 'string') continue
@@ -206,7 +212,10 @@ export function sanitizeCatalogEntries(models: readonly CatalogEntry[]): {
     }
     seen.add(id)
     const name = typeof m.name === 'string' && m.name.trim() !== '' ? m.name.trim() : id
-    entries.push({ id, name })
+    // The effort set travels with the entry so the settings dropdowns can
+    // offer exactly what the model supports instead of a second hardcoded
+    // low/medium/high list (see common/reasoning.ts).
+    entries.push({ id, name, efforts: normalizeEfforts(m.efforts) })
   }
   return { entries, dropped }
 }
@@ -443,8 +452,8 @@ export function resolveModelSlug(id: string): string {
   const s = id.trim().toLowerCase()
   // Bare aliases follow the current generation; explicit 4.x names stay 4.6 so
   // legacy sessions/accounts keep resolving exactly what they asked for.
-  if (s === 'claude-opus') return 'claude-opus-5-5'
-  if (s === 'claude-sonnet') return 'claude-sonnet-5-5'
+  if (s === 'claude-opus') return PREFERRED_CLAUDE_OPUS
+  if (s === 'claude-sonnet') return PREFERRED_CLAUDE
   if (s === 'claude-opus-4-6' || s === 'claude-opus-4-8' || s === 'claude-opus-4.6' || s === 'claude-opus-4-5') {
     return 'claude-opus-4-6-thinking'
   }
@@ -452,7 +461,7 @@ export function resolveModelSlug(id: string): string {
     return 'claude-sonnet-4-6'
   }
   if (s === 'gpt-oss-120b' || s === 'gpt-oss-20b' || s === 'gpt-oss') {
-    return 'gpt-oss-120b-medium'
+    return PREFERRED_OPENAI
   }
   // Claude 5.5: agy lists tiered slugs, but `--effort` must ride the BASE slug
   // (a tiered slug plus the flag is rejected: "--model … conflicts with").

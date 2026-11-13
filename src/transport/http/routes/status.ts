@@ -1,12 +1,12 @@
 import type { HostServices } from '../../../host/services.ts'
-import { sendJson, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { runRoute, sendJson, type RawRes, type RouteRegistrar } from '../respond.ts'
 import { sanitizeCatalogEntries } from '../../../host/models.ts'
 import { accountSupportsModel } from '../../../common/pool-types.ts'
 
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, bin, store, pool, catalog, auth, poolAuth, adapter, translation, lastRun } = services
   const { version: versionCache, dormantReason } = services.status
-      void (async () => {
+      runRoute(res, async () => {
         const cfg = getConfig()
         const cat = catalog.get()
         const poolData = pool?.getPoolData ? pool.getPoolData(cfg.proxyUrl?.trim() || undefined) : undefined
@@ -45,6 +45,8 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           translateModel: cfg.translateModel,
           translateEffort: cfg.translateEffort,
           translateTargetLanguage: cfg.translateTargetLanguage,
+          showHeaderBadge: cfg.showHeaderBadge,
+          showTranslateAction: cfg.showTranslateAction,
           imageModel: cfg.imageModel,
           imageEffort: cfg.imageEffort,
           imageOutputDir: cfg.imageOutputDir,
@@ -53,7 +55,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           effortUnsupported: adapter.effortUnsupportedModels(),
               lastRun,
         })
-      })()
+      })
 }
 
 export function register(reg: RouteRegistrar, services: HostServices): void {

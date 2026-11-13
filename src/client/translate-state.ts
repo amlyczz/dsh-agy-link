@@ -7,6 +7,7 @@
 // instead of stranding a spinner on the unmounted one.
 
 import { h, useEffect, useState, win, base, currentSessionId, type ClientContextLike } from './translate-context.ts'
+import { isUiVisible, useAgyStatus } from './status.ts'
 import { geminiMark } from './translate-card.ts'
 
 async function postTranslate(body: Record<string, unknown>): Promise<{ ok?: boolean; text?: string; error?: string; code?: string; model?: string; effort?: string } | null> {
@@ -327,6 +328,8 @@ export const TranslateAction = (props?: Record<string, unknown>): unknown => {
 		}
 	}, [key, messageId, sessionId])
 
+	const { status } = useAgyStatus()
+	if (!isUiVisible(status, 'showTranslateAction')) return null
 	if (messageId === '' || sessionId === '') return null
 
 	const apply = (next: ActionState): void => {

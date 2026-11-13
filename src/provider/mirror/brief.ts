@@ -57,11 +57,19 @@ export function toolStepBrief(toolName: string, args: unknown, server?: string):
     return timing ? 'schedule ' + timing : (prompt ? 'schedule ' + prompt.slice(0, 40) : 'schedule')
   }
   if (effTool === 'invoke_subagent') {
+    const directRole = pickStr('Role', 'role', 'TypeName', 'typeName')
     const subs = a.Subagents ?? a.subagents
-    const firstRole = Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown }).Role === 'string'
-      ? (subs[0] as { Role: string }).Role
-      : ''
-    return firstRole ? 'subagent: ' + firstRole : 'invoke subagent'
+    const subRole =
+      Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown; role?: unknown }).Role === 'string'
+        ? ((subs[0] as { Role: string }).Role)
+        : Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { TypeName?: unknown; typeName?: unknown }).TypeName === 'string'
+          ? ((subs[0] as { TypeName: string }).TypeName)
+          : ''
+    let role = (directRole || subRole).trim()
+    if (role.startsWith('"') && role.endsWith('"')) {
+      try { role = JSON.parse(role) } catch { /* ignore */ }
+    }
+    return role ? 'subagent: ' + role : 'invoke subagent'
   }
   if (effTool === 'send_message') {
     const recipient = pickStr('Recipient', 'recipient', 'to')

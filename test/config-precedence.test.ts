@@ -70,3 +70,34 @@ test('hiddenModels accepts string arrays, drops junk, and env wins as a comma li
   const fromEnv = resolveConfig({ hiddenModels: ['entry-model'] }, { DSH_AGY_HIDDEN_MODELS: ' env-model , second, ,' }, {})
   assert.deepEqual(fromEnv.hiddenModels, ['env-model', 'second'])
 })
+
+test('showHeaderBadge and showTranslateAction default to true, accept overrides and env (issue #105)', () => {
+  assert.equal(defaultConfig().showHeaderBadge, true)
+  assert.equal(defaultConfig().showTranslateAction, true)
+
+  const hiddenBoth = resolveConfig({ showHeaderBadge: false, showTranslateAction: false }, {}, {})
+  assert.equal(hiddenBoth.showHeaderBadge, false)
+  assert.equal(hiddenBoth.showTranslateAction, false)
+
+  const envOverride = resolveConfig({}, { DSH_AGY_SHOW_HEADER_BADGE: 'off', DSH_AGY_SHOW_TRANSLATE_ACTION: 'false' }, {})
+  assert.equal(envOverride.showHeaderBadge, false)
+  assert.equal(envOverride.showTranslateAction, false)
+
+  const overrideWins = resolveConfig({ showHeaderBadge: false }, {}, { showHeaderBadge: true })
+  assert.equal(overrideWins.showHeaderBadge, true)
+})
+
+test('issue #105: header badge and translate action are opt-out, visible by default', () => {
+  const defaults = defaultConfig()
+  assert.equal(defaults.showHeaderBadge, true, 'badge stays visible without an explicit opt-out')
+  assert.equal(defaults.showTranslateAction, true, 'translate action stays visible without an explicit opt-out')
+  // Runtime overrides (the /config endpoint) and the persisted entry layer both work.
+  assert.equal(resolveConfig({}, {}, { showHeaderBadge: false }).showHeaderBadge, false)
+  assert.equal(resolveConfig({ showTranslateAction: false }, {}, {}).showTranslateAction, false)
+  // Env accepts the same case-insensitive boolean vocabulary as every other switch,
+  // and wins last; junk values fall back to the current layer's value.
+  assert.equal(resolveConfig({}, { DSH_AGY_SHOW_HEADER_BADGE: 'off' }, {}).showHeaderBadge, false)
+  assert.equal(resolveConfig({}, { DSH_AGY_SHOW_TRANSLATE_ACTION: 'No' }, {}).showTranslateAction, false)
+  assert.equal(resolveConfig({}, { DSH_AGY_SHOW_HEADER_BADGE: 'garbage' }, {}).showHeaderBadge, true)
+  assert.equal(resolveConfig({ showTranslateAction: false }, { DSH_AGY_SHOW_TRANSLATE_ACTION: 'on' }, {}).showTranslateAction, true)
+})

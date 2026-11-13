@@ -2,7 +2,7 @@
 // isolated pool account home. No DB is opened here — just path resolution.
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 let AGY_DB_DIR = join(homedir(), '.gemini', 'antigravity-cli', 'conversations')
 
@@ -63,4 +63,31 @@ const SAFE_CONVERSATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 
 export function isSafeConversationId(id: string): boolean {
   return SAFE_CONVERSATION_ID.test(id)
+}
+
+/** Locate an existing conversation_summaries.db across system + pool homes. */
+export function findSummariesDb(accountHome?: string): string | null {
+  for (const dir of conversationsDirCandidates(accountHome)) {
+    const p = join(dirname(dir), 'conversation_summaries.db')
+    try {
+      if (existsSync(p)) return p
+    } catch {
+      // ignore
+    }
+  }
+  return null
+}
+
+/** Locate a subagent's transcript.jsonl across system + pool homes. */
+export function findTranscriptPath(conversationId: string, accountHome?: string): string | null {
+  if (!isSafeConversationId(conversationId)) return null
+  for (const dir of conversationsDirCandidates(accountHome)) {
+    const p = join(dirname(dir), 'brain', conversationId, '.system_generated', 'logs', 'transcript.jsonl')
+    try {
+      if (existsSync(p)) return p
+    } catch {
+      // ignore
+    }
+  }
+  return null
 }

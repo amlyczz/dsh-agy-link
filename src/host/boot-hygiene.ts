@@ -1,13 +1,49 @@
 // Boot-time hygiene for the account pool, moved verbatim out of apply().
 // Covers stale staging/log cleanup, per-account login keychains (macOS) and the
 // process-global credential slot (Windows). Keeps index.ts a thin root.
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { detectSystemProxy } from './wincred.ts'
 import { ensureIsolatedKeychain, purgeStaleIsolatedKeychain, repairMacSystemKeychain } from './runner.ts'
 import { resolvePrimaryCredential, findDuplicateCredentialIdentities } from './credential-slot.ts'
-import { readAccountCredential } from './credential-backup.ts'
+import { hasRefreshToken, readAccountCredential, saveCredentialBackup } from './credential-backup.ts'
 import type { HostServices } from './services.ts'
+
+/**
+ * On macOS, agy uses go-keyring which stores OAuth credentials inside the
+ * account's isolated keychain (acc.dir/Library/Keychains/login.keychain-db) rather
+ * than writing a file to ~/.gemini/antigravity-cli/antigravity-oauth-token.
+ * When the disk token file is absent, recover it from the keychain so the account
+ * is not falsely quarantined as auth_required.
+ */
+export function restoreTokenFromMacKeychain(accDir: string, tokenFile: string, log?: (msg: string) => void): string | null {
+  if (process.platform !== 'darwin') return null
+  const candidates = [
+    join(accDir, 'Library', 'Keychains', 'login.keychain-db'),
+    join(accDir, 'Library', 'Keychains', 'login.keychain'),
+  ]
+  const targetKc = candidates.find((p) => existsSync(p))
+  if (!targetKc) return null
+  try {
+    const raw = execFileSync('security', ['find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w', targetKc], {
+      encoding: 'utf8',
+      timeout: 3000,
+      windowsHide: true,
+    }).trim()
+    if (!raw.startsWith('go-keyring-base64:')) return null
+    const jsonStr = Buffer.from(raw.slice('go-keyring-base64:'.length), 'base64').toString('utf8')
+    if (!hasRefreshToken(jsonStr)) return null
+    mkdirSync(dirname(tokenFile), { recursive: true })
+    writeFileSync(tokenFile, jsonStr, { mode: 0o600 })
+    saveCredentialBackup(tokenFile, jsonStr)
+    log?.(`[agy-link] restored account credential from macOS isolated keychain for ${accDir}`)
+    return jsonStr
+  } catch {
+    return null
+  }
+}
 
 export function runBootHygiene(services: HostServices): void {
   const { pool, store, log, getConfig } = services
@@ -39,7 +75,10 @@ export function runBootHygiene(services: HostServices): void {
       purgeStaleIsolatedKeychain(acc.dir)
       if (ensureIsolatedKeychain(acc.dir)) kcProvisioned++
       const tokenFile = join(acc.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
-      const token = readAccountCredential(tokenFile, log)
+      let token = readAccountCredential(tokenFile, log)
+      if (!token && process.platform === 'darwin') {
+        token = restoreTokenFromMacKeychain(acc.dir, tokenFile, log)
+      }
       if (!token && !acc.authRequired) {
         pool.markAuthRequired?.(acc.id, 'credential file is missing or corrupted')
         log(`account ${acc.alias || acc.id} has no valid credential file; marked as auth_required`)

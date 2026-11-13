@@ -1,6 +1,7 @@
 // Model/effort resolution for translations (advisory catalog + fallback chain).
 import type { PluginConfig } from '../../common/types.ts'
 import { defaultEffortFor, findEntry, resolveModelSlug, type Catalog } from '../../host/models.ts'
+import { PREFERRED_GEMINI_FLASH } from '../../common/model-lineup.ts'
 import type { TranslateTarget } from './types.ts'
 
 /**
@@ -9,7 +10,7 @@ import type { TranslateTarget } from './types.ts'
  * An explicit request (command flag) is honoured even when the advisory catalog
  * has never listed it — the adapter accepts unknown ids. The DEFAULT goes
  * through a fallback chain so a plan without Gemini 3.8 still translates:
- * `gemini-3.8-flash` → newest `gemini-*-flash` → `defaultModel` → first model.
+ * `PREFERRED_GEMINI_FLASH` → newest `gemini-*-flash` → `defaultModel` → first model.
  */
 export function resolveTranslateTarget(
   cfg: PluginConfig,
@@ -28,7 +29,7 @@ export function resolveTranslateTarget(
     model = resolveModelSlug(requested)
     entry = findEntry(catalog, model)
   } else {
-    const candidates: string[] = ['gemini-3.8-flash']
+    const candidates: string[] = [PREFERRED_GEMINI_FLASH]
     if (cfg.defaultModel !== '') candidates.push(cfg.defaultModel)
     for (const cand of candidates) {
       const found = findEntry(catalog, cand)

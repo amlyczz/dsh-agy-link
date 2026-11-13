@@ -6,6 +6,7 @@
 // are unchanged. The only difference is that the single 170-line
 // `startAgyProcess` is organised into small helpers that share one RunState.
 import { spawn, type ChildProcess } from 'node:child_process'
+import { WATCHDOG_GRACE_MS } from '../../common/timeouts.ts'
 import { preemptAgyAutoUpdate } from '../../host/auto-updater.ts'
 import { isCmdShim, windowsQuote } from './bin.ts'
 import { makeLineDecoder, consoleOutputEncoding } from './console.ts'
@@ -167,6 +168,7 @@ interface RunState {
   settled: boolean
   idleBudgetMs: number | undefined
   watchdog: NodeJS.Timeout | null
+  watchdogGraceUsed: boolean
   turnCap: NodeJS.Timeout | null
 }
 
@@ -181,6 +183,7 @@ function createRunState(opts: RunOptions): RunState {
     settled: false,
     idleBudgetMs: opts.timeoutMs,
     watchdog: null,
+    watchdogGraceUsed: false,
     turnCap: null,
   }
 }
@@ -235,13 +238,25 @@ function writeInitialStdin(opts: RunOptions, child: ChildProcess): void {
 }
 
 function makeRefreshWatchdog(child: ChildProcess, state: RunState): () => void {
-  return () => {
-    if (!state.idleBudgetMs || state.idleBudgetMs <= 0 || state.settled) return
+  const arm = (budgetMs: number): void => {
     if (state.watchdog) clearTimeout(state.watchdog)
     state.watchdog = setTimeout(() => {
+      if (!state.watchdogGraceUsed) {
+        // The timer phase can outrun the poll phase after a blocked event loop;
+        // give queued child output one short chance to re-arm us before killing.
+        state.watchdogGraceUsed = true
+        arm(Math.min(budgetMs, WATCHDOG_GRACE_MS))
+        return
+      }
       state.timedOut = true
       killTree(child)
-    }, state.idleBudgetMs)
+    }, budgetMs)
+  }
+  return () => {
+    if (!state.idleBudgetMs || state.idleBudgetMs <= 0 || state.settled) return
+    // Real activity resets the grace: each silent stretch gets exactly one.
+    state.watchdogGraceUsed = false
+    arm(state.idleBudgetMs)
   }
 }
 

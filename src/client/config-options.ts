@@ -9,6 +9,8 @@
 //     hand (env var, older settings file, model dropped from the plan) stays
 //     selectable, otherwise the control would silently misreport the state.
 
+import { isGeminiFamilyModel } from '../common/model-lineup.ts'
+
 export interface SelectOption {
 	value: string
 	label: string
@@ -17,17 +19,44 @@ export interface SelectOption {
 export interface CatalogModelLike {
 	id?: unknown
 	name?: unknown
+	/** Effort ids the model supports (absent/empty = fixed-thinking). */
+	efforts?: unknown
 }
 
 export interface EffortLabels {
 	auto: string
-	low: string
-	medium: string
-	high: string
+	/** Localised display name per effort id; unknown ids fall back to the id. */
+	level: (id: string) => string
 }
 
-/** Thinking levels the translation call accepts, in ascending order. */
-const EFFORT_LEVELS = ['low', 'medium', 'high'] as const
+/** Effort ids carried by a catalog entry (order preserved, deduped). */
+export function modelEfforts(model: CatalogModelLike | undefined): string[] {
+	if (model === undefined || model === null) return []
+	const raw = model.efforts
+	if (!Array.isArray(raw)) return []
+	const out: string[] = []
+	for (const item of raw) {
+		if (typeof item !== 'string') continue
+		const id = item.trim().toLowerCase()
+		if (id !== '' && !out.includes(id)) out.push(id)
+	}
+	return out
+}
+
+/** Effort ids supported anywhere in the catalog (fallback when no model is chosen). */
+export function catalogEfforts(models: ReadonlyArray<CatalogModelLike>): string[] {
+	const out: string[] = []
+	for (const model of models) {
+		for (const id of modelEfforts(model)) if (!out.includes(id)) out.push(id)
+	}
+	return out
+}
+
+function findCatalogModel(modelId: string, models: ReadonlyArray<CatalogModelLike>): CatalogModelLike | undefined {
+	const wanted = typeof modelId === 'string' ? modelId.trim() : ''
+	if (wanted === '') return undefined
+	return models.find((model) => typeof model?.id === 'string' && model.id.trim() === wanted)
+}
 
 /**
  * Translation-model dropdown: `''` (host fallback chain: gemini-3.8-flash →
@@ -58,20 +87,34 @@ export function translateModelOptions(
  * hand is still appended by `translateModelOptions`, so the state stays honest.
  */
 export function geminiCatalogModels(models: ReadonlyArray<CatalogModelLike>): CatalogModelLike[] {
-	return models.filter((model) => typeof model?.id === 'string' && /gemini/i.test(model.id))
+	return models.filter((model) => typeof model?.id === 'string' && isGeminiFamilyModel(model.id))
 }
 
 /**
- * Thinking-effort dropdown: `''` (follow the default effort) plus the levels
- * agy understands; an unrecognised configured level is appended verbatim so the
- * select can display it rather than pretending the value is unset.
+ * Thinking-effort dropdown for a specific model: `''` (follow the model's
+ * default) plus exactly the levels THAT model supports, in the catalog's own
+ * order.
+ *
+ * Deriving from the catalog instead of a local low/medium/high list is what
+ * keeps this control honest: a model with no `--effort` support gets no levels
+ * at all, and a model with an extra level (agy 1.5.7's `xhigh` → "Extra") gets
+ * it without any code change. An unrecognised configured level is still
+ * appended verbatim so the select can display the real state.
  */
-export function translateEffortOptions(current: string, labels: EffortLabels): SelectOption[] {
+export function translateEffortOptions(
+	current: string,
+	labels: EffortLabels,
+	modelId = '',
+	models: ReadonlyArray<CatalogModelLike> = [],
+): SelectOption[] {
 	const options: SelectOption[] = [{ value: '', label: labels.auto }]
-	for (const level of EFFORT_LEVELS) options.push({ value: level, label: labels[level] })
+	const chosen = findCatalogModel(modelId, models)
+	// A chosen model with no effort support offers nothing but "auto".
+	const supported = chosen === undefined ? catalogEfforts(models) : modelEfforts(chosen)
+	for (const level of supported) options.push({ value: level, label: labels.level(level) })
 	const wanted = typeof current === 'string' ? current.trim().toLowerCase() : ''
 	if (wanted !== '' && !options.some((option) => option.value === wanted)) {
-		options.push({ value: wanted, label: wanted })
+		options.push({ value: wanted, label: labels.level(wanted) })
 	}
 	return options
 }

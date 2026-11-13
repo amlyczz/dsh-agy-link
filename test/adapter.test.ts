@@ -1652,7 +1652,7 @@ test('listModels hides hiddenModels from the picker while resolveModel still res
   const ids = models.map((m) => m.id)
   assert.ok(!ids.includes('gemini-3.8-flash'), 'a hidden id must leave the picker list')
   assert.ok(!ids.includes('gpt-oss-120b-medium'), 'hidden ids are matched after trimming')
-  assert.ok(ids.includes('claude-sonnet-4-6'), 'unlisted models stay visible (deny-list semantics)')
+  assert.ok(ids.includes('claude-sonnet-5-5'), 'unlisted models stay visible (deny-list semantics)')
   // resolveModel deliberately does not filter: in-flight sessions and direct
   // references keep resolving a model after it has been hidden.
   const resolved = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
@@ -1684,7 +1684,11 @@ test('listModels and resolveModel defensively handle empty IDs, empty names, and
 
   const resolved = await adapter.resolveModel('antigravity', 'effort-model')
   assert.ok(resolved.reasoning)
-  assert.deepEqual(resolved.reasoning.efforts.map((e) => e.id), ['high', 'low'])
+  // Canonical order (common/reasoning.ts) + dedupe, so the model menu always
+  // reads Low → Medium → High → Extra regardless of the order agy printed.
+  assert.deepEqual(resolved.reasoning.efforts.map((e) => e.id), ['low', 'high'])
+  // Display names come from agy's own picker vocabulary, not the raw ids.
+  assert.deepEqual(resolved.reasoning.efforts.map((e) => e.name), ['Low', 'High'])
   assert.equal(resolved.reasoning.defaultEffort, 'high')
 
   const resolvedNoEffort = await adapter.resolveModel('antigravity', 'valid-model')

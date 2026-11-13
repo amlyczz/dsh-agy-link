@@ -10,7 +10,7 @@ import { en, es, NS, ptBR, zh } from './locales.ts';
 import { installAgyToolView } from './toolview.ts';
 import { installMermaidRendering } from './mermaid.ts';
 import { installAutoExpandReasoning } from './reasoning.ts';
-import { installImageEnhancer } from './images.ts';
+import { installImageEnhancer, setClientContext } from './images.ts';
 import { installDecisionChips } from './decisions.ts';
 import { installTranslationUi } from './translate.ts';
 import { installCompactionCard } from './compaction.ts';
@@ -42,6 +42,7 @@ export interface ClientContext extends Context {
 }
 
 export function apply(ctx: ClientContext): void {
+	setClientContext(ctx);
 	injectGlobalStyles();
 	ctx.effect(() => {
 		ensureStatusPolling();
@@ -193,8 +194,8 @@ export function apply(ctx: ClientContext): void {
 	// leaves them as plain code blocks). Same lifecycle contract as above.
 	ctx.effect(() => installMermaidRendering());
 
-	// Local image display + fullscreen lightbox (recovered working tree).
-	ctx.effect(() => installImageEnhancer());
+	// Local image display + fullscreen lightbox + right sidebar file opener.
+	ctx.effect(() => installImageEnhancer(ctx));
 
 	// Interactive user decision & choice chips (recovered working tree).
 	ctx.effect(() => installDecisionChips());

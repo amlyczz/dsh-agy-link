@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import type { PluginConfig } from '../../common/types.ts'
 import { SUPPORTED_ASPECT_RATIOS, type ImageTarget } from './types.ts'
+import { PREFERRED_GEMINI_FLASH } from '../../common/model-lineup.ts'
 
 /** Accept `16:9`, `16x9`, `16/9`, `16-9`; return the canonical `w:h` or null. */
 export function normalizeAspectRatio(value: string | undefined): string | null {
@@ -33,7 +34,7 @@ export function normalizeImageName(value: string | undefined, now: number): stri
 export function resolveImageTarget(cfg: PluginConfig, override?: { model?: string; effort?: string }): ImageTarget {
   const model = (override?.model ?? cfg.imageModel ?? '').trim() ||
     (cfg.defaultModel ?? '').trim() ||
-    'gemini-3.8-flash'
+    PREFERRED_GEMINI_FLASH
   const effort = (override?.effort ?? cfg.imageEffort ?? '').trim()
   return { model, effort }
 }

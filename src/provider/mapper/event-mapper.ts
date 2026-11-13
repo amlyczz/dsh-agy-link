@@ -102,6 +102,7 @@ export class EventMapper {
   private totalTextOutput = ''
   private readonly toolCallStates = new Map<string, ToolCallState>()
   private emittedCompactionNotice = false
+  private sawSubagentBanner = false
 
   constructor(private readonly opts: EventMapperOptions) {
     this.sawTextStep = opts.initialSawText === true
@@ -280,8 +281,8 @@ export class EventMapper {
         return
       }
       if (ev.stepKind === 'thinking' || ev.stepKind === 'subagent') {
-        yield* this.ensureBlock('reasoning')
         if (ev.stepKind === 'thinking') {
+          yield* this.ensureBlock('reasoning')
           const dbThought = this.opts.resolvedThoughts?.get(absIndex)
           if (dbThought && dbThought.trim() !== '') {
             const prev = this.emittedByKey.get(ev.stepKey) ?? ''
@@ -302,10 +303,14 @@ export class EventMapper {
           // duplicate the whole transcript. Track the step's accumulated text
           // and emit only the grown suffix (same contract as the thinking
           // branch), with the banner on the first emission only.
+          if (ev.text.trim() === '') return
           const prev = this.emittedByKey.get(ev.stepKey) ?? ''
           const deltaText = suffixDelta(prev, ev.text)
           this.emittedByKey.set(ev.stepKey, ev.text)
-          const banner = prev === '' ? '[agy subagent] ' : ''
+          if (deltaText === '') return
+          yield* this.ensureBlock('reasoning')
+          const banner = !this.sawSubagentBanner ? (ev.text.startsWith('\n') ? '[agy subagent]' : '[agy subagent] ') : ''
+          this.sawSubagentBanner = true
           const d = this.appendDelta(banner + deltaText)
           if (d) yield d
         }

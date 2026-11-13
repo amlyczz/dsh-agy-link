@@ -130,6 +130,8 @@ const BASE_CONFIG: Record<string, unknown> = {
   translateModel: '',
   translateEffort: '',
   translateTargetLanguage: 'zh',
+  showHeaderBadge: true,
+  showTranslateAction: true,
   imageModel: '',
   imageEffort: '',
   imageOutputDir: '',
@@ -388,9 +390,22 @@ test('/status answers 200 with the client-visible shape', async () => {
     'permissionMode', 'workspaceRoot', 'defaultModel', 'defaultEffort', 'askTool', 'auth', 'poolAuth',
     'autoWarmup', 'warmupModels', 'autoTranslate', 'translateModel', 'translateEffort',
     'translateTargetLanguage', 'imageModel', 'imageEffort', 'imageOutputDir',
+    'showHeaderBadge', 'showTranslateAction',
   ]) {
     assert.ok(key in body, 'status must keep field ' + key)
   }
+  assert.equal(body.showHeaderBadge, true)
+  assert.equal(body.showTranslateAction, true)
+})
+
+test('/status forwards an explicit UI visibility opt-out (issue #105)', async () => {
+  const webServer = fakeWebServer()
+  registerRoutes(webServer, fakeServices({}, { showHeaderBadge: false, showTranslateAction: false }))
+  const captured = await invoke(routeFor(webServer.routes, '/plugins/agy-link/status'), fakeReq('GET'))
+  assert.equal(captured.status(), 200)
+  const body = captured.json() as Record<string, unknown>
+  assert.equal(body.showHeaderBadge, false, 'an explicit false must reach the client unchanged')
+  assert.equal(body.showTranslateAction, false)
 })
 
 test('/status reflects bin/dormant/last-run/pool proxy and announces no method gate', async () => {
@@ -534,6 +549,16 @@ test('/config is POST-only and validates keys before writing', async () => {
   const warmup = await invoke(route, fakeReq('POST', '/', { key: 'warmupModels', value: ['gemini-3-flash'] }))
   assert.equal(warmup.status(), 200)
   assert.equal(pickerEvents, 1, 'warmupModels writes must not announce the picker update')
+
+  // issue #105: both visibility switches are settable through the same guarded
+  // endpoint; neither is a picker event.
+  for (const [key, value] of [['showHeaderBadge', false], ['showTranslateAction', false]] as const) {
+    const res = await invoke(route, fakeReq('POST', '/', { key, value }))
+    assert.equal(res.status(), 200, key + ' must be an allowed config key')
+    assert.deepEqual(res.json(), { ok: true, key, value })
+    assert.deepEqual(writes.at(-1), [key, value])
+  }
+  assert.equal(pickerEvents, 1, 'visibility switches must not announce a picker update')
 })
 
 test('/config treats malformed and oversized bodies as empty (non-strict read)', async () => {
@@ -1386,4 +1411,52 @@ test('/mermaid.min.js maps an unreadable file to 500', async (t) => {
   const captured = await invoke(s.route('/plugins/agy-link/mermaid.min.js'), fakeReq('GET'))
   assert.equal(captured.status(), 500)
   assert.match(captured.text(), /^read error: /)
+})
+
+test('REGRESSION: /pool/refresh-quota answers immediately even when the quota pipeline never settles', async () => {
+  // Before the fix the route awaited a 20s `agy /usage` spawn + several REST
+  // calls, so the console's "同步中" kept spinning. The status poll (3s) is
+  // what actually delivers fresh numbers, so the HTTP response must not wait.
+  let started = 0
+  const s = setup({
+    quota: {
+      refreshAccountQuota: async () => {
+        started++
+        await new Promise<void>(() => undefined) // deliberately never resolves
+      },
+      refreshAllQuotas: async () => undefined,
+    },
+    catalog: {
+      get: () => ({ source: 'fallback', models: [], lastError: null }),
+      getAllKnownModels: () => [],
+      forceRefresh: async () => undefined,
+    },
+    pool: poolDouble({ getAccount: (id: unknown) => (id === 'hanging' ? { id: 'hanging' } : undefined) }).pool,
+  })
+  const startedAt = Date.now()
+  const res = await invoke(s.route('/plugins/agy-link/pool/refresh-quota'), fakeReq('POST', '/', { id: 'hanging' }))
+  assert.equal(res.status(), 200)
+  assert.equal((res.json() as { pending?: boolean }).pending, true)
+  assert.equal(started, 1, 'the refresh still runs in the background')
+  assert.ok(Date.now() - startedAt < 1000, 'the HTTP response must not wait for the pipeline')
+
+  // A second click on the same account must not stack a duplicate pipeline.
+  const again = await invoke(s.route('/plugins/agy-link/pool/refresh-quota'), fakeReq('POST', '/', { id: 'hanging' }))
+  assert.equal(again.status(), 200)
+  assert.equal(started, 1, 'in-flight refresh is deduped')
+})
+
+test('REGRESSION: every route answers 500 when a dependency throws (no silent hang)', async () => {
+  const s = setup({
+    quota: {
+      refreshAccountQuota: async () => { throw new Error('boom') },
+      refreshAllQuotas: async () => undefined,
+    },
+    pool: poolDouble({ getAccount: () => ({ id: 'x' }) }).pool,
+  })
+  // A background rejection is swallowed by the guarded runner, but the HTTP
+  // response is still 200/pending — the important part is that it ENDS.
+  const res = await invoke(s.route('/plugins/agy-link/pool/refresh-quota'), fakeReq('POST', '/', { id: 'x' }))
+  assert.equal(res.status(), 200)
+  assert.equal((res.json() as { ok?: boolean }).ok, true)
 })

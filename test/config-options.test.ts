@@ -1,19 +1,29 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { geminiCatalogModels, translateModelOptions, translateEffortOptions } from '../src/client/config-options.ts'
+import {
+  catalogEfforts,
+  geminiCatalogModels,
+  modelEfforts,
+  translateModelOptions,
+  translateEffortOptions,
+  type EffortLabels,
+} from '../src/client/config-options.ts'
+import { effortLabel, normalizeEfforts, splitEffortSuffix } from '../src/common/reasoning.ts'
+
+const labels: EffortLabels = { auto: 'Auto', level: (id) => effortLabel(id) }
 
 test('translation model dropdown: auto first, then the catalog in order, deduped', () => {
   const models = [
     { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
-    { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6' },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
     { id: 'gemini-3.8-flash', name: 'duplicate' },
   ]
   const opts = translateModelOptions('', models, 'Auto (gemini flash)')
   assert.deepEqual(opts, [
     { value: '', label: 'Auto (gemini flash)' },
     { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
-    { value: 'claude-sonnet-4.6', label: 'Claude Sonnet 4.6' },
+    { value: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
   ])
 })
 
@@ -33,19 +43,40 @@ test('translation model dropdown tolerates blank catalog entries and blank names
   ])
 })
 
-test('translation effort dropdown: auto, the three levels, then an unknown configured level', () => {
-  const labels = { auto: 'Auto', low: 'Low', medium: 'Medium', high: 'High' }
-  assert.deepEqual(translateEffortOptions('', labels), [
+test('effort dropdown offers EXACTLY the chosen model efforts, in catalog order', () => {
+  // The single source of truth: the model's own effort set. Hydrogen has agy
+  // 1.5.7's `xhigh` (rendered "Extra", like agy's own picker); Orchestrator has
+  // none at all, so it must not offer levels the CLI would reject.
+  const models = [
+    { id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen', efforts: ['low', 'medium', 'high', 'xhigh'] },
+    { id: 'gemini-pro-orchestrator-g1-pro', name: 'Orchestrator (Argon)' },
+  ]
+  assert.deepEqual(translateEffortOptions('', labels, 'gemini-4-hydrogen', models), [
     { value: '', label: 'Auto' },
     { value: 'low', label: 'Low' },
     { value: 'medium', label: 'Medium' },
     { value: 'high', label: 'High' },
+    { value: 'xhigh', label: 'Extra' },
   ])
-  // Configured through DSH_AGY_TRANSLATE_EFFORT or an old config file: keep it visible.
-  const extra = translateEffortOptions(' XHIGH ', labels)
-  assert.equal(extra.length, 5)
-  assert.deepEqual(extra[4], { value: 'xhigh', label: 'xhigh' })
-  assert.equal(translateEffortOptions('HIGH', labels).length, 4, 'known levels never duplicate')
+  assert.deepEqual(translateEffortOptions('', labels, 'gemini-pro-orchestrator-g1-pro', models), [
+    { value: '', label: 'Auto' },
+  ])
+})
+
+test('effort dropdown falls back to the catalog union when no model is chosen', () => {
+  const models = [
+    { id: 'gemini-3.8-flash', name: 'Flash', efforts: ['low', 'medium', 'high'] },
+    { id: 'gemini-4-hydrogen', name: 'Hydrogen', efforts: ['medium', 'xhigh'] },
+  ]
+  assert.deepEqual(catalogEfforts(models), ['low', 'medium', 'high', 'xhigh'])
+  assert.deepEqual(translateEffortOptions('', labels, '', models).map((o) => o.value), ['', 'low', 'medium', 'high', 'xhigh'])
+})
+
+test('effort dropdown keeps an unknown configured level visible without duplicating known ones', () => {
+  const models = [{ id: 'gemini-3.8-flash', name: 'Flash', efforts: ['low', 'medium', 'high'] }]
+  const extra = translateEffortOptions(' ULTRA ', labels, 'gemini-3.8-flash', models)
+  assert.deepEqual(extra[extra.length - 1], { value: 'ultra', label: 'ULTRA'.toLowerCase() })
+  assert.equal(translateEffortOptions('HIGH', labels, 'gemini-3.8-flash', models).length, 4, 'known levels never duplicate')
 })
 
 test('translation model dropdown only offers the Gemini family', () => {
@@ -53,10 +84,32 @@ test('translation model dropdown only offers the Gemini family', () => {
   // label wrong. A hand-configured id still shows through translateModelOptions.
   const models = [
     { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
-    { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6' },
-    { id: 'gpt-oss-120b', name: 'GPT-OSS' },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
+    { id: 'gpt-oss-120b-medium', name: 'GPT-OSS' },
   ]
   assert.deepEqual(geminiCatalogModels(models).map((m) => m.id), ['gemini-3.8-flash'])
   const opts = translateModelOptions('', geminiCatalogModels(models), 'Auto')
-  assert.equal(opts.some((o) => o.value === 'claude-sonnet-4.6'), false)
+  assert.equal(opts.some((o) => o.value === 'claude-sonnet-5-5'), false)
+})
+
+test('modelEfforts ignores malformed effort data', () => {
+  assert.deepEqual(modelEfforts(undefined), [])
+  assert.deepEqual(modelEfforts({ id: 'm' }), [])
+  assert.deepEqual(modelEfforts({ id: 'm', efforts: 'low' }), [])
+  assert.deepEqual(modelEfforts({ id: 'm', efforts: [1, ' HIGH ', 'high', ''] }), ['high'])
+})
+
+test('splitEffortSuffix prefers the LONGEST suffix so xhigh never folds as high', () => {
+  assert.deepEqual(splitEffortSuffix('gemini-4-hydrogen-xhigh'), { base: 'gemini-4-hydrogen', effort: 'xhigh' })
+  assert.deepEqual(splitEffortSuffix('gemini-4-hydrogen-high'), { base: 'gemini-4-hydrogen', effort: 'high' })
+  assert.deepEqual(splitEffortSuffix('gemini-4-argon-medium'), { base: 'gemini-4-argon', effort: 'medium' })
+  assert.deepEqual(splitEffortSuffix('gpt-oss-120b-medium'), { base: 'gpt-oss-120b', effort: 'medium' })
+  assert.deepEqual(splitEffortSuffix('gemini-pro-orchestrator-g1-pro'), { base: 'gemini-pro-orchestrator-g1-pro' })
+})
+
+test('normalizeEfforts orders canonically and keeps unknown levels last', () => {
+  assert.deepEqual(normalizeEfforts(['xhigh', 'low', 'high', 'medium']), ['low', 'medium', 'high', 'xhigh'])
+  assert.deepEqual(normalizeEfforts(['ultra', 'low', 'ultra']), ['low', 'ultra'])
+  assert.deepEqual(normalizeEfforts(null), [])
+  assert.deepEqual(normalizeEfforts(undefined), [])
 })

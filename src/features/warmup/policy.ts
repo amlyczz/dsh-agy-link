@@ -2,6 +2,7 @@
 // extraction, timing constants and the pure "which weekly windows are due"
 // planner. No I/O and no service state.
 import type { FamilyQuotaInfo, ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
+import { PREFERRED_CLAUDE, PREFERRED_GEMINI_FLASH, PREFERRED_OPENAI } from '../../common/model-lineup.ts'
 
 /** Canonical model route resolution for upstream Google Cloud Code PA endpoints. */
 export function toCanonicalWarmupModel(model: string): string {
@@ -47,15 +48,15 @@ export function pickWarmupModelForFamily(
     const found = monitoredModels.find((m) => m.toLowerCase().includes('claude'))
     // 4.6 is retired upstream (agy 1.5.3 lists 5.5 only); legacy accounts pick
     // 4.6 from their own quota models above, so this fallback tracks current.
-    return found ?? 'claude-sonnet-5-5'
+    return found ?? PREFERRED_CLAUDE
   }
   if (family === 'openai') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('gpt'))
-    return found ?? 'gpt-oss-120b-medium'
+    return found ?? PREFERRED_OPENAI
   }
   // google / default
   const found = monitoredModels.find((m) => m.toLowerCase().includes('gemini') && !m.toLowerCase().includes('argon'))
-  return found ?? 'gemini-3.8-flash'
+  return found ?? PREFERRED_GEMINI_FLASH
 }
 
 /**
@@ -203,7 +204,7 @@ export function planWarmupTargets(params: {
   if (configuredModels !== undefined && configuredModels.length === 0) {
     return { kind: 'skip', model: 'none', reason: 'No warmup models configured' }
   }
-  const monitored = configuredModels ?? ['gemini-3.8-flash', 'claude-sonnet-5-5']
+  const monitored = configuredModels ?? [PREFERRED_GEMINI_FLASH, PREFERRED_CLAUDE]
   const quotas = account.quotas ?? {}
   const families = Object.keys(quotas) as ModelFamily[]
   const targets: WarmupTarget[] = []

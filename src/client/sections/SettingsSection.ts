@@ -4,9 +4,11 @@
 // model visibility). All state/handlers live here; child panels stay
 // presentational so the DOM and every i18n key remain exactly as shipped.
 
-import { win } from '../api.ts';
+import { win, WRITE_TIMEOUT_MS } from '../api.ts';
 import type { AccountPoolData } from '../../common/pool-types.ts';
-import { geminiCatalogModels, translateEffortOptions, translateModelOptions } from '../config-options.ts';
+import { catalogEfforts, geminiCatalogModels, translateEffortOptions, translateModelOptions, type EffortLabels } from '../config-options.ts';
+import { effortLabel } from '../../common/reasoning.ts';
+import type { CatalogModelView } from '../status.ts';
 import { useAgyTranslation, type LocaleLike, type Translator } from '../hooks/useTranslation.ts';
 import { useAccounts } from '../hooks/useAccounts.ts';
 import { useAuthFlow } from '../hooks/useAuthFlow.ts';
@@ -17,15 +19,44 @@ import { useAgyStatus } from '../status.ts';
 import { S } from '../styles.ts';
 import { Button } from '../ui/Button.ts';
 import { Row } from '../ui/Row.ts';
+import { segGroup } from '../ui/SegGroup.ts';
 import { Select } from '../ui/Select.ts';
 import { Spinner } from '../ui/Spinner.ts';
 import { Toast, type ToastNotice, type ToastType } from '../ui/Toast.ts';
 import { AccountsPanel } from './AccountsPanel.ts';
 import { ModelsPanel } from './ModelsPanel.ts';
+import { renderVisibilityRows } from './VisibilityRows.ts';
+
+/**
+ * BUSY-STATE WATCHDOG. Every action sets a busy flag and clears it when its
+ * request settles. A host route with no .catch, a 20s `agy /usage` spawn, or a
+ * browser fetch with no timeout each used to leave "同步中" spinning forever.
+ * The request layer now bounds those; this is the final invariant — no busy
+ * flag may outlive BUSY_TIMEOUT_MS.
+ */
+function useBusyAction(): [string | null, (value: string | null) => void] {
+	const [loadingAction, setLoadingAction] = useState<string | null>(null);
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const set = (value: string | null): void => {
+		setLoadingAction(value);
+		if (timerRef.current !== null) clearTimeout(timerRef.current);
+		timerRef.current = value === null ? null : setTimeout(() => {
+			timerRef.current = null;
+			setLoadingAction(null);
+		}, BUSY_TIMEOUT_MS);
+	};
+	useEffect(() => () => {
+		if (timerRef.current !== null) clearTimeout(timerRef.current);
+	}, []);
+	return [loadingAction, set];
+}
 
 // Shown (and copyable) in Settings: image generation is a CLI feature, so the
 // panel documents the exact command instead of pretending to run it in-page.
 const IMAGE_CLI_SAMPLE = 'dsh-agy-image -p "…" -a 16:9 -o ./image.jpg';
+
+/** Slightly longer than a bounded write, so a normal failure still shows its own toast. */
+const BUSY_TIMEOUT_MS = WRITE_TIMEOUT_MS + 5_000;
 
 export interface SettingsSectionProps {
 	isModal?: boolean;
@@ -54,7 +85,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 			}, 6000);
 		};
 
-		const [loadingAction, setLoadingAction] = useState<string | null>(null);
+		const [loadingAction, setLoadingAction] = useBusyAction();
 		const [proxyInputs, setProxyInputs] = useState<Record<string, string>>({});
 		const [editingProxyId, setEditingProxyId] = useState<string | null>(null);
 		const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
@@ -341,15 +372,27 @@ function renderAddAccountSection(
 	);
 }
 
-function segGroup(children: unknown[]): unknown {
-	return h('div', { style: S.segGroup }, children);
+/**
+ * Effort labels for the dropdowns. Localised when the locale defines the id,
+ * otherwise agy's own English name (Low/Medium/High/Extra/Max) — the same
+ * names the host's model menu shows, so both surfaces read identically.
+ */
+function effortLabels(t: Translator): EffortLabels {
+	return {
+		auto: t('config.translateEffortAuto'),
+		level: (id: string) => {
+			const key = ('effort.' + id) as Parameters<Translator>[0];
+			const localised = t(key);
+			return localised === key ? effortLabel(id) : localised;
+		},
+	};
 }
 
 function renderRuntimeConfig(
 	t: Translator,
 	status: NonNullable<ReturnType<typeof useAgyStatus>['status']>,
 	pool: NonNullable<ReturnType<typeof useAgyStatus>['status']>['pool'] | undefined,
-	catalogModels: ReadonlyArray<{ id: string; name: string }>,
+	catalogModels: ReadonlyArray<CatalogModelView>,
 	hiddenModelSet: Set<string>,
 	loadingAction: string | null,
 	actions: {
@@ -433,29 +476,38 @@ function renderRuntimeConfig(
 						style: { minWidth: '78px', maxWidth: '110px' },
 						disabled: loadingAction === 'config:translateEffort',
 						onChange: (e: { target?: { value?: string } }) => void setCfg('translateEffort', e?.target?.value ?? ''),
-						options: translateEffortOptions(status.translateEffort ?? '', {
-							auto: t('config.translateEffortAuto'),
-							low: t('effort.low'),
-							medium: t('effort.medium'),
-							high: t('effort.high'),
-						}),
+						options: translateEffortOptions(status.translateEffort ?? '', effortLabels(t), status.translateModel ?? '', catalogModels),
 					}),
 				),
 			}),
 			renderImageRow(t, status, catalogModels, loadingAction, setCfg, copyImageCommand),
-			renderDefaultEffortRow(t, status, loadingAction, setCfg),
+			renderVisibilityRows({ t, status, loadingAction, setCfg }),
+			renderDefaultEffortRow(t, status, catalogModels, loadingAction, setCfg),
 			h(ModelsPanel, { t, catalogModels, hiddenModelSet, loadingAction, toggleModelHidden }),
 		),
 	);
 }
 
+/**
+ * Default thinking effort. The buttons come from the LIVE catalog, not a local
+ * low/medium/high list: when agy ships a new level (1.5.7 added `xhigh`) the
+ * row gains it with no code change, and it can never offer a level no model
+ * supports.
+ */
 function renderDefaultEffortRow(
 	t: Translator,
 	status: NonNullable<ReturnType<typeof useAgyStatus>['status']>,
+	catalogModels: ReadonlyArray<CatalogModelView>,
 	loadingAction: string | null,
 	setCfg: (key: string, value: unknown) => Promise<void>,
 ): unknown {
 	const value = status.defaultEffort;
+	const labels = effortLabels(t);
+	const levels = catalogEfforts(catalogModels);
+	// A hand-configured level the catalog no longer lists still gets a button,
+	// otherwise the control would silently misreport the stored value.
+	const configured = (value ?? '').trim().toLowerCase();
+	const shown = configured !== '' && !levels.includes(configured) ? [...levels, configured] : levels;
 	return h(Row, {
 		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
 			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.defaultEffort')),
@@ -467,21 +519,12 @@ function renderDefaultEffortRow(
 				disabled: loadingAction === 'config:defaultEffort',
 				onClick: () => void setCfg('defaultEffort', ''),
 			}, t('effort.auto')),
-			h(Button, {
-				variant: value === 'low' ? 'segActive' : 'seg',
+			...shown.map((level) => h(Button, {
+				key: level,
+				variant: value === level ? 'segActive' : 'seg',
 				disabled: loadingAction === 'config:defaultEffort',
-				onClick: () => void setCfg('defaultEffort', 'low'),
-			}, t('effort.low')),
-			h(Button, {
-				variant: value === 'medium' ? 'segActive' : 'seg',
-				disabled: loadingAction === 'config:defaultEffort',
-				onClick: () => void setCfg('defaultEffort', 'medium'),
-			}, t('effort.medium')),
-			h(Button, {
-				variant: value === 'high' ? 'segActive' : 'seg',
-				disabled: loadingAction === 'config:defaultEffort',
-				onClick: () => void setCfg('defaultEffort', 'high'),
-			}, t('effort.high')),
+				onClick: () => void setCfg('defaultEffort', level),
+			}, labels.level(level))),
 		]),
 	});
 }
@@ -489,7 +532,7 @@ function renderDefaultEffortRow(
 function renderImageRow(
 	t: Translator,
 	status: NonNullable<ReturnType<typeof useAgyStatus>['status']>,
-	catalogModels: ReadonlyArray<{ id: string; name: string }>,
+	catalogModels: ReadonlyArray<CatalogModelView>,
 	loadingAction: string | null,
 	setCfg: (key: string, value: unknown) => Promise<void>,
 	copyImageCommand: () => void,
@@ -516,12 +559,7 @@ function renderImageRow(
 					style: { minWidth: '78px', maxWidth: '110px' },
 					disabled: loadingAction === 'config:imageEffort',
 					onChange: (e: { target?: { value?: string } }) => void setCfg('imageEffort', e?.target?.value ?? ''),
-					options: translateEffortOptions(status.imageEffort ?? '', {
-						auto: t('config.translateEffortAuto'),
-						low: t('effort.low'),
-						medium: t('effort.medium'),
-						high: t('effort.high'),
-					}),
+					options: translateEffortOptions(status.imageEffort ?? '', effortLabels(t), status.imageModel ?? '', catalogModels),
 				}),
 			),
 		),

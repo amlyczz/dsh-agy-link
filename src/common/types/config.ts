@@ -1,17 +1,13 @@
 // Plugin identity, the user-facing config shape, and its defaults.
 
+import { DEFAULT_FALLBACK_MODELS, PREFERRED_CLAUDE, PREFERRED_GEMINI_FLASH, type FallbackModelDef } from '../model-lineup.ts'
+
 export const PROVIDER_ID = 'antigravity'
 export const PLUGIN_ID = 'agy-link'
 export const PKG_NAME = 'dsh-agy-link'
 
 export type PermissionMode = 'skip' | 'plan' | 'accept-edits'
 
-export interface FallbackModelDef {
-  id: string
-  name: string
-  /** Selectable reasoning efforts; omit for fixed-thinking models. */
-  efforts?: readonly string[]
-}
 
 export interface PluginConfig {
   enabled: boolean
@@ -155,7 +151,7 @@ export interface PluginConfig {
    * cold start, activating the 7-day upstream timer.
    */
   autoWarmup: boolean
-  /** Models monitored/used for auto-warmup. Defaults to ['gemini-3.8-flash', 'claude-sonnet-5-5']. */
+  /** Models monitored/used for auto-warmup. Defaults to the Gemini Flash + Claude lineup picks. */
   warmupModels: readonly string[]
   /**
    * Auto "plain language" translation after every completed agent turn
@@ -164,7 +160,7 @@ export interface PluginConfig {
    * session record, rendered as a labelled Gemini card under that reply.
    */
   autoTranslate: boolean
-  /** Model used for translation (default `gemini-3.8-flash`; falls back through the live catalog). */
+  /** Model used for translation (default: the preferred Gemini Flash; falls back through the live catalog). */
   translateModel: string
   /**
    * Reasoning effort for effort-capable translate models (default `medium`).
@@ -192,8 +188,18 @@ export interface PluginConfig {
   translateSkipSameModel: boolean
   /** Minimum spacing between automatic translations inside one session (0 = no throttle). */
   translateMinIntervalMs: number
+  /**
+   * Show Antigravity status badge in the conversation header toolbar (default: true).
+   * Set false to hide it (especially on mobile / narrow viewports).
+   */
+  showHeaderBadge: boolean
+  /**
+   * Show per-message plain-language translate action button in chat assistant actions (default: true).
+   * Set false to hide the "译成人话" Gemini button.
+   */
+  showTranslateAction: boolean
   // ---- image generation (`dsh-agy-image` CLI, purpose:'image' adapter route) ----
-  /** Chat model that drives the `generate_image` call ('' = defaultModel → gemini-3.8-flash). */
+  /** Chat model that drives the `generate_image` call ('' = defaultModel → the preferred Gemini Flash). */
   imageModel: string
   /** Reasoning effort for that hop (default `low`: the image model does the real work). */
   imageEffort: string
@@ -207,24 +213,11 @@ export interface PluginConfig {
   imageRetries: number
 }
 
-// Fallback line-up. Serves the picker when `agy models` cannot run (signed out
-// / offline); the live list always comes from `agy models` once signed in.
-// Gemini 3.5–3.7 are retired upstream (confirmed by the maintainer 2026-11-09),
-// so they are gone; Claude 5.5 is the current Anthropic line and IS effort
-// capable (verified on agy 1.5.3): the base slug takes `--effort`, while the
-// tiered slugs are the ones agy lists in `agy models`.
-// Gemini 4 Carbon shipped with agy 1.5.5 (2026-11-11) and, like Argon, is
-// listed only as tiered slugs; the bare id accepts `--effort` (verified live).
-export const DEFAULT_FALLBACK_MODELS: readonly FallbackModelDef[] = [
-  { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', efforts: ['low', 'medium', 'high'] },
-  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', efforts: ['low', 'medium', 'high'] },
-  { id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['low', 'medium', 'high'] },
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)' },
-  { id: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)' },
-  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', efforts: ['low', 'medium', 'high'] },
-  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ['low', 'medium', 'high'] },
-  { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)' },
-]
+// The offline/signed-out lineup lives in `common/model-lineup.ts` — the single
+// place that names concrete agy models. Re-exported here so the historical
+// `common/types` import surface keeps working.
+export { DEFAULT_FALLBACK_MODELS }
+export type { FallbackModelDef }
 
 export function defaultConfig(): PluginConfig {
   return {
@@ -302,11 +295,11 @@ export function defaultConfig(): PluginConfig {
     // endpoints, so it must never start probing on upgrade. Users enable it
     // explicitly with `autoWarmup: true` / DSH_AGY_AUTO_WARMUP=1.
     autoWarmup: false,
-    warmupModels: ['gemini-3.8-flash', 'claude-sonnet-5-5'],
+    warmupModels: [PREFERRED_GEMINI_FLASH, PREFERRED_CLAUDE],
     // Translation is strictly opt-in: it spends quota on every completed
     // turn, so the default must never silently start billing a user.
     autoTranslate: false,
-    translateModel: 'gemini-3.8-flash',
+    translateModel: PREFERRED_GEMINI_FLASH,
     // Medium is the speed/quality compromise measured on real agy: low ≈ 12s,
     // medium ≈ 33s, high ≈ 45s for the same 964-char reply (most of the low
     // figure is agy's own ~9s startup). high made a frequent action feel broken.
@@ -319,6 +312,8 @@ export function defaultConfig(): PluginConfig {
     translateBindConversation: true,
     translateSkipSameModel: true,
     translateMinIntervalMs: 3_000,
+    showHeaderBadge: true,
+    showTranslateAction: true,
     imageModel: '',
     imageEffort: 'low',
     imageTimeoutMs: 240_000,

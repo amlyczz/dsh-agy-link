@@ -1,5 +1,5 @@
 import type { HostServices } from '../../../host/services.ts'
-import { sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { runRoute, sendJson, readBody, methodOf, ROUTE_TIMEOUT_MS, type RawRes, type RouteRegistrar } from '../respond.ts'
 import type { WarmupResult } from '../../../host/warmup.ts'
 import { detectSystemProxy } from '../../../host/wincred.ts'
 import { openAccountTerminal } from '../../../host/runner.ts'
@@ -14,7 +14,7 @@ function handlePoolList(services: HostServices, req: unknown, res: unknown): voi
 
 function handlePoolBeginAdd(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, poolAuth } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -26,12 +26,12 @@ function handlePoolBeginAdd(services: HostServices, req: unknown, res: unknown):
           : (getConfig().proxyUrl.trim() || detectSystemProxy() || undefined)
         const st = await poolAuth.begin(alias, proxyUrl)
         sendJson(res as RawRes, st.ok ? 200 : 500, st)
-      })()
+      })
 }
 
 function handlePoolCompleteAdd(services: HostServices, req: unknown, res: unknown): void {
   const { pool, poolAuth } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -49,12 +49,12 @@ function handlePoolCompleteAdd(services: HostServices, req: unknown, res: unknow
           code: st.code,
           pool: pool.getPoolData(),
         })
-      })()
+      })
 }
 
 function handlePoolCancelAdd(services: HostServices, req: unknown, res: unknown): void {
   const { pool, poolAuth } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -62,12 +62,12 @@ function handlePoolCancelAdd(services: HostServices, req: unknown, res: unknown)
         await readBody(req)
         await poolAuth.cancel()
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolAdd(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, pool, bridgeState } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -91,12 +91,12 @@ function handlePoolAdd(services: HostServices, req: unknown, res: unknown): void
           openAccountTerminal(acc.dir)
         }
         sendJson(res as RawRes, 200, { ok: true, account: acc, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolOpenTerminal(services: HostServices, req: unknown, res: unknown): void {
   const { pool } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -110,12 +110,12 @@ function handlePoolOpenTerminal(services: HostServices, req: unknown, res: unkno
         }
         openAccountTerminal(acc.dir)
         sendJson(res as RawRes, 200, { ok: true, dir: acc.dir })
-      })()
+      })
 }
 
 function handlePoolRemove(services: HostServices, req: unknown, res: unknown): void {
   const { pool, notifyPicker } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -126,12 +126,12 @@ function handlePoolRemove(services: HostServices, req: unknown, res: unknown): v
         // Deleting the active/primary account changes the effective account.
         notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolEnable(services: HostServices, req: unknown, res: unknown): void {
   const { pool, notifyPicker } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -143,12 +143,12 @@ function handlePoolEnable(services: HostServices, req: unknown, res: unknown): v
         // Enabling/disabling the active account changes which models are live.
         if (ok) notifyPicker()
         sendJson(res as RawRes, ok ? 200 : 400, { ok, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolProxy(services: HostServices, req: unknown, res: unknown): void {
   const { pool } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -158,12 +158,12 @@ function handlePoolProxy(services: HostServices, req: unknown, res: unknown): vo
         const proxyUrl = typeof body.proxyUrl === 'string' ? body.proxyUrl : undefined
         pool.setAccountProxy(id, proxyUrl)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolPrimary(services: HostServices, req: unknown, res: unknown): void {
   const { pool, catalog, notifyPicker } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -177,12 +177,12 @@ function handlePoolPrimary(services: HostServices, req: unknown, res: unknown): 
           void catalog.forceRefreshAndNotify(id).catch(() => undefined)
         }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolMode(services: HostServices, req: unknown, res: unknown): void {
   const { pool } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -191,37 +191,73 @@ function handlePoolMode(services: HostServices, req: unknown, res: unknown): voi
         const mode = body.mode === 'round-robin' ? 'round-robin' : 'sequential'
         pool.setMode(mode)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+      })
 }
 
+/**
+ * In-flight quota refreshes, keyed by account id ('' = all). A manual refresh
+ * runs `agy /usage` (20s cap) plus several REST calls; waiting for all of that
+ * before answering is what made the console's "同步中" spin. Rapid clicks must
+ * not stack duplicate pipelines either.
+ */
+const quotaRefreshInFlight = new Map<string, Promise<void>>();
+
 function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unknown): void {
-  const { pool, quota, catalog, notifyPicker } = services
-      void (async () => {
+  const { pool, quota, catalog } = services
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
         }
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
-        if (id) {
-          const acc = pool.getAccount(id)
-          if (acc) await quota.refreshAccountQuota(acc, true)
-        } else {
-          await quota.refreshAllQuotas(true)
+        const key = id || '__all__'
+        if (!quotaRefreshInFlight.has(key)) {
+          // The dedupe entry must ALWAYS be released, even if a dependency
+          // never settles — otherwise every future sync on that account would
+          // be silently skipped. Bound the background work independently of
+          // the (already-answered) HTTP response.
+          let releaseTimer: ReturnType<typeof setTimeout> | undefined
+          const bounded = new Promise<void>((resolve) => {
+            releaseTimer = setTimeout(resolve, ROUTE_TIMEOUT_MS)
+            releaseTimer.unref?.()
+          })
+          const work = (async () => {
+            if (id) {
+              const acc = pool.getAccount(id)
+              if (acc) await quota.refreshAccountQuota(acc, true)
+            } else {
+              await quota.refreshAllQuotas(true)
+            }
+            // Manual refresh also re-reads the model catalog: after an
+            // external re-login the subscription tier (and thus model list)
+            // may differ. One `agy models` spawn per explicit click only —
+            // the background poller never touches the catalog.
+            // ModelCatalog emits notifyPicker internally ONLY when entries change.
+            await catalog.forceRefresh().catch(() => undefined)
+          })()
+            .catch(() => undefined)
+            .finally(() => {
+              if (releaseTimer !== undefined) clearTimeout(releaseTimer)
+            })
+          // Whichever finishes first — real work or the deadline — owns the
+          // dedupe entry and releases it. A hung pipeline therefore cannot
+          // permanently block future syncs on this account.
+          quotaRefreshInFlight.set(
+            key,
+            Promise.race([work, bounded]).finally(() => quotaRefreshInFlight.delete(key)),
+          )
         }
-        // Manual refresh also re-reads the model catalog: after an external
-        // re-login the subscription tier (and thus model list) may differ.
-        // One `agy models` spawn per explicit user click only — the
-        // background poller never touches the catalog.
-        // ModelCatalog emits notifyPicker internally ONLY when entries change.
-        void catalog.forceRefresh().catch(() => undefined)
-        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+        // Answer IMMEDIATELY. The console polls /status every 3s, so the new
+        // quota numbers appear on their own — no HTTP request needs to stay
+        // open for the whole network cascade.
+        sendJson(res as RawRes, 200, { ok: true, pending: true, pool: pool.getPoolData() })
+      })
 }
 
 function handlePoolWarmup(services: HostServices, req: unknown, res: unknown): void {
   const { pool, quota, warmup } = services
-      void (async () => {
+      runRoute(res, async () => {
         try {
           if (methodOf(req) !== 'POST') {
             sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -265,12 +301,12 @@ function handlePoolWarmup(services: HostServices, req: unknown, res: unknown): v
         } catch (e) {
           sendJson(res as RawRes, 500, { error: String(e) })
         }
-      })()
+      })
 }
 
 function handlePoolClearCooldown(services: HostServices, req: unknown, res: unknown): void {
   const { pool } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -280,12 +316,12 @@ function handlePoolClearCooldown(services: HostServices, req: unknown, res: unkn
         const family = typeof body.family === 'string' ? body.family : undefined
         pool.clearCooldown(id, family as never, true)
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolSetActive(services: HostServices, req: unknown, res: unknown): void {
   const { pool, catalog, notifyPicker } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -302,12 +338,12 @@ function handlePoolSetActive(services: HostServices, req: unknown, res: unknown)
           }
         }
         sendJson(res as RawRes, ok ? 200 : 400, { ok, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolReorder(services: HostServices, req: unknown, res: unknown): void {
   const { pool, catalog, notifyPicker } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -326,12 +362,12 @@ function handlePoolReorder(services: HostServices, req: unknown, res: unknown): 
           }
         }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
-      })()
+      })
 }
 
 function handlePoolImport(services: HostServices, req: unknown, res: unknown): void {
   const { poolAuth, pool, notifyPicker } = services
-  void (async () => {
+  runRoute(res, async () => {
     if (methodOf(req) !== 'POST') {
       sendJson(res as RawRes, 405, { error: 'POST only' })
       return
@@ -361,7 +397,7 @@ function handlePoolImport(services: HostServices, req: unknown, res: unknown): v
         code: result.code,
       })
     }
-  })()
+  })
 }
 
 export function register(reg: RouteRegistrar, services: HostServices): void {

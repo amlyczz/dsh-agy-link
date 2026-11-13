@@ -4,7 +4,7 @@
 
 import { agyIcon } from '../icons.ts';
 import { h, useEffect, useRef, useState } from '../react.ts';
-import { useAgyStatus } from '../status.ts';
+import { isUiVisible, useAgyStatus } from '../status.ts';
 import { Button } from '../ui/Button.ts';
 import { agyModalStore, modalHostManager, Modal, portalToBody } from '../ui/Modal.ts';
 import { useAgyTranslation, type LocaleLike } from '../hooks/useTranslation.ts';
@@ -77,18 +77,22 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 			{
 				variant: 'pill',
 				title: badgeTitle,
-				className: 'agy-btn',
+				className: 'agy-btn agy-session-status-btn',
 				onClick: () => {
 					modalHostManager.claim(hostId);
 					agyModalStore.setOpen(true);
 				},
 			},
-			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color } }),
-			buttonLabel,
+			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color, flexShrink: 0 } }),
+			h('span', { className: 'agy-session-status-label' }, buttonLabel),
 		);
+		const modalPortal = isPrimaryHost && isModalOpen ? portalToBody(h(ConsoleDialog, { t, SettingsSection })) : null;
+		if (!isUiVisible(status, 'showHeaderBadge')) {
+			return modalPortal;
+		}
 		return h('div', { style: { display: 'inline-block' } },
 			badge,
-			isPrimaryHost && isModalOpen ? portalToBody(h(ConsoleDialog, { t, SettingsSection })) : null,
+			modalPortal,
 		);
 	};
 }

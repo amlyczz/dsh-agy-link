@@ -827,18 +827,29 @@ test('selectAccount for family=argon routes only to Argon-capable accounts', () 
 })
 
 test('defaultPoolDir recovers when home directory is inside an isolated account path', () => {
-  assert.equal(
-    defaultPoolDir('C:\\Users\\kybco\\.dsh\\agy-accounts\\acc_1793341113485_51ytc'),
-    join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
-  )
-  assert.equal(
-    defaultPoolDir('/home/user/.dsh/agy-accounts/acc_1793341113485_51ytc'),
-    join('/home/user', '.dsh', 'agy-accounts'),
-  )
-  assert.equal(
-    defaultPoolDir('C:\\Users\\kybco'),
-    join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
-  )
+  const savedStateDir = process.env.DSH_STATE_DIR
+  try {
+    // An explicit home always wins: accounts spawned inside an isolated
+    // HOME must resolve to that home, not the parent process's state dir.
+    process.env.DSH_STATE_DIR = '/tmp/some-other-state'
+    assert.equal(
+      defaultPoolDir('C:\\Users\\kybco\\.dsh\\agy-accounts\\acc_1793341113485_51ytc'),
+      join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
+    )
+    assert.equal(
+      defaultPoolDir('/home/user/.dsh/agy-accounts/acc_1793341113485_51ytc'),
+      join('/home/user', '.dsh', 'agy-accounts'),
+    )
+    assert.equal(
+      defaultPoolDir('C:\\Users\\kybco'),
+      join('C:\\Users\\kybco', '.dsh', 'agy-accounts'),
+    )
+    // With no explicit home the host's state dir is authoritative.
+    assert.equal(defaultPoolDir(), join('/tmp/some-other-state', 'agy-accounts'))
+  } finally {
+    if (savedStateDir === undefined) delete process.env.DSH_STATE_DIR
+    else process.env.DSH_STATE_DIR = savedStateDir
+  }
 })
 
 test('selectAccount routes to account supporting requested model (Opus 4.6 vs Opus 5.5)', () => {

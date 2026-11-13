@@ -21,9 +21,9 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | Key | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `''` (agy default) | Initial model slug |
-| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | Initial thinking effort: `low` / `medium` / `high` / `auto`; overridable per model in the session menu |
+| `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | Initial thinking effort; the settings row and the session menu offer exactly the levels the live catalog advertises (`low` / `medium` / `high` / `xhigh` (Extra) / `max`), plus `auto` |
 | `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | Slugs hidden from the model picker (comma separated) |
-| `fallbackModels` | `—` | Gemini 3.8/3.7/3.6/3.5 Flash, Gemini 4 Argon, Claude Sonnet 4.6, Claude Opus 4.6 (Thinking), GPT-OSS 120B | Catalog shown before `agy models` succeeds (signed out or offline) |
+| `fallbackModels` | `—` | agy 1.5.7 lineup: Gemini 4 Argon, Gemini 4 Hydrogen, Orchestrator (Argon), Gemini 3.8 Flash, Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B (Medium) | Catalog shown before `agy models` succeeds (signed out or offline); mirrors `agy models` exactly, no retired entries |
 | `autoFallbackModel` | `DSH_AGY_AUTO_FALLBACK_MODEL` | `false` | Retry on a fallback model when the selected one cannot run |
 | `modelsCacheTtlMs` | `—` | `300000` | Model catalog cache lifetime |
 
@@ -130,6 +130,15 @@ The CLI instantiates the plugin's real `AgyAdapter` with
 classification and the retry-on-effort-refusal all come from the same code path a
 normal turn uses. `--json` returns the validated artifact (`path`, `mime`,
 `width`, `height`, `bytes`, `aspectRatio`, `accountId`) or a stable failure `code`.
+
+## Client UI visibility (issue #105)
+
+| Key | Environment | Default | Description |
+| --- | --- | --- | --- |
+| `showHeaderBadge` | `DSH_AGY_SHOW_HEADER_BADGE` | `true` | Show the AGY status badge in the conversation header toolbar; `false` hides it (the console dialog stays reachable from Settings). On viewports ≤ 680 px the badge label is hidden automatically, leaving the status dot |
+| `showTranslateAction` | `DSH_AGY_SHOW_TRANSLATE_ACTION` | `true` | Show the per-reply "translate to plain language" button; `false` hides only that button, not the translation cards or `/tsl` |
+
+Both are opt-out (only an explicit `false` hides anything), settable from **Settings → Antigravity**, and take effect on the next 3 s status poll without a reload. See `.spec/ui-visibility.md`.
 
 ## Diagnostics
 

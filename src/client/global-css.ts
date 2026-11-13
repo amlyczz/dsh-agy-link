@@ -426,6 +426,13 @@ body[data-ds-dark-theme] select.agy-select { color-scheme: dark; }
    overrides here are deliberately blunt.
    ------------------------------------------------------------------ */
 @media (max-width: 680px) {
+	.agy-session-status-label {
+		display: none !important;
+	}
+	.agy-session-status-btn {
+		padding: 4px 6px !important;
+		min-width: 0 !important;
+	}
 	.agy-modal-backdrop {
 		padding: 0 !important;
 		align-items: stretch !important;

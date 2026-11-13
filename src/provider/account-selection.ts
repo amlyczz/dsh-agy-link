@@ -7,6 +7,7 @@ import { Err, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import type { SessionStore } from '../host/sessions.ts'
+import { PREFERRED_CLAUDE, PREFERRED_GEMINI_FLASH, PREFERRED_OPENAI } from '../common/model-lineup.ts'
 
 export interface AccountSelectionDeps {
   pool?: AccountPoolManager
@@ -69,9 +70,9 @@ function crossFamilyFallback(
   // Quota pools are per FAMILY; downgrading within one shares the exhausted
   // pool, so fail over across families and pin a model of the picked family.
   const familyModel: Partial<Record<ModelFamily, string>> = {
-    google: 'gemini-3.8-flash',
-    anthropic: 'claude-sonnet-5-5',
-    openai: 'gpt-oss-120b-medium',
+    google: PREFERRED_GEMINI_FLASH,
+    anthropic: PREFERRED_CLAUDE,
+    openai: PREFERRED_OPENAI,
   }
   for (const fbFam of ['google', 'anthropic', 'openai'] as ModelFamily[]) {
     if (fbFam === family) continue

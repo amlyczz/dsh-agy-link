@@ -8,6 +8,7 @@ import { defaultEffortFor, findEntry } from './models.ts'
 import type { OneShotDeps } from './oneshot.ts'
 import { runAgyOnce } from './oneshot.ts'
 import { parseEffortUnsupported } from './adapter.ts'
+import { EFFORT_SUFFIXES, REASONING_EFFORTS } from '../common/reasoning.ts'
 
 const ALIASES: Readonly<Record<string, string>> = {
   flash: 'gemini',
@@ -20,6 +21,30 @@ const ALIASES: Readonly<Record<string, string>> = {
   oss: 'gpt-oss',
 }
 
+/**
+ * Split a model word into (base, effort): `"gemini-3.8-flash high"`,
+ * `"gemini-high"` and `"hydrogen extra"` all carry a level. The effort list is
+ * the canonical one (common/reasoning.ts), longest suffix first, so `xhigh`
+ * is never read as `high`.
+ */
+function splitAskQuery(input: string): { base: string; effort?: string } {
+  const q = input.trim().toLowerCase()
+  const prefix = ALIASES[q] ?? q.replace(/\s+/g, '-')
+  for (const eff of EFFORT_SUFFIXES) {
+    if (q.endsWith(' ' + eff) || q.endsWith('-' + eff)) {
+      return { base: prefix.slice(0, -(eff.length + 1)), effort: eff }
+    }
+  }
+  return { base: prefix }
+}
+
+/** The effort a model word asks for, if any (`"hydrogen extra"` → `xhigh`). */
+export function resolveAskEffort(input: string): string | undefined {
+  const q = input.trim()
+  if (q === '') return undefined
+  return splitAskQuery(q).effort
+}
+
 /** Resolve a user-facing model word against the live catalog. */
 export function resolveAskModel(
   input: string,
@@ -30,19 +55,13 @@ export function resolveAskModel(
   if (q === '') return defaultModel
   const ids = catalog.models.map((m) => m.id)
   if (ids.includes(q)) return q
-  const prefix = ALIASES[q] ?? q.replace(/\s+/g, '-')
-  let level = ''
-  for (const eff of ['high', 'medium', 'low']) {
-    if (q.endsWith(' ' + eff) || q.endsWith('-' + eff)) level = eff
-  }
-  const base = level !== '' ? prefix.replace(/-?(high|medium|low)$/, '') : prefix
+  const { base } = splitAskQuery(q)
   const candidates = ids.filter((id) => id.startsWith(base))
   if (candidates.length === 0) return defaultModel !== '' ? defaultModel : q
   const sorted = candidates.slice().sort(compareNatural)
-  const last = sorted[sorted.length - 1] ?? q
-  if (level === '') return last
-  const exact = sorted.find((id) => id.endsWith('-' + level))
-  return exact ?? last
+  // Catalog ids are already folded (base + efforts), so the newest matching
+  // base IS the answer; the level travels separately as --effort.
+  return sorted[sorted.length - 1] ?? q
 }
 
 function compareNatural(a: string, b: string): number {
@@ -62,7 +81,26 @@ function compareNatural(a: string, b: string): number {
   return 0
 }
 
+/**
+ * The `model` parameter's help text, built from the LIVE catalog: the model list
+ * and the effort list are never retyped here (a hardcoded "flash, pro, gemini,
+ * sonnet, opus" line is the same drift that put models in the picker agy does
+ * not have). Family words still work through ALIASES.
+ */
+export function askModelHelp(catalog: Catalog): string {
+  const ids = catalog.models.map((m) => m.id)
+  const listed = ids.length > 0 ? ids.join(', ') : 'any agy model id'
+  return 'Model to ask: ' + listed + ', a family word (' + Object.keys(ALIASES).join(', ')
+    + '), or an exact slug (default: the bridge default model).'
+}
+
+/** The `effort` parameter's help text, from the canonical effort vocabulary. */
+export function askEffortHelp(): string {
+  return 'Reasoning effort for effort-capable models: ' + REASONING_EFFORTS.join(', ') + '.'
+}
+
 export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog }) {
+  const catalogNow = deps.catalog()
   return defineTool({
     name: 'agy_ask',
     description: 'Delegate a one-shot task to a Google Antigravity model via the agy CLI (e.g. ask Gemini for a review while keeping the current model). Returns the final answer text.',
@@ -74,11 +112,11 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
       },
       model: {
         type: 'string',
-        description: 'Model to ask: flash, pro, gemini, sonnet, opus, gpt-oss, or an exact slug (default: the bridge default model).',
+        description: askModelHelp(catalogNow),
       },
       effort: {
         type: 'string',
-        description: 'Reasoning effort for effort-capable models: low, medium, or high.',
+        description: askEffortHelp(),
       },
       mode: {
         type: 'string',
@@ -121,7 +159,10 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
       // A model agy has already refused `--effort` for (issue #67) is asked
       // without the flag — the catalog is advisory, the refusal is the truth.
       const entry = findEntry(deps.catalog(), model)
-      const wanted = args.effort ?? (entry?.efforts ? defaultEffortFor(entry, cfg) : undefined)
+      // A level written into the model word ("hydrogen extra") wins over the
+      // model default; an explicit `effort` argument wins over both.
+      const askedEffort = resolveAskEffort(args.model ?? '')
+      const wanted = args.effort ?? askedEffort ?? (entry?.efforts ? defaultEffortFor(entry, cfg) : undefined)
       const learned = deps.effortUnsupported?.() ?? []
       const refusedBefore = wanted !== undefined && learned.some((m) => m !== '' && (m === model || m === entry?.id))
       const call = (effort: string | undefined) =>

@@ -246,13 +246,25 @@ function presentScheduleCall(input: Record<string, unknown>): ToolCallView {
   return { card: 'generic', title, kind: 'other', rawInput: input }
 }
 
+function cleanRole(raw?: string): string | undefined {
+  if (!raw) return undefined
+  let s = raw.trim()
+  if (s.startsWith('"') && s.endsWith('"')) {
+    try { s = JSON.parse(s) } catch { /* ignore */ }
+  }
+  return s || undefined
+}
+
 function presentSubagentCall(input: Record<string, unknown>): ToolCallView {
+  const directRole = pick(input, 'Role', 'role', 'TypeName', 'typeName')
   const subs = input.Subagents ?? input.subagents
-  const firstRole = Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown; role?: unknown }).Role === 'string'
-    ? ((subs[0] as { Role: string }).Role)
-    : Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { TypeName?: unknown; typeName?: unknown }).TypeName === 'string'
-      ? ((subs[0] as { TypeName: string }).TypeName)
-      : undefined
+  const subRole =
+    Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown; role?: unknown }).Role === 'string'
+      ? ((subs[0] as { Role: string }).Role)
+      : Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { TypeName?: unknown; typeName?: unknown }).TypeName === 'string'
+        ? ((subs[0] as { TypeName: string }).TypeName)
+        : undefined
+  const firstRole = cleanRole(directRole) ?? cleanRole(subRole)
   const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
   const title = desc ?? (firstRole ? `Subagent: ${firstRole}` : 'Invoke subagent')
   return { card: 'generic', title, kind: 'execute', rawInput: input }

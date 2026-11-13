@@ -150,7 +150,11 @@ function quotaActions(
 				return;
 			}
 			await refresh();
-			showToast(t('quota.refreshed'), 'success');
+			// The host answers immediately and refreshes in the background; the
+			// 3s status poll delivers the new numbers. Saying "refreshed" here
+			// used to be a lie (and the old blocking request left the spinner
+			// spinning for the whole network cascade).
+			showToast(res?.pending === true ? t('quota.refreshStarted') : t('quota.refreshed'), res?.pending === true ? 'info' : 'success');
 		} finally {
 			setLoadingAction(null);
 		}

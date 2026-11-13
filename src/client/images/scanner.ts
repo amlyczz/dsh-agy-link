@@ -211,6 +211,203 @@ let imageEnhancerDispose: (() => void) | null = null;
 let imageScanTimer: ReturnType<typeof setTimeout> | null = null;
 let unbindImageSettle: (() => void) | null = null;
 let delegatedClickListener: ((e: MouseEvent) => void) | null = null;
+let currentClientCtx: any = null;
+
+export function setClientContext(ctx: unknown): void {
+  currentClientCtx = ctx;
+  if (typeof window !== 'undefined' && ctx) {
+    (window as any).__dshClientCtx__ = ctx;
+  }
+}
+
+function getService<T>(c: any, name: string): T | undefined {
+  if (!c) return undefined;
+  try {
+    const fromReflect = c.reflect?.get?.(name, false);
+    if (fromReflect != null) return fromReflect;
+  } catch {}
+  try {
+    const fromGet = typeof c.get === 'function' ? c.get(name) : undefined;
+    if (fromGet != null) return fromGet;
+  } catch {}
+  try {
+    const direct = c[name];
+    if (direct != null) return direct;
+  } catch {}
+  return undefined;
+}
+
+export function parseFilePathAndLine(rawPath: string): { cleanPath: string; line?: number } {
+  let cleanPath = rawPath.trim();
+  let line: number | undefined;
+
+  const hashIdx = cleanPath.indexOf('#');
+  if (hashIdx >= 0) {
+    const hash = cleanPath.slice(hashIdx + 1);
+    const hashMatch = /^L(\d+)(?:-L(\d+))?$/i.exec(hash);
+    if (hashMatch && hashMatch[1]) {
+      const l = parseInt(hashMatch[1], 10);
+      if (Number.isSafeInteger(l) && l > 0) {
+        line = l;
+      }
+    }
+    cleanPath = cleanPath.slice(0, hashIdx);
+  }
+
+  if (line === undefined) {
+    const colonMatch = /:(\d+)(?::\d+|-(\d+))?$/.exec(cleanPath);
+    if (colonMatch && colonMatch[1]) {
+      const l = parseInt(colonMatch[1], 10);
+      if (Number.isSafeInteger(l) && l > 0) {
+        line = l;
+        cleanPath = cleanPath.slice(0, -colonMatch[0].length);
+      }
+    }
+  }
+
+  if (cleanPath.startsWith('file://')) {
+    cleanPath = cleanPath.slice(7);
+    if (/^\/[A-Za-z]:[\\/]/.test(cleanPath)) {
+      cleanPath = cleanPath.slice(1);
+    } else if (!cleanPath.startsWith('/') && !/^[A-Za-z]:/.test(cleanPath)) {
+      cleanPath = '/' + cleanPath.replace(/^localhost\/?/, '');
+    }
+  }
+
+  try {
+    cleanPath = decodeURIComponent(cleanPath);
+  } catch {}
+
+  return { cleanPath, line };
+}
+
+const FILE_ADDRESS_PREFIX = 'dsh-resource://file/';
+
+function encodeSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/%3A/gi, ':');
+}
+
+function encodePath(path: string): string {
+  return path.split('/').map(encodeSegment).join('/');
+}
+
+function isWindowsStylePath(value: string): boolean {
+  return /^[A-Za-z]:[/\\]/.test(value) || value.startsWith('\\\\');
+}
+
+function isAbsoluteWorkspacePath(path: string): boolean {
+  return path.startsWith('/') || isWindowsStylePath(path);
+}
+
+function sessionFileAddress(sessionId: string, path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+  return `${FILE_ADDRESS_PREFIX}session/${encodeSegment(sessionId)}/${encodePath(normalized)}`;
+}
+
+export function fileAddressFor(sessionId: string, cwd: string | undefined, path: string): string {
+  if (path.startsWith(FILE_ADDRESS_PREFIX)) return path;
+  const normalized = path.replace(/\\/g, '/');
+  if (!isAbsoluteWorkspacePath(normalized)) return sessionFileAddress(sessionId, normalized);
+  const root = cwd === undefined ? '' : cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (root !== '' && normalized === root) return sessionFileAddress(sessionId, '');
+  if (root !== '' && normalized.startsWith(`${root}/`)) return sessionFileAddress(sessionId, normalized.slice(root.length + 1));
+  return sessionFileAddress(sessionId, normalized);
+}
+
+export function resolveSessionId(targetCtx: any, cleanPath?: string): string {
+  if (!targetCtx) return '';
+  const sidebarRight = getService<any>(targetCtx, 'sidebarRight');
+  const mounted = sidebarRight?.mounted?.getSnapshot?.();
+  if (typeof mounted === 'string' && mounted) return mounted;
+
+  const uiSession = getService<any>(targetCtx, 'uiSession');
+  const adapterKey = uiSession?.adapter?.current?.getSnapshot?.()?.key;
+  if (typeof adapterKey === 'string' && adapterKey) return adapterKey;
+
+  const value = uiSession?.current?.value;
+  if (value && typeof value === 'object') {
+    for (const k of ['key', 'sessionId', 'id']) {
+      const id = value[k];
+      if (typeof id === 'string' && id) return id;
+    }
+  }
+
+  const sessions = getService<any>(targetCtx, 'sessions');
+  const byId = sessions?.list?.getSnapshot?.()?.byId;
+  if (byId && typeof byId === 'object') {
+    const keys = Object.keys(byId);
+    if (keys.length === 1 && keys[0]) return keys[0];
+    if (cleanPath) {
+      const normClean = cleanPath.replace(/\\/g, '/');
+      for (const key of keys) {
+        const sessCwd = byId[key]?.cwd;
+        if (sessCwd && typeof sessCwd === 'string') {
+          const normCwd = sessCwd.replace(/\\/g, '/').replace(/\/+$/, '');
+          if (normCwd && normClean.startsWith(`${normCwd}/`)) {
+            return key;
+          }
+        }
+      }
+    }
+    if (keys[0]) return keys[0];
+  }
+
+  return '';
+}
+
+export async function openInSidebar(rawPath: string, ctx?: unknown): Promise<boolean> {
+  try {
+    const targetCtx = (ctx || currentClientCtx || (typeof window !== 'undefined' ? (window as any).__dshClientCtx__ : undefined)) as any;
+    if (!targetCtx) return false;
+
+    const sidebarRight = getService<any>(targetCtx, 'sidebarRight');
+    if (!sidebarRight || (typeof sidebarRight.openResource !== 'function' && typeof sidebarRight.openResourceIn !== 'function')) {
+      return false;
+    }
+
+    const { cleanPath, line } = parseFilePathAndLine(rawPath);
+    if (!cleanPath) return false;
+
+    const sessionId = resolveSessionId(targetCtx, cleanPath);
+    if (!sessionId) {
+      console.warn('[dsh-agy-link] openInSidebar: could not determine current sessionId');
+      return false;
+    }
+
+    const sessions = getService<any>(targetCtx, 'sessions');
+    let cwd = sessions?.list?.getSnapshot?.()?.byId?.[sessionId]?.cwd;
+    try {
+      const bindingWd = sessions?.binding?.(sessionId)?.session?.projections?.faceOf?.('workingDirectory')?.getSnapshot?.();
+      if (typeof bindingWd === 'string' && bindingWd) {
+        cwd = bindingWd;
+      }
+    } catch {}
+
+    const resourceUrl = fileAddressFor(sessionId, cwd, cleanPath);
+    const options = line !== undefined ? { params: { line } } : {};
+
+    if (typeof sidebarRight.openResource === 'function') {
+      try {
+        sidebarRight.openResource(resourceUrl, options);
+        return true;
+      } catch (err) {
+        if (typeof sidebarRight.openResourceIn === 'function') {
+          sidebarRight.openResourceIn(sessionId, resourceUrl, options);
+          return true;
+        }
+        throw err;
+      }
+    } else if (typeof sidebarRight.openResourceIn === 'function') {
+      sidebarRight.openResourceIn(sessionId, resourceUrl, options);
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    console.warn('[dsh-agy-link] openInSidebar failed:', err);
+    return false;
+  }
+}
 
 function scheduleImageScan(): void {
   if (isInteractionLocked()) return;
@@ -237,15 +434,39 @@ function handleGlobalLinkClick(e: MouseEvent): void {
 
     e.preventDefault();
     e.stopPropagation();
-    openInSystem(pathToUse, false).then((res) => {
-      const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
-      showToast(res.ok ? `已在系统默认程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
+
+    // Alt+Click bypass: open directly in system default app / Finder
+    if (e.altKey) {
+      openInSystem(pathToUse, false).then((res) => {
+        const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
+        showToast(res.ok ? `已在系统默认程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
+      });
+      return;
+    }
+
+    // Visual media opens in lightbox
+    if (isImageFile(pathToUse) || isVideoFile(pathToUse)) {
+      const mediaUrl = buildMediaUrl(pathToUse);
+      const linkText = (a.textContent ?? 'Media').trim();
+      openLightbox(mediaUrl, linkText, pathToUse);
+      return;
+    }
+
+    // Non-media file: open inside DSH's native right sidebar!
+    openInSidebar(pathToUse).then((opened) => {
+      if (opened) return;
+      // Fallback to system default application if sidebar open was unavailable
+      openInSystem(pathToUse, false).then((res) => {
+        const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
+        showToast(res.ok ? `已在系统默认程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
+      });
     });
   }
 }
 
-export function installImageEnhancer(): () => void {
+export function installImageEnhancer(ctx?: unknown): () => void {
   if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
+  if (ctx) setClientContext(ctx);
   imageEnhancerDispose?.();
   injectStyles();
 

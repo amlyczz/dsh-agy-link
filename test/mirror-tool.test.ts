@@ -155,8 +155,11 @@ test('run_code wrapper round-trip: build -> parse recovers the cursor', () => {
   const built = buildMirrorRunCode('7d246c00-c0d1-4e3c-a25b-848881b81042', 15, 'run_command')
   assert.equal(built.description, 'run_command')
   assert.ok(built.code.includes("tools['agy_tool']({\"run\":\"7d246c00-c0d1-4e3c-a25b-848881b81042\",\"step\":15})"), built.code)
+  assert.ok(!built.code.includes('return await'), 'must not contain top-level return so REPL / persistent mode does not fail (issue #103): ' + built.code)
   assert.deepEqual(parseMirrorInvocation(built.code), { run: '7d246c00-c0d1-4e3c-a25b-848881b81042', step: 15 })
   assert.equal(parseMirrorInvocation('unrelated code'), null)
+  // Backwards compatibility: ensure legacy "return await" code is still parsed correctly
+  assert.deepEqual(parseMirrorInvocation("return await tools['agy_tool']({\"run\":\"legacy-run\",\"step\":3})"), { run: 'legacy-run', step: 3 })
   const pretty = buildMirrorRunCode('r', 1, 'run_command', toolStepBrief('run_command', { command: 'ls -la' }))
   assert.equal(pretty.description, '$ ls -la · run_command')
 })
@@ -327,6 +330,15 @@ test('presentMirrorCall and toolStepBrief support web search, task management, s
   if (subagent?.card === 'generic') {
     assert.equal(subagent.title, 'Subagent: Code Reviewer')
   }
+
+  const directSubagent = presentMirrorCall({
+    tool: 'invoke_subagent',
+    input: { Role: '"Layer 0 Investigator"', TypeName: 'DeepInvestigatorWorkerL0' },
+  })
+  assert.equal(directSubagent?.card, 'generic')
+  if (directSubagent?.card === 'generic') {
+    assert.equal(directSubagent.title, 'Subagent: Layer 0 Investigator')
+  }
   const sendMsg = presentMirrorCall({ tool: 'send_message', input: { Recipient: 'agent-1' } })
   assert.equal(sendMsg?.card, 'generic')
   if (sendMsg?.card === 'generic') {
@@ -339,6 +351,7 @@ test('presentMirrorCall and toolStepBrief support web search, task management, s
   assert.equal(toolStepBrief('read_url_content', { Url: 'https://antigravity.google' }), 'fetch https://antigravity.google')
   assert.equal(toolStepBrief('manage_task', { Action: 'kill', TaskId: 'task-9' }), 'task kill task-9')
   assert.equal(toolStepBrief('invoke_subagent', { Subagents: [{ Role: 'Tester' }] }), 'subagent: Tester')
+  assert.equal(toolStepBrief('invoke_subagent', { Role: '"Layer 0 Investigator"' }), 'subagent: Layer 0 Investigator')
   assert.equal(toolStepBrief('send_message', { Recipient: 'agent-2' }), 'msg agent-2')
 })
 

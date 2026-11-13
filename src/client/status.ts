@@ -4,8 +4,16 @@
 // no overlap guard, and let a slow stale response overwrite a newer one.
 
 import type { AccountPoolData } from '../common/pool-types.ts';
-import { base, win } from './api.ts';
+import { base, win, timedSignal, STATUS_TIMEOUT_MS } from './api.ts';
 import { useEffect, useState } from './react.ts';
+
+/** One model row, shared by the picker, the visibility chips and the dropdowns. */
+export interface CatalogModelView {
+	id: string;
+	name: string;
+	/** Effort ids this model accepts (empty = fixed-thinking, no --effort). */
+	efforts?: readonly string[];
+}
 
 export interface StatusPayload {
 	bin?: string | null;
@@ -36,13 +44,16 @@ export interface StatusPayload {
 		code?: string;
 	};
 	catalog?: { source: string; count: number; lastError: string | null };
-	catalogModels?: ReadonlyArray<{ id: string; name: string }>;
+	/** The catalog exactly as the host's model picker sees it (id, label, supported efforts). */
+	catalogModels?: ReadonlyArray<CatalogModelView>;
 	hiddenModels?: readonly string[];
 	autoWarmup?: boolean;
 	warmupModels?: readonly string[];
 	autoTranslate?: boolean;
 	translateModel?: string;
 	translateEffort?: string;
+	showHeaderBadge?: boolean;
+	showTranslateAction?: boolean;
 	imageModel?: string;
 	imageEffort?: string;
 	imageOutputDir?: string;
@@ -72,10 +83,10 @@ async function getStatus(): Promise<StatusPayload | null> {
 	try {
 		// A bounded fetch: the poll loop must never stack behind a hung request
 		// (undici/browser defaults can park far longer than one poll period).
+		// The signal helper is shared with every write in api.ts.
 		const init: Record<string, unknown> = {};
-		if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as { timeout?: unknown }).timeout === 'function') {
-			init.signal = (AbortSignal as { timeout: (ms: number) => unknown }).timeout(5000);
-		}
+		const signal = timedSignal(STATUS_TIMEOUT_MS);
+		if (signal !== undefined) init.signal = signal;
 		const res = await win.fetch?.(base + '/plugins/agy-link/status', init);
 		if (!res || !res.ok) return null;
 		return (await res.json()) as StatusPayload;
@@ -99,7 +110,21 @@ function isStatusEqual(a: StatusPayload | null, b: StatusPayload | null): boolea
 	}
 }
 
-function notifyStatus(st: StatusPayload): void {
+/**
+ * UI visibility switches are opt-out: a missing/undefined flag means the
+ * affordance stays visible (older hosts, a not-yet-polled status, or a status
+ * payload fetched before this version shipped). Only an explicit `false`
+ * hides it.
+ */
+export function isUiVisible(
+	status: StatusPayload | null | undefined,
+	key: 'showHeaderBadge' | 'showTranslateAction',
+): boolean {
+	return status?.[key] !== false
+}
+
+/** Single writer for the shared status snapshot (poll loop, refresh, tests). */
+function publishStatus(st: StatusPayload): void {
 	statusCache = st;
 	try {
 		win.localStorage?.setItem(STATUS_CACHE_KEY, JSON.stringify(st));
@@ -111,6 +136,11 @@ function notifyStatus(st: StatusPayload): void {
 	}
 }
 
+/** Publish an externally obtained snapshot to every mounted consumer. */
+export function publishStatusSnapshot(st: StatusPayload): void {
+	publishStatus(st)
+}
+
 async function statusPollTick(): Promise<void> {
 	const seq = ++statusFetchSeq;
 	const st = await getStatus();
@@ -118,7 +148,7 @@ async function statusPollTick(): Promise<void> {
 	// Only notify when payload actually changed to prevent needless re-renders.
 	if (st !== null && seq === statusFetchSeq) {
 		if (!isStatusEqual(statusCache, st)) {
-			notifyStatus(st);
+			publishStatus(st);
 		}
 	}
 }
@@ -173,7 +203,7 @@ export function useAgyStatus(): { status: StatusPayload | null; refresh: () => P
 	}, []);
 	const refresh = async (): Promise<void> => {
 		const st = await getStatus();
-		if (st !== null && !isStatusEqual(statusCache, st)) notifyStatus(st);
+		if (st !== null && !isStatusEqual(statusCache, st)) publishStatus(st);
 	};
 	return { status, refresh };
 }

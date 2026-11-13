@@ -1,9 +1,9 @@
 import type { HostServices } from '../../../host/services.ts'
-import { sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
 
 function handleConfig(services: HostServices, req: unknown, res: unknown): void {
   const { setOverride, notifyPicker, onConfigWritten } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -14,6 +14,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
+          'showHeaderBadge', 'showTranslateAction',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
@@ -33,7 +34,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         // after this event, so the toggle must announce itself.
         if (key === 'hiddenModels') notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
-      })()
+      })
 }
 
 export function register(reg: RouteRegistrar, services: HostServices): void {

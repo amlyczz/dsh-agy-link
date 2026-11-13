@@ -308,6 +308,26 @@ test('watchdog: stderrKeepalive opt-in preserves login-flow semantics', async ()
   assert.equal(outcome.code, 0)
 })
 
+test('watchdog: a blocked host event loop does not kill an actively writing child', async () => {
+  // libuv runs the timers phase BEFORE the poll phase. If the DSH host is
+  // blocked for longer than the idle budget (a big parse, many parallel
+  // workers), the expired watchdog used to fire before the child's queued
+  // stdout was delivered — a false timeout that also made the two keep-alive
+  // tests flake under a fully parallel `npm test`. The one-shot grace gives
+  // that data a chance to arrive. This test is deterministic: we block the
+  // loop ourselves instead of hoping the scheduler does it.
+  const p = startAgyProcess({
+    bin: process.execPath,
+    args: nodeChild('console.log("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>1200){clearInterval(i);process.exit(0)};console.log("progress")},20)'),
+    timeoutMs: 300,
+  })
+  const until = Date.now() + 400
+  while (Date.now() < until) { /* deliberately block past the 300ms idle budget */ }
+  const outcome = await p.outcome
+  assert.equal(outcome.timedOut, false, 'queued progress must re-arm the watchdog during the grace')
+  assert.equal(outcome.code, 0)
+})
+
 test('Stop button: SIGTERM-ignoring children still die via SIGKILL escalation', async () => {
   // A wedged agy (offline dial-retry) ignores SIGTERM; the 3s escalation
   // must SIGKILL the whole group so the UI Stop button always wins.

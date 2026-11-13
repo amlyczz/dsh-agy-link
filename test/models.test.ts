@@ -56,24 +56,91 @@ test('parseModelsOutput handles dotted current-gen slugs', () => {
   assert.deepEqual(base?.efforts, ['medium'])
 })
 
-test('fallback catalog carries the current line-up: 3.8/argon/4.6+5.5 Claude, retired 3.5–3.7 dropped', () => {
+// Verbatim `agy models` output (agy 1.5.7, macOS). This is the ground truth
+// for the reported bug: DSH listed a bogus `gemini-4-hydrogen-xhigh` MODEL
+// because the fold did not know `xhigh`, while agy's own picker shows it as
+// the "Extra" level of Gemini 4 Hydrogen.
+const AGY_157_MODELS = [
+  'gemini-4-argon-medium\tGemini 4 Argon (Medium)',
+  'gemini-4-argon-high\tGemini 4 Argon (High)',
+  'gemini-4-argon-low\tGemini 4 Argon (Low)',
+  'gemini-4-hydrogen-high\tGemini 4 Hydrogen (High)',
+  'gemini-4-hydrogen-xhigh\tGemini 4 Hydrogen (XHigh)',
+  'gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)',
+  'gemini-4-hydrogen-low\tGemini 4 Hydrogen (Low)',
+  'gemini-pro-orchestrator-g1-pro\tOrchestrator (Argon)',
+  'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+  'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+  'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
+  'claude-opus-5-5-low\tClaude Opus 5.5 (Low)',
+  'claude-opus-5-5-medium\tClaude Opus 5.5 (Medium)',
+  'claude-opus-5-5-high\tClaude Opus 5.5 (High)',
+  'claude-sonnet-5-5-low\tClaude Sonnet 5.5 (Low)',
+  'claude-sonnet-5-5-medium\tClaude Sonnet 5.5 (Medium)',
+  'claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)',
+  'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
+].join('\n')
+
+test('REGRESSION: the DSH catalog is agy 1.5.7 folded — no effort leaks in as a model', () => {
+  const folded = foldEfforts(parseModelsOutput(AGY_157_MODELS))
+  assert.deepEqual(
+    folded.map((m) => [m.id, m.efforts]),
+    [
+      ['gemini-4-argon', ['low', 'medium', 'high']],
+      ['gemini-4-hydrogen', ['low', 'medium', 'high', 'xhigh']],
+      ['gemini-pro-orchestrator-g1-pro', null],
+      ['gemini-3.8-flash', ['low', 'medium', 'high']],
+      ['claude-opus-5-5', ['low', 'medium', 'high']],
+      ['claude-sonnet-5-5', ['low', 'medium', 'high']],
+      ['gpt-oss-120b-medium', null],
+    ],
+  )
+  // The bug itself: `xhigh` must never appear as a standalone model id.
+  assert.equal(folded.some((m) => m.id === 'gemini-4-hydrogen-xhigh'), false)
+  // Nor may any tiered slug of a folding family survive as its own model
+  // (gpt-oss-120b-medium is a real verbatim id, not a tier of gpt-oss-120b).
+  assert.equal(folded.some((m) => /^(?:gemini|claude|argon).+-(?:low|medium|high|xhigh|max)$/.test(m.id)), false)
+})
+
+test('the offline fallback lineup is the same set the live discovery produces', () => {
+  // A fallback that disagrees with discovery is a bug the user only sees when
+  // signed out — keep them byte-identical in id and effort set.
+  const discovered = foldEfforts(parseModelsOutput(AGY_157_MODELS)).map((m) => [m.id, m.efforts])
+  const fallback = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS).map((m) => [m.id, m.efforts])
+  assert.deepEqual(fallback, discovered)
+})
+
+test('fallback catalog mirrors agy 1.5.7 exactly — nothing agy does not list', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
   const ids = cat.map((e) => e.id)
-  assert.ok(ids.includes('gemini-3.8-flash'), '3.8 flash present')
-  // Gemini 3.5–3.7 are retired upstream (maintainer-confirmed 2026-11-09).
+  // Ground truth: `agy models` on 1.5.7, in its own order.
+  assert.deepEqual(ids, [
+    'gemini-4-argon',
+    'gemini-4-hydrogen',
+    'gemini-pro-orchestrator-g1-pro',
+    'gemini-3.8-flash',
+    'claude-opus-5-5',
+    'claude-sonnet-5-5',
+    'gpt-oss-120b-medium',
+  ])
+  // Retired / unavailable upstream: offering them here is exactly how DSH ends
+  // up listing models agy's own picker does not have.
+  assert.equal(ids.includes('gemini-4-carbon'), false, 'Carbon is "Unavailable" in agy')
+  assert.equal(ids.includes('claude-opus-4-6-thinking'), false, 'Claude 4.6 line is retired')
+  assert.equal(ids.includes('claude-sonnet-4-6'), false, 'Claude 4.6 line is retired')
   assert.equal(ids.includes('gemini-3.7-flash'), false, 'retired 3.7 flash is gone')
-  assert.equal(ids.includes('gemini-3.6-flash'), false, 'retired 3.6 flash is gone')
-  assert.equal(ids.includes('gemini-3.5-flash'), false, 'retired 3.5 flash is gone')
-  assert.ok(ids.includes('claude-sonnet-5-5'), 'Claude Sonnet 5.5 present')
-  assert.ok(ids.includes('claude-opus-5-5'), 'Claude Opus 5.5 present')
-  assert.ok(ids.includes('claude-opus-4-6-thinking'))
-  assert.ok(ids.includes('gpt-oss-120b-medium'))
-  const f38 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'gemini-3.8-flash')
-  assert.deepEqual(f38?.efforts, ['low', 'medium', 'high'])
+
+  const byId = (id: string) => cat.find((e) => e.id === id)
+  assert.deepEqual(byId('gemini-3.8-flash')?.efforts, ['low', 'medium', 'high'])
+  assert.deepEqual(byId('gemini-4-argon')?.efforts, ['low', 'medium', 'high'])
+  // agy 1.5.7 added `xhigh` to the Hydrogen family (its picker labels it "Extra").
+  assert.deepEqual(byId('gemini-4-hydrogen')?.efforts, ['low', 'medium', 'high', 'xhigh'])
+  // Orchestrator is a single fixed slug — no --effort.
+  assert.equal(byId('gemini-pro-orchestrator-g1-pro')?.efforts, null)
   // Verified on agy 1.5.3: a base Claude 5.5 slug accepts --effort, while a
   // tiered slug conflicts with it, so the catalog advertises base + tiers.
-  const c55 = findEntry({ source: 'fallback', models: cat, discoveredAt: 0 }, 'claude-sonnet-5-5')
-  assert.deepEqual(c55?.efforts, ['low', 'medium', 'high'])
+  assert.deepEqual(byId('claude-sonnet-5-5')?.efforts, ['low', 'medium', 'high'])
+  assert.equal(byId('gpt-oss-120b-medium')?.efforts, null)
 })
 
 test('Claude 5.5 effort variants fold into a base entry, like gemini/argon', () => {
@@ -169,17 +236,15 @@ test('bare gemini base without siblings gets no efforts', () => {
 
 test('buildFallbackCatalog carries configurable efforts', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
-  assert.equal(cat.length, 8)
-  const carbon = cat.find((e) => e.id === 'gemini-4-carbon')
-  assert.deepEqual(carbon?.efforts, ['low', 'medium', 'high'])
+  assert.equal(cat.length, DEFAULT_FALLBACK_MODELS.length)
   const flash38 = cat.find((e) => e.id === 'gemini-3.8-flash')
   assert.deepEqual(flash38?.efforts, ['low', 'medium', 'high'])
-  const argon = cat.find((e) => e.id === 'gemini-4-argon')
-  assert.deepEqual(argon?.efforts, ['low', 'medium', 'high'])
-  const flash = cat.find((e) => e.id === 'gemini-3.8-flash')
-  assert.deepEqual(flash?.efforts, ['low', 'medium', 'high'])
-  const claude = cat.find((e) => e.id === 'claude-sonnet-4-6')
-  assert.equal(claude?.efforts, null)
+  const hydrogen = cat.find((e) => e.id === 'gemini-4-hydrogen')
+  assert.deepEqual(hydrogen?.efforts, ['low', 'medium', 'high', 'xhigh'])
+  const orchestrator = cat.find((e) => e.id === 'gemini-pro-orchestrator-g1-pro')
+  assert.equal(orchestrator?.efforts, null)
+  const gpt = cat.find((e) => e.id === 'gpt-oss-120b-medium')
+  assert.equal(gpt?.efforts, null)
 })
 
 test('defaultEffortFor prefers config override then high first', () => {
@@ -206,11 +271,14 @@ test('effort suffix ids still resolve to their base entry', () => {
 
 test('findEntry resolves aliases via resolveModelSlug', () => {
   const cat = { source: 'fallback' as const, models: buildFallbackCatalog(DEFAULT_FALLBACK_MODELS), discoveredAt: 0 }
-  assert.equal(findEntry(cat, 'claude-opus-4-6')?.id, 'claude-opus-4-6-thinking')
-  // Bare aliases point at the current generation (agy 1.5.3 serves 5.5).
+  // Bare aliases point at the current generation (agy 1.5.7 serves 5.5 only).
   assert.equal(findEntry(cat, 'claude-opus')?.id, 'claude-opus-5-5')
   assert.equal(findEntry(cat, 'claude-sonnet')?.id, 'claude-sonnet-5-5')
   assert.equal(findEntry(cat, 'gpt-oss-120b')?.id, 'gpt-oss-120b-medium')
+  // A retired 4.6 id still RESOLVES (legacy sessions), it just is not listed:
+  // resolveModelSlug is pure, so the catalog lookup correctly finds nothing.
+  assert.equal(resolveModelSlug('claude-opus-4-6'), 'claude-opus-4-6-thinking')
+  assert.equal(findEntry(cat, 'claude-opus-4-6'), undefined)
 })
 
 test('isArgonModel identifies Argon variants case-insensitively', () => {

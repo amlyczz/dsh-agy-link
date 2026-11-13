@@ -23,13 +23,27 @@ export const base = win.location?.origin ?? '';
 
 const PLUGIN_BASE = '/plugins/agy-link';
 
+export { WRITE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from '../common/timeouts.ts'
+import { WRITE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from '../common/timeouts.ts'
+
+/** One AbortSignal.timeout helper, shared by writes and the status poll. */
+export function timedSignal(ms: number): unknown | undefined {
+	if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as { timeout?: unknown }).timeout === 'function') {
+		return (AbortSignal as { timeout: (ms: number) => unknown }).timeout(ms);
+	}
+	return undefined;
+}
+
 export async function postJson(path: string, body: Record<string, unknown>): Promise<any> {
 	try {
-		const res = await win.fetch?.(base + path, {
+		const init: Record<string, unknown> = {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
-		});
+		};
+		const signal = timedSignal(WRITE_TIMEOUT_MS);
+		if (signal !== undefined) init.signal = signal;
+		const res = await win.fetch?.(base + path, init);
 		if (!res) return null;
 		try {
 			const payload = await res.json();
@@ -49,7 +63,10 @@ export async function postJson(path: string, body: Record<string, unknown>): Pro
 
 export async function getJson<T = any>(path: string): Promise<T | null> {
 	try {
-		const res = await win.fetch?.(base + path);
+		const init: Record<string, unknown> = {};
+		const signal = timedSignal(STATUS_TIMEOUT_MS);
+		if (signal !== undefined) init.signal = signal;
+		const res = await win.fetch?.(base + path, init);
 		if (!res || !res.ok) return null;
 		return (await res.json()) as T;
 	} catch {

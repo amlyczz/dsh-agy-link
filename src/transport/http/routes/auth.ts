@@ -1,10 +1,10 @@
 import type { HostServices } from '../../../host/services.ts'
-import { sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
 import { detectSystemProxy } from '../../../host/wincred.ts'
 
 function handleAuthBegin(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, auth } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -17,12 +17,12 @@ function handleAuthBegin(services: HostServices, req: unknown, res: unknown): vo
           : (getConfig().proxyUrl.trim() || detectSystemProxy() || undefined)
         const st = await auth.begin(homeDir, accountId, proxyUrl)
         sendJson(res as RawRes, 200, st)
-      })()
+      })
 }
 
 function handleAuthCode(services: HostServices, req: unknown, res: unknown): void {
   const { store, pool, quota, catalog, auth } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -45,12 +45,12 @@ function handleAuthCode(services: HostServices, req: unknown, res: unknown): voi
           void catalog.forceRefresh().catch(() => undefined)
         }
         sendJson(res as RawRes, 200, st)
-      })()
+      })
 }
 
 function handleAuthCancel(services: HostServices, req: unknown, res: unknown): void {
   const { auth } = services
-      void (async () => {
+      runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
@@ -58,12 +58,12 @@ function handleAuthCancel(services: HostServices, req: unknown, res: unknown): v
         await readBody(req)
         const st = auth.cancelAuth()
         sendJson(res as RawRes, 200, st)
-      })()
+      })
 }
 
 function handleAuthQr(services: HostServices, req: unknown, res: unknown): void {
   const { auth } = services
-      void (async () => {
+      runRoute(res, async () => {
         const st = auth.status()
         const url = st.phase === 'pending' ? st.url : undefined
         if (!url) {
@@ -81,7 +81,7 @@ function handleAuthQr(services: HostServices, req: unknown, res: unknown): void 
         } catch {
           sendJson(res as RawRes, 500, { error: 'qr generation failed' })
         }
-      })()
+      })
 }
 
 export function register(reg: RouteRegistrar, services: HostServices): void {

@@ -63,6 +63,8 @@ test('console dictionary keys exist in every shipped language', () => {
     'config.image', 'config.imageDesc', 'config.imageModel', 'config.imageModelDesc',
     'config.imageEffort', 'config.imageEffortDesc', 'config.imageCopy', 'config.imageCopied',
     'config.imageCopyFailed',
+    'config.showHeaderBadge', 'config.showHeaderBadgeDesc',
+    'config.showTranslateAction', 'config.showTranslateActionDesc',
   ];
   for (const [lang, dict] of Object.entries(languages)) {
     for (const key of required) {
@@ -73,11 +75,15 @@ test('console dictionary keys exist in every shipped language', () => {
 
 test('settings panel keeps the default thinking-effort row', () => {
   // The row is the seed for the session model menu; it was dropped once and must
-  // stay: the model menu can still override it per model.
+  // stay: the model menu can still override it per model. The level buttons are
+  // now BUILT from the catalog (no hardcoded high/medium/low literals), so we
+  // assert the writer receives the level variable plus the explicit "auto".
   const source = readFileSync(join(root, 'dist', 'client.js'), 'utf8');
   assert.match(source, /config\.defaultEffort/)
-  assert.match(source, /setCfg\(["']defaultEffort["'], ["']high["']\)/)
   assert.match(source, /setCfg\(["']defaultEffort["'],\s*["']['"]\)/)
+  assert.match(source, /setCfg\(["']defaultEffort["'],\s*[A-Za-z_$][\w$]*\)/)
+  // No hardcoded level buttons may remain.
+  assert.doesNotMatch(source, /setCfg\(["']defaultEffort["'],\s*["'](?:low|medium|high|xhigh|max)["']\)/)
 });
 
 test('settings row exposes translation model and effort as dropdowns', () => {

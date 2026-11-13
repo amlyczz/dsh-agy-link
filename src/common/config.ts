@@ -161,6 +161,8 @@ export function resolveConfig(
     translateSkipSameModel: asBool(get('translateSkipSameModel')) ?? base.translateSkipSameModel,
     translateBindConversation: asBool(get('translateBindConversation')) ?? base.translateBindConversation,
     translateMinIntervalMs: asNum(get('translateMinIntervalMs')) ?? base.translateMinIntervalMs,
+    showHeaderBadge: asBool(get('showHeaderBadge')) ?? base.showHeaderBadge,
+    showTranslateAction: asBool(get('showTranslateAction')) ?? base.showTranslateAction,
     imageModel: asString(get('imageModel')) ?? base.imageModel,
     imageEffort: asString(get('imageEffort')) ?? base.imageEffort,
     imageTimeoutMs: asNum(get('imageTimeoutMs')) ?? base.imageTimeoutMs,
@@ -271,6 +273,14 @@ export function resolveConfig(
   if (env.DSH_AGY_TRANSLATE_MODEL) cfg.translateModel = env.DSH_AGY_TRANSLATE_MODEL
   if (env.DSH_AGY_TRANSLATE_EFFORT) cfg.translateEffort = env.DSH_AGY_TRANSLATE_EFFORT
   if (env.DSH_AGY_TRANSLATE_LANG) cfg.translateTargetLanguage = env.DSH_AGY_TRANSLATE_LANG
+  if (env.DSH_AGY_SHOW_HEADER_BADGE !== undefined) {
+    const shb = asBool(env.DSH_AGY_SHOW_HEADER_BADGE)
+    if (shb !== undefined) cfg.showHeaderBadge = shb
+  }
+  if (env.DSH_AGY_SHOW_TRANSLATE_ACTION !== undefined) {
+    const sta = asBool(env.DSH_AGY_SHOW_TRANSLATE_ACTION)
+    if (sta !== undefined) cfg.showTranslateAction = sta
+  }
   if (env.DSH_AGY_IMAGE_MODEL) cfg.imageModel = env.DSH_AGY_IMAGE_MODEL
   if (env.DSH_AGY_IMAGE_EFFORT) cfg.imageEffort = env.DSH_AGY_IMAGE_EFFORT
   if (env.DSH_AGY_IMAGE_TIMEOUT_MS) {

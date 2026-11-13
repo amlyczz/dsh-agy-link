@@ -33,6 +33,7 @@ import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { resolveModelSlug } from '../host/models.ts'
 import type { RunTelemetry } from './finalize.ts'
 import { AGY_PROMPT_SAFE_BYTES, trimToUtf8Bytes, utf8Bytes } from './prompt-text.ts'
+import { SubagentWatcher, unquoteArg } from './subagent-watcher.ts'
 
 export function brief(s: string): string {
   const flat = s.trim().replace(/\s+/g, ' ')
@@ -292,7 +293,12 @@ export interface AttemptRecorder {
 }
 
 /** Create the recording, parser, HOME snapshot and tool watchdog for one run. */
-export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, account: ManagedAccount | undefined): AttemptRecorder {
+export function createAttemptRecorder(
+  deps: AttemptDeps,
+  cfg: PluginConfig,
+  account: ManagedAccount | undefined,
+  initialConversationId?: string,
+): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
   // The fallback conversation-id discovery must watch the SAME HOME the child
@@ -303,15 +309,17 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
   const parser = new StreamJsonParser()
   deps.onParser?.(parser)
   const watchdog = createToolWatchdog(deps.log, cfg)
+  let currentOnEvent: ((ev: AgyEvent) => void) | undefined
   const state: AttemptRecorder = {
     rec,
     parser,
     conversationsDir,
     before,
-    streamCid: null,
+    streamCid: initialConversationId ?? null,
     printTimeoutMinutes: watchdog.printTimeoutMinutes,
     attachProcess: (proc) => watchdog.attach(proc),
     feedLine: (line, onEvent, onFirstEvent) => {
+      currentOnEvent = onEvent
       watchdog.markEvent()
       // First output = agy resolved its credential; give the machine-wide slot
       // back so other accounts' sessions can run concurrently.
@@ -319,6 +327,14 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
       for (const ev of parser.feed(line + '\n')) {
         if (ev.kind === 'init' && ev.conversationId) state.streamCid = ev.conversationId
         if (ev.kind === 'result' && ev.conversationId !== '') state.streamCid = ev.conversationId
+        if (ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool?.name === 'invoke_subagent') {
+          const text = typeof ev.tool.output === 'string' ? ev.tool.output : ''
+          const m = text.match(/"conversationId":\s*"([^"]+)"/i) || text.match(/\/brain\/([0-9a-fA-F-]{36})\//)
+          if (m && m[1]) {
+            const role = (ev.tool.args && typeof ev.tool.args === 'object' && ((ev.tool.args as Record<string, unknown>).Role || (ev.tool.args as Record<string, unknown>).TypeName)) as string | undefined
+            subagentWatcher.trackExplicitSubagent(m[1], typeof role === 'string' ? unquoteArg(role) : undefined)
+          }
+        }
         watchdog.trackStep(ev)
         rec.append(ev)
         if (typeof onEvent === 'function') {
@@ -331,6 +347,7 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
       }
     },
     drain: (onEvent) => {
+      currentOnEvent = onEvent
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') state.streamCid = ev.conversationId
         rec.append(ev)
@@ -343,9 +360,33 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
         }
       }
     },
-    stop: () => watchdog.stop(),
+    stop: () => {
+      subagentWatcher.stop()
+      watchdog.stop()
+    },
     conversationId: () => state.streamCid ?? diffConversations(before, conversationsDir).conversationId,
   }
+
+  const subagentWatcher = new SubagentWatcher({
+    getRootConversationId: () => state.conversationId(),
+    accountHome: rec.accountHome,
+    onEvent: (ev) => {
+      rec.append(ev)
+      if (typeof currentOnEvent === 'function') {
+        try {
+          currentOnEvent(ev)
+        } catch {
+          // contained
+        }
+      }
+    },
+    onActivity: () => {
+      watchdog.markEvent()
+    },
+    log: deps.log,
+  })
+  subagentWatcher.start()
+
   return state
 }
 

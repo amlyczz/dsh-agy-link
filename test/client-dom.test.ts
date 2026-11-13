@@ -17,7 +17,15 @@ const ReactDOMClient = nodeRequire('react-dom/client') as any;
 const testUtils = nodeRequire('react-dom/test-utils') as any;
 
 import { openLightbox } from '../src/client/images/lightbox.ts';
-import { installImageEnhancer, scanAndEnhanceImages } from '../src/client/images/scanner.ts';
+import {
+	installImageEnhancer,
+	scanAndEnhanceImages,
+	openInSidebar,
+	fileAddressFor,
+	parseFilePathAndLine,
+	resolveSessionId,
+	setClientContext,
+} from '../src/client/images/scanner.ts';
 import { installDecisionChips, insertTextIntoChatComposer, scanAndEnhanceDecisions } from '../src/client/decisions.ts';
 import {
 	buildCompactionRow,
@@ -35,10 +43,13 @@ import {
 	setScrollActiveForTest,
 } from '../src/client/scroll-guard.ts';
 import { actionStateOf, setActionState, TranslateAction } from '../src/client/translate-state.ts';
+import { disposeStatusPolling, publishStatusSnapshot } from '../src/client/status.ts';
 import { TranslationCard } from '../src/client/translate-card.ts';
 import { QuestionCardBody } from '../src/client/toolview/question-card.ts';
 import { clearExpandedToolBlockKeysForTest, expandToolBlockKeyForTest } from '../src/client/toolview/toggle.ts';
 import { AgyCodeToolView, AgyRunCodeToolView, runCodeModel } from '../src/client/toolview/run-code-view.ts';
+import { createSessionStatus } from '../src/client/sections/SessionStatus.ts';
+import { defaultPoolData } from '../src/common/pool-types.ts';
 
 const createElement = (React as { createElement: (type: unknown, props?: unknown) => unknown }).createElement;
 const GLOBAL_KEYS = [
@@ -131,9 +142,13 @@ beforeEach(() => {
 	setScrollActiveForTest(false);
 	setOverlaySuspended(false);
 	installDom();
+	// Every test starts with both UI affordances visible; the shared status
+	// snapshot is module-level state that must not leak between cases.
+	publishStatusSnapshot({ showHeaderBadge: true, showTranslateAction: true });
 });
 
 afterEach(() => {
+	disposeStatusPolling();
 	restoreDom();
 });
 
@@ -350,6 +365,106 @@ test('image scanner: install early-returns without a window/document', () => {
 	delete (globalThis as unknown as Record<string, unknown>).document;
 	const dispose = installImageEnhancer();
 	assert.equal(typeof dispose, 'function');
+	dispose();
+});
+
+test('parseFilePathAndLine: extracts clean path and line number correctly', () => {
+	assert.deepEqual(parseFilePathAndLine('file:///Users/zqy/test.md#L10-L20'), { cleanPath: '/Users/zqy/test.md', line: 10 });
+	assert.deepEqual(parseFilePathAndLine('file:///Users/zqy/test.md:42'), { cleanPath: '/Users/zqy/test.md', line: 42 });
+	assert.deepEqual(parseFilePathAndLine('file:///C:/Users/zqy/test.md#L5'), { cleanPath: 'C:/Users/zqy/test.md', line: 5 });
+	assert.deepEqual(parseFilePathAndLine('file:///Users/zqy/path%20with%20spaces/test.md#L5'), { cleanPath: '/Users/zqy/path with spaces/test.md', line: 5 });
+	assert.deepEqual(parseFilePathAndLine('scripts/player.gd'), { cleanPath: 'scripts/player.gd', line: undefined });
+});
+
+test('fileAddressFor: formats session resource address correctly', () => {
+	const sessionId = 'test-session-123';
+	const cwd = '/Users/zqy/project';
+	assert.equal(fileAddressFor(sessionId, cwd, 'src/main.ts'), 'dsh-resource://file/session/test-session-123/src/main.ts');
+	assert.equal(fileAddressFor(sessionId, cwd, '/Users/zqy/project/src/main.ts'), 'dsh-resource://file/session/test-session-123/src/main.ts');
+	assert.equal(fileAddressFor(sessionId, cwd, '/Users/zqy/other/doc.md'), 'dsh-resource://file/session/test-session-123//Users/zqy/other/doc.md');
+});
+
+test('openInSidebar: routes file path into DSH sidebarRight service with line param', async () => {
+	let openedAddress = '';
+	let openedOptions: any = null;
+	const mockCtx = {
+		sidebarRight: {
+			mounted: { getSnapshot: () => 'sess-abc' },
+			openResource: (addr: string, opts: any) => {
+				openedAddress = addr;
+				openedOptions = opts;
+			},
+		},
+		sessions: {
+			list: { getSnapshot: () => ({ byId: { 'sess-abc': { cwd: '/Users/zqy/app' } } }) },
+		},
+	};
+
+	const ok = await openInSidebar('file:///Users/zqy/app/src/index.ts#L42', mockCtx);
+	assert.equal(ok, true);
+	assert.equal(openedAddress, 'dsh-resource://file/session/sess-abc/src/index.ts');
+	assert.deepEqual(openedOptions, { params: { line: 42 } });
+});
+
+test('openInSidebar: outside workspace file keeps absolute path and succeeds', async () => {
+	let openedAddress = '';
+	let openedOptions: any = null;
+	const mockCtx = {
+		sidebarRight: {
+			mounted: { getSnapshot: () => 'sess-xyz' },
+			openResource: (addr: string, opts: any) => {
+				openedAddress = addr;
+				openedOptions = opts;
+			},
+		},
+		sessions: {
+			list: { getSnapshot: () => ({ byId: { 'sess-xyz': { cwd: '/Users/zqy/app' } } }) },
+		},
+	};
+
+	const ok = await openInSidebar('file:///Users/zqy/.gemini/antigravity/scratch/notes.md', mockCtx);
+	assert.equal(ok, true);
+	assert.equal(openedAddress, 'dsh-resource://file/session/sess-xyz//Users/zqy/.gemini/antigravity/scratch/notes.md');
+	assert.deepEqual(openedOptions, {});
+});
+
+test('openInSidebar: graceful fallback to false when sidebarRight is missing', async () => {
+	const ok = await openInSidebar('file:///some/file.md', {});
+	assert.equal(ok, false);
+});
+
+test('handleGlobalLinkClick: intercepting file link calls openInSidebar', async () => {
+	let openedAddress = '';
+	let openedOptions: any = null;
+	const mockCtx = {
+		sidebarRight: {
+			mounted: { getSnapshot: () => 'sess-click' },
+			openResource: (addr: string, opts: any) => {
+				openedAddress = addr;
+				openedOptions = opts;
+			},
+		},
+		sessions: {
+			list: { getSnapshot: () => ({ byId: { 'sess-click': { cwd: '/Users/zqy/app' } } }) },
+		},
+	};
+	setClientContext(mockCtx);
+	const dispose = installImageEnhancer(mockCtx);
+
+	const link = document.createElement('a');
+	link.href = 'file:///Users/zqy/app/docs/spec.md#L15';
+	link.setAttribute('href', 'file:///Users/zqy/app/docs/spec.md#L15');
+	link.textContent = 'spec.md';
+	document.body.appendChild(link);
+
+	link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+	// Give async openInSidebar a tick to resolve
+	await new Promise((r) => setTimeout(r, 20));
+
+	assert.equal(openedAddress, 'dsh-resource://file/session/sess-click/docs/spec.md');
+	assert.deepEqual(openedOptions, { params: { line: 15 } });
+
 	dispose();
 });
 
@@ -630,9 +745,15 @@ test('translate action: click posts, transitions to done, and early-returns whil
 	let postCalls = 0;
 	let stateCalls = 0;
 	setGlobal('fetch', async (url: unknown) => {
-		if (String(url).includes('/translate/state')) {
+		const path = String(url);
+		if (path.includes('/translate/state')) {
 			stateCalls++;
 			return { ok: true, status: 200, json: async () => ({ state: 'idle' }) };
+		}
+		// The action now subscribes to the shared status snapshot (issue #105);
+		// its poll is a GET and must not be counted as a translate POST.
+		if (path.includes('/plugins/agy-link/status')) {
+			return { ok: true, status: 200, json: async () => ({ showTranslateAction: true }) };
 		}
 		postCalls++;
 		return { ok: true, status: 200, json: async () => ({ ok: true }) };
@@ -660,6 +781,21 @@ test('translate action: click posts, transitions to done, and early-returns whil
 	assert.equal(btn().getAttribute('data-state'), 'working');
 	assert.equal(btn().disabled, true, 'working disables the button');
 	assert.equal(postCalls, 1, 'no extra POST was issued');
+	await act(() => { root.unmount(); });
+	setActionState(ACTION_KEY, 'idle');
+});
+
+test('translate action: hidden by showTranslateAction=false and restored live (issue #105)', async () => {
+	let visible = false;
+	setGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ showTranslateAction: visible }) }));
+	setActionState(ACTION_KEY, 'idle');
+	publishStatusSnapshot({ showTranslateAction: false });
+	const { container, root } = await mount(createElement(TranslateAction, { messageId: 'msg-dom', sessionId: 'sess-dom' }));
+	assert.equal(container.querySelector('.agy-tsl-icon'), null, 'an explicit false must remove the whole action');
+
+	visible = true;
+	await act(async () => { publishStatusSnapshot({ showTranslateAction: true }); await Promise.resolve(); });
+	assert.ok(container.querySelector('.agy-tsl-icon'), 're-enabling must restore the button without a remount');
 	await act(() => { root.unmount(); });
 	setActionState(ACTION_KEY, 'idle');
 });
@@ -746,4 +882,16 @@ test('decisions: insertTextIntoChatComposer handles textarea and contenteditable
 	assert.equal(insertTextIntoChatComposer('world'), true);
 	assert.ok((editable.textContent ?? '').includes('world'));
 	assert.equal(insertTextIntoChatComposer(''), false);
+});
+
+test('session status header badge: hidden when showHeaderBadge=false and restored live (issue #105)', async () => {
+	publishStatusSnapshot({ showHeaderBadge: false, pool: defaultPoolData() });
+	const locale = { subscribe: () => () => {}, bind: () => (k: string) => k };
+	const AgySessionStatus = createSessionStatus(locale as never, () => null);
+	const { container, root } = await mount(createElement(AgySessionStatus as never));
+	assert.equal(container.querySelector('.agy-session-status-btn'), null, 'header button must be hidden when showHeaderBadge=false');
+
+	await act(async () => { publishStatusSnapshot({ showHeaderBadge: true, pool: defaultPoolData() }); await Promise.resolve(); });
+	assert.ok(container.querySelector('.agy-session-status-btn'), 'header button restored when showHeaderBadge=true');
+	await act(() => { root.unmount(); });
 });

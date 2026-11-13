@@ -9,6 +9,7 @@ import { PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { accountSupportsModel, type ManagedAccount } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import { defaultEffortFor, findEntry, sanitizeCatalogEntries, type CatalogEntry, type ModelCatalog } from '../host/models.ts'
+import { effortLabel, normalizeEfforts } from '../common/reasoning.ts'
 
 /** What model resolution needs from the adapter. */
 export interface ModelResolutionDeps {
@@ -91,12 +92,14 @@ export function resolveModelInfo(deps: ModelResolutionDeps, model: string): LlmR
   if (deps.isEffortUnsupported(cleanId)) {
     // Learned refusal (issue #67): do not offer levels the model rejects.
   } else if (entry && Array.isArray(entry.efforts) && entry.efforts.length > 0) {
-    const cleanEfforts = Array.from(new Set(entry.efforts.filter((e) => typeof e === 'string' && e.trim() !== '')))
+    // Canonical order + agy's own display names (agy's picker calls `xhigh`
+    // "Extra"), so the menu reads exactly like agy's model submenu.
+    const cleanEfforts = normalizeEfforts(entry.efforts)
     if (cleanEfforts.length > 0) {
       const def = defaultEffortFor({ ...entry, efforts: cleanEfforts }, cfg)
       const validDef = def && cleanEfforts.includes(def) ? def : cleanEfforts[0]
       resolved.reasoning = {
-        efforts: cleanEfforts.map((e) => ({ id: e as never, name: e })),
+        efforts: cleanEfforts.map((e) => ({ id: e as never, name: effortLabel(e) })),
         ...(validDef ? { defaultEffort: validDef as never } : {}),
       }
     }

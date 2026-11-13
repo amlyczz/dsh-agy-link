@@ -262,7 +262,28 @@ export async function getStoredToken(
     }
   }
 
-  return disk
+  if (disk) return disk
+
+  if (account.dir && !account.systemHome && process.platform === 'darwin' && allowKeychainFallback) {
+    const candidates = [
+      join(account.dir, 'Library', 'Keychains', 'login.keychain-db'),
+      join(account.dir, 'Library', 'Keychains', 'login.keychain'),
+    ]
+    const targetKc = candidates.find((p) => existsSync(p))
+    if (targetKc) {
+      try {
+        const raw = (await execFileT('security', ['find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w', targetKc], 3000)).trim()
+        if (raw) {
+          const tok = parseGoKeyringPayload(raw)
+          if (tok && (tok.accessToken || tok.refreshToken)) return tok
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return null
 }
 
 /**
