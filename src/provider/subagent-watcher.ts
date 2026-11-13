@@ -103,7 +103,7 @@ export function formatSubagentStep(agentName: string, rawJsonLine: string): stri
         const taskId = unquoteArg(args.TaskId || args.taskId || '')
         results.push(`• [${agentName}] ⚙️ manage_task: ${action}${taskId ? ' ' + taskId : ''}`)
       } else if (name === 'send_message') {
-        const recipient = unquoteArg(args.Recipient || args.recipient || '')
+        const recipient = unquoteArg(args.Recipient || args.recipient || args.to || '')
         results.push(`• [${agentName}] 💬 send_message: ${recipient}`)
       } else {
         results.push(`• [${agentName}] 🛠️ ${name}`)

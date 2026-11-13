@@ -147,6 +147,7 @@ describe('formatSubagentStep', () => {
         { name: 'manage_task', args: { action: 'kill', taskId: 't-9' } },
         { name: 'send_message', args: { recipient: 'agent-1' } },
         { name: 'send_message', args: { Recipient: 'agent-2' } },
+        { name: 'send_message', args: { to: 'agent-3' } },
         { name: 'mystery_tool', args: {} },
         { args: {} },
       ],
@@ -158,6 +159,7 @@ describe('formatSubagentStep', () => {
     assert.match(out, /⚙️ manage_task: kill t-9/)
     assert.match(out, /💬 send_message: agent-1/)
     assert.match(out, /💬 send_message: agent-2/)
+    assert.match(out, /💬 send_message: agent-3/)
     assert.match(out, /🛠️ mystery_tool/)
     assert.match(out, /🛠️ tool/)
 
