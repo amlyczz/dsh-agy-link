@@ -322,11 +322,14 @@ test('watchdog: a blocked host event loop does not kill an actively writing chil
   // loop ourselves instead of hoping the scheduler does it.
   const p = startAgyProcess({
     bin: process.execPath,
-    args: nodeChild('console.log("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>1200){clearInterval(i);process.exit(0)};console.log("progress")},20)'),
-    timeoutMs: 300,
+    args: nodeChild('console.log("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>3200){clearInterval(i);process.exit(0)};console.log("progress")},20)'),
+    timeoutMs: 2000,
   })
-  const until = Date.now() + 400
-  while (Date.now() < until) { /* deliberately block past the 300ms idle budget */ }
+  // Block past the 2s idle budget. Match the other keep-alive tests' budget so
+  // the grace also has room when a fully parallel `npm test` starves the loop
+  // a second time (a 300ms budget was too tight for the suite's own load).
+  const until = Date.now() + 2100
+  while (Date.now() < until) { /* deliberately block past the idle budget */ }
   const outcome = await p.outcome
   assert.equal(outcome.timedOut, false, 'queued progress must re-arm the watchdog during the grace')
   assert.equal(outcome.code, 0)
