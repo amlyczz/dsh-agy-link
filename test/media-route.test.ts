@@ -5,6 +5,7 @@ import {
   handleMediaRequest,
   handleAssetRequest,
   handleOpenFile,
+  executeOpenInSystem,
 } from '../src/host/media-route.ts';
 import { existsSync, writeFileSync, mkdirSync, rmSync, symlinkSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -71,6 +72,19 @@ test('media-route: resolveLocalMediaPath handles Windows paths, file://, and rel
     const encodedUrl = 'file://' + (isWin ? '/' + utf8File.replace(/\\/g, '/') : utf8File).replace(/中文目录/, '%E4%B8%AD%E6%96%87%E7%9B%AE%E5%BD%95').replace(/测试/, '%E6%B5%8B%E8%AF%95');
     const resolvedUtf8 = resolveLocalMediaPath(encodedUrl);
     assert.equal(resolvedUtf8, utf8File, 'percent-encoded path should decode and resolve');
+
+    // 3f. File path with fragment/line range (#L12-L25 or ?v=1)
+    const anchorUrl = (isWin ? sampleFile : sampleFile) + '#L10-L20';
+    const resolvedAnchor = resolveLocalMediaPath(anchorUrl);
+    assert.equal(resolvedAnchor, resolvedDirect, 'path with #L anchor should strip fragment and resolve');
+
+    const fileUrlWithAnchor = fileUrl + '#L50';
+    const resolvedFileUrlAnchor = resolveLocalMediaPath(fileUrlWithAnchor);
+    assert.equal(resolvedFileUrlAnchor, resolvedDirect, 'file:// URL with #L anchor should resolve');
+
+    // 3g. Tilde path (~/...)
+    const homeRel = resolveLocalMediaPath('~/non-existent-subpath-test-999');
+    assert.equal(homeRel, null, 'non-existent tilde path resolves to null without error');
 
     // 4. Non-existent path returns null
     assert.equal(resolveLocalMediaPath('non-existent-image-12345.png'), null);
@@ -264,6 +278,10 @@ test('media-route: handleOpenFile validates path and returns JSON', () => {
     };
     handleOpenFile({ url: '/plugins/agy-link/open' }, resBad as never);
     assert.equal(badStatus, 400);
+
+    // executeOpenInSystem reveal test
+    const revealRes = executeOpenInSystem(testDoc, true);
+    assert.equal(revealRes.ok, true, 'reveal in explorer/finder should succeed');
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
   }

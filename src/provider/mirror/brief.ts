@@ -61,7 +61,9 @@ export function toolStepBrief(toolName: string, args: unknown, server?: string):
     const firstRole = Array.isArray(subs) && subs.length > 0 && typeof (subs[0] as { Role?: unknown }).Role === 'string'
       ? (subs[0] as { Role: string }).Role
       : ''
-    return firstRole ? 'subagent: ' + firstRole : 'invoke subagent'
+    const directRole = pickStr('Role', 'role', 'TypeName', 'typeName')
+    const role = firstRole || directRole
+    return role ? 'subagent: ' + role : 'invoke subagent'
   }
   if (effTool === 'send_message') {
     const recipient = pickStr('Recipient', 'recipient', 'to')

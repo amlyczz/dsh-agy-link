@@ -58,6 +58,25 @@ export function findConversationDb(conversationId: string, accountHome?: string)
   return null
 }
 
+/** Candidate brain directories for a conversation id across system + pool homes. */
+export function brainDirCandidates(accountHome?: string): string[] {
+  return conversationsDirCandidates(accountHome).map((d) => join(d, '..', 'brain'))
+}
+
+/** Locate an existing conversation brain directory across system + pool homes. */
+export function findBrainDir(conversationId: string, accountHome?: string): string | null {
+  if (!isSafeConversationId(conversationId)) return null
+  for (const dir of brainDirCandidates(accountHome)) {
+    const p = join(dir, conversationId)
+    try {
+      if (existsSync(p)) return p
+    } catch {
+      // ignore
+    }
+  }
+  return null
+}
+
 /** agy conversation ids are path-safe tokens; reject anything else before join(). */
 const SAFE_CONVERSATION_ID = /^[A-Za-z0-9_-]{1,64}$/
 

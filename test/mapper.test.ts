@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import { EventMapper, rewriteImageMarkdown, suffixDelta, usageFromRaw, rememberToolCallId, consumeToolBinding, expirePendingToolCalls, type ToolCallState } from '../src/host/mapper.ts'
+import { EventMapper, normalizeFileLinks, rewriteImageMarkdown, suffixDelta, usageFromRaw, rememberToolCallId, consumeToolBinding, expirePendingToolCalls, type ToolCallState } from '../src/host/mapper.ts'
 import { mirrorCallId, parseMirrorCallId } from '../src/host/recording.ts'
 import { parseMirrorInvocation } from '../src/host/mirror-tool.ts'
 
@@ -799,5 +799,43 @@ test('parseMirrorCallId supports both canonical and hash-disambiguated call IDs'
     eventIndex: 12,
   })
 })
+
+test('normalizeFileLinks rewrites file:// links to clean paths for DSH native sidebar preview', () => {
+  // Windows absolute paths
+  assert.equal(
+    normalizeFileLinks('[masterplan](file:///D:/proj/zombie-madness/masterplan.md)'),
+    '[masterplan](D:/proj/zombie-madness/masterplan.md)',
+  )
+  assert.equal(
+    normalizeFileLinks('[code](file:///C:/Users/test/index.ts#L10-L20)'),
+    '[code](C:/Users/test/index.ts#L10-L20)',
+  )
+  // Windows backslash normalization
+  assert.equal(
+    normalizeFileLinks('[win](file:///D:\\proj\\zombie-madness\\masterplan.md)'),
+    '[win](D:/proj/zombie-madness/masterplan.md)',
+  )
+  // Two slashes
+  assert.equal(
+    normalizeFileLinks('[two](file://D:/proj/zombie-madness/masterplan.md)'),
+    '[two](D:/proj/zombie-madness/masterplan.md)',
+  )
+  // Unix absolute path
+  assert.equal(
+    normalizeFileLinks('[unix](file:///home/user/project/README.md)'),
+    '[unix](/home/user/project/README.md)',
+  )
+  // Images are NOT touched (must remain ![...](...) for image parser)
+  assert.equal(
+    normalizeFileLinks('![preview](file:///D:/proj/preview.png)'),
+    '![preview](file:///D:/proj/preview.png)',
+  )
+  // Web links are NOT touched
+  assert.equal(
+    normalizeFileLinks('[web](https://example.com/file.md)'),
+    '[web](https://example.com/file.md)',
+  )
+})
+
 
 

@@ -405,7 +405,7 @@ export async function* runAgyAttempt(
   deps: AttemptDeps,
   input: AttemptInput,
 ): AsyncGenerator<StreamChunk, RunRecording, void> {
-  const recorder = createAttemptRecorder(deps, input.cfg, input.account)
+  const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId)
   // Build the argv (and tail-trim an over-budget prompt) BEFORE waiting for
   // the slot, exactly as the former inline block did — the trim warning is
   // logged even when the dispatch later aborts.

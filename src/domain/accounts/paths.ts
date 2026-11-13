@@ -32,18 +32,29 @@ export function writeJsonAtomic(file: string, body: string): void {
   throw lastErr
 }
 
-export function defaultPoolDir(home = homedir()): string {
+export function defaultPoolDir(home?: string): string {
+  if (home !== undefined) {
+    // Guard against isolated sub-account environments where HOME/USERPROFILE
+    // has been redirected into `<dshState>/agy-accounts/<accountId>`.
+    const norm = home.replace(/\\/g, '/')
+    const marker = '/.dsh/agy-accounts/'
+    const idx = norm.indexOf(marker)
+    if (idx !== -1) {
+      const realHome = home.slice(0, idx)
+      return join(realHome, '.dsh', 'agy-accounts')
+    }
+    return join(home, '.dsh', 'agy-accounts')
+  }
   if (process.env.DSH_STATE_DIR) {
     return join(process.env.DSH_STATE_DIR, 'agy-accounts')
   }
-  // Guard against isolated sub-account environments where HOME/USERPROFILE
-  // has been redirected into `<dshState>/agy-accounts/<accountId>`.
-  const norm = home.replace(/\\/g, '/')
+  const defaultHome = homedir()
+  const norm = defaultHome.replace(/\\/g, '/')
   const marker = '/.dsh/agy-accounts/'
   const idx = norm.indexOf(marker)
   if (idx !== -1) {
-    const realHome = home.slice(0, idx)
+    const realHome = defaultHome.slice(0, idx)
     return join(realHome, '.dsh', 'agy-accounts')
   }
-  return join(home, '.dsh', 'agy-accounts')
+  return join(defaultHome, '.dsh', 'agy-accounts')
 }

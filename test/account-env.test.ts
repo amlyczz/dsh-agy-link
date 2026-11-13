@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { accountHome, buildAgyEnv, buildAgyEnvWithProxy, pickProxy, resolveProxy } from '../src/runtime/net/account-env.ts'
 import { defaultConfig } from '../src/common/types.ts'
@@ -20,8 +20,10 @@ test('resolveProxy uses the config proxy and trims it', () => {
 
 test('accountHome follows the isolated dir, else HOME', () => {
   assert.equal(accountHome({ dir: '/tmp/acc' }), '/tmp/acc')
-  assert.equal(accountHome({ dir: '' }), process.env.HOME)
-  assert.equal(accountHome(undefined), process.env.HOME)
+  // `os.homedir()` is the fallback and reads USERPROFILE on Windows, where HOME is unset.
+  const systemHome = process.env.HOME ?? homedir()
+  assert.equal(accountHome({ dir: '' }), systemHome)
+  assert.equal(accountHome(undefined), systemHome)
 })
 
 test('buildAgyEnv isolates HOME and applies the proxy to every variable', () => {

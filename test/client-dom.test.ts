@@ -17,7 +17,7 @@ const ReactDOMClient = nodeRequire('react-dom/client') as any;
 const testUtils = nodeRequire('react-dom/test-utils') as any;
 
 import { openLightbox } from '../src/client/images/lightbox.ts';
-import { installImageEnhancer, scanAndEnhanceImages } from '../src/client/images/scanner.ts';
+import { installImageEnhancer, openInRightSidebar, scanAndEnhanceImages, setClientContext } from '../src/client/images/scanner.ts';
 import { installDecisionChips, insertTextIntoChatComposer, scanAndEnhanceDecisions } from '../src/client/decisions.ts';
 import {
 	buildCompactionRow,
@@ -288,10 +288,13 @@ test('image scanner: enhances file:// image links but ignores non-images', () =>
 	assert.ok(chip, 'preview chip');
 	assert.equal(typeof chip.onclick, 'function', 'chip has click handler for lightbox');
 	assert.equal(imgLink.onclick, null, 'native link onclick is NOT hijacked');
-	assert.equal(txtLink.dataset.agyLinkEnhanced, undefined, 'non-image link untouched');
+	assert.equal(txtLink.dataset.agyLinkEnhanced, undefined, 'non-image link not marked as image enhanced');
 	assert.equal(txtLink.querySelector('.agy-image-link-icon'), null);
+	assert.equal(txtLink.dataset.agyFileEnhanced, 'true', 'marked as file enhanced');
+	assert.ok(txtLink.querySelector('.agy-file-link-icon'), 'file reveal chip attached');
 	scanAndEnhanceImages();
 	assert.equal(imgLink.querySelectorAll('.agy-image-link-icon').length, 1, 'idempotent chip');
+	assert.equal(txtLink.querySelectorAll('.agy-file-link-icon').length, 1, 'idempotent file chip');
 });
 
 test('image scanner: image load error restores the alt span', () => {
@@ -746,4 +749,126 @@ test('decisions: insertTextIntoChatComposer handles textarea and contenteditable
 	assert.equal(insertTextIntoChatComposer('world'), true);
 	assert.ok((editable.textContent ?? '').includes('world'));
 	assert.equal(insertTextIntoChatComposer(''), false);
+});
+
+test('openInRightSidebar: opens file in DSH native right sidebar with relativized path and line options', () => {
+	// Without context, returns false
+	setClientContext(null);
+	assert.equal(openInRightSidebar('D:/proj/test.md'), false);
+
+	const opened: Array<{ url: string; options?: any }> = [];
+	const mockSidebarRight = {
+		mounted: { getSnapshot: () => 'session-alpha-1' },
+		openResource: (url: string, options?: any) => {
+			opened.push({ url, options });
+		},
+	};
+	const mockSessions = {
+		list: {
+			getSnapshot: () => ({
+				byId: {
+					'session-alpha-1': { cwd: 'D:/proj/zombie-madness' },
+				},
+			}),
+		},
+	};
+	const mockTabs = {
+		get: (id: string) => (id === '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' ? { id } : undefined),
+	};
+
+	setClientContext({ sidebarRight: mockSidebarRight, sessions: mockSessions, sidebarRightTabs: mockTabs });
+
+	// 1. File inside cwd is relativized
+	opened.length = 0;
+	assert.equal(openInRightSidebar('file:///D:/proj/zombie-madness/zombie_madness_reconstruction_masterplan.md'), true);
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/zombie_madness_reconstruction_masterplan.md');
+	assert.equal(opened[0]?.options, undefined);
+
+	// 2. Line number hash is extracted into options.params.line
+	opened.length = 0;
+	assert.equal(openInRightSidebar('file:///D:/proj/zombie-madness/src/main.ts#L42'), true);
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/src/main.ts');
+	assert.deepEqual(opened[0]?.options, { params: { line: 42 } });
+
+	// 3. File outside cwd retains full normalized path
+	opened.length = 0;
+	assert.equal(openInRightSidebar('C:/Users/zand/documents/notes.md'), true);
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/C:/Users/zand/documents/notes.md');
+
+	// 4. Backslash spellings and `file://` with one slash also normalize
+	opened.length = 0;
+	assert.equal(openInRightSidebar('file://D:\\proj\\zombie-madness\\docs\\plan.md'), true);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-alpha-1/docs/plan.md');
+
+	// Clean up
+	setClientContext(null);
+});
+
+test('openInRightSidebar: declines when no preview tab type can claim the address', () => {
+	const opened: string[] = [];
+	const sidebarRight = {
+		mounted: { getSnapshot: () => 'session-gamma-3' },
+		openResource: (url: string) => {
+			opened.push(url);
+		},
+	};
+	setClientContext({ sidebarRight, sidebarRightTabs: { get: () => undefined } });
+	assert.equal(openInRightSidebar('D:/proj/plan.md'), false, 'no preview tab type → caller falls back');
+	assert.equal(opened.length, 0, 'nothing was opened');
+	setClientContext(null);
+});
+
+test('file links scanner: enhances file links with "边栏打开" badge and intercepts click to open sidebar', () => {
+	const opened: Array<{ url: string; options?: any }> = [];
+	const mockSidebarRight = {
+		mounted: { getSnapshot: () => 'session-beta-2' },
+		openResource: (url: string, options?: any) => {
+			opened.push({ url, options });
+		},
+	};
+	const mockSessions = {
+		list: {
+			getSnapshot: () => ({
+				byId: {
+					'session-beta-2': { cwd: 'D:/workspace' },
+				},
+			}),
+		},
+	};
+	setClientContext({
+		sidebarRight: mockSidebarRight,
+		sessions: mockSessions,
+		sidebarRightTabs: {
+			get: (id: string) => (id === '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' ? { id } : undefined),
+		},
+	});
+
+	const a = document.createElement('a');
+	a.href = 'file:///D:/workspace/plan.md';
+	a.textContent = 'plan.md';
+	document.body.appendChild(a);
+
+	scanAndEnhanceImages();
+
+	const badge = a.querySelector('.agy-file-link-icon') as HTMLElement;
+	assert.ok(badge, 'badge was injected');
+	assert.ok(badge.textContent?.includes('边栏打开'), 'badge text is "边栏打开"');
+
+	// Clicking badge triggers openInRightSidebar
+	opened.length = 0;
+	badge.click();
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-beta-2/plan.md');
+
+	// Clicking anchor directly also triggers openInRightSidebar
+	opened.length = 0;
+	a.click();
+	assert.equal(opened.length, 1);
+	assert.equal(opened[0]?.url, 'dsh-resource://file/session/session-beta-2/plan.md');
+
+	document.body.removeChild(a);
+	setClientContext(null);
 });

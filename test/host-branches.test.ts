@@ -52,6 +52,26 @@ function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
 }
 
+/**
+ * Redirect the "system HOME" for one test and return a restore callback.
+ *
+ * `os.homedir()` reads USERPROFILE on Windows and HOME on POSIX, so a test that
+ * only sets HOME silently keeps reading the developer's real home on Windows —
+ * which both failed the assertion and risked touching the live token file.
+ */
+function setSystemHome(home: string): () => void {
+  const keys = ['HOME', 'USERPROFILE'] as const
+  const saved = keys.map((key) => process.env[key])
+  for (const key of keys) process.env[key] = home
+  return () => {
+    keys.forEach((key, index) => {
+      const previous = saved[index]
+      if (previous === undefined) delete process.env[key]
+      else process.env[key] = previous
+    })
+  }
+}
+
 function account(id: string, over: Partial<ManagedAccount> = {}): ManagedAccount {
   return { id, alias: id, dir: '', enabled: true, createdAt: 0, cooldowns: {}, quotas: {}, ...over }
 }
@@ -628,18 +648,16 @@ function tokenDeps(over: Partial<QuotaTokenDeps> = {}, poolDir = '/tmp/pool'): Q
 
 test('quotaTokenFilePath: isolated account uses its dir, system account uses HOME', () => {
   const isolated = account('acc_i', { dir: '/tmp/iso' })
-  assert.ok(quotaTokenFilePath(isolated).startsWith('/tmp/iso/'))
-  assert.match(quotaTokenFilePath(isolated), /\.gemini\/antigravity-cli\//)
+  // Compare against the joined path: `path.join` emits `\` separators on Windows.
+  assert.equal(quotaTokenFilePath(isolated), join('/tmp/iso', '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))
 
   const home = tempDir('hb-token-home-')
-  const savedHome = process.env.HOME
-  process.env.HOME = home
+  const restoreHome = setSystemHome(home)
   try {
     const sys = account('acc_sys', { dir: '', systemHome: true })
-    assert.ok(quotaTokenFilePath(sys).startsWith(home))
+    assert.equal(quotaTokenFilePath(sys), join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))
   } finally {
-    if (savedHome === undefined) delete process.env.HOME
-    else process.env.HOME = savedHome
+    restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
 })
@@ -671,8 +689,7 @@ test('getStoredToken: disk token, corrupted file, and isolated-account short cir
 
 test('getStoredToken: system account prefers the keychain, and allowKeychainFallback=false skips it', async () => {
   const home = tempDir('hb-token-sys-')
-  const savedHome = process.env.HOME
-  process.env.HOME = home
+  const restoreHome = setSystemHome(home)
   try {
     const sys = account('acc_sys', { dir: '', systemHome: true })
     let reads = 0
@@ -687,16 +704,14 @@ test('getStoredToken: system account prefers the keychain, and allowKeychainFall
     assert.equal(await getStoredToken(deps, sys, false), null)
     assert.equal(reads, 0, 'keychain must not be read when the fallback is disabled')
   } finally {
-    if (savedHome === undefined) delete process.env.HOME
-    else process.env.HOME = savedHome
+    restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
 })
 
 test('getStoredToken: win32 primary durable store wins; empty stored token falls through', async () => {
   const home = tempDir('hb-token-win-')
-  const savedHome = process.env.HOME
-  process.env.HOME = home
+  const restoreHome = setSystemHome(home)
   const restore = setPlatform('win32')
   try {
     const sys = account('acc_sys', { dir: '', systemHome: true })
@@ -718,8 +733,7 @@ test('getStoredToken: win32 primary durable store wins; empty stored token falls
     assert.ok(keychainReads >= 1)
   } finally {
     restore()
-    if (savedHome === undefined) delete process.env.HOME
-    else process.env.HOME = savedHome
+    restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
 })
@@ -749,8 +763,7 @@ test('persistRefreshedToken: writes the nested agy shape and preserves the prior
 
 test('persistRefreshedToken: flat legacy doc is accepted; win32 re-adopts into the durable store', async () => {
   const home = tempDir('hb-token-flat-')
-  const savedHome = process.env.HOME
-  process.env.HOME = home
+  const restoreHome = setSystemHome(home)
   const restore = setPlatform('win32')
   try {
     // systemHome → the token path resolves under HOME, and the win32 re-adopt branch runs.
@@ -772,8 +785,7 @@ test('persistRefreshedToken: flat legacy doc is accepted; win32 re-adopts into t
     assert.ok(written !== null && (written as { raw: string }).raw.includes('A3'))
   } finally {
     restore()
-    if (savedHome === undefined) delete process.env.HOME
-    else process.env.HOME = savedHome
+    restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
 })
@@ -792,8 +804,7 @@ test('persistRefreshedToken: unwritable path is swallowed (best-effort)', () => 
 
 test('isCurrentAccountGrant: system account always current; isolated compares the refresh token', () => {
   const home = tempDir('hb-token-current-')
-  const savedHome = process.env.HOME
-  process.env.HOME = home
+  const restoreHome = setSystemHome(home)
   try {
     const sys = account('acc_sys', { dir: '', systemHome: true })
     assert.equal(isCurrentAccountGrant(tokenDeps(), sys, 'whatever'), true)
@@ -810,8 +821,7 @@ test('isCurrentAccountGrant: system account always current; isolated compares th
     const throwing = tokenDeps({ parseCredentialDoc: () => { throw new Error('bad') } })
     assert.equal(isCurrentAccountGrant(throwing, iso, 'R1'), false)
   } finally {
-    if (savedHome === undefined) delete process.env.HOME
-    else process.env.HOME = savedHome
+    restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
 })
@@ -860,8 +870,7 @@ test('keyring readers are platform-gated (aix) and the dispatcher no-ops', async
 
 test('boot-hygiene: darwin with an empty HOME (no login keychain) repairs nothing and does not spawn', () => {
   const home = tempDir('hb-hygiene-darwin-')
-  const savedHome = process.env.HOME
-  process.env.HOME = home
+  const restoreHome = setSystemHome(home)
   const restore = setPlatform('darwin')
   const logs: string[] = []
   try {
@@ -870,8 +879,7 @@ test('boot-hygiene: darwin with an empty HOME (no login keychain) repairs nothin
     assert.deepEqual(logs, [])
   } finally {
     restore()
-    if (savedHome === undefined) delete process.env.HOME
-    else process.env.HOME = savedHome
+    restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
 })
@@ -1260,15 +1268,13 @@ test('getValidAccessToken: expired token with no access and no refresh token ret
 
 test('getStoredToken: a failing keyring read surfaces as a rejection', async () => {
   const home = tempDir('hb-token-kcfail-')
-  const savedHome = process.env.HOME
-  process.env.HOME = home
+  const restoreHome = setSystemHome(home)
   try {
     const sys = account('acc_sys', { dir: '', systemHome: true })
     const deps = tokenDeps({ readSystemKeychainToken: async () => { throw new Error('keyring locked') } })
     await assert.rejects(() => getStoredToken(deps, sys), /keyring locked/)
   } finally {
-    if (savedHome === undefined) delete process.env.HOME
-    else process.env.HOME = savedHome
+    restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
 })

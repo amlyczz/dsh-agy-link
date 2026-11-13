@@ -322,6 +322,12 @@ test('presentMirrorCall and toolStepBrief support web search, task management, s
   if (sched?.card === 'generic') {
     assert.equal(sched.title, 'Schedule 300s timer')
   }
+  const directSub = presentMirrorCall({ tool: 'invoke_subagent', input: { Role: 'Deep Game Investigator', TypeName: 'DeepInvestigator' } })
+  assert.equal(directSub?.card, 'generic')
+  if (directSub?.card === 'generic') {
+    assert.equal(directSub.title, 'Subagent: Deep Game Investigator (DeepInvestigator)')
+  }
+  assert.equal(toolStepBrief('invoke_subagent', { Role: 'Deep Game Investigator' }), 'subagent: Deep Game Investigator')
   const subagent = presentMirrorCall({ tool: 'invoke_subagent', input: { Subagents: [{ Role: 'Code Reviewer' }] } })
   assert.equal(subagent?.card, 'generic')
   if (subagent?.card === 'generic') {

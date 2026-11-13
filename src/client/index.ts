@@ -194,7 +194,7 @@ export function apply(ctx: ClientContext): void {
 	ctx.effect(() => installMermaidRendering());
 
 	// Local image display + fullscreen lightbox (recovered working tree).
-	ctx.effect(() => installImageEnhancer());
+	ctx.effect(() => installImageEnhancer(ctx));
 
 	// Interactive user decision & choice chips (recovered working tree).
 	ctx.effect(() => installDecisionChips());

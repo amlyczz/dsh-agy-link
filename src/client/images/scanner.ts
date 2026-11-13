@@ -4,6 +4,165 @@ import { buildMediaUrl, getOrigin, isImageFile, isVideoFile, isLocalFilePath, op
 import { openLightbox, showToast } from './lightbox.ts';
 import { injectStyles } from './styles.ts';
 
+/**
+ * Cached client context. `installImageEnhancer` receives it from `apply(ctx)` so
+ * the click handler — which runs long after apply returned — can still reach
+ * `ctx.get('sidebarRight')`. Never dereferenced eagerly: Cordis throws on a
+ * non-injected service, so every read stays inside a guard.
+ */
+let clientContext: unknown = null
+
+export function setClientContext(ctx: unknown): void {
+  clientContext = ctx
+}
+
+/** The tab type that previews a session file in the right Sidebar (documentpreview's fallback). */
+const DOCUMENT_PREVIEW_TAB = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview'
+
+/**
+ * Resolve one Cordis service without an injection declaration.
+ *
+ * Kept local (not imported from translate-context) on purpose: this module is
+ * also loaded by SSR/toolview tests under plain ESM, and translate-context pulls
+ * React in through `require`. A guarded `get()` plus a guarded property read is
+ * enough here — Cordis throws on a non-injected service property, hence the try.
+ */
+function service<T>(ctx: unknown, name: string): T | undefined {
+  const c = ctx as { get?: (key: string) => unknown } & Record<string, unknown>
+  try {
+    const fromGet = c.get?.(name)
+    if (fromGet !== undefined && fromGet !== null) return fromGet as T
+  } catch {
+    // service not present in this composition
+  }
+  try {
+    const direct = c[name]
+    return direct === undefined || direct === null ? undefined : (direct as T)
+  } catch {
+    return undefined
+  }
+}
+
+/** The Session the visible conversation belongs to; `''` when unknown. */
+function currentSessionId(ctx: unknown): string {
+  const uiSession = service<{ current?: { value?: Record<string, unknown> } }>(ctx, 'uiSession')
+  const value = uiSession?.current?.value
+  if (value !== undefined && value !== null) {
+    for (const key of ['key', 'sessionId', 'id']) {
+      const id = value[key]
+      if (typeof id === 'string' && id !== '') return id
+    }
+  }
+  const sessions = service<{ list?: { getSnapshot?: () => { byId?: Record<string, unknown> } } }>(ctx, 'sessions')
+  const byId = sessions?.list?.getSnapshot?.()?.byId
+  if (byId !== undefined && byId !== null) {
+    const ids = Object.keys(byId)
+    if (ids.length === 1 && ids[0] !== undefined) return ids[0]
+  }
+  return ''
+}
+
+interface SidebarRightLike {
+  mounted?: { getSnapshot?: () => unknown }
+  openResource?: (address: string, options?: Record<string, unknown>) => void
+}
+
+/** A Sidebar we proved callable in {@link sidebarRightOf}. */
+type OpenableSidebar = SidebarRightLike & { openResource: NonNullable<SidebarRightLike['openResource']> }
+
+function encodeSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/%3A/gi, ':')
+}
+
+/** `dsh-resource://file/session/<sessionId>/<path>`, mirroring DSH's `sessionFileAddress`. */
+function sessionFileAddress(sessionId: string, filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '')
+  return `dsh-resource://file/session/${encodeSegment(sessionId)}/${normalized.split('/').map(encodeSegment).join('/')}`
+}
+
+/** `file:///C:/x` | `file://C:/x` | `C:\x` → `C:/x`, dropping a `#L12` / `?v=1` suffix. */
+function normalizeLocalPath(raw: string): string {
+  let p = raw.trim()
+  if (p.startsWith('file://')) {
+    p = p.slice(7)
+    if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1)
+  }
+  const [pathPart] = p.replace(/\\/g, '/').split(/[?#]/)
+  return (pathPart ?? '').replace(/^(?:\.\/)+/, '')
+}
+
+function sidebarRightOf(ctx: unknown): OpenableSidebar | undefined {
+  const sidebarRight = service<SidebarRightLike>(ctx, 'sidebarRight')
+  return typeof sidebarRight?.openResource === 'function' ? (sidebarRight as OpenableSidebar) : undefined
+}
+
+/**
+ * Whether a tab type can follow a session file address. Web/headless profiles
+ * omit `ui-sidebar-documentpreview`; opening there would silently do nothing, so
+ * the caller must fall back to the OS opener instead of reporting success.
+ */
+function canPreviewFiles(ctx: unknown): boolean {
+  const tabs = service<{ get?: (id: string) => unknown }>(ctx, 'sidebarRightTabs')
+  return tabs?.get?.(DOCUMENT_PREVIEW_TAB) !== undefined && tabs?.get?.(DOCUMENT_PREVIEW_TAB) !== null
+}
+
+function mountedSessionId(sidebarRight: SidebarRightLike): string {
+  const mounted = sidebarRight.mounted?.getSnapshot?.()
+  return typeof mounted === 'string' ? mounted : ''
+}
+
+/** The on-screen Session's workspace root, normalized to forward slashes. */
+function sessionWorkspace(ctx: unknown, sessionId: string): string {
+  const sessions = service<{ list?: { getSnapshot?: () => { byId?: Record<string, { cwd?: unknown }> } } }>(
+    ctx as never,
+    'sessions',
+  )
+  const cwd = sessions?.list?.getSnapshot?.()?.byId?.[sessionId]?.cwd
+  return typeof cwd === 'string' ? cwd.replace(/\\/g, '/').replace(/\/+$/, '') : ''
+}
+
+/**
+ * Open a local file in DSH's native right Sidebar (the `ui-sidebar-documentpreview`
+ * tab), exactly like the native `fileMention` chip does.
+ *
+ * The address is built the way `fileAddressFor` builds it: a path inside the
+ * Session workspace travels relative, anything else keeps its absolute spelling.
+ * Returns `false` when no Sidebar can take it, so callers can fall back.
+ */
+export function openInRightSidebar(rawPath: string): boolean {
+  if (clientContext === null) return false
+  const sidebarRight = sidebarRightOf(clientContext)
+  if (sidebarRight === undefined) return false
+  if (!canPreviewFiles(clientContext)) return false
+
+  // `mounted` is the Session whose Sidebar is on screen — the one `openResource`
+  // places into. Fall back to the visible conversation when it is not adopted.
+  const sessionId = mountedSessionId(sidebarRight) || currentSessionId(clientContext)
+  if (sessionId === '') return false
+
+  const target = normalizeLocalPath(rawPath)
+  if (target === '') return false
+
+  const cwd = sessionWorkspace(clientContext, sessionId)
+  let addressPath = target
+  if (cwd !== '') {
+    const lowerCwd = cwd.toLowerCase()
+    if (target.toLowerCase() === lowerCwd) addressPath = ''
+    else if (target.toLowerCase().startsWith(`${lowerCwd}/`)) addressPath = target.slice(cwd.length + 1)
+  }
+
+  const line = /#L(\d+)/.exec(rawPath)
+  try {
+    sidebarRight.openResource(
+      sessionFileAddress(sessionId, addressPath),
+      line === null ? undefined : { params: { line: Number(line[1]) } },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Get React props of a DOM element */
 function getReactProps(el: HTMLElement): Record<string, unknown> | null {
   const key = Object.keys(el).find((k) => k.startsWith('__reactProps'));
@@ -191,6 +350,57 @@ function enhanceVideoLinks(links: NodeListOf<HTMLAnchorElement>): void {
   }
 }
 
+function enhanceFileLinks(links: NodeListOf<HTMLAnchorElement>): void {
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
+    if (!link || link.dataset.agyFileEnhanced === 'true' || link.dataset.agyLinkEnhanced === 'true' || link.dataset.agyVideoEnhanced === 'true') continue;
+
+    const rawHref = link.getAttribute('href') ?? '';
+    const resolvedHref = link.href ?? '';
+    if (isImageFile(rawHref) || isImageFile(resolvedHref) || isVideoFile(rawHref) || isVideoFile(resolvedHref)) continue;
+
+    if (!rawHref.startsWith('file://') && !resolvedHref.startsWith('file://') && !isLocalFilePath(rawHref)) continue;
+
+    link.dataset.agyFileEnhanced = 'true';
+    const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
+    const linkText = (link.textContent ?? 'File').replace(/边栏打开$|定位$/, '').trim();
+
+    const handleOpen = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
+      if (openInRightSidebar(pathToUse)) {
+        showToast(`已在原生边栏打开: ${fileName}`);
+        return;
+      }
+      openInSystem(pathToUse, false).then((res) => {
+        showToast(res.ok ? `已在系统程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
+      });
+    };
+
+    link.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
+      handleOpen(e);
+    });
+
+    if (!link.querySelector('.agy-file-link-icon')) {
+      const badge = document.createElement('span');
+      badge.className = 'agy-image-link-chip agy-chip-file agy-file-link-icon';
+      badge.setAttribute('role', 'button');
+      badge.setAttribute('tabindex', '0');
+      badge.title = `在原生右侧边栏打开 / Open in Sidebar (${linkText})`;
+      badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;display:inline-block;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg></span><span class="agy-image-chip-text">边栏打开</span>';
+
+      badge.onclick = handleOpen;
+      badge.onkeydown = (e: KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') handleOpen(e);
+      };
+
+      link.appendChild(badge);
+    }
+  }
+}
+
 /**
  * Scan DOM for imageAlt spans and enhance them with live rendered images
  */
@@ -205,6 +415,7 @@ export function scanAndEnhanceImages(): void {
   const links = document.querySelectorAll<HTMLAnchorElement>('a[href]');
   enhanceImageLinks(links);
   enhanceVideoLinks(links);
+  enhanceFileLinks(links);
 }
 
 let imageEnhancerDispose: (() => void) | null = null;
@@ -226,7 +437,7 @@ function handleGlobalLinkClick(e: MouseEvent): void {
   const target = e.target as HTMLElement | null;
   const a = target?.closest('a') as HTMLAnchorElement | null;
   if (!a) return;
-  if (a.dataset.agyLinkEnhanced === 'true' || a.dataset.agyVideoEnhanced === 'true') return;
+  if (a.dataset.agyLinkEnhanced === 'true' || a.dataset.agyVideoEnhanced === 'true' || a.dataset.agyFileEnhanced === 'true') return;
   if (target?.closest?.('.agy-image-link-chip')) return;
 
   const rawHref = a.getAttribute('href') ?? '';
@@ -237,14 +448,19 @@ function handleGlobalLinkClick(e: MouseEvent): void {
 
     e.preventDefault();
     e.stopPropagation();
+    const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
+    if (openInRightSidebar(pathToUse)) {
+      showToast(`已在原生边栏打开: ${fileName}`);
+      return;
+    }
     openInSystem(pathToUse, false).then((res) => {
-      const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
-      showToast(res.ok ? `已在系统默认程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
+      showToast(res.ok ? `已在系统程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
     });
   }
 }
 
-export function installImageEnhancer(): () => void {
+export function installImageEnhancer(ctx?: any): () => void {
+  if (ctx) setClientContext(ctx);
   if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
   imageEnhancerDispose?.();
   injectStyles();

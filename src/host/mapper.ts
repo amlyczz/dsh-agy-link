@@ -12,4 +12,4 @@ export {
 } from '../provider/mapper/tool-calls.ts'
 export type { ToolCallBinding, ToolCallState } from '../provider/mapper/tool-calls.ts'
 export { usageFromRaw } from '../provider/mapper/usage.ts'
-export { rewriteImageMarkdown, suffixDelta } from '../provider/mapper/text.ts'
+export { normalizeFileLinks, rewriteImageMarkdown, suffixDelta } from '../provider/mapper/text.ts'

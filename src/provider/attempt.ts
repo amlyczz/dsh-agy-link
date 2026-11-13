@@ -32,6 +32,7 @@ import { acquireCredentialSlot, armSlotHandoff, type SlotHandoff } from '../host
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { resolveModelSlug } from '../host/models.ts'
 import type { RunTelemetry } from './finalize.ts'
+import { SubagentTracker } from '../features/subagent/tracker.ts'
 import { AGY_PROMPT_SAFE_BYTES, trimToUtf8Bytes, utf8Bytes } from './prompt-text.ts'
 
 export function brief(s: string): string {
@@ -292,7 +293,7 @@ export interface AttemptRecorder {
 }
 
 /** Create the recording, parser, HOME snapshot and tool watchdog for one run. */
-export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, account: ManagedAccount | undefined): AttemptRecorder {
+export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, account: ManagedAccount | undefined, initialConversationId?: string): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
   // The fallback conversation-id discovery must watch the SAME HOME the child
@@ -303,22 +304,43 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
   const parser = new StreamJsonParser()
   deps.onParser?.(parser)
   const watchdog = createToolWatchdog(deps.log, cfg)
+  const tracker = new SubagentTracker({
+    conversationId: initialConversationId,
+    accountHome: rec.accountHome,
+    log: deps.log,
+    onEvent: (ev) => {
+      rec.append(ev)
+    },
+    noteActivity: () => {
+      watchdog.markEvent()
+    },
+  })
   const state: AttemptRecorder = {
     rec,
     parser,
     conversationsDir,
     before,
-    streamCid: null,
+    streamCid: initialConversationId ?? null,
     printTimeoutMinutes: watchdog.printTimeoutMinutes,
-    attachProcess: (proc) => watchdog.attach(proc),
+    attachProcess: (proc) => {
+      watchdog.attach(proc)
+      tracker.start()
+      void proc.outcome.finally(() => tracker.stop())
+    },
     feedLine: (line, onEvent, onFirstEvent) => {
       watchdog.markEvent()
       // First output = agy resolved its credential; give the machine-wide slot
       // back so other accounts' sessions can run concurrently.
       onFirstEvent?.()
       for (const ev of parser.feed(line + '\n')) {
-        if (ev.kind === 'init' && ev.conversationId) state.streamCid = ev.conversationId
-        if (ev.kind === 'result' && ev.conversationId !== '') state.streamCid = ev.conversationId
+        if (ev.kind === 'init' && ev.conversationId) {
+          state.streamCid = ev.conversationId
+          tracker.setConversationId(ev.conversationId)
+        }
+        if (ev.kind === 'result' && ev.conversationId !== '') {
+          state.streamCid = ev.conversationId
+          tracker.setConversationId(ev.conversationId)
+        }
         watchdog.trackStep(ev)
         rec.append(ev)
         if (typeof onEvent === 'function') {
@@ -332,7 +354,10 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
     },
     drain: (onEvent) => {
       for (const ev of parser.flush()) {
-        if (ev.kind === 'result' && ev.conversationId !== '') state.streamCid = ev.conversationId
+        if (ev.kind === 'result' && ev.conversationId !== '') {
+          state.streamCid = ev.conversationId
+          tracker.setConversationId(ev.conversationId)
+        }
         rec.append(ev)
         if (typeof onEvent === 'function') {
           try {
@@ -343,7 +368,10 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
         }
       }
     },
-    stop: () => watchdog.stop(),
+    stop: () => {
+      watchdog.stop()
+      tracker.stop()
+    },
     conversationId: () => state.streamCid ?? diffConversations(before, conversationsDir).conversationId,
   }
   return state
