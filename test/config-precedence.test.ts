@@ -87,17 +87,110 @@ test('showHeaderBadge and showTranslateAction default to true, accept overrides 
   assert.equal(overrideWins.showHeaderBadge, true)
 })
 
-test('issue #105: header badge and translate action are opt-out, visible by default', () => {
-  const defaults = defaultConfig()
-  assert.equal(defaults.showHeaderBadge, true, 'badge stays visible without an explicit opt-out')
-  assert.equal(defaults.showTranslateAction, true, 'translate action stays visible without an explicit opt-out')
-  // Runtime overrides (the /config endpoint) and the persisted entry layer both work.
-  assert.equal(resolveConfig({}, {}, { showHeaderBadge: false }).showHeaderBadge, false)
-  assert.equal(resolveConfig({ showTranslateAction: false }, {}, {}).showTranslateAction, false)
-  // Env accepts the same case-insensitive boolean vocabulary as every other switch,
-  // and wins last; junk values fall back to the current layer's value.
-  assert.equal(resolveConfig({}, { DSH_AGY_SHOW_HEADER_BADGE: 'off' }, {}).showHeaderBadge, false)
-  assert.equal(resolveConfig({}, { DSH_AGY_SHOW_TRANSLATE_ACTION: 'No' }, {}).showTranslateAction, false)
-  assert.equal(resolveConfig({}, { DSH_AGY_SHOW_HEADER_BADGE: 'garbage' }, {}).showHeaderBadge, true)
-  assert.equal(resolveConfig({ showTranslateAction: false }, { DSH_AGY_SHOW_TRANSLATE_ACTION: 'on' }, {}).showTranslateAction, true)
+test('every DSH_AGY_* env override is honoured, and junk values never corrupt the config', () => {
+  const cfg = resolveConfig({}, {
+    DSH_AGY_MODE: 'plan',
+    DSH_AGY_SKIP_PERMISSIONS: 'true',
+    DSH_AGY_DEFAULT_MODEL: 'gemini-4-hydrogen',
+    DSH_AGY_DEFAULT_EFFORT: 'xhigh',
+    DSH_AGY_TIMEOUT_MS: '12345',
+    DSH_AGY_LONG_TOOL_IDLE_MINUTES: '5',
+    DSH_AGY_MAX_TURN_MINUTES: '7',
+    DSH_AGY_CONTEXT_WINDOW: '262144',
+    DSH_AGY_MAX_TOKENS: '32768',
+    DSH_AGY_EXTRA_ARGS: '--foo --bar',
+    DSH_AGY_HIDDEN_MODELS: 'a,b',
+    DSH_AGY_WORKSPACE_ROOT: '/tmp/ws',
+    DSH_AGY_MEDIA_DIR: '/tmp/media',
+    DSH_AGY_MEDIA_TTL_MS: '999',
+    DSH_AGY_MCP_BRIDGE: 'yes',
+    DSH_AGY_MCP_TOOL_ALLOWLIST: 'x,y',
+    DSH_AGY_MCP_CONFIG_PATH: '/tmp/mcp.json',
+    DSH_AGY_MCP_CONFIG_SCOPE: 'workspace',
+    DSH_AGY_RATE_LIMIT_PER_MINUTE: '12',
+    DSH_AGY_AUTO_FALLBACK_MODEL: 'on',
+    DSH_AGY_LOG_RETENTION_DAYS: '3',
+    DSH_AGY_DISABLE_TELEMETRY: 'false',
+    DSH_AGY_QUOTA_POLL_INTERVAL_MS: '120000',
+    DSH_AGY_QUOTA_VIA_CLI: 'no',
+    DSH_AGY_PROXY_URL: 'http://127.0.0.1:1',
+    DSH_AGY_SUPPRESS_AUTOUPDATE: 'true',
+    DSH_AGY_AUTO_WARMUP: 'true',
+    DSH_AGY_WARMUP_MODELS: 'm1,m2',
+    DSH_AGY_AUTO_TRANSLATE: 'true',
+    DSH_AGY_TRANSLATE_MODEL: 'tm',
+    DSH_AGY_TRANSLATE_EFFORT: 'low',
+    DSH_AGY_TRANSLATE_LANG: 'English',
+    DSH_AGY_SHOW_HEADER_BADGE: 'off',
+    DSH_AGY_SHOW_TRANSLATE_ACTION: 'off',
+    DSH_AGY_IMAGE_MODEL: 'im',
+    DSH_AGY_IMAGE_EFFORT: 'high',
+    DSH_AGY_IMAGE_TIMEOUT_MS: '1000',
+    DSH_AGY_IMAGE_MAX_BYTES: '2048',
+    DSH_AGY_IMAGE_OUTPUT_DIR: '/tmp/img',
+    DSH_AGY_IMAGE_RETRIES: '2',
+  }, {})
+  assert.equal(cfg.permissionMode, 'skip', 'SKIP_PERMISSIONS wins over MODE')
+  assert.equal(cfg.defaultModel, 'gemini-4-hydrogen')
+  assert.equal(cfg.defaultEffort, 'xhigh')
+  assert.equal(cfg.timeoutMs, 12345)
+  assert.equal(cfg.contextWindowDefault, 262144)
+  assert.equal(cfg.maxTokensDefault, 32768)
+  assert.deepEqual(cfg.extraArgs, ['--foo', '--bar'])
+  assert.deepEqual(cfg.hiddenModels, ['a', 'b'])
+  assert.equal(cfg.mcpBridge, true)
+  assert.equal(cfg.mcpConfigScope, 'workspace')
+  assert.equal(cfg.rateLimitPerMinute, 12)
+  assert.equal(cfg.autoFallbackModel, true)
+  assert.equal(cfg.logRetentionDays, 3)
+  assert.equal(cfg.disableTelemetry, false)
+  assert.equal(cfg.quotaPollIntervalMs, 120000)
+  assert.equal(cfg.quotaViaCli, false)
+  assert.equal(cfg.suppressAgyAutoUpdate, true)
+  assert.equal(cfg.autoWarmup, true)
+  assert.deepEqual(cfg.warmupModels, ['m1', 'm2'])
+  assert.equal(cfg.autoTranslate, true)
+  assert.equal(cfg.translateTargetLanguage, 'English')
+  assert.equal(cfg.showHeaderBadge, false)
+  assert.equal(cfg.showTranslateAction, false)
+  assert.equal(cfg.imageTimeoutMs, 1000)
+  assert.equal(cfg.imageMaxBytes, 2048)
+  assert.equal(cfg.imageRetries, 2)
+
+  // The rejection branches matter just as much: a typo must leave the default
+  // intact instead of writing a zero/NaN into the running config (ADR-13).
+  const base = defaultConfig()
+  const junk = resolveConfig({}, {
+    DSH_AGY_MODE: 'nope',
+    DSH_AGY_SKIP_PERMISSIONS: 'nope',
+    DSH_AGY_TIMEOUT_MS: 'nope',
+    DSH_AGY_LONG_TOOL_IDLE_MINUTES: '-1',
+    DSH_AGY_MAX_TURN_MINUTES: '-2',
+    DSH_AGY_CONTEXT_WINDOW: '-1',
+    DSH_AGY_MAX_TOKENS: '0',
+    DSH_AGY_MCP_BRIDGE: 'nope',
+    DSH_AGY_MCP_CONFIG_SCOPE: 'nope',
+    DSH_AGY_RATE_LIMIT_PER_MINUTE: '-1',
+    DSH_AGY_AUTO_FALLBACK_MODEL: 'nope',
+    DSH_AGY_LOG_RETENTION_DAYS: '0',
+    DSH_AGY_DISABLE_TELEMETRY: 'nope',
+    DSH_AGY_QUOTA_POLL_INTERVAL_MS: '1000',
+    DSH_AGY_QUOTA_VIA_CLI: 'nope',
+    DSH_AGY_SUPPRESS_AUTOUPDATE: 'nope',
+    DSH_AGY_AUTO_WARMUP: 'nope',
+    DSH_AGY_AUTO_TRANSLATE: 'nope',
+    DSH_AGY_SHOW_HEADER_BADGE: 'nope',
+    DSH_AGY_SHOW_TRANSLATE_ACTION: 'nope',
+    DSH_AGY_IMAGE_TIMEOUT_MS: 'nope',
+    DSH_AGY_IMAGE_MAX_BYTES: 'nope',
+    DSH_AGY_IMAGE_RETRIES: 'nope',
+  }, {})
+  assert.equal(junk.timeoutMs, base.timeoutMs)
+  assert.equal(junk.contextWindowDefault, base.contextWindowDefault)
+  assert.equal(junk.mcpBridge, base.mcpBridge)
+  assert.equal(junk.mcpConfigScope, base.mcpConfigScope)
+  assert.equal(junk.quotaPollIntervalMs, base.quotaPollIntervalMs)
+  assert.equal(junk.showHeaderBadge, true)
+  assert.equal(junk.showTranslateAction, true)
+  assert.equal(junk.imageTimeoutMs, base.imageTimeoutMs)
 })
