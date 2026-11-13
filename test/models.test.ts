@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { accountHasArgon, buildFallbackCatalog, defaultEffortFor, findEntry, foldEfforts, isArgonModel, ModelCatalog, parseModelsOutput, resolveModelSlug } from '../src/host/models.ts'
 import { DEFAULT_FALLBACK_MODELS, defaultConfig, type PluginConfig } from '../src/common/types.ts'
+import { listAvailableModels, type ModelResolutionDeps } from '../src/provider/model-resolution.ts'
 
 test('parseModelsOutput reads the JSON array shape', () => {
   const raw = JSON.stringify([
@@ -566,6 +567,92 @@ test('getModelsForAccount returns exact models for that specific account without
   assert.ok(secondaryIds.includes('claude-sonnet-4-6'))
   assert.equal(secondaryIds.includes('gemini-4-argon'), false, 'secondary must NOT have Argon')
   assert.equal(secondaryIds.includes('claude-sonnet-5-5'), false, 'secondary must NOT have Claude 5.5')
+})
+
+// ---------------------------------------------------------------------------
+// Issue #106: listModels must never close a discovery → adapters-updated →
+// listModels loop when discovery fails (signed out / token expired / timeout).
+// ---------------------------------------------------------------------------
+
+function loopDeps(discoverThrows = true): {
+  deps: ModelResolutionDeps
+  reads: () => number
+  probes: () => number
+  announcements: () => number
+  read: () => void
+} {
+  const account = { id: 'acc1', alias: 'A', dir: '/tmp/acc1', enabled: true, createdAt: 0 } as never
+  const pool = {
+    getAccounts: () => [account],
+    getAccount: (id: string) => (id === 'acc1' ? account : undefined),
+    getActiveAccountId: () => 'acc1',
+    getPoolData: () => ({ lastActiveAccountId: 'acc1', primaryAccountId: 'acc1' }),
+  } as never
+  let probes = 0
+  let announcements = 0
+  let readCount = 0
+  let deps!: ModelResolutionDeps
+  const catalog = new ModelCatalog(
+    async () => {
+      probes++
+      if (discoverThrows) throw new Error('agy models failed')
+      return { stdout: 'gemini-3.8-flash\tGemini 3.8 Flash', stderr: '' }
+    },
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+    () => {
+      announcements++
+      // DSH's browser re-reads the catalog on `llm/adapters-updated`. Bound it
+      // so a broken implementation fails the test instead of hanging.
+      if (readCount < 40) read()
+    },
+  )
+  const read = (): void => {
+    readCount++
+    listAvailableModels(deps)
+  }
+  deps = {
+    catalog,
+    pool,
+    getConfig: () => defaultConfig(),
+    isEffortUnsupported: () => false,
+    warnOnce: () => undefined,
+  }
+  return {
+    deps,
+    reads: () => readCount,
+    probes: () => probes,
+    announcements: () => announcements,
+    read,
+  }
+}
+
+test('issue #106: failed account discovery does not self-excite listModels (no probe/announce storm)', async () => {
+  const h = loopDeps(true)
+  for (let i = 0; i < 20; i++) h.read()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(h.probes(), 1, 'one throttled probe per retry window, not one per read')
+  assert.equal(h.announcements(), 0, 'a failed refresh must NEVER emit adapters-updated')
+  assert.ok(h.reads() <= 20, 'no feedback loop: reads stay at the 20 we asked for')
+})
+
+test('issue #106: repeated reads across settled refreshes stay throttled while discovery fails', async () => {
+  const h = loopDeps(true)
+  for (let i = 0; i < 5; i++) {
+    h.read()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(h.probes(), 1, 'an un-cached account records its attempt too')
+  assert.equal(h.announcements(), 0)
+})
+
+test('issue #106: a successful first discovery still announces exactly once', async () => {
+  const h = loopDeps(false)
+  h.read()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(h.probes(), 1)
+  assert.equal(h.announcements(), 1, 'the picker needs one update when the account catalog is built')
+  assert.ok(h.reads() <= 2, 'one announcement must not snowball')
 })
 
 
