@@ -1,9 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.6.22 (2026-11-13)
 
 ### English
 
+- **Fix(mirror, ptc): drop the top-level `return` from the replay program (fixes #103).** In Code/PTC Mode the generated `run_code` wrapper emitted `return await tools['agy_tool'](...)`; DSH's REPL validator rejects a top-level `return` with `Return statement is not allowed here`, so *every* mirrored agy tool step failed. The wrapper now ends with `await tools['agy_tool'](...)` (final expression), which evaluates in both REPL and function-body runtimes. `parseMirrorInvocation` still accepts legacy `return await` programs; regression test pins both shapes. Thanks to @lzh-marble for the precise report and @fall2wish for PR #104.
+- **Feat(client): hide the header status badge and the per-reply translate button (fixes #105).** Two opt-out switches — `showHeaderBadge` and `showTranslateAction` (default `true`) — are available in the settings panel, via `DSH_AGY_SHOW_HEADER_BADGE` / `DSH_AGY_SHOW_TRANSLATE_ACTION`, and through the guarded `/config` endpoint. The `/status` snapshot feeds them into a single `isUiVisible()` rule; only an explicit `false` hides anything, so a missing/older status payload never makes the UI blink out. On narrow viewports (≤680px) the badge text is hidden by CSS, leaving just the status dot. Translation cards, `/tsl` and auto-translate are unaffected. Covered by config-precedence, HTTP-contract, SSR, jsdom and four-locale dictionary tests.
+- **Fix(pool): an explicit `home` argument now wins over `DSH_STATE_DIR`.** `defaultPoolDir(home)` used to return the parent process's state dir whenever the env var was set, breaking isolated-account path recovery (and the regression test in any environment that exports `DSH_STATE_DIR`). Production callers pass no argument and keep using the state dir.
+- **Fix(runtime): the idle watchdog no longer kills a healthy child after a blocked host event loop.** libuv runs the timers phase before the poll phase, so an expired watchdog could fire before queued stdout/stderr from an actively-writing child was delivered — a false timeout that also made the two keep-alive tests flake under a fully parallel `npm test` (the Publish gate). One short grace (`WATCHDOG_GRACE_MS`, capped at the run's own idle budget) lets that output re-arm the watchdog; a deterministic test blocks the loop on purpose and asserts the run survives.
+- **Fix(console): "同步中" no longer spins forever — every request now has a hard deadline.**
+  - Three independent causes stacked: host routes were bare `void (async () => …)()` IIFEs (a thrown dependency became an unhandled rejection and **no HTTP response at all**), `refresh-quota` awaited a 20s `agy /usage` spawn plus several REST calls before answering, and browser writes had no timeout (only the 3s status poll did).
+  - `runRoute()` in `respond.ts` is now the single guard for all 23 async routes: a rejection returns 500, a hang past `ROUTE_TIMEOUT_MS` returns 504, and `sendJson` is exactly-once so a late body cannot write a second head. No duplicated per-route error handling.
+  - `refresh-quota` answers immediately with `pending: true` and runs the refresh in the background (deduped per account, with its own deadline so a hung pipeline cannot block future syncs). The existing 3s status poll delivers fresh numbers; the toast now says "syncing" instead of claiming "refreshed".
+  - Client `postJson`/`getJson` share one `timedSignal()` helper and a `useBusyAction()` watchdog: no busy flag can outlive `WRITE_TIMEOUT_MS + 5s`. All timeouts live in `src/common/timeouts.ts`.
+- **Fix(models): one source of truth for models & thinking levels — the DSH picker now matches agy exactly, with zero duplicate definitions.**
+  - **`xhigh` no longer leaks in as a fake model.** agy 1.5.7 lists `gemini-4-hydrogen-xhigh`; the fold only knew `low/medium/high`, so DSH showed **both** `Gemini 4 Hydrogen` and `Gemini 4 Hydrogen (XHigh)` as separate models. Effort suffixes now come from `agy --help` (`low|medium|high|xhigh|max`) and are matched longest-first, so Hydrogen is ONE model with four levels, `xhigh` rendered as **Extra** (agy's own picker label).
+  - **The catalog is agy's catalog.** Fallback lineup refreshed to `agy models` 1.5.7 (adds `gemini-4-hydrogen`, `gemini-pro-orchestrator-g1-pro`; drops the retired Claude 4.6 line and `gemini-4-carbon`, which agy lists as *Unavailable*). Folded entries are now emitted in `agy models`' own order, so Orchestrator sits third, not last. A regression test replays the verbatim 1.5.7 output and asserts the fallback line-up is byte-identical to discovery.
+  - **Zero-redundancy vocabulary.** `src/common/reasoning.ts` is now the only definition of the effort list/labels/suffix parsing; `src/common/model-lineup.ts` the only place concrete model ids live. The settings default-effort buttons, the translate/image effort dropdowns, the model-visibility chips and `agy_ask`'s help text are all derived from the live catalog — the four independent hardcoded `low/medium/high` copies are gone. The defaults dropdown now offers `Extra` because the catalog exposes it.
+  - `agy_ask`: a level written into the model word (`"gemini-4-hydrogen extra"`) is now honoured as `--effort` instead of being silently dropped.
 - **Fix(release): publishing now retries transient registry failures and verifies the version actually lands.**
   - v0.6.19 and v0.6.20 both got GitHub Releases that were never installable: a single transient `404 Not Found - PUT https://registry.npmjs.org/dsh-agy-link` killed `npm publish`, and nothing checked whether the version was readable. v0.6.21 succeeded minutes later with the same token.
   - `scripts/publish-retry.mjs` now: skips an already-published version (idempotent re-runs), retries only transient errors with backoff, fails fast on fatal auth/version errors, and polls `npm view <name>@<version> version` after a successful publish. Slow registry propagation (2–6 min observed) is a WARNING, not a failed run; `PUBLISH_STRICT_VERIFY=1` makes it fatal for canaries. Publish workflow uses the wrapper.
@@ -12,6 +26,20 @@
 
 ### 中文
 
+- **修复(镜像, ptc)：移除重放程序的顶层 `return`（修复 #103）。** 代码 / PTC 模式下生成的 `run_code` 包装脚本是 `return await tools['agy_tool'](...)`，而 DSH 的 REPL 语法校验不接受顶层 `return`（报 `Return statement is not allowed here`），导致每个 agy 工具步骤的镜像回放都失败。现改为以 `await tools['agy_tool'](...)` 作为末表达式，在 REPL 与函数体两种运行时下都能求值；解析器仍兼容旧的 `return await` 脚本，两种形态均有回归测试。感谢 @lzh-marble 的精确定位与 @fall2wish 的 PR #104。
+- **新增(客户端)：可隐藏会话头状态徽标与单条翻译按钮（修复 #105）。** 设置页新增 `showHeaderBadge`、`showTranslateAction` 两个开关（默认开启），同时支持 `DSH_AGY_SHOW_HEADER_BADGE` / `DSH_AGY_SHOW_TRANSLATE_ACTION` 环境变量与受白名单保护的 `/config` 接口。状态快照经统一的 `isUiVisible()` 规则下发：只有显式 `false` 才隐藏，状态未到达或旧宿主没有该字段时保持可见，不会闪退。窄屏（≤680px）下徽标文字自动隐藏、只留状态圆点。译文卡片、`/tsl` 与自动翻译功能均不受影响。配置优先级、HTTP 契约、SSR、jsdom 与四语言字典均有对应测试。
+- **修复(号池)：显式传入的 `home` 优先于 `DSH_STATE_DIR`。** 此前只要环境变量存在，`defaultPoolDir(home)` 就忽略参数直接返回父进程状态目录，破坏了隔离子账号的路径恢复逻辑（在导出该变量的环境中也会让回归测试失败）。生产调用不传参数，行为不变。
+- **修复(运行时)：宿主事件循环被阻塞后，空闲看门狗不再误杀仍在输出的子进程。** libuv 的 timers 阶段先于 poll 阶段，看门狗到期时可能子进程已写入的 stdout/stderr 还排在管道里没被投递，于是被误判为超时；满并发 `npm test` 下这会让两项保活用例偶发失败、挡住发布门禁。现给一次短暂宽限（`WATCHDOG_GRACE_MS`，不超过本次运行的空闲预算），让排队数据重新喂狗；新增确定性测试主动阻塞事件循环并断言运行不超时。
+- **修复(控制台)：「同步中」不再无限转圈——所有请求现在都有硬超时。**
+  - 三个原因叠加：宿主路由都是裸的 `void (async () => …)()`（依赖抛错会变成未处理的 rejection，**HTTP 永远不响应**）；`refresh-quota` 要等 20s 的 `agy /usage` 子进程加若干 REST 调用才返回；而浏览器端写请求没有超时（只有 3s 的状态轮询有）。
+  - `respond.ts` 新增 `runRoute()`，作为全部 23 条异步路由的统一守卫：抛错返回 500、超过 `ROUTE_TIMEOUT_MS` 挂起返回 504，`sendJson` 保证只写一次（超时的迟到响应不会二次写 head）。不再有逐路由重复的错误处理。
+  - `refresh-quota` 立即返回 `pending: true`，刷新放到后台执行（按账号去重，并带独立超时，避免挂死的流水线永久挡住后续同步）。现有 3s 状态轮询会自动带出最新额度；提示文案改为「正在同步」而不是谎称「已刷新」。
+  - 客户端 `postJson`/`getJson` 共用 `timedSignal()`，并有 `useBusyAction()` 兜底：任何 busy 状态都不会超过 `WRITE_TIMEOUT_MS + 5s`。所有超时常量集中在 `src/common/timeouts.ts`。
+- **修复(模型)：模型与思考等级收敛为单一事实源——DSH 的模型列表现在与 agy 完全一致，且不再有重复定义。**
+  - **`xhigh` 不再被当成独立模型。** agy 1.5.7 列出的是 `gemini-4-hydrogen-xhigh`，而旧的折叠逻辑只认识 `low/medium/high`，于是 DSH 里同时出现了 `Gemini 4 Hydrogen` 和 `Gemini 4 Hydrogen (XHigh)` 两个模型。档位词表现已取自 `agy --help`（`low|medium|high|xhigh|max`）并按**后缀长度降序**匹配：Hydrogen 就是**一个**模型、带四个档位，`xhigh` 显示为 **Extra**（与 agy 自己的菜单一致）。
+  - **目录即 agy 目录。** 离线兜底阵容同步到 `agy models` 1.5.7（新增 `gemini-4-hydrogen`、`gemini-pro-orchestrator-g1-pro`；移除已下线的 Claude 4.6 线与 agy 标记为 *Unavailable* 的 `gemini-4-carbon`）。折叠后的条目也按 `agy models` 的原始顺序输出，Orchestrator 因此回到第三位而不是垫底。新增回归测试逐字回放 1.5.7 输出，并断言兜底阵容与真实发现结果完全一致。
+  - **词表零冗余。** `src/common/reasoning.ts` 成为档位列表/显示名/后缀解析的唯一定义；`src/common/model-lineup.ts` 成为具体模型 id 的唯一出处。设置页“默认思考强度”按钮、翻译/生图档位下拉、模型显示 chips 与 `agy_ask` 帮助文本全部由实时目录派生——原来四处各自硬编码的 `low/medium/high` 已全部删除；目录里有 `xhigh`，下拉框就自动多出「Extra」。
+  - `agy_ask`：写在模型词里的档位（如 `"gemini-4-hydrogen extra"`）现在会被识别为 `--effort`，不再被静默丢弃。
 - **修复(发布)：发布遇瞬态故障会自动重试，并校验版本真的可用。**
   - 0.6.19/0.6.20 都建了 GitHub Release 却装不上：一次瞬态 `404 Not Found - PUT registry.npmjs.org` 直接打断 `npm publish`，且没有任何环节检查版本是否可读；0.6.21 用同一 token 几分钟后就成功了。
   - `scripts/publish-retry.mjs`：已发布则跳过（可重复运行）、只对瞬态错误退避重试、鉴权/版本类致命错误立即失败，发布成功后轮询 `npm view` 确认。registry 传播慢（实测 2–6 分钟）只告警不误判失败，canary 可用 `PUBLISH_STRICT_VERIFY=1` 严格化。
