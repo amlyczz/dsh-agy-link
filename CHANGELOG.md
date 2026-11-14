@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.23 (2026-11-14)
+
+### English
+
+- **Feat(models): opt-in pool-wide model catalog (fixes #107).** Since v0.6.21 the picker showed only the ACTIVE account's models, so a model owned by another account (e.g. Argon on a backup account) could not be selected even though `selectSessionAccount()` already routes via `pool.selectAccount(family, model)` and self-heals on a "model not recognized" refusal. The new `poolWideCatalog` switch (default `false`) makes `listAvailableModels()` use the already-tested `getUnion(enabledAccounts, pool)`; the scheduler then routes to an account that can serve the chosen model without a manual "set active" round-trip. Available in Settings, via `DSH_AGY_POOL_WIDE_CATALOG`, and through the guarded `/config` endpoint; `/status` exposes its state. Default off keeps strict single-account isolation unchanged. Covered by a two-account heterogeneous-catalog regression test, config-precedence, HTTP-contract, SSR row and four-locale dictionary tests. Thanks to @Ronnoc for the proposal and the precise code walkthrough.
+
+### 中文
+
+- **新增(模型)：号池全量模型并集开关（修复 #107）。** v0.6.21 起模型选择器只显示当前活动账号的模型，异构权限多账号场景下，备用账号独有的模型（如 Argon）即使底层已支持按模型自动调度也无法被选中。`poolWideCatalog`（默认关闭）让 `listAvailableModels()` 改走现成的 `getUnion(enabledAccounts, pool)`，选中后由 `selectAccount(family, model)` 自动路由到支持该模型的账号，无需先手动「设为当前使用」。设置面板、`DSH_AGY_POOL_WIDE_CATALOG` 环境变量与受白名单保护的 `/config` 均可配置，`/status` 同步状态；默认关闭保持严格单账号隔离不变。异构双账号目录回归测试、配置优先级、HTTP 契约、SSR 行与四语言字典测试均已覆盖。感谢 @Ronnoc 的提案与精确定位。
+
 ## 0.6.22 (2026-11-13)
 
 ### English

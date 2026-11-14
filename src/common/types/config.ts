@@ -198,6 +198,13 @@ export interface PluginConfig {
    * Set false to hide the "译成人话" Gemini button.
    */
   showTranslateAction: boolean
+  /**
+   * Show the union of models supported by every enabled pool account in the
+   * picker (default: false = strict single-account isolation). Opt-in so a
+   * multi-account user can pick a model owned by another account and let
+   * `selectAccount(family, model)` route to it automatically.
+   */
+  poolWideCatalog: boolean
   // ---- image generation (`dsh-agy-image` CLI, purpose:'image' adapter route) ----
   /** Chat model that drives the `generate_image` call ('' = defaultModel → the preferred Gemini Flash). */
   imageModel: string
@@ -314,6 +321,7 @@ export function defaultConfig(): PluginConfig {
     translateMinIntervalMs: 3_000,
     showHeaderBadge: true,
     showTranslateAction: true,
+    poolWideCatalog: false,
     imageModel: '',
     imageEffort: 'low',
     imageTimeoutMs: 240_000,

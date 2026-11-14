@@ -14,13 +14,19 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           ? pool.getActiveAccountId('google')
           : (poolData?.lastActiveAccountId ?? poolData?.primaryAccountId)
         const activeAcc = (activeId && typeof pool?.getAccount === 'function') ? pool.getAccount(activeId) : undefined
-        const supportedModels = (activeAcc && pool && typeof catalog.getModelsForAccount === 'function')
-          ? catalog.getModelsForAccount(activeAcc, pool)
-          : (typeof catalog.getUnion === 'function'
-              ? catalog.getUnion(pool?.getAccounts ? pool.getAccounts() : [], pool)
-              : (typeof catalog.getAllKnownModels === 'function'
-                  ? catalog.getAllKnownModels(pool?.getAccounts ? pool.getAccounts() : [])
-                  : (catalog.get().models ?? [])))
+        // The Settings chips must describe the SAME set the picker offers: with
+        // `poolWideCatalog` enabled, show the union instead of the active
+        // account's catalog (issue #107).
+        let supportedModels: ReturnType<typeof catalog.getModelsForAccount>
+        if (cfg.poolWideCatalog || !activeAcc || !pool || typeof catalog.getModelsForAccount !== 'function') {
+          supportedModels = typeof catalog.getUnion === 'function'
+            ? catalog.getUnion(pool?.getAccounts ? pool.getAccounts() : [], pool)
+            : (typeof catalog.getAllKnownModels === 'function'
+                ? catalog.getAllKnownModels(pool?.getAccounts ? pool.getAccounts() : [])
+                : (catalog.get().models ?? []))
+        } else {
+          supportedModels = catalog.getModelsForAccount(activeAcc, pool)
+        }
         sendJson(res as RawRes, 200, {
           plugin: 'dsh-agy-link',
           bin: bin(),
@@ -47,6 +53,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           translateTargetLanguage: cfg.translateTargetLanguage,
           showHeaderBadge: cfg.showHeaderBadge,
           showTranslateAction: cfg.showTranslateAction,
+          poolWideCatalog: cfg.poolWideCatalog,
           imageModel: cfg.imageModel,
           imageEffort: cfg.imageEffort,
           imageOutputDir: cfg.imageOutputDir,

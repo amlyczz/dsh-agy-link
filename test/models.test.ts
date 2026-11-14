@@ -570,6 +570,51 @@ test('getModelsForAccount returns exact models for that specific account without
 })
 
 // ---------------------------------------------------------------------------
+// Issue #107: opt-in pool-wide catalog so model-aware account routing is usable
+// from the picker (default stays strict single-account isolation).
+// ---------------------------------------------------------------------------
+
+async function poolWideDeps(poolWideCatalog: boolean): Promise<ModelResolutionDeps> {
+  const primary = { id: 'acc_primary', alias: 'Primary', dir: '/tmp/primary', enabled: true, createdAt: 0 } as never
+  const secondary = { id: 'acc_secondary', alias: 'Secondary', dir: '/tmp/secondary', enabled: true, createdAt: 0 } as never
+  const pool = {
+    getAccounts: () => [primary, secondary],
+    getAccount: (id: string) => (id === 'acc_primary' ? primary : id === 'acc_secondary' ? secondary : undefined),
+    getActiveAccountId: () => 'acc_primary',
+    getPoolData: () => ({ lastActiveAccountId: 'acc_primary', primaryAccountId: 'acc_primary' }),
+  } as never
+  const outputs: Record<string, string> = {
+    acc_primary: 'gemini-4-argon\tGemini 4 Argon\ngemini-3.8-flash\tGemini 3.8 Flash\nclaude-sonnet-5-5\tClaude Sonnet 5.5',
+    acc_secondary: 'gemini-3.8-flash\tGemini 3.8 Flash\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+  }
+  const catalog = new ModelCatalog(
+    async (_signal, id) => ({ stdout: outputs[id ?? 'acc_primary'] ?? '', stderr: '' }),
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+  )
+  await catalog.forceRefresh('acc_primary')
+  await catalog.forceRefresh('acc_secondary')
+  return {
+    catalog,
+    pool,
+    getConfig: () => ({ ...defaultConfig(), poolWideCatalog } as PluginConfig),
+    isEffortUnsupported: () => false,
+    warnOnce: () => undefined,
+  }
+}
+
+test('issue #107: poolWideCatalog exposes the pool-wide union; default stays isolated', async () => {
+  const narrow = listAvailableModels(await poolWideDeps(false)).map((m) => m.id)
+  assert.ok(narrow.includes('gemini-4-argon'), 'primary owns Argon')
+  assert.equal(narrow.includes('claude-sonnet-4-6'), false, 'default hides another account’s models')
+
+  const wide = listAvailableModels(await poolWideDeps(true)).map((m) => m.id)
+  assert.ok(wide.includes('gemini-4-argon'))
+  assert.ok(wide.includes('claude-sonnet-4-6'), 'union surfaces the other account’s model for model-aware routing')
+  assert.ok(wide.includes('claude-sonnet-5-5'))
+})
+
+// ---------------------------------------------------------------------------
 // Issue #106: listModels must never close a discovery → adapters-updated →
 // listModels loop when discovery fails (signed out / token expired / timeout).
 // ---------------------------------------------------------------------------

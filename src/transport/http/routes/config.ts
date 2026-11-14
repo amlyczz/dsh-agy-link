@@ -14,7 +14,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
-          'showHeaderBadge', 'showTranslateAction',
+          'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })

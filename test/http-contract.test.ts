@@ -133,6 +133,7 @@ const BASE_CONFIG: Record<string, unknown> = {
   translateTargetLanguage: 'zh',
   showHeaderBadge: true,
   showTranslateAction: true,
+  poolWideCatalog: false,
   imageModel: '',
   imageEffort: '',
   imageOutputDir: '',
@@ -391,12 +392,13 @@ test('/status answers 200 with the client-visible shape', async () => {
     'permissionMode', 'workspaceRoot', 'defaultModel', 'defaultEffort', 'askTool', 'auth', 'poolAuth',
     'autoWarmup', 'warmupModels', 'autoTranslate', 'translateModel', 'translateEffort',
     'translateTargetLanguage', 'imageModel', 'imageEffort', 'imageOutputDir',
-    'showHeaderBadge', 'showTranslateAction',
+    'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog',
   ]) {
     assert.ok(key in body, 'status must keep field ' + key)
   }
   assert.equal(body.showHeaderBadge, true)
   assert.equal(body.showTranslateAction, true)
+  assert.equal(body.poolWideCatalog, false)
 })
 
 test('/status forwards an explicit UI visibility opt-out (issue #105)', async () => {
@@ -407,6 +409,39 @@ test('/status forwards an explicit UI visibility opt-out (issue #105)', async ()
   const body = captured.json() as Record<string, unknown>
   assert.equal(body.showHeaderBadge, false, 'an explicit false must reach the client unchanged')
   assert.equal(body.showTranslateAction, false)
+})
+
+test('issue #107: /status catalogModels follows the pool-wide switch', async () => {
+  const active = { id: 'acc_active', alias: 'Active', dir: '/tmp/active', enabled: true, createdAt: 0 }
+  const pool = {
+    getPoolData: () => POOL_DATA,
+    getAccounts: () => [active],
+    getAccount: (id: string) => (id === 'acc_active' ? active : undefined),
+    getActiveAccountId: () => 'acc_active',
+  }
+  const catalog = {
+    get: () => ({ source: 'discovered', models: [], lastError: null }),
+    getAllKnownModels: () => [],
+    getModelsForAccount: () => [{ id: 'model-active', name: 'Active only', efforts: [] }],
+    getUnion: () => [
+      { id: 'model-active', name: 'Active only', efforts: [] },
+      { id: 'model-other', name: 'Another account', efforts: [] },
+    ],
+  }
+
+  const narrow = await invoke(
+    setup({ pool, catalog }, { poolWideCatalog: false }).route('/plugins/agy-link/status'),
+    fakeReq('GET'),
+  )
+  const narrowIds = (narrow.json() as { catalogModels: Array<{ id: string }> }).catalogModels.map((m) => m.id)
+  assert.deepEqual(narrowIds, ['model-active'], 'default keeps single-account isolation')
+
+  const wide = await invoke(
+    setup({ pool, catalog }, { poolWideCatalog: true }).route('/plugins/agy-link/status'),
+    fakeReq('GET'),
+  )
+  const wideIds = (wide.json() as { catalogModels: Array<{ id: string }> }).catalogModels.map((m) => m.id)
+  assert.deepEqual(wideIds, ['model-active', 'model-other'], 'Settings chips must match the picker union')
 })
 
 test('/status reflects bin/dormant/last-run/pool proxy and announces no method gate', async () => {
@@ -559,7 +594,11 @@ test('/config is POST-only and validates keys before writing', async () => {
     assert.deepEqual(res.json(), { ok: true, key, value })
     assert.deepEqual(writes.at(-1), [key, value])
   }
-  assert.equal(pickerEvents, 1, 'visibility switches must not announce a picker update')
+  // issue #107: the pool-wide catalog switch rides the same guarded endpoint.
+  const wide = await invoke(route, fakeReq('POST', '/', { key: 'poolWideCatalog', value: true }))
+  assert.equal(wide.status(), 200)
+  assert.deepEqual(writes.at(-1), ['poolWideCatalog', true])
+  assert.equal(pickerEvents, 1, 'visibility/catalog switches must not announce a picker update')
 })
 
 test('/config treats malformed and oversized bodies as empty (non-strict read)', async () => {

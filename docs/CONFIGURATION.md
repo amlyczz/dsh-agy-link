@@ -22,6 +22,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `defaultModel` | `DSH_AGY_DEFAULT_MODEL` | `''` (agy default) | Initial model slug |
 | `defaultEffort` | `DSH_AGY_DEFAULT_EFFORT` | `high` | Initial thinking effort; the settings row and the session menu offer exactly the levels the live catalog advertises (`low` / `medium` / `high` / `xhigh` (Extra) / `max`), plus `auto` |
+| `poolWideCatalog` | `DSH_AGY_POOL_WIDE_CATALOG` | `false` | Show the union of models supported by **all** enabled accounts in the picker instead of only the active account's models; `selectAccount(family, model)` then routes automatically to an account that can serve the chosen model (issue #107) |
 | `hiddenModels` | `DSH_AGY_HIDDEN_MODELS` | `[]` | Slugs hidden from the model picker (comma separated) |
 | `fallbackModels` | `—` | agy 1.5.7 lineup: Gemini 4 Argon, Gemini 4 Hydrogen, Orchestrator (Argon), Gemini 3.8 Flash, Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B (Medium) | Catalog shown before `agy models` succeeds (signed out or offline); mirrors `agy models` exactly, no retired entries |
 | `autoFallbackModel` | `DSH_AGY_AUTO_FALLBACK_MODEL` | `false` | Retry on a fallback model when the selected one cannot run |

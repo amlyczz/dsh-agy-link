@@ -87,6 +87,15 @@ test('showHeaderBadge and showTranslateAction default to true, accept overrides 
   assert.equal(overrideWins.showHeaderBadge, true)
 })
 
+test('issue #107: poolWideCatalog is opt-in and every layer can enable it', () => {
+  assert.equal(defaultConfig().poolWideCatalog, false, 'strict single-account isolation stays the default')
+  assert.equal(resolveConfig({ poolWideCatalog: true }, {}, {}).poolWideCatalog, true)
+  assert.equal(resolveConfig({}, {}, { poolWideCatalog: true }).poolWideCatalog, true)
+  assert.equal(resolveConfig({}, { DSH_AGY_POOL_WIDE_CATALOG: 'on' }, {}).poolWideCatalog, true)
+  assert.equal(resolveConfig({ poolWideCatalog: true }, { DSH_AGY_POOL_WIDE_CATALOG: 'off' }, {}).poolWideCatalog, false, 'env wins last')
+  assert.equal(resolveConfig({}, { DSH_AGY_POOL_WIDE_CATALOG: 'garbage' }, {}).poolWideCatalog, false, 'junk keeps the default')
+})
+
 test('every DSH_AGY_* env override is honoured, and junk values never corrupt the config', () => {
   const cfg = resolveConfig({}, {
     DSH_AGY_MODE: 'plan',
@@ -123,6 +132,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
     DSH_AGY_TRANSLATE_LANG: 'English',
     DSH_AGY_SHOW_HEADER_BADGE: 'off',
     DSH_AGY_SHOW_TRANSLATE_ACTION: 'off',
+    DSH_AGY_POOL_WIDE_CATALOG: 'true',
     DSH_AGY_IMAGE_MODEL: 'im',
     DSH_AGY_IMAGE_EFFORT: 'high',
     DSH_AGY_IMAGE_TIMEOUT_MS: '1000',
@@ -153,6 +163,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
   assert.equal(cfg.translateTargetLanguage, 'English')
   assert.equal(cfg.showHeaderBadge, false)
   assert.equal(cfg.showTranslateAction, false)
+  assert.equal(cfg.poolWideCatalog, true)
   assert.equal(cfg.imageTimeoutMs, 1000)
   assert.equal(cfg.imageMaxBytes, 2048)
   assert.equal(cfg.imageRetries, 2)
@@ -181,6 +192,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
     DSH_AGY_AUTO_TRANSLATE: 'nope',
     DSH_AGY_SHOW_HEADER_BADGE: 'nope',
     DSH_AGY_SHOW_TRANSLATE_ACTION: 'nope',
+    DSH_AGY_POOL_WIDE_CATALOG: 'nope',
     DSH_AGY_IMAGE_TIMEOUT_MS: 'nope',
     DSH_AGY_IMAGE_MAX_BYTES: 'nope',
     DSH_AGY_IMAGE_RETRIES: 'nope',
@@ -192,5 +204,6 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
   assert.equal(junk.quotaPollIntervalMs, base.quotaPollIntervalMs)
   assert.equal(junk.showHeaderBadge, true)
   assert.equal(junk.showTranslateAction, true)
+  assert.equal(junk.poolWideCatalog, false)
   assert.equal(junk.imageTimeoutMs, base.imageTimeoutMs)
 })

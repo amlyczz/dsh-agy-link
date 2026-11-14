@@ -54,6 +54,7 @@ export interface StatusPayload {
 	translateEffort?: string;
 	showHeaderBadge?: boolean;
 	showTranslateAction?: boolean;
+	poolWideCatalog?: boolean;
 	imageModel?: string;
 	imageEffort?: string;
 	imageOutputDir?: string;

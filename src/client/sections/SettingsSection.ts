@@ -26,6 +26,7 @@ import { Toast, type ToastNotice, type ToastType } from '../ui/Toast.ts';
 import { AccountsPanel } from './AccountsPanel.ts';
 import { ModelsPanel } from './ModelsPanel.ts';
 import { renderVisibilityRows } from './VisibilityRows.ts';
+import { renderPoolWideCatalogRow } from './CatalogRows.ts';
 
 /**
  * BUSY-STATE WATCHDOG. Every action sets a busy flag and clears it when its
@@ -482,6 +483,7 @@ function renderRuntimeConfig(
 			}),
 			renderImageRow(t, status, catalogModels, loadingAction, setCfg, copyImageCommand),
 			renderVisibilityRows({ t, status, loadingAction, setCfg }),
+			renderPoolWideCatalogRow({ t, status, loadingAction, setCfg }),
 			renderDefaultEffortRow(t, status, catalogModels, loadingAction, setCfg),
 			h(ModelsPanel, { t, catalogModels, hiddenModelSet, loadingAction, toggleModelHidden }),
 		),

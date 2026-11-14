@@ -33,11 +33,13 @@ export function listAvailableModels(deps: ModelResolutionDeps): readonly LlmMode
   const cfg = deps.getConfig()
   const activeAcc = activeAccount(deps)
 
-  // When an active account is selected, the picker shows only the models supported
-  // by that specific account (e.g. an account without Argon access will not display
-  // Argon in its picker). If no active account is resolved, falls back to the union.
+  // Default (issue #106 / v0.6.21 isolation): the picker shows only the models
+  // the ACTIVE account supports. With `poolWideCatalog` the picker shows the
+  // union across enabled accounts instead — the scheduler already routes by
+  // `selectAccount(family, model)` (PR #100), so a model owned by another
+  // account is served by that account without a manual switch (issue #107).
   let models: readonly CatalogEntry[]
-  if (activeAcc && pool) {
+  if (activeAcc && pool && !cfg.poolWideCatalog) {
     models = deps.catalog.getModelsForAccount(activeAcc, pool)
     if (!deps.catalog.hasAccountCatalog(activeAcc.id)) {
       // Read path: throttled, change-only announcements. Never use the

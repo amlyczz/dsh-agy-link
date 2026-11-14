@@ -163,6 +163,7 @@ export function resolveConfig(
     translateMinIntervalMs: asNum(get('translateMinIntervalMs')) ?? base.translateMinIntervalMs,
     showHeaderBadge: asBool(get('showHeaderBadge')) ?? base.showHeaderBadge,
     showTranslateAction: asBool(get('showTranslateAction')) ?? base.showTranslateAction,
+    poolWideCatalog: asBool(get('poolWideCatalog')) ?? base.poolWideCatalog,
     imageModel: asString(get('imageModel')) ?? base.imageModel,
     imageEffort: asString(get('imageEffort')) ?? base.imageEffort,
     imageTimeoutMs: asNum(get('imageTimeoutMs')) ?? base.imageTimeoutMs,
@@ -280,6 +281,10 @@ export function resolveConfig(
   if (env.DSH_AGY_SHOW_TRANSLATE_ACTION !== undefined) {
     const sta = asBool(env.DSH_AGY_SHOW_TRANSLATE_ACTION)
     if (sta !== undefined) cfg.showTranslateAction = sta
+  }
+  if (env.DSH_AGY_POOL_WIDE_CATALOG !== undefined) {
+    const pwc = asBool(env.DSH_AGY_POOL_WIDE_CATALOG)
+    if (pwc !== undefined) cfg.poolWideCatalog = pwc
   }
   if (env.DSH_AGY_IMAGE_MODEL) cfg.imageModel = env.DSH_AGY_IMAGE_MODEL
   if (env.DSH_AGY_IMAGE_EFFORT) cfg.imageEffort = env.DSH_AGY_IMAGE_EFFORT
