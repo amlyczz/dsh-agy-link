@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.25 (2026-11-15)
+
+### English
+
+- **Perf(client): scope DOM scanning so streaming no longer sweeps the whole document (merges PR #110).** `scanAndEnhanceImages()` runs on a 100ms debounce for every DOM mutation; it previously re-queried every `a[href]` for three separate enhancers and walked every markdown container on each pass, even when nothing new existed. Links are now visited once (`data-agy-link-scanned`), image/video/file dispatch is a single pass, alt-span work exits early when no unenhanced spans remain, and origin rewrites skip already-processed images. Thanks to @Ronnoc for the profiling and patch.
+- **Fix(client): a streaming markdown change re-evaluates previously skipped alt spans.** The perf pass stamps non-matching alt spans as scanned; without a guard, a span present before its `![...](file:///...)` link streamed in would be skipped forever. Containers now carry a short text fingerprint, and a changed fingerprint clears the stamps so the span is retried — the fast path stays a single attribute query. Regression test reproduces the two-chunk stream.
+
+### 中文
+
+- **性能(客户端)：收敛 DOM 扫描范围，避免流式输出时全文档轮询（合并 PR #110）。** `scanAndEnhanceImages()` 在每次 DOM 变更的 100ms debounce 上执行，旧实现对全部 `a[href]` 跑三遍增强器、并遍历页面上每个 markdown 容器，即使没有新节点也重复解析。现在链接只访问一次（`data-agy-link-scanned`）、图片/视频/文件判断合并为单趟、无未处理 alt span 时快速返回、已改写的图片不再重复处理。感谢 @Ronnoc 的定位与补丁。
+- **修复(客户端)：markdown 文本变化后重新评估此前跳过的 alt span。** 性能优化会把「当前没有本地图片匹配」的 span 标记为已扫描；若 span 先于 `![...](file:///...)` 链接出现（流式分块），就会永久跳过。现为每个容器保存短文本指纹，指纹变化时清除标记并重试；快速路径仍只是一次属性查询。新增两段式流式回归测试。
+
 ## 0.6.24 (2026-11-14)
 
 ### English

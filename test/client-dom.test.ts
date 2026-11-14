@@ -348,6 +348,23 @@ test('image scanner: marks non-matching alt spans as scanned to avoid redundant 
 	document.body.removeChild(container);
 });
 
+test('image scanner: a markdown text change re-evaluates previously scanned alt spans (streaming)', () => {
+	// PR #110 stamps non-matching alt spans as "scanned" to skip them on later
+	// passes. Streaming markdown grows while tokens arrive: if the first pass
+	// only had a web image and the local image link appears one chunk later,
+	// the span must NOT stay skipped forever.
+	const container = markdownWithImageSpan('![pic](https://example.com/pic.png)', 'pic');
+	scanAndEnhanceImages();
+	assert.equal(container.querySelector('.agy-image-card'), null, 'no card for a web image');
+	const span = container.querySelector<HTMLElement>('span[class*="imageAlt"]');
+	assert.equal(span?.dataset.agyAltScanned, 'true');
+
+	(container as unknown as Record<string, unknown>).__reactProps$test = { text: '![pic](/home/user/pic.png)' };
+	scanAndEnhanceImages();
+	assert.ok(container.querySelector('.agy-image-card'), 'the local image card must appear once markdown text changes');
+	document.body.removeChild(container);
+});
+
 test('image scanner: image load error restores the alt span', () => {
 	const container = markdownWithImageSpan('![pic](/home/user/pic.png)', 'pic');
 	scanAndEnhanceImages();

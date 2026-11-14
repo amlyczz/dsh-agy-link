@@ -186,7 +186,45 @@ function rewriteMediaOrigins(origin: string): void {
   }
 }
 
+/**
+ * PR #110 stamps non-matching alt spans as "scanned" so later passes can exit
+ * early. Streaming markdown grows while tokens arrive, so a span skipped once
+ * must be re-evaluated when its container's markdown text changes. Track a
+ * short fingerprint on the container (never the whole text) and clear the
+ * stamps only for containers whose text actually changed — the fast path stays
+ * a single cheap attribute query.
+ */
+const ALT_MD_ATTR = 'data-agy-alt-md';
+
+function markdownTextOf(container: HTMLElement): string {
+  const props = getReactProps(container);
+  return typeof props?.text === 'string' ? props.text : '';
+}
+
+function altFingerprint(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return `${text.length}:${h}`;
+}
+
+function refreshChangedAltContainers(): void {
+  const tracked = document.querySelectorAll<HTMLElement>(`[${ALT_MD_ATTR}]`);
+  for (let i = 0; i < tracked.length; i++) {
+    const container = tracked[i];
+    if (!container) continue;
+    const next = altFingerprint(markdownTextOf(container));
+    if (container.getAttribute(ALT_MD_ATTR) === next) continue;
+    container.setAttribute(ALT_MD_ATTR, next);
+    const spans = container.querySelectorAll<HTMLElement>('span[class*="imageAlt"], span[class*="_imageAlt_"]');
+    for (let j = 0; j < spans.length; j++) {
+      const span = spans[j];
+      if (span && span.dataset.agyEnhanced !== 'true') delete span.dataset.agyAltScanned;
+    }
+  }
+}
+
 function enhanceAltSpans(): void {
+  refreshChangedAltContainers();
   const unenhancedSpans = document.querySelectorAll<HTMLElement>(
     'span[class*="imageAlt"]:not([data-agy-alt-scanned]):not([data-agy-enhanced]), span[class*="_imageAlt_"]:not([data-agy-alt-scanned]):not([data-agy-enhanced])',
   );
@@ -208,8 +246,8 @@ function enhanceAltSpans(): void {
     const allSpans = container.querySelectorAll<HTMLElement>('span[class*="imageAlt"], span[class*="_imageAlt_"]');
     if (allSpans.length === 0) continue;
 
-    const props = getReactProps(container);
-    const mdText = typeof props?.text === 'string' ? props.text : '';
+    const mdText = markdownTextOf(container);
+    container.setAttribute(ALT_MD_ATTR, altFingerprint(mdText));
     if (!mdText) continue;
 
     const imgMatches: Array<{ alt: string; target: string }> = [];
