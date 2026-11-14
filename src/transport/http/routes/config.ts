@@ -30,9 +30,12 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         }
         setOverride(key, body.value)
         onConfigWritten(key, body.value)
-        // Picker visibility changed — the webview re-reads the catalog only
-        // after this event, so the toggle must announce itself.
-        if (key === 'hiddenModels') notifyPicker()
+        // Both keys change the model set DSH's picker must display:
+        // `hiddenModels` hides ids, `poolWideCatalog` switches between the
+        // active account's catalog and the pool-wide union (issue #107/#108).
+        // Without this event the cached picker keeps the old list until a
+        // restart, so enabling the switch looked like "it did nothing".
+        if (key === 'hiddenModels' || key === 'poolWideCatalog') notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
       })
 }

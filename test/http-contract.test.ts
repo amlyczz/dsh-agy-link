@@ -594,11 +594,13 @@ test('/config is POST-only and validates keys before writing', async () => {
     assert.deepEqual(res.json(), { ok: true, key, value })
     assert.deepEqual(writes.at(-1), [key, value])
   }
-  // issue #107: the pool-wide catalog switch rides the same guarded endpoint.
+  // issue #108/#109: toggling the pool-wide catalog CHANGES the visible model
+  // set, so it must announce a picker update (otherwise the cached picker
+  // keeps showing the old account's models until a restart).
   const wide = await invoke(route, fakeReq('POST', '/', { key: 'poolWideCatalog', value: true }))
   assert.equal(wide.status(), 200)
   assert.deepEqual(writes.at(-1), ['poolWideCatalog', true])
-  assert.equal(pickerEvents, 1, 'visibility/catalog switches must not announce a picker update')
+  assert.equal(pickerEvents, 2, 'poolWideCatalog must refresh the model picker like hiddenModels')
 })
 
 test('/config treats malformed and oversized bodies as empty (non-strict read)', async () => {

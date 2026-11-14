@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.24 (2026-11-14)
+
+### English
+
+- **Fix(client): toggling `poolWideCatalog` now refreshes the model picker immediately (fixes #108, #109).** `/config` only emitted `llm/adapters-updated` for `hiddenModels`, so switching the just-shipped pool-wide catalog flag changed the setting and `/status` but left DSH's cached model selector showing the old account's models until a restart. Both keys that change the visible model set now announce a picker update; the HTTP-contract test pins the event count. Note for multi-account Windows users: `agy models` discovery still reads the machine-wide credential slot, so if a secondary account's probe returns only the primary account's basic models, the union cannot invent Argon/Hydrogen — that is an upstream credential-isolation limitation, not a filter in this plugin.
+
+### 中文
+
+- **修复(客户端)：切换「号池全量模型并集」后立即刷新模型选择器（修复 #108、#109）。** `/config` 此前只对 `hiddenModels` 广播 `llm/adapters-updated`，导致刚上线的 `poolWideCatalog` 开关虽然写入了配置、状态也变了，DSH 缓存的模型列表却仍是旧账号的，必须重启才生效——表现为「开关没作用」。现两个会改变可见模型集合的配置键都会触发选择器刷新，HTTP 契约测试锁定事件次数。另说明：Windows 多账号下 `agy models` 探测仍读取机器级凭据槽，若备用账号的探测被系统凭据劫持、只返回主账号的基础模型，并集也不会凭空补出 Argon/Hydrogen；这属于上游凭据隔离限制，不是本插件的过滤逻辑。
+
 ## 0.6.23 (2026-11-14)
 
 ### English
