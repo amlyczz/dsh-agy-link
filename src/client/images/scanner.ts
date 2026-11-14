@@ -172,24 +172,41 @@ function getReactProps(el: HTMLElement): Record<string, unknown> | null {
 
 function rewriteMediaOrigins(origin: string): void {
   if (!origin || origin.includes('127.0.0.1') || origin.includes('localhost')) return;
-  const images = document.querySelectorAll<HTMLImageElement>('img[src*="/plugins/agy-link/media"]');
+  const images = document.querySelectorAll<HTMLImageElement>(
+    'img[src*="/plugins/agy-link/media"]:not([data-agy-origin-rewritten])',
+  );
   for (let i = 0; i < images.length; i++) {
     const img = images[i];
-    if (img && img.src.includes('127.0.0.1')) {
+    if (!img) continue;
+    if (img.src.includes('127.0.0.1')) {
       const u = new URL(img.src);
       img.src = `${origin}${u.pathname}${u.search}`;
     }
+    img.dataset.agyOriginRewritten = 'true';
   }
 }
 
 function enhanceAltSpans(): void {
-  const markdownContainers = document.querySelectorAll<HTMLElement>('div[class*="_markdown_"], [data-markdown-variant]');
-  for (let i = 0; i < markdownContainers.length; i++) {
-    const container = markdownContainers[i];
-    if (!container) continue;
+  const unenhancedSpans = document.querySelectorAll<HTMLElement>(
+    'span[class*="imageAlt"]:not([data-agy-alt-scanned]):not([data-agy-enhanced]), span[class*="_imageAlt_"]:not([data-agy-alt-scanned]):not([data-agy-enhanced])',
+  );
+  if (unenhancedSpans.length === 0) return;
 
-    const altSpans = container.querySelectorAll<HTMLElement>('span[class*="imageAlt"], span[class*="_imageAlt_"]');
-    if (altSpans.length === 0) continue;
+  const seenContainers = new Set<HTMLElement>();
+  for (let i = 0; i < unenhancedSpans.length; i++) {
+    const span = unenhancedSpans[i];
+    if (!span) continue;
+    const container = span.closest<HTMLElement>('div[class*="_markdown_"], [data-markdown-variant]');
+    if (container) {
+      seenContainers.add(container);
+    } else {
+      span.dataset.agyAltScanned = 'true';
+    }
+  }
+
+  for (const container of seenContainers) {
+    const allSpans = container.querySelectorAll<HTMLElement>('span[class*="imageAlt"], span[class*="_imageAlt_"]');
+    if (allSpans.length === 0) continue;
 
     const props = getReactProps(container);
     const mdText = typeof props?.text === 'string' ? props.text : '';
@@ -201,11 +218,18 @@ function enhanceAltSpans(): void {
     while ((m = re.exec(mdText)) !== null) {
       imgMatches.push({ alt: m[1] ?? '', target: m[2] ?? '' });
     }
-    if (imgMatches.length === 0) continue;
+    if (imgMatches.length === 0) {
+      for (let j = 0; j < allSpans.length; j++) {
+        const span = allSpans[j];
+        if (span) span.dataset.agyAltScanned = 'true';
+      }
+      continue;
+    }
 
-    for (let j = 0; j < altSpans.length; j++) {
-      const span = altSpans[j];
+    for (let j = 0; j < allSpans.length; j++) {
+      const span = allSpans[j];
       if (!span || span.dataset.agyEnhanced === 'true') continue;
+      span.dataset.agyAltScanned = 'true';
 
       const altText = (span.textContent ?? '').trim();
       const match = imgMatches.find((im) => im.alt.trim() === altText) ?? imgMatches[j];
@@ -253,132 +277,125 @@ function enhanceAltSpans(): void {
   }
 }
 
-function enhanceImageLinks(links: NodeListOf<HTMLAnchorElement>): void {
-  for (let i = 0; i < links.length; i++) {
-    const link = links[i];
-    if (!link || link.dataset.agyLinkEnhanced === 'true') continue;
+function enhanceImageLink(link: HTMLAnchorElement, rawHref: string, resolvedHref: string): void {
+  link.dataset.agyLinkEnhanced = 'true';
+  const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
+  const mediaUrl = buildMediaUrl(pathToUse);
+  const linkText = (link.textContent ?? 'Image').replace(/预览$/, '').trim();
 
-    const rawHref = link.getAttribute('href') ?? '';
-    const resolvedHref = link.href ?? '';
-    if (!isImageFile(rawHref) && !isImageFile(resolvedHref)) continue;
+  // Intercept clicking on the filename itself so local file preview opens in Lightbox
+  link.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openLightbox(mediaUrl, linkText, pathToUse);
+  });
 
-    link.dataset.agyLinkEnhanced = 'true';
-    const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
-    const mediaUrl = buildMediaUrl(pathToUse);
-    const linkText = (link.textContent ?? 'Image').replace(/预览$/, '').trim();
+  if (!link.querySelector('.agy-image-link-icon')) {
+    const badge = document.createElement('span');
+    badge.className = 'agy-image-link-chip agy-image-link-icon';
+    badge.setAttribute('role', 'button');
+    badge.setAttribute('tabindex', '0');
+    badge.title = `预览图片 / Preview (${linkText})`;
+    badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;display:inline-block;"><path d="M1 8s3-5.5 7-5.5S15 8 15 8s-3 5.5-7 5.5S1 8 1 8z"/><circle cx="8" cy="8" r="2.5"/></svg></span><span class="agy-image-chip-text">预览</span>';
 
-    // Intercept clicking on the filename itself so local file preview opens in Lightbox
-    link.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
+    badge.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
       openLightbox(mediaUrl, linkText, pathToUse);
-    });
+    };
 
-    if (!link.querySelector('.agy-image-link-icon')) {
-      const badge = document.createElement('span');
-      badge.className = 'agy-image-link-chip agy-image-link-icon';
-      badge.setAttribute('role', 'button');
-      badge.setAttribute('tabindex', '0');
-      badge.title = `预览图片 / Preview (${linkText})`;
-      badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;display:inline-block;"><path d="M1 8s3-5.5 7-5.5S15 8 15 8s-3 5.5-7 5.5S1 8 1 8z"/><circle cx="8" cy="8" r="2.5"/></svg></span><span class="agy-image-chip-text">预览</span>';
-
-      badge.onclick = (e) => {
+    badge.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         e.stopPropagation();
         openLightbox(mediaUrl, linkText, pathToUse);
-      };
-
-      badge.onkeydown = (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          e.stopPropagation();
-          openLightbox(mediaUrl, linkText, pathToUse);
-        }
-      };
-
-      link.appendChild(badge);
-    }
-  }
-}
-
-function enhanceVideoLinks(links: NodeListOf<HTMLAnchorElement>): void {
-  for (let i = 0; i < links.length; i++) {
-    const link = links[i];
-    if (!link || link.dataset.agyVideoEnhanced === 'true') continue;
-
-    const rawHref = link.getAttribute('href') ?? '';
-    const resolvedHref = link.href ?? '';
-    if (!isVideoFile(rawHref) && !isVideoFile(resolvedHref)) continue;
-
-    link.dataset.agyVideoEnhanced = 'true';
-    const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
-    const mediaUrl = buildMediaUrl(pathToUse);
-    const linkText = (link.textContent ?? 'Video').replace(/播放$/, '').trim();
-
-    link.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openLightbox(mediaUrl, linkText, pathToUse);
-    });
-
-    if (!link.querySelector('.agy-video-link-icon')) {
-      const badge = document.createElement('span');
-      badge.className = 'agy-image-link-chip agy-chip-video agy-video-link-icon';
-      badge.setAttribute('role', 'button');
-      badge.setAttribute('tabindex', '0');
-      badge.title = `播放视频 / Play Video (${linkText})`;
-      badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></span><span class="agy-image-chip-text">播放</span>';
-
-      badge.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openLightbox(mediaUrl, linkText, pathToUse);
-      };
-
-      badge.onkeydown = (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          e.stopPropagation();
-          openLightbox(mediaUrl, linkText, pathToUse);
-        }
-      };
-
-      link.appendChild(badge);
-    }
-  }
-}
-
-function enhanceFileLinks(links: NodeListOf<HTMLAnchorElement>): void {
-  for (let i = 0; i < links.length; i++) {
-    const link = links[i];
-    if (!link || link.dataset.agyFileEnhanced === 'true' || link.dataset.agyLinkEnhanced === 'true' || link.dataset.agyVideoEnhanced === 'true') continue;
-
-    const rawHref = link.getAttribute('href') ?? '';
-    const resolvedHref = link.href ?? '';
-    if (isImageFile(rawHref) || isImageFile(resolvedHref) || isVideoFile(rawHref) || isVideoFile(resolvedHref)) continue;
-
-    if (!rawHref.startsWith('file://') && !resolvedHref.startsWith('file://') && !isLocalFilePath(rawHref)) continue;
-
-    link.dataset.agyFileEnhanced = 'true';
-    const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
-
-    // The link text is the affordance: clicking it opens the native right Sidebar
-    // (no extra badge), falling back to the OS opener when no Sidebar can take it.
-    link.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
-      if (openInRightSidebar(pathToUse)) {
-        showToast(`已在原生边栏打开: ${fileName}`);
-        return;
       }
-      openInSystem(pathToUse, false).then((res) => {
-        showToast(res.ok ? `已在系统程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
-      });
+    };
+
+    link.appendChild(badge);
+  }
+}
+
+function enhanceVideoLink(link: HTMLAnchorElement, rawHref: string, resolvedHref: string): void {
+  link.dataset.agyVideoEnhanced = 'true';
+  const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
+  const mediaUrl = buildMediaUrl(pathToUse);
+  const linkText = (link.textContent ?? 'Video').replace(/播放$/, '').trim();
+
+  link.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openLightbox(mediaUrl, linkText, pathToUse);
+  });
+
+  if (!link.querySelector('.agy-video-link-icon')) {
+    const badge = document.createElement('span');
+    badge.className = 'agy-image-link-chip agy-chip-video agy-video-link-icon';
+    badge.setAttribute('role', 'button');
+    badge.setAttribute('tabindex', '0');
+    badge.title = `播放视频 / Play Video (${linkText})`;
+    badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></span><span class="agy-image-chip-text">播放</span>';
+
+    badge.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openLightbox(mediaUrl, linkText, pathToUse);
+    };
+
+    badge.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        openLightbox(mediaUrl, linkText, pathToUse);
+      }
+    };
+
+    link.appendChild(badge);
+  }
+}
+
+function enhanceFileLink(link: HTMLAnchorElement, rawHref: string, resolvedHref: string): void {
+  link.dataset.agyFileEnhanced = 'true';
+  const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
+
+  // The link text is the affordance: clicking it opens the native right Sidebar
+  // (no extra badge), falling back to the OS opener when no Sidebar can take it.
+  link.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
+    if (openInRightSidebar(pathToUse)) {
+      showToast(`已在原生边栏打开: ${fileName}`);
+      return;
+    }
+    openInSystem(pathToUse, false).then((res) => {
+      showToast(res.ok ? `已在系统程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
     });
+  });
+}
+
+function enhanceLinks(): void {
+  const links = document.querySelectorAll<HTMLAnchorElement>(
+    'a[href]:not([data-agy-link-scanned]):not([data-agy-link-enhanced]):not([data-agy-video-enhanced]):not([data-agy-file-enhanced])',
+  );
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
+    if (!link) continue;
+    link.dataset.agyLinkScanned = 'true';
+
+    const rawHref = link.getAttribute('href') ?? '';
+    const resolvedHref = link.href ?? '';
+
+    if (isImageFile(rawHref) || isImageFile(resolvedHref)) {
+      enhanceImageLink(link, rawHref, resolvedHref);
+    } else if (isVideoFile(rawHref) || isVideoFile(resolvedHref)) {
+      enhanceVideoLink(link, rawHref, resolvedHref);
+    } else if (rawHref.startsWith('file://') || resolvedHref.startsWith('file://') || isLocalFilePath(rawHref)) {
+      enhanceFileLink(link, rawHref, resolvedHref);
+    }
   }
 }
 
@@ -392,11 +409,7 @@ export function scanAndEnhanceImages(): void {
 
   rewriteMediaOrigins(origin);
   enhanceAltSpans();
-
-  const links = document.querySelectorAll<HTMLAnchorElement>('a[href]');
-  enhanceImageLinks(links);
-  enhanceVideoLinks(links);
-  enhanceFileLinks(links);
+  enhanceLinks();
 }
 
 let imageEnhancerDispose: (() => void) | null = null;

@@ -304,6 +304,50 @@ test('image scanner: enhances file:// image links but ignores non-images', () =>
 	assert.equal(imgLink.querySelectorAll('.agy-image-link-icon').length, 1, 'idempotent chip');
 });
 
+test('image scanner: marks web links as scanned without enhancing and skips re-scanning', () => {
+	const webLink = document.createElement('a');
+	webLink.setAttribute('href', 'https://github.com/amlyczz/dsh-agy-link');
+	webLink.textContent = 'GitHub Repo';
+	document.body.appendChild(webLink);
+
+	scanAndEnhanceImages();
+	assert.equal(webLink.dataset.agyLinkScanned, 'true', 'web link marked as scanned');
+	assert.equal(webLink.dataset.agyLinkEnhanced, undefined, 'not marked as image');
+	assert.equal(webLink.dataset.agyVideoEnhanced, undefined, 'not marked as video');
+	assert.equal(webLink.dataset.agyFileEnhanced, undefined, 'not marked as file');
+	assert.equal(webLink.querySelectorAll('.agy-image-link-icon').length, 0);
+
+	const unscanned = document.querySelectorAll(
+		'a[href]:not([data-agy-link-scanned]):not([data-agy-link-enhanced]):not([data-agy-video-enhanced]):not([data-agy-file-enhanced])',
+	);
+	assert.equal(unscanned.length, 0, 'no unscanned links remain');
+
+	document.body.removeChild(webLink);
+});
+
+test('image scanner: marks non-matching alt spans as scanned to avoid redundant markdown passes', () => {
+	const container = document.createElement('div');
+	container.className = '_markdown_abc';
+	(container as unknown as Record<string, unknown>).__reactProps$test = { text: '![web pic](https://example.com/pic.png)' };
+	const span = document.createElement('span');
+	span.className = 'imageAlt_web';
+	span.textContent = 'web pic';
+	container.appendChild(span);
+	document.body.appendChild(container);
+
+	scanAndEnhanceImages();
+	assert.equal(span.dataset.agyAltScanned, 'true', 'non-local alt span marked as scanned');
+	assert.equal(span.dataset.agyEnhanced, undefined, 'not enhanced as local image card');
+	assert.equal(container.querySelector('.agy-image-card'), null, 'no card created');
+
+	const unenhanced = document.querySelectorAll(
+		'span[class*="imageAlt"]:not([data-agy-alt-scanned]):not([data-agy-enhanced]), span[class*="_imageAlt_"]:not([data-agy-alt-scanned]):not([data-agy-enhanced])',
+	);
+	assert.equal(unenhanced.length, 0, 'zero unenhanced spans remain');
+
+	document.body.removeChild(container);
+});
+
 test('image scanner: image load error restores the alt span', () => {
 	const container = markdownWithImageSpan('![pic](/home/user/pic.png)', 'pic');
 	scanAndEnhanceImages();
