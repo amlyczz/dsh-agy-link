@@ -66,6 +66,8 @@ export function providerRetryPolicyFor(pool: AccountPoolManager | undefined) {
 export interface EffortRetryDeps {
   streamAttempt: (options: AgyGenerateOptions, suppressEffort: boolean) => AsyncIterable<StreamChunk>
   learnEffortUnsupported: (model: string) => void
+  /** True when the live discovered catalog says this model accepts efforts. */
+  catalogAdvertisesEffort?: (model: string) => boolean
   onModelUnsupported?: (model: string) => void
 }
 
@@ -116,7 +118,14 @@ export async function* streamWithEffortRetry(
       const rawMsg = String(failure?.message ?? '')
       const refused = parseEffortUnsupported(rawMsg)
       if (refused !== null) {
-        deps.learnEffortUnsupported(refused)
+        // A refusal that CONTRADICTS the live discovered catalog is transient,
+        // not a capability fact: agy emits the same text when its model-config
+        // fetch fails. Replay without --effort (the #67 invariant) but do NOT
+        // persist — persisting hides the model's effort row forever and makes
+        // DSH reject later turns with UNSUPPORTED_REASONING_EFFORT (issue #115).
+        if (deps.catalogAdvertisesEffort?.(refused) !== true) {
+          deps.learnEffortUnsupported(refused)
+        }
         continue
       }
       const unrecog = parseModelNotRecognized(rawMsg)

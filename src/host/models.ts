@@ -351,6 +351,27 @@ export class ModelCatalog {
     return this.accountCatalogs.has(accountId);
   }
 
+  /**
+   * Effort ids the LIVE DISCOVERED catalog advertises for one model (across the
+   * base catalog and every per-account catalog). Fallback entries are excluded:
+   * they are a static mirror, not proof about the installed agy build.
+   *
+   * Used to reject false "--effort is not supported" refusals: agy's print-mode
+   * validation emits that text when its model-config fetch fails, even though
+   * `agy models` lists the level (issue #115).
+   */
+  advertisedEfforts(modelId: string): readonly string[] {
+    const out = new Set<string>();
+    for (const cat of [this.current, ...this.accountCatalogs.values()]) {
+      if (cat.source !== 'discovered') continue;
+      for (const m of cat.models) {
+        if (m.id !== modelId || !Array.isArray(m.efforts)) continue;
+        for (const e of m.efforts) if (typeof e === 'string' && e !== '') out.add(e);
+      }
+    }
+    return [...out];
+  }
+
   /** Refresh if stale; never throws — failures keep the previous catalog. */
   async refreshIfNeeded(accountId?: string): Promise<void> {
     if (this.refreshing) return this.refreshing;

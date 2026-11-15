@@ -196,6 +196,7 @@ export class AgyAdapter extends LlmAdapter {
     yield* streamWithEffortRetry({
       streamAttempt: (opts, suppressEffort) => this.streamAttempt(opts, suppressEffort),
       learnEffortUnsupported: (model) => this.learnEffortUnsupported(model),
+      catalogAdvertisesEffort: (model) => this.deps.catalog.advertisedEfforts(model).length > 0,
       onModelUnsupported: (unrecog) => {
         const fam = modelFamilyOf(unrecog)
         const pool = this.deps.pool
@@ -246,8 +247,7 @@ export class AgyAdapter extends LlmAdapter {
     const goalContext = resolveGoalContext(options.messages, liveGoal)
     const supportsGoalUpdate = Boolean(options.tools?.some((t) => t.name === 'update_goal'))
     const supportsPlanExit = Boolean(options.tools?.some((t) => t.name === 'exit_plan_mode')) && isPlanMode(options.messages)
-    // `exit_plan_mode` exists only while DSH plan mode is active, so this is a
-    // current-turn signal: plan mode must be read-only at the agy layer too.
+    // `exit_plan_mode` exists only in active DSH plan mode: a current-turn signal.
     const agyPermissionMode = effectivePermissionMode(permissionMode, supportsPlanExit, isAux)
 
     // ---- native tool mirroring: continuation spans (v0.3) ----

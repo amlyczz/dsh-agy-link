@@ -58,6 +58,9 @@ export function parseModelNotRecognized(text: string): string | null {
  */
 export class EffortPolicy {
   private cache: Set<string> | null = null
+  private seedKey = ''
+  /** Models learned in THIS process: survive an external edit of the seed. */
+  private readonly learned = new Set<string>()
 
   constructor(
     private readonly seed: () => readonly string[] | undefined,
@@ -85,6 +88,7 @@ export class EffortPolicy {
     const set = this.models()
     if (this.isUnsupported(model)) return
     set.add(model)
+    this.learned.add(model)
     this.log?.(
       'agy refused --effort for model "' + model + '" — it is now run without an effort flag'
         + ' (effort support is advisory in the catalog; see issue #67)',
@@ -97,9 +101,15 @@ export class EffortPolicy {
   }
 
   private models(): Set<string> {
-    if (this.cache === null) {
-      const seeded = this.seed() ?? []
-      this.cache = new Set((Array.isArray(seeded) ? seeded : []).filter((m) => typeof m === 'string' && m.trim() !== ''))
+    const raw = this.seed() ?? []
+    const seeded = (Array.isArray(raw) ? raw : []).filter((m) => typeof m === 'string' && m.trim() !== '')
+    const key = seeded.join('\u0000')
+    // Re-seed when the host's persisted list changed (e.g. an operator cleared
+    // a false refusal) while keeping refusals learned in this process. Without
+    // this, editing effort-unsupported.json needed a DSH restart (issue #115).
+    if (this.cache === null || key !== this.seedKey) {
+      this.seedKey = key
+      this.cache = new Set([...seeded, ...this.learned])
     }
     return this.cache
   }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.29 (2026-11-15)
+
+### English
+
+- **Fix(models): a transient refusal can no longer blacklist a model's reasoning efforts (fixes #115).** When agy's model-config fetch fails (e.g. a `loadCodeAssist` TLS timeout), its print-mode validation emits a perfectly well-formed `--effort is not supported for model "X"` even though `agy models` lists that level. `streamWithEffortRetry()` learned ANY such refusal as a static capability: the model went into `effort-unsupported.json`, `resolveModel()` stopped advertising `reasoning`, and DSH then rejected later turns with `UNSUPPORTED_REASONING_EFFORT` while the live catalog still showed `xhigh`. A new `ModelCatalog.advertisedEfforts()` collects the efforts the **discovered** catalog (base + per-account) advertises; a refusal that contradicts it is still replayed without `--effort` (the #67 invariant) but is NOT persisted. Fallback entries are deliberately not evidence.
+- **Fix(models): `effort-unsupported.json` is now live-reloaded.** The host no longer caches the file for the process lifetime, and `EffortPolicy` rebuilds when the seed changes (keeping refusals learned in the current process), so an operator clearing a false entry no longer needs to restart DSH.
+- Tests: real discovered-catalog regression (refusal not learned, effort row preserved), external-edit visibility, and file re-read. Thanks to @AlaIchhe for the timeline, transcript evidence and the minimal reproduction.
+
+### 中文
+
+- **修复(模型)：瞬时拒绝不再把模型的思考档位永久拉黑（修复 #115）。** agy 在模型配置拉取失败（如 `loadCodeAssist` TLS 超时）时，print-mode 硬校验会输出**格式完全合法**的 `--effort is not supported for model "X"`，而 `agy models` 明明列着该档位。`streamWithEffortRetry()` 此前把任何这类拒绝当作静态能力学习：写入 `effort-unsupported.json`、`resolveModel()` 不再发布 `reasoning`，于是 DSH 后续轮次直接抛 `UNSUPPORTED_REASONING_EFFORT`，档位行永久消失，而实时目录仍显示 `xhigh`。新增 `ModelCatalog.advertisedEfforts()` 汇总**已发现**目录（base + 各账号）声明的档位；与目录矛盾的拒绝仍按 #67 重放一次（不带 `--effort`），但**不落盘、不收回能力声明**。fallback 阵容是静态镜像，不作为证据。
+- **修复(模型)：`effort-unsupported.json` 现在即时生效。** 宿主不再对文件做进程级缓存，`EffortPolicy` 在 seed 变化时重建（保留本进程学到的条目），运维清空误学条目后无需重启 DSH。
+- 测试：真实已发现目录回归（矛盾拒绝不学习、档位行保留）、外部修改即时可见、文件重读。感谢 @AlaIchhe 提供时间线、transcript 证据与最小复现。
+
 ## 0.6.28 (2026-11-15)
 
 ### English

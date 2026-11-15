@@ -148,26 +148,26 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   // refusal is learned once, persisted here, and the picker is told to re-read
   // the capabilities (the model's effort row then disappears).
   const effortUnsupportedPath = (): string => join(stateDir(), 'effort-unsupported.json')
-  let effortUnsupportedCache: string[] | null = null
+  // No in-process cache: an operator clearing/fixing this file must take effect
+  // without restarting DSH (issue #115). The file is tiny and read at most a
+  // few times per turn.
   const readEffortUnsupported = (): readonly string[] => {
-    if (effortUnsupportedCache !== null) return effortUnsupportedCache
     try {
       const raw = existsSync(effortUnsupportedPath()) ? JSON.parse(readFileSync(effortUnsupportedPath(), 'utf8')) : []
-      effortUnsupportedCache = Array.isArray(raw)
+      return Array.isArray(raw)
         ? raw.filter((m): m is string => typeof m === 'string' && m.trim() !== '')
         : []
     } catch {
-      effortUnsupportedCache = []
+      return []
     }
-    return effortUnsupportedCache
   }
   const rememberEffortUnsupported = (model: string): void => {
     const known = readEffortUnsupported()
     if (known.some((m) => m.trim().toLowerCase() === model.trim().toLowerCase())) return
-    effortUnsupportedCache = [...known, model]
+    const next = [...known, model]
     try {
       mkdirSync(stateDir(), { recursive: true })
-      writeFileSync(effortUnsupportedPath(), JSON.stringify(effortUnsupportedCache, null, 2), 'utf8')
+      writeFileSync(effortUnsupportedPath(), JSON.stringify(next, null, 2), 'utf8')
     } catch (e) {
       log('failed to persist the effort-unsupported list: ' + String(e))
     }

@@ -268,16 +268,16 @@ test('setOverride logs instead of throwing when the state dir cannot be created'
 // effort-unsupported persistence
 // ---------------------------------------------------------------------------
 
-test('readEffortUnsupported filters the persisted list and caches it', (t) => {
+test('readEffortUnsupported filters the list and observes external edits (issue #115)', (t) => {
   const root = sandbox(t)
   mkdirSync(join(root, 'agy-link'), { recursive: true })
   writeFileSync(join(root, 'agy-link', 'effort-unsupported.json'), JSON.stringify(['a', '', 2, ' b ', 'a', null]))
   const services = createHostServices(asCtx({}), {})
   // Only non-empty strings are kept; duplicates are preserved (unlike config lists).
   assert.deepEqual(services.readEffortUnsupported(), ['a', ' b ', 'a'])
-  // Cached: rewriting the file is not observed by the same instance.
+  // An operator clearing/fixing the file must not need a host restart.
   writeFileSync(join(root, 'agy-link', 'effort-unsupported.json'), JSON.stringify(['z']))
-  assert.deepEqual(services.readEffortUnsupported(), ['a', ' b ', 'a'])
+  assert.deepEqual(services.readEffortUnsupported(), ['z'])
 })
 
 test('readEffortUnsupported tolerates a missing or invalid file', (t) => {
