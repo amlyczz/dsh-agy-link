@@ -224,6 +224,13 @@ function isHarnessInjectedUserText(text: string): boolean {
  * "anywhere" swallowed exactly that: a message sent right after a goal
  * completed was finished as an empty turn without spawning agy
  * (2026-10-17, "把相关的经验整理到agents.md" × 2).
+ *
+ * The TEXTUAL marker is only trustworthy on a user-role message (the `tool-goal`
+ * notice). Reading it out of every message let the agent's own tool output
+ * poison the scan: a `grep` over the built `dist/index.js` — whose doc comments
+ * contain the literal marker — printed it into a tool result, and the very next
+ * request was short-circuited into an EMPTY turn that was still recorded as
+ * "completed" (2026-11-15, three silent replies in a row).
  */
 export function isGoalToolContinuation(messages: readonly Message[]): boolean {
   if (messages.length === 0) return false
@@ -241,7 +248,9 @@ export function isGoalToolContinuation(messages: readonly Message[]): boolean {
       return true
     }
     const text = extractText(m)
-    if (text.includes('<goal_complete>')) {
+    // Only a user-role message can be DSH's deferred notice; a tool result or an
+    // assistant transcript merely *quoting* the marker must not short-circuit.
+    if (m.role === 'user' && text.includes('<goal_complete>')) {
       return true
     }
     // A genuine user message with no marker ends the scan: the completion hop

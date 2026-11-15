@@ -212,6 +212,57 @@ test('a genuine user message after the goal result is NOT a continuation (must r
   assert.equal(isGoalToolContinuation(afterGoal), false)
 })
 
+test('a goal marker merely quoted by tool output is NOT a continuation', () => {
+  // 2026-11-15 incident: the agent grepped this package's own dist for
+  // "result", which printed the doc comment containing `<goal_complete>` into a
+  // tool result. The next request short-circuited into an empty finish, so the
+  // turn completed with zero content — three times in a row, including the turn
+  // where the user reported the missing output.
+  const grepHit: Message[] = [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          id: 'agytc-run-1-step-34',
+          name: 'agy_tool',
+          arguments: '{"run":"run-1","step":34}',
+        },
+      ],
+    } as unknown as Message,
+    {
+      role: 'tool',
+      toolCallId: 'agytc-run-1-step-34',
+      content: [
+        {
+          type: 'text',
+          text: '3199: * This covers both the direct tool-result message and DSH\'s deferred `<goal_complete>` notice.\n3453:function resultText',
+        },
+      ],
+    } as unknown as Message,
+  ]
+  assert.equal(isGoalToolContinuation(grepHit), false)
+
+  // Same for an assistant message that echoes the marker back while explaining it.
+  const echoInAssistant: Message[] = [
+    {
+      role: 'assistant',
+      content: 'The scan looks for <goal_complete> in the trailing window.',
+    } as unknown as Message,
+  ]
+  assert.equal(isGoalToolContinuation(echoInAssistant), false)
+
+  // The genuine user-role notice keeps short-circuiting (regression guard).
+  const realNotice: Message[] = [
+    {
+      role: 'user',
+      content: '<goal_complete>\nThe goal is marked complete.',
+      source: { kind: 'tool-goal', form: 'notice' },
+    } as unknown as Message,
+  ]
+  assert.equal(isGoalToolContinuation(realNotice), true)
+})
+
 test('deferred goal_complete notice followed by a real user message drives agy', () => {
   const noticeThenUser = [
     {
