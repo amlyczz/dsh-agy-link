@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.28 (2026-11-15)
+
+### English
+
+- **Fix(auth): a terminal TOS quarantine can no longer be cleared by the same warmup request (fixes #114).** v0.6.26 correctly marked a `TOS_VIOLATION` account `authRequired`, but `handlePoolWarmup` then ran an unconditional `refreshAccountQuota(acc, true)`; the quota pipeline (and boot hygiene / token refresh) calls `clearAuthRequired` on any successful refresh. A banned account still has a valid refresh token, so the flag was set and cleared within one HTTP request, and `needsAuthReverify` would have retried it every 10 minutes. `clearAuthRequired(id, force = false)` now refuses to lift a terminal ban; only **explicit user actions** (a completed OAuth login or a fresh credential import) pass `force: true`. `needsAuthReverify()` excludes terminal errors. Regression tests: pure classifier, real `AccountPoolManager` stickiness, and a route-level warmup → forced quota refresh → still `authRequired` test.
+
+### 中文
+
+- **修复(认证)：TOS 终态隔离不再被同一轮 warmup 清除（修复 #114）。** v0.6.26 已正确把 `TOS_VIOLATION` 账号标为 `authRequired`，但 `handlePoolWarmup` 随后无条件执行 `refreshAccountQuota(acc, true)`，而配额流水线（以及启动凭据恢复、token 刷新）在任何一次刷新成功后都会调用 `clearAuthRequired`。被停用账号的 refresh_token 仍然有效，于是「打标记 → 清标记」发生在同一次 HTTP 请求内，`needsAuthReverify` 还会每 10 分钟重试一次。现在 `clearAuthRequired(id, force = false)` 拒绝解除终态封禁；只有**显式用户操作**（完成 OAuth 登录、重新导入凭据）传入 `force: true`。`needsAuthReverify()` 也排除终态错误。回归测试覆盖：纯分类器、真实 `AccountPoolManager` 的粘性，以及路由级「预热 → 强制配额刷新 → authRequired 仍为真」。
+
 ## 0.6.27 (2026-11-15)
 
 ### English

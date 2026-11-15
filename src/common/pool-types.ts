@@ -264,9 +264,18 @@ export const AUTH_REVERIFY_DELAY_MS = 10 * 60_000
  * stored token still works the flag clears itself; if not, the flag is
  * simply re-stamped.
  */
+/** A terminal account ban (Google TOS_VIOLATION) is not a transient auth error. */
+export function isTerminalAuthError(message?: string): boolean {
+  return typeof message === 'string' && /TOS_VIOLATION/i.test(message)
+}
+
 export function needsAuthReverify(account: ManagedAccount, now = Date.now()): boolean {
   if (!account.enabled) return false
   if (!account.authRequired) return false
+  // A TOS-banned account still has a working refresh token, so the 10-minute
+  // "re-verify" would always succeed and clear the ban. Terminal states must
+  // wait for an explicit re-login / appeal, not a background poll (issue #114).
+  if (isTerminalAuthError(account.authError)) return false
   if (typeof account.authMarkedAt !== 'number') return true
   return now - account.authMarkedAt > AUTH_REVERIFY_DELAY_MS
 }

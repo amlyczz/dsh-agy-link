@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { shouldMarkAuthRequired, looksLikeNetworkError, looksLikeAuthVerificationJitter, isTransportFailure, isAuthoritativeAuthError } from '../src/common/types.ts'
-import { AUTH_REVERIFY_DELAY_MS, needsAuthReverify, type ManagedAccount } from '../src/common/pool-types.ts'
+import { AUTH_REVERIFY_DELAY_MS, needsAuthReverify, isTerminalAuthError, type ManagedAccount } from '../src/common/pool-types.ts'
 
 const NETWORK_BLIP = 'Post "https://oauth2.googleapis.com/token": dial tcp 172.217.113.4:443: i/o timeout'
 
@@ -34,6 +34,24 @@ test('shouldMarkAuthRequired: authoritative states still flag', () => {
   assert.equal(shouldMarkAuthRequired(undefined, 'refresh failed: unauthorized_client'), true)
   // Bare 400 without an OAuth error code: not authoritative.
   assert.equal(shouldMarkAuthRequired(undefined, 'token endpoint 400: unknown error'), false)
+})
+
+test('issue #114: a TOS terminal ban never re-enters background polling', () => {
+  const base = { id: 'a', alias: 'a', dir: '', enabled: true, cooldowns: {}, quotas: {} } as ManagedAccount
+  const tos = { ...base, authRequired: true, authError: 'HTTP 403: TOS_VIOLATION ... Appeal: https://forms.gle/x' }
+  assert.equal(isTerminalAuthError(tos.authError), true)
+  assert.equal(isTerminalAuthError('invalid_grant: token expired'), false)
+  assert.equal(isTerminalAuthError(undefined), false)
+  assert.equal(
+    needsAuthReverify({ ...tos, authMarkedAt: Date.now() - AUTH_REVERIFY_DELAY_MS - 1 }),
+    false,
+    'a terminal ban is not a transient auth failure; do not retry it every 10 minutes',
+  )
+  assert.equal(
+    needsAuthReverify({ ...base, authRequired: true, authError: 'invalid_grant', authMarkedAt: Date.now() - AUTH_REVERIFY_DELAY_MS - 1 }),
+    true,
+    'ordinary auth failures still self-heal',
+  )
 })
 
 test('needsAuthReverify: flagged accounts re-enter the poll once the flag is stale', () => {

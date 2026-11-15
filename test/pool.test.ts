@@ -329,6 +329,30 @@ test('resetAccountIdentity clears identity-bound state on external re-login', ()
   assert.equal(picked?.id, acc.id)
 })
 
+test('issue #114: a terminal TOS quarantine survives automatic clearAuthRequired', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-tos-quarantine-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.getAccounts()[0]!
+  const tos = 'HTTP 403: TOS_VIOLATION This service has been disabled. Appeal: https://forms.gle/x'
+  pool.markAuthRequired(acc.id, tos)
+  assert.equal(pool.getAccount(acc.id)?.authRequired, true)
+
+  // The quota pipeline (and boot hygiene) clear the flag after any successful
+  // OAuth refresh. A TOS-banned account still has a VALID refresh token, so
+  // that success must NOT resurrect it.
+  pool.clearAuthRequired(acc.id)
+  assert.equal(pool.getAccount(acc.id)?.authRequired, true, 'terminal ban must be sticky')
+  assert.equal(pool.getAccount(acc.id)?.authError, tos, 'appeal reason stays visible')
+
+  // Only an explicit user action (re-login / import) may lift it.
+  pool.clearAuthRequired(acc.id, true)
+  assert.equal(pool.getAccount(acc.id)?.authRequired, undefined)
+
+  pool.markAuthRequired(acc.id, 'invalid_grant: token expired')
+  pool.clearAuthRequired(acc.id)
+  assert.equal(pool.getAccount(acc.id)?.authRequired, undefined, 'ordinary auth failures still self-heal')
+})
+
 test('markAuthRequired quarantines broken accounts from selectAccount', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-auth-'))
   const pool = new AccountPoolManager(dir)

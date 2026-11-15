@@ -10,6 +10,7 @@ import { isAbsolute, join, relative } from 'node:path'
 import {
   AUTH_CONFIRM_STRIKES,
   accountHasArgon,
+  isTerminalAuthError,
   type AccountPoolData,
   type ManagedAccount,
   type ModelFamily,
@@ -319,9 +320,19 @@ export class PoolAdmin {
     this.deps.persist()
   }
 
-  clearAuthRequired(id: string): void {
+  /**
+   * Drop the "needs re-login" flag.
+   *
+   * Automatic paths (a successful quota/token refresh, boot-time credential
+   * recovery) must NOT lift a TERMINAL TOS ban: those accounts still have a
+   * valid refresh token, so every refresh would succeed and clear the ban
+   * (issue #114). `force` is reserved for explicit user actions — a completed
+   * re-login or a fresh credential import.
+   */
+  clearAuthRequired(id: string, force = false): void {
     const acc = this.account(id)
     if (!acc) return
+    if (!force && isTerminalAuthError(acc.authError)) return
     delete acc.authRequired
     delete acc.authError
     delete acc.authMarkedAt

@@ -264,8 +264,8 @@ export class AccountPoolManager {
     this.admin.resetAccountIdentity(id, newEmail)
   }
 
-  clearAuthRequired(id: string): void {
-    this.admin.clearAuthRequired(id)
+  clearAuthRequired(id: string, force = false): void {
+    this.admin.clearAuthRequired(id, force)
   }
 
   /** Drop an email label that is provably wrong (e.g. a foreign token overwrote it). */

@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { registerRoutes } from '../src/transport/http/router.ts'
 import { QUOTA_REFRESH_DEDUP_MS } from '../src/common/timeouts.ts'
+import { AccountPoolManager } from '../src/host/pool.ts'
 import type { HostServices } from '../src/host/services.ts'
 import type { Route } from '../src/transport/http/respond.ts'
 
@@ -1564,6 +1565,38 @@ test('REGRESSION: quota dedupe outlives the old 30s race while its work still ru
     assert.equal(started, 2, 'a genuinely wedged refresh can be retried after the hard cap')
   } finally {
     mock.timers.reset()
+  }
+})
+
+test('issue #114: TOS quarantine survives the forced quota refresh in the same warmup request', async () => {
+  // v0.6.26 marked the account authRequired on a terminal 403, but
+  // handlePoolWarmup then unconditionally ran refreshAccountQuota(acc, true),
+  // whose success cleared the flag again — all inside ONE HTTP request.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-tos-route-'))
+  try {
+    const realPool = new AccountPoolManager(dir)
+    const acc = realPool.getAccounts()[0]!
+    const tos = 'HTTP 403: TOS_VIOLATION service disabled. Appeal: https://forms.gle/x'
+    const s = setup({
+      pool: realPool,
+      warmup: {
+        warmupAccount: async () => {
+          realPool.markAuthRequired(acc.id, tos)
+          return [{ accountId: acc.id, alias: acc.alias, model: 'gemini-3.8-flash', success: false, status: 403, error: tos, durationMs: 1 }]
+        },
+      },
+      quota: {
+        // Emulate the real pipeline: a successful OAuth/usage refresh calls
+        // clearAuthRequired. It MUST NOT lift a terminal ban.
+        refreshAccountQuota: async () => { realPool.clearAuthRequired(acc.id) },
+      },
+    })
+    const res = await invoke(s.route('/plugins/agy-link/pool/warmup'), fakeReq('POST', '/', { id: acc.id, force: true }))
+    assert.equal(res.status(), 200)
+    assert.equal(realPool.getAccount(acc.id)?.authRequired, true, 'quarantine must still be set after the response')
+    assert.equal(realPool.getAccount(acc.id)?.authError, tos)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 

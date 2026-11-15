@@ -272,7 +272,9 @@ export class PoolAuthFlow {
         if (proxyUrl?.trim()) {
           this.pool.setAccountProxy(existing.id, proxyUrl.trim())
         }
-        this.pool.clearAuthRequired(existing.id)
+        // A completed import is an explicit user action: it may lift even a
+        // terminal TOS quarantine (the user may have won an appeal).
+        this.pool.clearAuthRequired(existing.id, true)
         this.pool.clearCooldown(existing.id, undefined, true)
         this.pool.updateAccountQuotas(existing.id, existing.quotas ?? {}, email)
         void this.quota.refreshAccountQuota(existing).catch(() => undefined)
@@ -364,7 +366,9 @@ export class PoolAuthFlow {
         renameSync(stagedFile, targetFile)
         saveCredentialBackup(targetFile)
         this.pool.updateAccountQuotas(account.id, {}, email)
-        this.pool.clearAuthRequired(account.id)
+        // A completed OAuth login is an explicit user action (unlike an
+        // automatic quota refresh), so it may lift a terminal quarantine.
+        this.pool.clearAuthRequired(account.id, true)
         this.pool.cleanupStagingSlot(flow.dir)
         void this.quota.refreshAccountQuota(account).catch(() => undefined)
         this.flow = null
