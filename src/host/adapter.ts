@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
-import { resolveCallContext } from '../provider/call-context.ts'
+import { resolveCallContext, effectivePermissionMode } from '../provider/call-context.ts'
 import { purposePolicy } from '../provider/purpose-policy.ts'
 import { driveSpan as driveSpanImpl } from '../provider/span.ts'
 import { EffortPolicy } from '../provider/effort-policy.ts'
@@ -246,6 +246,9 @@ export class AgyAdapter extends LlmAdapter {
     const goalContext = resolveGoalContext(options.messages, liveGoal)
     const supportsGoalUpdate = Boolean(options.tools?.some((t) => t.name === 'update_goal'))
     const supportsPlanExit = Boolean(options.tools?.some((t) => t.name === 'exit_plan_mode')) && isPlanMode(options.messages)
+    // `exit_plan_mode` exists only while DSH plan mode is active, so this is a
+    // current-turn signal: plan mode must be read-only at the agy layer too.
+    const agyPermissionMode = effectivePermissionMode(permissionMode, supportsPlanExit, isAux)
 
     // ---- native tool mirroring: continuation spans (v0.3) ----
     // When the previous span cut on a completed agy tool step, DSH dispatched
@@ -568,7 +571,7 @@ export class AgyAdapter extends LlmAdapter {
     const attemptInput: AttemptInput = {
       cfg,
       bin,
-      permissionMode,
+      permissionMode: agyPermissionMode,
       sessionKey,
       workspaceRoot,
       isAux,

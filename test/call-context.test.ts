@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveCallContext } from '../src/provider/call-context.ts'
+import { resolveCallContext, effectivePermissionMode } from '../src/provider/call-context.ts'
 import { defaultConfig, type PluginConfig } from '../src/common/types.ts'
 import type { AgyGenerateOptions } from '../src/common/protocol.ts'
 
@@ -17,6 +17,15 @@ function ctx(over: Partial<AgyGenerateOptions> = {}, cfg: Partial<PluginConfig> 
   })
   return { context, warnings }
 }
+
+test('issue #113: DSH plan mode forces read-only agy permissions', () => {
+  // A statically configured `skip` used to hand --dangerously-skip-permissions
+  // to agy while DSH was in plan mode, so "planning" could still write files.
+  assert.equal(effectivePermissionMode('skip', true, false), 'plan')
+  assert.equal(effectivePermissionMode('accept-edits', true, false), 'plan')
+  assert.equal(effectivePermissionMode('skip', false, false), 'skip', 'normal turns keep the configured mode')
+  assert.equal(effectivePermissionMode('skip', true, true), 'skip', 'aux calls are already read-only; leave their policy alone')
+})
 
 test('chat call: not aux, configured permission mode, tools as declared', () => {
   const { context } = ctx()

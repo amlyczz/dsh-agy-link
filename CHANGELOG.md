@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.27 (2026-11-15)
+
+### English
+
+- **Fix(security): DSH plan mode is now read-only at the agy layer (issue #113, part 2).** `permissionMode` was always taken from the static config (default `skip` → `--dangerously-skip-permissions`), so during a plan-mode turn agy could still write files and the `exit_plan_mode` approval card only constrained the prompt. A new `effectivePermissionMode()` forces `--mode plan` when the host is in plan mode, using the presence of the `exit_plan_mode` tool as a **current-turn** signal so exiting plan mode immediately restores the configured mode; auxiliary calls keep their existing read-only policy. Pure decision matrix + real-spawn argv regression tests.
+- **Not planned: interactive `ask_question` / `/grill-me` (issue #113, part 1).** This is not a filter bug: agy's `-p` / `--input-format stream-json` print mode is one-way and auto-answers `ask_question` with `User Skipped`. Making it interactive requires replacing the bridge's transport with ACP (`agy acp`, stdio JSON-RPC) — a different session lifecycle, streaming protocol and tool-mirroring path, i.e. a separate architectural project, not a patch. The question card rendering already exists; it appears after the turn because print mode cannot pause. Tracked in the issue reply, not shipped here.
+
+### 中文
+
+- **修复(安全)：DSH plan mode 在 agy 层也强制只读（issue #113 第 2 项）。** `permissionMode` 此前只取静态配置（缺省 `skip` → `--dangerously-skip-permissions`），所以规划轮次里 agy 仍能直接写文件，`exit_plan_mode` 审批卡只约束了提示词。新增 `effectivePermissionMode()`：当宿主处于 plan mode 时强制 `--mode plan`，并以「本轮提供了 `exit_plan_mode` 工具」作为当前轮次信号（避免历史里的 plan 提示词让会话永久只读），退出 plan mode 立即恢复配置值；辅助调用沿用既有只读策略。纯函数矩阵 + 真实 spawn argv 双重回归测试。
+- **暂不实现：交互式 `ask_question` / `/grill-me`（issue #113 第 1 项）。** 这不是过滤逻辑缺陷：agy 的 `-p` / `--input-format stream-json` 是单向 print 模式，会把 `ask_question` 自动回填 `User Skipped`。要真正交互必须把桥接层传输协议换成 ACP（`agy acp`，stdio JSON-RPC），涉及完全不同的会话生命周期、流式协议与工具镜像链路，属于独立架构项目而非补丁。问题卡片渲染已存在，只是因为 print 模式无法暂停而出现在轮次结束之后。已在 issue 回复中说明，本版本不发布该能力。
+
 ## 0.6.26 (2026-11-15)
 
 ### English

@@ -1511,6 +1511,26 @@ test('review calls forward the REVIEW_POLICY system prompt without the global op
   assert.ok(prompt.startsWith('System instructions:'), 'the policy leads the prompt')
 })
 
+test('issue #113: DSH plan mode overrides a statically configured skip permission', async () => {
+  const { adapter } = makeAdapter({ permissionMode: 'skip' })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-plan-mode.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  // One span is enough: the fake agy records argv at spawn time. Using
+  // collect() directly avoids runTurn's tool-result replay (the plan-mode
+  // bridge synthesizes an exit_plan_mode call that is not a mirror step).
+  await collect(adapter.stream(opts(
+    [msg('user', 'You are in plan mode. Plan the Redis cache change.')],
+    { sessionId: 'sess-plan' as never, tools: [{ name: 'exit_plan_mode' }] as never },
+  )))
+
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  assert.equal(argv.includes('--dangerously-skip-permissions'), false, 'plan mode must not keep skip permissions')
+  const idx = argv.indexOf('--mode')
+  assert.ok(idx !== -1 && argv[idx + 1] === 'plan', 'agy must run read-only in --mode plan')
+})
+
 test('session-title calls forward the system prompt and never force plan mode', async () => {
   const { adapter } = makeAdapter({ forwardSystemPrompt: false, permissionMode: 'skip' })
   process.env.FAKE_AGY_MODE = 'ok'

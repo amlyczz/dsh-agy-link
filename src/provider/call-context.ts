@@ -38,6 +38,25 @@ export interface CallContextInput {
   cwd?: string
 }
 
+/**
+ * Effective agy permission mode for one turn.
+ *
+ * DSH plan mode is a READ-ONLY contract. `cfg.permissionMode` is static and
+ * defaults to `skip` (`--dangerously-skip-permissions`); without this override
+ * agy can write files while the host believes it is only planning (issue #113).
+ * The caller supplies `dshPlanMode` from a CURRENT-turn signal (the host only
+ * exposes `exit_plan_mode` while plan mode is active), never from stale
+ * history, so exiting plan mode restores the configured mode immediately.
+ * Auxiliary calls already have their own read-only policy.
+ */
+export function effectivePermissionMode(
+  configured: PermissionMode,
+  dshPlanMode: boolean,
+  isAux: boolean,
+): PermissionMode {
+  return dshPlanMode && !isAux ? 'plan' : configured
+}
+
 export function resolveCallContext(input: CallContextInput): CallContext {
   const { options, cfg, bin } = input
   if (!bin) {
