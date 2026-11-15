@@ -14,6 +14,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  buildAgyCredentialDoc,
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserEmail,
@@ -256,14 +257,9 @@ export class PoolAuthFlow {
           saveCredentialBackup(stagedFile)
         } else if (process.platform === 'win32') {
           try {
-            const docStr = JSON.stringify({
-              token: {
-                access_token: tokens.access_token,
-                token_type: tokens.token_type ?? 'Bearer',
-                refresh_token: tokens.refresh_token,
-              },
-              auth_method: 'consumer',
-            })
+            // Same document the on-disk writer produces — crucially WITH an
+            // `expiry`, so a missing field cannot be read as "valid forever".
+            const docStr = buildAgyCredentialDoc(tokens)
             writeWindowsCredentialRaw(docStr, 'gemini:antigravity')
             writePrimaryCredential({ raw: docStr, email, savedAt: Date.now() })
           } catch {

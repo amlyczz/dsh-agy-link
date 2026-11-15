@@ -14,6 +14,53 @@ import type { ManagedAccount } from '../src/common/pool-types.ts'
 import type { AccountPoolManager } from '../src/host/pool.ts'
 import type { QuotaService } from '../src/host/quota.ts'
 import { defaultConfig, type PluginConfig } from '../src/common/types.ts'
+import { describeWarmupError } from '../src/features/warmup/policy.ts'
+
+const TOS_403_BODY = JSON.stringify({
+  error: {
+    code: 403,
+    message: 'This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.',
+    status: 'PERMISSION_DENIED',
+    details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'TOS_VIOLATION', domain: 'cloudcode-pa.googleapis.com', metadata: { uiMessage: 'true', appeal_url: 'https://forms.gle/hGzM9MEUv2azZsrb9' } }],
+  },
+})
+
+test('issue #112: TOS_VIOLATION is terminal and the appeal URL survives error reporting', () => {
+  const info = describeWarmupError(403, TOS_403_BODY)
+  assert.equal(info.terminal, true)
+  assert.equal(info.appealUrl, 'https://forms.gle/hGzM9MEUv2azZsrb9')
+  assert.ok(info.error.includes('TOS_VIOLATION'), 'full body is kept, not truncated at 160 chars')
+  assert.ok(info.error.includes('https://forms.gle/hGzM9MEUv2azZsrb9'))
+  assert.equal(describeWarmupError(403, 'rate limited').terminal, false)
+  assert.equal(describeWarmupError(401, 'invalid_grant').terminal, false)
+})
+
+test('issue #112: a terminal warmup 403 quarantines the account (stops the 5-minute loop)', async () => {
+  let marked = ''
+  const pool = {
+    getAccounts: () => [],
+    markAuthRequired: (id: string, msg: string) => { marked = `${id}|${msg}` },
+  }
+  const quota = { getValidAccessToken: async () => 'tok' }
+  const fakeFetch = async () => ({ status: 403, ok: false, text: async () => TOS_403_BODY })
+  const service = new WarmupService(
+    pool as unknown as AccountPoolManager,
+    quota as unknown as QuotaService,
+    () => '', () => null,
+    () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
+    () => undefined,
+    undefined,
+    fakeFetch as never,
+  )
+  service.fetchProjectId = async () => 'test-project-123'
+  const res = await service.warmupModelDirectly(
+    { id: 'acc_tos', alias: 'TOS', email: '', dir: '', enabled: true, createdAt: 0 } as ManagedAccount,
+    'gemini-3.8-flash',
+  )
+  assert.equal(res.ok, false)
+  assert.ok(marked.startsWith('acc_tos|'), 'account must be marked authRequired')
+  assert.ok(marked.includes('https://forms.gle/hGzM9MEUv2azZsrb9'), 'UI can show the appeal link')
+})
 
 test('autoWarmup is opt-in: the default config never probes on upgrade', () => {
   assert.equal(defaultConfig().autoWarmup, false)

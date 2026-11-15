@@ -177,14 +177,15 @@ export async function fetchUserEmail(accessToken: string, proxyUrl?: string): Pr
  *   {"token": {access_token, token_type, refresh_token, expiry}, "auth_method": "consumer"}
  * where expiry is a local-time ISO-8601 string with timezone offset.
  */
-export function writeAgyTokenFile(homeDir: string, tokens: TokenSet): string {
-  const dir = join(homeDir, '.gemini', 'antigravity-cli')
-  mkdirSync(dir, { recursive: true })
-  const file = join(dir, 'antigravity-oauth-token')
-  const expiryIso = tokens.expiryMs
-    ? formatLocalIso(tokens.expiryMs)
-    : formatLocalIso(Date.now() + 3600_000)
-  const doc = {
+/**
+ * Serialize a token set into agy's own credential document. This is the ONE
+ * writer for both the on-disk token file and the Windows credential slot: an
+ * import that hand-built the doc without `expiry` produced a token that was
+ * treated as valid forever and then 401'd forever (issue #112).
+ */
+export function buildAgyCredentialDoc(tokens: TokenSet, now = Date.now()): string {
+  const expiryIso = formatLocalIso(tokens.expiryMs ?? now + 3600_000)
+  return JSON.stringify({
     token: {
       access_token: tokens.access_token,
       token_type: tokens.token_type ?? 'Bearer',
@@ -192,8 +193,14 @@ export function writeAgyTokenFile(homeDir: string, tokens: TokenSet): string {
       expiry: expiryIso,
     },
     auth_method: 'consumer',
-  }
-  writeFileSync(file, JSON.stringify(doc), { encoding: 'utf8', mode: 0o600 })
+  })
+}
+
+export function writeAgyTokenFile(homeDir: string, tokens: TokenSet): string {
+  const dir = join(homeDir, '.gemini', 'antigravity-cli')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, 'antigravity-oauth-token')
+  writeFileSync(file, buildAgyCredentialDoc(tokens), { encoding: 'utf8', mode: 0o600 })
   try {
     chmodSync(file, 0o600)
   } catch {

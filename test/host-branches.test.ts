@@ -24,6 +24,7 @@ import type { Catalog } from '../src/host/models.ts'
 import {
   getStoredToken,
   getValidAccessToken,
+  isAccessTokenFresh,
   isCurrentAccountGrant,
   persistRefreshedToken,
   quotaTokenFilePath,
@@ -824,6 +825,14 @@ test('isCurrentAccountGrant: system account always current; isolated compares th
     restoreHome()
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+test('issue #112: an access token without expiry is NOT fresh forever', () => {
+  const now = Date.now()
+  assert.equal(isAccessTokenFresh({ accessToken: 'A', expiryMs: now + 3_600_000 }, now), true)
+  assert.equal(isAccessTokenFresh({ accessToken: 'A', expiryMs: now + 1_000 }, now), false, '60s buffer is respected')
+  assert.equal(isAccessTokenFresh({ accessToken: 'A' }, now), false, 'missing expiry must force refresh/validation')
+  assert.equal(isAccessTokenFresh({ expiryMs: now + 3_600_000 } as never, now), false, 'no access token is never fresh')
 })
 
 test('getValidAccessToken: dedupes concurrent calls and returns cached/fresh or null tokens', async () => {

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.26 (2026-11-15)
+
+### English
+
+- **Fix(goal): only trust `<goal_complete>` on a user-role message (merges PR #111).** `isGoalToolContinuation()` matched the marker as a plain substring on every message role, so any tool result that merely *printed* the literal string (e.g. grepping this package's own `dist/index.js` doc comments) short-circuited the next request into a zero-content `finish(stop)` that DSH records as a normal completion — three silent replies in a row in the reported incident. The textual marker is now gated on `m.role === 'user'`; the genuine `source.kind === 'tool-goal'` notice still short-circuits. Regression test built from the real grep output plus an assistant echo. Thanks to @AlaIchhe for the diagnosis and RED-first test.
+- **Fix(auth): imported Windows credentials no longer create a permanent 401 deadlock (fixes #112).** `/agy import` on a Windows primary account hand-built a token document without `expiry`; `getValidAccessTokenUncached()` read the missing expiry as "valid forever", so the stale access token was reused until Google rejected it, and every refresh path (`force:true` warmup/quota) reused the same judgment — a self-inflicted, unrecoverable loop. The import now uses `buildAgyCredentialDoc()` (the same single writer as the on-disk token file, always with an expiry or a bounded fallback), and a token with **no known expiry** is treated as needing refresh/validation rather than fresh.
+- **Fix(warmup): terminal TOS bans are quarantined instead of probed every 5 minutes (fixes #112).** 403 `TOS_VIOLATION` responses were truncated to 160 characters (losing `appeal_url`) and returned as an ordinary failure, so `authRequired`/cooldowns stayed empty. Errors now keep up to 2000 characters plus an explicit `Appeal:` link; a `TOS_VIOLATION` marks the account `authRequired` and logs the full reason, stopping the scheduled loop. Pure classifier + injected-network regression tests cover both.
+
+### 中文
+
+- **修复(goal)：`<goal_complete>` 仅信任 user 角色消息（合并 PR #111）。** `isGoalToolContinuation()` 此前把该标记当普通子串匹配所有角色；工具输出只要「打印」出这串字面量（例如 grep 本包 `dist/index.js` 的文档注释），下一轮请求就会被短路成零内容 `finish(stop)`，而 DSH 将其记为正常完成——报告里连续三轮空白回复。现文本标记限制在 `m.role === 'user'`，真正的 `source.kind === 'tool-goal'` 通知仍正常短路。回归测试用真实 grep 输出与 assistant 回声构造。感谢 @AlaIchhe 的定位与 RED-first 测试。
+- **修复(认证)：Windows 导入凭据不再造成永久 401 死锁（修复 #112）。** `/agy import` 在 Windows 主账号分支手工拼装了缺少 `expiry` 的 token 文档；`getValidAccessTokenUncached()` 把「缺失 expiry」当成永久有效，旧 access_token 一直复用到 Google 拒绝，而 `force:true` 的预热/额度刷新同样绕不过该判断——一次导入就自造不可逆死循环。现在导入复用 `buildAgyCredentialDoc()`（与磁盘 token 文件同一写入器，必带 expiry 或有界兜底），且**未知 expiry 一律视为需要刷新/校验**而非新鲜。
+- **修复(预热)：TOS 终态封禁改为隔离，不再每 5 分钟空转（修复 #112）。** 403 `TOS_VIOLATION` 此前被截到 160 字符（丢失 `appeal_url`）并按普通失败返回，`authRequired`/冷却一直为空。现在保留最多 2000 字符并显式附 `Appeal:` 链接；`TOS_VIOLATION` 会把账号标为 `authRequired` 并记录完整原因，停止定时探测。纯分类器 + 注入网络层的回归测试均已覆盖。
+
 ## 0.6.25 (2026-11-15)
 
 ### English

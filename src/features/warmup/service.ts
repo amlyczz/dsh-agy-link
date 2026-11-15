@@ -32,6 +32,7 @@ import {
   FOUR_HOURS_MS,
   LOAD_PROJECT_ENDPOINTS,
   extractWarmupProjectId,
+  describeWarmupError,
   planWarmupTargets,
   skippedWarmupResult,
   toCanonicalWarmupModel,
@@ -51,6 +52,8 @@ export class WarmupService {
     private readonly config: () => PluginConfig = () => ({} as PluginConfig),
     private readonly log: (msg: string) => void = () => undefined,
     historyStore?: WarmupHistoryStore,
+    /** Injectable network layer so terminal-error handling can be tested. */
+    private readonly fetchImpl: typeof agyFetch = agyFetch,
   ) {
     this.history = historyStore ?? new WarmupHistoryStore()
   }
@@ -163,7 +166,7 @@ export class WarmupService {
       for (const ep of endpoints) {
         try {
           const targetUrl = `${ep}/v1internal:${attempt.method}${attempt.query}`
-          const res = await agyFetch(targetUrl, {
+          const res = await this.fetchImpl(targetUrl, {
             method: 'POST',
             headers,
             body: reqBody,
@@ -197,10 +200,17 @@ export class WarmupService {
             }
           }
 
-          lastError = `HTTP ${res.status}: ${errBody.slice(0, 160)}`
-          // On auth denial 401/403, don't spam sibling endpoints
+          const described = describeWarmupError(res.status, errBody)
+          lastError = described.error
+          // On auth denial 401/403, don't spam sibling endpoints. A terminal
+          // ban is not a transient failure: quarantine the account so the
+          // 5-minute scheduler stops probing it (and surface the appeal URL).
           if (res.status === 401 || res.status === 403) {
-            return { ok: false, status: res.status, error: lastError, durationMs: Date.now() - start }
+            if (described.terminal) {
+              this.pool.markAuthRequired(account.id, described.error)
+              this.log(`[agy-link] warmup: ${account.alias || account.id} is terminal: ${described.error}`)
+            }
+            return { ok: false, status: res.status, error: described.error, durationMs: Date.now() - start }
           }
         } catch (err) {
           lastError = String(err)

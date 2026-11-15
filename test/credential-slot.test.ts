@@ -31,6 +31,24 @@ import {
   type SlotLease,
 } from '../src/host/credential-slot.ts'
 import { invalidateWindowsCredentialCache, readWindowsCredentialRaw } from '../src/host/wincred.ts'
+import { buildAgyCredentialDoc } from '../src/host/oauth.ts'
+import { normalizeStoredToken } from '../src/domain/quota/identity.ts'
+
+test('issue #112: an imported credential document always carries a parseable expiry', () => {
+  // `/agy import` on a Windows primary account wrote a token doc WITHOUT
+  // `expiry`; normalizeStoredToken then returned expiryMs === undefined and
+  // getValidAccessTokenUncached treated it as valid forever -> permanent 401.
+  const withExpiry = buildAgyCredentialDoc({
+    access_token: 'A', refresh_token: 'R', expiryMs: Date.now() + 3_600_000,
+  })
+  const parsed = normalizeStoredToken(JSON.parse(withExpiry))
+  assert.ok(parsed?.expiryMs && parsed.expiryMs > Date.now(), 'expiry must survive round-trip')
+
+  // Even when the OAuth response omits expires_in, the doc gets a bounded
+  // fallback — never an open-ended "永久有效" credential.
+  const fallback = normalizeStoredToken(JSON.parse(buildAgyCredentialDoc({ access_token: 'A', refresh_token: 'R' })))
+  assert.ok(fallback?.expiryMs && fallback.expiryMs > Date.now(), 'missing expiryMs gets a bounded fallback')
+})
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))

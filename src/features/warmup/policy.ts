@@ -246,3 +246,27 @@ export function planWarmupTargets(params: {
   }
   return { kind: 'targets', targets }
 }
+
+export interface WarmupErrorInfo {
+  error: string
+  /** Terminal account state (e.g. a TOS ban): quarantine, do not keep probing. */
+  terminal: boolean
+  appealUrl?: string
+}
+
+/**
+ * Keep the upstream error readable instead of slicing it to 160 characters.
+ * A `TOS_VIOLATION` 403 is a terminal ban: the 5-minute scheduler must stop
+ * hammering that account, and the appeal URL must reach the UI (issue #112).
+ */
+export function describeWarmupError(status: number, body: string): WarmupErrorInfo {
+  const detail = body.trim().slice(0, 2000)
+  const appealUrl = /"appeal_url"\s*:\s*"([^"]+)"/.exec(body)?.[1]
+  const terminal = /TOS_VIOLATION/i.test(body)
+  const suffix = appealUrl ? ` Appeal: ${appealUrl}` : ''
+  return {
+    error: `HTTP ${status}: ${detail}${suffix}`,
+    terminal,
+    ...(appealUrl ? { appealUrl } : {}),
+  }
+}

@@ -414,12 +414,25 @@ export async function getValidAccessToken(
   return attempt
 }
 
+/**
+ * A token is fresh only when it has a KNOWN future expiry (60s buffer).
+ * A missing expiry is not "valid forever": credentials written by older
+ * imports must go through refresh/validation instead of being reused until
+ * they 401 (issue #112).
+ */
+export function isAccessTokenFresh(
+  tok: { accessToken?: string; expiryMs?: number },
+  now = Date.now(),
+): boolean {
+  return !!tok.accessToken && typeof tok.expiryMs === 'number' && tok.expiryMs > now + 60_000
+}
+
 async function getValidAccessTokenUncached(deps: QuotaTokenDeps, account: ManagedAccount): Promise<string | null> {
   const tok = await deps.getStoredToken(account)
   if (!tok) return null
 
   // Still fresh (with 60s buffer)? Use it directly.
-  if (tok.accessToken && (!tok.expiryMs || tok.expiryMs > Date.now() + 60_000)) {
+  if (tok.accessToken && isAccessTokenFresh(tok)) {
     return tok.accessToken
   }
 
