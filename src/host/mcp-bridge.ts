@@ -22,6 +22,7 @@ import { basename, dirname, join } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readJsonBody } from './read-json-body.ts'
 import { homedir } from 'node:os'
+import { createImageLimiter, toMcpContent, type McpAttachments } from './mcp-content.ts'
 
 const MCP_SERVER_KEY = 'dsh-tools'
 
@@ -155,12 +156,37 @@ export function startMcpBridge(opts: {
   allowlist: () => string
   /** Map the spawning DSH session id to the agent the call runs on behalf of. */
   resolveAgent?: (sessionId: string) => unknown | Promise<unknown>
+  /** Explicit opt-in; native still obeys agent schemas and visibility. */
+  sessionToolPolicy?: () => 'allowlist' | 'native'
+  /** Optional host-owned visibility cap, recomputed on every list and call. */
+  visibility?: (agent: unknown, schemas: ReturnType<ToolsServiceLike['schemas']>) => { names: readonly string[] } | undefined | Promise<{ names: readonly string[] } | undefined>
+  attachments?: () => McpAttachments | undefined
   log?: (msg: string) => void
   /** Max buffered request-body bytes (tests use a small value). */
   maxBodyBytes?: number
 }): Promise<McpBridge> {
   const token = randomBytes(24).toString('hex')
   let callSeq = 0
+  const limitImages = createImageLimiter()
+  const resolveCaller = async (header: string): Promise<unknown> => {
+    if (!opts.resolveAgent) return undefined
+    let agent = header ? await opts.resolveAgent(header) : undefined
+    if (agent == null && header && !header.startsWith('session-')) agent = await opts.resolveAgent('session-' + header)
+    if (agent == null) throw Object.assign(new Error('missing or unknown calling session'), { status: 403 })
+    return agent
+  }
+  const visibleSchemas = async (svc: ToolsServiceLike, agent: unknown): Promise<ReturnType<ToolsServiceLike['schemas']>> => {
+    const schemas = svc.schemas(agent)
+    let cap: { names: readonly string[] } | undefined
+    try {
+      cap = await opts.visibility?.(agent, schemas)
+      if (cap !== undefined && (!cap || !Array.isArray(cap.names) || cap.names.some((name) => typeof name !== 'string' || name.length === 0))) throw new Error('invalid visibility snapshot')
+    } catch { throw Object.assign(new Error('tool visibility unavailable'), { status: 503 }) }
+    const allow = opts.allowlist().split(',').map((name) => name.trim()).filter(Boolean)
+    return schemas.filter((tool) => !INTERNAL_TOOL_NAMES.has(tool.name)
+      && (cap === undefined || cap.names.includes(tool.name))
+      && (opts.sessionToolPolicy?.() === 'native' || allow.length === 0 || allow.includes(tool.name)))
+  }
   const server: Server = createServer((req, res) => {
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
@@ -175,13 +201,9 @@ export function startMcpBridge(opts: {
           sendJson(res, 503, { error: 'tools service unavailable' })
           return
         }
-        const allow = opts.allowlist().split(',').map((s) => s.trim()).filter(Boolean)
-        const allowSet = new Set(allow)
         const used = new Set<string>()
-        const tools = svc.schemas()
-          .filter((t) => allow.length === 0 || allowSet.has(t.name))
-          // internal transports / loopback-only helpers are not bridgeable
-          .filter((t) => !INTERNAL_TOOL_NAMES.has(t.name))
+        const agent = await resolveCaller(String(req.headers['x-dsh-session'] ?? ''))
+        const tools = (await visibleSchemas(svc, agent))
           .map((t) => {
             // Map the DSH name to an MCP-safe name. Distinct DSH names can
             // normalize to the same MCP name (e.g. 'a.b' and 'a_b'); rather than
@@ -203,6 +225,7 @@ export function startMcpBridge(opts: {
         return;
       }
       if (req.method === 'POST' && (url === '/call' || url === '/mcp/call')) {
+        const callId = 'agy-mcp-' + (++callSeq)
         const body = await readJsonBody(req, { maxBytes: opts.maxBodyBytes ?? MCP_MAX_BODY_BYTES })
         if (body.tooLarge) {
           sendJson(res, 413, { error: 'request body too large' })
@@ -223,7 +246,6 @@ export function startMcpBridge(opts: {
           sendJson(res, 400, { error: 'bad tool name' })
           return;
         }
-        callSeq++
         // Audit trail: the bridge is the only path from an external agent
         // runtime into DSH tools, and it used to log nothing per call, so a
         // failed run could only be reconstructed from transcripts. Log the
@@ -243,7 +265,7 @@ export function startMcpBridge(opts: {
         // (possibly prompt-injected) child POST /call with an arbitrary dshName
         // and reach tools outside the allowlist. Empty allowlist = all allowed.
         const allow = opts.allowlist().split(',').map((s) => s.trim()).filter(Boolean)
-        if (allow.length > 0 && !allow.includes(dshName)) {
+        if (opts.sessionToolPolicy?.() !== 'native' && allow.length > 0 && !allow.includes(dshName)) {
           audit('denied: not in allowlist')
           sendJson(res, 403, { error: 'tool not allowed' })
           return
@@ -252,19 +274,11 @@ export function startMcpBridge(opts: {
           // Carry the caller: the session that spawned agy is the agent on
           // whose behalf this call runs (issue #55). Without it, tools that
           // enforce `exec.agent` reject the call.
-          const sessionHeader = String(req.headers['x-dsh-session'] ?? '')
-          const resolveSession = async (id: string): Promise<unknown> =>
-            id === '' ? undefined : await Promise.resolve(opts.resolveAgent?.(id))
-          // DSH session keys come in two forms: a top-level web session is
-          // `session-<uuid>`, a sub-agent/fork session is a bare `<uuid>`. The
-          // spawning key is injected automatically, so resolve the value as
-          // given first (a bare sub-agent key must not be rewritten); only when
-          // that finds no agent and the value is not prefixed yet, retry once
-          // with `session-` - otherwise such a call runs without a caller and
-          // fails with `agent_teams tools require a calling agent`.
-          let agent = await resolveSession(sessionHeader)
-          if (agent === undefined && sessionHeader !== '' && !sessionHeader.startsWith('session-')) {
-            agent = await resolveSession('session-' + sessionHeader)
+          const agent = await resolveCaller(String(req.headers['x-dsh-session'] ?? ''))
+          if (!(await visibleSchemas(svc, agent)).some((tool) => tool.name === dshName)) {
+            audit('denied: not visible to caller')
+            sendJson(res, 403, { error: 'tool not allowed' })
+            return
           }
           // Every DSH tool receives `exec.signal`; tools that await inside their
           // body read it, so a call without one throws
@@ -283,7 +297,6 @@ export function startMcpBridge(opts: {
           // token only for a PTC surface: native calls must not carry it (a
           // pre-execute hook treats any parent as a PTC dispatch and then looks
           // for a session-log start that a native call does not have).
-          const callId = 'agy-mcp-' + callSeq
           const isPtc = svc.schemas(agent).some((tool) => tool.name === 'run_code')
           const result = await svc.execute({
             calls: [{
@@ -302,17 +315,28 @@ export function startMcpBridge(opts: {
             arguments: parsed.arguments ?? {},
             ...(isPtc ? { parent: Symbol(callId) } : {}),
           })
-          audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
-          sendJson(res, 200, { ok: true, text: resultText(settledToolResult(result, callId)) })
+          const settled = settledToolResult(result, callId)
+          const native = settled as { isError?: boolean; error?: unknown; structuredContent?: unknown } | null
+          const failed = native?.isError === true || native?.error !== undefined
+          const content = await toMcpContent(settled, opts.attachments?.(), controller.signal, limitImages)
+          audit(failed ? 'failed: native result' : 'ok caller=' + (agent === undefined ? 'none' : 'agent'))
+          const text = Array.isArray((settled as { content?: unknown } | null)?.content)
+            ? content.filter((block) => block.type === 'text').map((block) => block.text).join(String.fromCharCode(10))
+            : resultText(settled)
+          sendJson(res, 200, { ok: !failed, text, content, isError: failed,
+            ...(native?.error === undefined ? {} : { error: native.error }),
+            ...(native?.structuredContent === undefined ? {} : { structuredContent: native.structuredContent }) })
         } catch (e) {
           audit('failed: ' + String(e).slice(0, 200))
-          sendJson(res, 200, { ok: false, error: String(e) })
+          const status = (e as { status?: number })?.status
+          sendJson(res, status === 403 || status === 503 ? status : 200, { ok: false, error: String(e) })
         }
         return;
       }
       sendJson(res, 404, { error: 'not found' })
-    })().catch(() => {
-      try { sendJson(res, 500, { error: 'internal' }) } catch { /* closed */ }
+    })().catch((error) => {
+      const status = (error as { status?: number })?.status
+      try { sendJson(res, status === 403 || status === 503 ? status : 500, { error: status === 403 ? 'missing or unknown calling session' : status === 503 ? 'tool visibility unavailable' : 'internal' }) } catch { /* closed */ }
     })
   })
   return new Promise((resolve, reject) => {

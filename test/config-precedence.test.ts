@@ -26,6 +26,14 @@ test('boolean env vars are case-insensitive and accept yes/on/off', () => {
   assert.equal(resolveConfig({}, { DSH_AGY_MCP_BRIDGE: 'garbage' }, {}).mcpBridge, false, 'unknown falls back to base default')
 })
 
+test('MCP session tool policy defaults to allowlist and accepts only the closed enum', () => {
+  assert.equal(defaultConfig().mcpSessionToolPolicy, 'allowlist')
+  assert.equal(resolveConfig({ mcpSessionToolPolicy: 'native' }, {}, {}).mcpSessionToolPolicy, 'native')
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_SESSION_TOOL_POLICY: 'native' }, {}).mcpSessionToolPolicy, 'native')
+  assert.equal(resolveConfig({ mcpSessionToolPolicy: 'invalid' }, {}, {}).mcpSessionToolPolicy, 'allowlist')
+  assert.equal(resolveConfig({}, { DSH_AGY_MCP_SESSION_TOOL_POLICY: 'invalid' }, {}).mcpSessionToolPolicy, 'allowlist')
+})
+
 test('maxTurnMinutes defaults to 0 (off) and reads the env override (issue #92)', () => {
   assert.equal(defaultConfig().maxTurnMinutes, 0)
   assert.equal(resolveConfig({ maxTurnMinutes: 30 }, {}, {}).maxTurnMinutes, 30)
@@ -114,6 +122,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
     DSH_AGY_MEDIA_TTL_MS: '999',
     DSH_AGY_MCP_BRIDGE: 'yes',
     DSH_AGY_MCP_TOOL_ALLOWLIST: 'x,y',
+    DSH_AGY_MCP_SESSION_TOOL_POLICY: 'native',
     DSH_AGY_MCP_CONFIG_PATH: '/tmp/mcp.json',
     DSH_AGY_MCP_CONFIG_SCOPE: 'workspace',
     DSH_AGY_RATE_LIMIT_PER_MINUTE: '12',
@@ -150,6 +159,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
   assert.deepEqual(cfg.hiddenModels, ['a', 'b'])
   assert.equal(cfg.mcpBridge, true)
   assert.equal(cfg.mcpConfigScope, 'workspace')
+  assert.equal(cfg.mcpSessionToolPolicy, 'native')
   assert.equal(cfg.rateLimitPerMinute, 12)
   assert.equal(cfg.autoFallbackModel, true)
   assert.equal(cfg.logRetentionDays, 3)
@@ -181,6 +191,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
     DSH_AGY_MAX_TOKENS: '0',
     DSH_AGY_MCP_BRIDGE: 'nope',
     DSH_AGY_MCP_CONFIG_SCOPE: 'nope',
+    DSH_AGY_MCP_SESSION_TOOL_POLICY: 'nope',
     DSH_AGY_RATE_LIMIT_PER_MINUTE: '-1',
     DSH_AGY_AUTO_FALLBACK_MODEL: 'nope',
     DSH_AGY_LOG_RETENTION_DAYS: '0',
@@ -201,6 +212,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
   assert.equal(junk.contextWindowDefault, base.contextWindowDefault)
   assert.equal(junk.mcpBridge, base.mcpBridge)
   assert.equal(junk.mcpConfigScope, base.mcpConfigScope)
+  assert.equal(junk.mcpSessionToolPolicy, 'allowlist')
   assert.equal(junk.quotaPollIntervalMs, base.quotaPollIntervalMs)
   assert.equal(junk.showHeaderBadge, true)
   assert.equal(junk.showTranslateAction, true)

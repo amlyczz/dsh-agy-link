@@ -112,7 +112,7 @@ test('a bridged call carries the agent of the spawning session', async () => {
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token, ...headers },
         body: JSON.stringify({ dshName: 'agent_teams_status', arguments: {} }),
       })
-      return (await res.json()) as { ok: boolean; text?: string; error?: string }
+      return { status: res.status, ...await res.json() } as { status: number; ok: boolean; text?: string; error?: string }
     }
 
     // agy hands its env to the MCP server, so a run started by session-42
@@ -122,11 +122,13 @@ test('a bridged call carries the agent of the spawning session', async () => {
     assert.equal(ok.text, 'ok:agent-42')
     assert.deepEqual(received.at(-1)?.agent, { id: 'agent-42', session: 'session-42' })
 
-    // Unknown session: no agent, and the tool's own guard rejects the call.
+    // A resolver-equipped bridge rejects a missing caller before dispatch.
+    const beforeAnonymous = received.length
     const anonymous = await call({})
+    assert.equal(anonymous.status, 403)
     assert.equal(anonymous.ok, false)
-    assert.match(String(anonymous.error), /require a calling agent/)
-    assert.equal(received.at(-1)?.agent, undefined)
+    assert.match(String(anonymous.error), /missing or unknown calling session/)
+    assert.equal(received.length, beforeAnonymous, 'anonymous calls never execute the tool')
   } finally {
     await bridge.close()
   }
@@ -221,7 +223,7 @@ test('a PTC-scoped bridged call still carries the 0.2.1 nested-dispatch parent t
     bridgeScript: BRIDGE_SCRIPT,
     tools: () => tools,
     allowlist: () => 'echo',
-    resolveAgent: (sessionId) => (sessionId === 'session-ptc' ? { id: 'ptc' } : undefined),
+    resolveAgent: (sessionId) => sessionId === 'session-ptc' ? { id: 'ptc' } : sessionId === 'session-native' ? { id: 'native' } : undefined,
   })
   try {
     const call = async (session?: string) => {
@@ -233,7 +235,7 @@ test('a PTC-scoped bridged call still carries the 0.2.1 nested-dispatch parent t
     const ptc = await call('session-ptc')
     assert.equal(ptc.ok, true, String(ptc.error))
     assert.equal(typeof parents.at(-1), 'symbol', 'PTC dispatches keep the 0.2.1 nested parent token')
-    const native = await call()
+    const native = await call('session-native')
     assert.equal(native.ok, true, String(native.error))
     assert.equal(parents.at(-1), undefined, 'native calls must not carry a parent token')
   } finally {
@@ -276,7 +278,7 @@ test('both DSH session key forms resolve without rewriting a bare id', async () 
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token, ...headers },
         body: JSON.stringify({ dshName: 'agent_teams_status', arguments: {} }),
       })
-      return (await res.json()) as { ok: boolean; text?: string; error?: string }
+      return { status: res.status, ...await res.json() } as { status: number; ok: boolean; text?: string; error?: string }
     }
 
     // 1. A bare uuid a sub-agent/fork session is registered under: the value
@@ -307,14 +309,16 @@ test('both DSH session key forms resolve without rewriting a bare id', async () 
     assert.equal(canonical.ok, true)
     assert.deepEqual(lookups, ['session-313ce201'])
 
-    // 4. An unknown id is retried exactly once and then still surfaces the
-    //    tool's own guard.
+    // 4. An unknown id is retried exactly once, then rejected before dispatch.
     registered = new Set()
     lookups.length = 0
+    const beforeUnknown = seen.length
     const unknown = await call({ 'X-DSH-Session': 'deadbeef' })
+    assert.equal(unknown.status, 403)
     assert.equal(unknown.ok, false)
-    assert.match(String(unknown.error), /require a calling agent/)
+    assert.match(String(unknown.error), /missing or unknown calling session/)
     assert.deepEqual(lookups, ['deadbeef', 'session-deadbeef'])
+    assert.equal(seen.length, beforeUnknown, 'unknown sessions never execute the tool')
   } finally {
     await bridge.close()
   }

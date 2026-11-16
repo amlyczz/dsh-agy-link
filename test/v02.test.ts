@@ -221,9 +221,10 @@ test('mcp bridge script speaks JSON-RPC over stdio end to end', async () => {
     bridgeScript: resolve(here, '../dist/bridge.mjs'),
     tools: () => fakeTools,
     allowlist: () => '',
+    resolveAgent: (sessionId) => sessionId === 'session-fixture' ? { id: 'fixture-agent' } : undefined,
   })
   const child = spawn(process.execPath, [bridge.bridgeScript], {
-    env: { ...process.env, DSH_MCP_URL: bridge.url, DSH_MCP_TOKEN: bridge.token },
+    env: { ...process.env, DSH_MCP_URL: bridge.url, DSH_MCP_TOKEN: bridge.token, DSH_MCP_SESSION: 'session-fixture' },
     stdio: ['pipe', 'pipe', 'inherit'],
   })
   const lines: string[] = []

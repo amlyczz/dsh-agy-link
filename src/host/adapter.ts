@@ -272,7 +272,7 @@ export class AgyAdapter extends LlmAdapter {
       // forever on rotating accounts.
       const deadFailure = rec !== undefined && rec.isSettled ? rec.failureInfo : null
       if (rec !== undefined && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
-        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
+        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport && !isCodeMode, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
         return
       }
       if (rec !== undefined) {
@@ -463,7 +463,7 @@ export class AgyAdapter extends LlmAdapter {
             'duplicate-debounce rescue: identical prompt for a live agy run ' + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
           )
           this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
-          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
+          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport && !isCodeMode, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
           return
         }
         throw new LlmError(
@@ -594,6 +594,6 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice)
+    yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport && !isCodeMode, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice)
   }
 }

@@ -17,6 +17,7 @@ import { stateDir } from '../common/config.ts'
 import type { CompactionNotice } from '../common/compaction.ts'
 import type { CallContext } from './call-context.ts'
 import type { PurposePolicy } from './purpose-policy.ts'
+import { adaptCliSystemPrompt } from './cli-tool-instructions.ts'
 import {
   buildDigest,
   collectUnsentImageRefs,
@@ -174,7 +175,7 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
       return sm ? textOf(sm).trim() : ''
     })()
     if (sysInstruction) {
-      prompt = 'System instructions:\n' + sysInstruction + '\n\n' + prompt
+      prompt = 'System instructions:\n' + adaptCliSystemPrompt(sysInstruction) + '\n\n' + prompt
     }
   }
 

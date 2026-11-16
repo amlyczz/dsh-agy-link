@@ -7,6 +7,7 @@ export const PLUGIN_ID = 'agy-link'
 export const PKG_NAME = 'dsh-agy-link'
 
 export type PermissionMode = 'skip' | 'plan' | 'accept-edits'
+export type McpSessionToolPolicy = 'allowlist' | 'native'
 
 
 export interface PluginConfig {
@@ -111,6 +112,8 @@ export interface PluginConfig {
   mcpConfigPath: string
   /** Comma-separated tool-name allowlist for the MCP bridge (empty = all non-internal). */
   mcpToolAllowlist: string
+  /** Allowlist compatibility mode, or the caller session's live native tool visibility. */
+  mcpSessionToolPolicy: McpSessionToolPolicy
   /** Maximum requests allowed per minute across all sessions (0 = disabled). */
   rateLimitPerMinute: number
   /** Automatically fallback to available lower-tier model if active model is exhausted. */
@@ -288,6 +291,7 @@ export function defaultConfig(): PluginConfig {
     mcpConfigScope: 'global',
     mcpConfigPath: '',
     mcpToolAllowlist: '',
+    mcpSessionToolPolicy: 'allowlist',
     rateLimitPerMinute: 0,
     autoFallbackModel: false,
     logRetentionDays: 7,

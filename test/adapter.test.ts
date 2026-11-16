@@ -15,6 +15,7 @@ import { DEFAULT_FALLBACK_MODELS } from '../src/common/types.ts'
 import { AccountPoolManager } from '../src/host/pool.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { RunRegistry } from '../src/host/recording.ts'
+import { driveSpan } from '../src/provider/span.ts'
 import { classifyToolError } from '../src/host/recording.ts'
 import { defineAgyMirrorTool, parseMirrorInvocation } from '../src/host/mirror-tool.ts'
 import { stripNulBytes } from '../src/host/runner.ts'
@@ -1962,26 +1963,125 @@ test('model switch invalidates stale agy conversation binding', async () => {
   assert.ok(!argv.includes('--conversation') || argv[argv.indexOf('--conversation') + 1] !== conv1)
 })
 
-test('adapts tool dispatch to Native Mode (agy_tool) vs Code Mode (run_code)', async () => {
+test('Code Mode streams the full result without mirrors while Native Mode keeps agy_tool cards', async () => {
   const { adapter } = makeAdapter()
   process.env.FAKE_AGY_MODE = 'ok'
   process.env.FAKE_AGY_ARGS_FILE = join(workDir, 'args-modes.json')
 
-  // In Code Mode: tools contains run_code
-  const codeRes = await runTurn(adapter, [msg('user', 'code mode test')], {
+  // Strict Code Mode cannot dispatch the internal agy_tool through run_code.
+  // Collect one stream directly: no helper may synthesize a mirror result.
+  const codeChunks = await collect(adapter.stream(opts([msg('user', 'code mode test')], {
     sessionId: 'sess-code' as never,
     tools: [{ name: 'run_code', description: 'execute JS', parameters: {} }] as never,
-  })
-  const codeBlocks = codeRes.chunks.filter((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call')
-  assert.equal((codeBlocks[0] as unknown as { block: { name: string } }).block.name, 'run_code')
+  })))
+  const codeBlocks = codeChunks.filter((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call')
+  assert.equal(codeBlocks.length, 0, 'Code Mode must not emit a native mirror or run_code wrapper')
+  assert.deepEqual(codeChunks.filter((c) => c.type === 'finish').map((c) => (c as { reason: { kind: string } }).reason.kind), ['stop'])
+  const codeText = codeChunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
+  assert.equal(codeText, 'Hello from fake agy')
 
-  // In Native Mode: tools contains agy_tool or standard tools
+  // Ordinary Native Mode still replays the recorded result as a tool card.
   const nativeRes = await runTurn(adapter, [msg('user', 'native mode test')], {
     sessionId: 'sess-native' as never,
     tools: [{ name: 'agy_tool', description: 'mirror tool', parameters: {} }] as never,
   })
   const nativeBlocks = nativeRes.chunks.filter((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call')
+  assert.equal(nativeBlocks.length, 1)
   assert.equal((nativeBlocks[0] as unknown as { block: { name: string } }).block.name, 'agy_tool')
+  assert.deepEqual(nativeRes.chunks.filter((c) => c.type === 'finish').map((c) => (c as { reason: { kind: string } }).reason.kind), ['tool-calls', 'stop'])
+  const nativeText = nativeRes.chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
+  assert.equal(nativeText, 'Hello from fake agy')
+})
+
+test('Code Mode continuation does not reopen mirrors and resumes the existing run', async () => {
+  const reports: Array<{ processOk: boolean }> = []
+  const { adapter, runs } = makeAdapter({}, { onRun: (info) => reports.push(info) })
+  process.env.FAKE_AGY_MODE = 'real'
+  const base = [msg('user', 'count the files')]
+  const sessionId = 'sess-code-continuation' as never
+
+  // An earlier native span supplied a real cursor. A later PTC surface must
+  // consume the remaining recording without mirroring its second tool step.
+  const first = await collect(adapter.stream(opts(base, {
+    sessionId,
+    tools: [{ name: 'agy_tool', description: 'mirror tool', parameters: {} }] as never,
+  })))
+  const firstFinish = first[first.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(firstFinish.type, 'finish')
+  assert.equal(firstFinish.reason.kind, 'tool-calls')
+  const call = first.find((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call') as unknown as { block: { id: string; name: string; arguments: string } }
+  assert.ok(call)
+  assert.equal(call.block.name, 'agy_tool')
+  const args = JSON.parse(call.block.arguments) as { run: string; step: number }
+  assert.equal(runs.get(args.run)?.toolEventAt(args.step)?.name, 'run_command')
+  const output = await defineAgyMirrorTool({ runs }).execute(args as never, { signal: new AbortController().signal } as never)
+  const messages = [
+    ...base,
+    { role: 'assistant', content: [call.block] } as unknown as Message,
+    { role: 'tool', toolCallId: call.block.id, content: [{ type: 'text', text: String(output) }], source: { kind: 'tool', callId: call.block.id } } as unknown as Message,
+  ]
+  assert.deepEqual(detectContinuation(messages), { runId: args.run, eventIndex: args.step })
+
+  const continued = await collect(adapter.stream(opts(messages, {
+    sessionId,
+    tools: [{ name: 'run_code', description: 'execute JS', parameters: {} }] as never,
+  })))
+  assert.equal(continued.some((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call'), false, 'continuation must not reopen mirrors for the remaining tool step')
+  assert.deepEqual(continued.filter((c) => c.type === 'finish').map((c) => (c as { reason: { kind: string } }).reason.kind), ['stop'])
+  const text = continued.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
+  assert.ok(text.includes('There are 2 files, 6 words total.'), text)
+  const report = await waitFor(() => reports[0])
+  assert.equal(report.processOk, true)
+  assert.equal(reports.length, 1, 'changing to Code Mode must resume the same process')
+})
+
+test('Code Mode duplicate-debounce rescue does not reopen mirrors after a cut', async () => {
+  const logs: string[] = []
+  let acquires = 0
+  const { adapter, runs } = makeAdapter({}, {
+    log: (line) => logs.push(line),
+    acquire: async () => { acquires++; return () => {} },
+  })
+  const rec = runs.create()
+  rec.append({ kind: 'step', stepKey: 'first', stepKind: 'tool', text: '', state: 'DONE', tool: { name: 'read_file', output: 'first output' }, raw: {} })
+  // Produce the cursor through the real span driver rather than assigning it.
+  const first = await collect(driveSpan({ runs }, rec, 0, true, false))
+  assert.deepEqual(first.filter((c) => c.type === 'finish').map((c) => (c as { reason: { kind: string } }).reason.kind), ['tool-calls'])
+  assert.equal(rec.lastCutIndex, 0)
+  assert.equal(rec.isSettled, false)
+  rec.append({ kind: 'step', stepKey: 'second', stepKind: 'tool', text: '', state: 'DONE', tool: { name: 'read_file', output: 'second output' }, raw: {} })
+  rec.append({ kind: 'step', stepKey: 'answer', stepKind: 'text', text: 'Recovered complete answer.', state: 'DONE', raw: {} })
+  rec.append({ kind: 'result', conversationId: 'rescue-conversation', ok: true, response: 'Recovered complete answer.', usage: {}, raw: {} })
+
+  // Seed the live ownership snapshot deterministically: a caller re-sent the
+  // same prompt without a parseable mirror result while this recording lives.
+  const sessionId = 'sess-code-rescue'
+  const prompt = 'repeat this task'
+  const ownership = adapter as unknown as {
+    activeRuns: Map<string, typeof rec>
+    activeSessionPrompts: Map<string, { prompt: string; startedAt: number; inFlight: boolean }>
+  }
+  ownership.activeRuns.set(sessionId, rec)
+  ownership.activeSessionPrompts.set(sessionId, { prompt, startedAt: Date.now(), inFlight: true })
+  const messages = [msg('user', prompt)]
+  assert.equal(detectContinuation(messages), null, 'must exercise rescue rather than ordinary continuation')
+  try {
+    const chunks = await collect(adapter.stream(opts(messages, {
+      sessionId: sessionId as never,
+      tools: [{ name: 'run_code', description: 'execute JS', parameters: {} }] as never,
+    })))
+    assert.equal(logs.filter((line) => line.includes('duplicate-debounce rescue:')).length, 1, 'same prompt and live cut must enter the rescue branch')
+    assert.equal(chunks.some((c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call'), false, 'rescue must not emit agy_tool or a run_code wrapper')
+    assert.deepEqual(chunks.filter((c) => c.type === 'finish').map((c) => (c as { reason: { kind: string } }).reason.kind), ['stop'])
+    const text = chunks.filter((c) => c.type === 'text-delta').map((c) => (c as unknown as { text: string }).text).join('')
+    assert.equal(text, 'Recovered complete answer.')
+    assert.equal(rec.lastCutIndex, 3, 'rescue must consume through the final result rather than cutting at the remaining tool')
+    assert.equal(acquires, 0, 'rescue must reuse the recording without spawning a process')
+  } finally {
+    rec.settle(null)
+    ownership.activeRuns.delete(sessionId)
+    ownership.activeSessionPrompts.delete(sessionId)
+  }
 })
 
 test('multimodal: stages attached images and forwards path with view_file instructions', async () => {

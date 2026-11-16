@@ -21,6 +21,7 @@ import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess } from './host/runner.ts'
 import { sweepDir } from './host/media.ts'
 import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type ToolsServiceLike } from './host/mcp-bridge.ts'
+import type { McpAttachments } from './host/mcp-content.ts'
 import { runBootHygiene } from './host/boot-hygiene.ts'
 import { createHostServices } from './host/services.ts'
 import { registerRoutes, type WebServerLike } from './transport/http/router.ts'
@@ -355,6 +356,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             bridgeScript: script,
             tools: () => (ctx.get('tools') as ToolsServiceLike | undefined),
             allowlist: () => getConfig().mcpToolAllowlist,
+            sessionToolPolicy: () => getConfig().mcpSessionToolPolicy,
+            attachments: () => (ctx.get('attachments') as McpAttachments | undefined)
+              ?? (ctx as unknown as { attachments?: McpAttachments }).attachments,
             // Bridged calls run on behalf of the session that spawned agy
             // (issue #55): resolve its agent so tools that require a caller work.
             resolveAgent: (sessionId) => agents()?.get(sessionId),

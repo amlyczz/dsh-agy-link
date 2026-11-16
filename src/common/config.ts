@@ -44,6 +44,10 @@ function asMcpConfigScope(v: unknown): PluginConfig['mcpConfigScope'] | undefine
   return v === 'global' || v === 'workspace' || v === 'both' ? v : undefined
 }
 
+function asMcpSessionToolPolicy(v: unknown): PluginConfig['mcpSessionToolPolicy'] | undefined {
+  return v === 'allowlist' || v === 'native' ? v : undefined
+}
+
 function asBool(v: unknown): boolean | undefined {
   if (typeof v === 'boolean') return v
   if (typeof v === 'string') {
@@ -140,6 +144,7 @@ export function resolveConfig(
     mcpConfigScope: asMcpConfigScope(get('mcpConfigScope')) ?? base.mcpConfigScope,
     mcpConfigPath: asString(get('mcpConfigPath')) ?? base.mcpConfigPath,
     mcpToolAllowlist: asString(get('mcpToolAllowlist')) ?? base.mcpToolAllowlist,
+    mcpSessionToolPolicy: asMcpSessionToolPolicy(get('mcpSessionToolPolicy')) ?? base.mcpSessionToolPolicy,
     rateLimitPerMinute: asNum(get('rateLimitPerMinute')) ?? base.rateLimitPerMinute,
     autoFallbackModel: asBool(get('autoFallbackModel')) ?? base.autoFallbackModel,
     logRetentionDays: asNum(get('logRetentionDays')) ?? base.logRetentionDays,
@@ -225,6 +230,10 @@ export function resolveConfig(
     if (b !== undefined) cfg.mcpBridge = b
   }
   if (env.DSH_AGY_MCP_TOOL_ALLOWLIST) cfg.mcpToolAllowlist = env.DSH_AGY_MCP_TOOL_ALLOWLIST
+  if (env.DSH_AGY_MCP_SESSION_TOOL_POLICY !== undefined) {
+    const policy = asMcpSessionToolPolicy(env.DSH_AGY_MCP_SESSION_TOOL_POLICY)
+    if (policy !== undefined) cfg.mcpSessionToolPolicy = policy
+  }
   if (env.DSH_AGY_MCP_CONFIG_PATH) cfg.mcpConfigPath = env.DSH_AGY_MCP_CONFIG_PATH
   if (env.DSH_AGY_MCP_CONFIG_SCOPE !== undefined) {
     const scope = asMcpConfigScope(env.DSH_AGY_MCP_CONFIG_SCOPE)

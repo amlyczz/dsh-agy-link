@@ -13,6 +13,7 @@ const URL_BASE = process.env.DSH_MCP_URL || ''
 const TOKEN = process.env.DSH_MCP_TOKEN || ''
 const SESSION = process.env.DSH_MCP_SESSION || ''
 const PROTOCOL = '2024-11-05'
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 function post(path, body) {
   return new Promise((resolve, reject) => {
@@ -37,7 +38,20 @@ function post(path, body) {
     });
     req.on('response', (res) => {
       const chunks = []
-      res.on('data', (c) => chunks.push(c))
+      let size = 0
+      res.on('error', reject)
+      res.on('aborted', () => reject(new Error('bridge response aborted')))
+      res.on('data', (c) => {
+        size += c.length
+        if (size > MAX_RESPONSE_BYTES) {
+          const error = new Error('bridge response exceeds 16 MiB')
+          reject(error)
+          res.destroy(error)
+          req.destroy(error)
+          return
+        }
+        chunks.push(c)
+      })
       res.on('end', () => {
         try {
           resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) })
@@ -53,18 +67,29 @@ function post(path, body) {
 }
 
 let toolCache = null;
+let generation = 0
 
-async function listTools() {
+function invalidateTools() {
+  generation += 1
+  toolCache = null
+}
+
+async function listTools(force = false) {
+  if (force) invalidateTools()
   if (toolCache) return toolCache;
+  const started = generation
   const res = await post('/tools', {})
   if (res.status !== 200) throw new Error('bridge /tools failed: ' + JSON.stringify(res.body))
-  toolCache = (res.body.tools || []).map((t) => ({
+  const tools = (res.body.tools || []).map((t) => ({
     name: t.name,
     description: t.description || t.dshName,
     inputSchema: t.inputSchema || { type: 'object' },
     _dshName: t.dshName,
   }))
-  return toolCache;
+  // A response from before an unlock must never repopulate the new cache.
+  if (started !== generation) return listTools()
+  toolCache = tools
+  return tools;
 }
 
 function send(msg) {
@@ -73,7 +98,7 @@ function send(msg) {
 
 async function handle(id, method, params) {
   if (method === 'initialize') {
-    send({ jsonrpc: '2.0', id, result: { protocolVersion: PROTOCOL, capabilities: { tools: {} }, serverInfo: { name: 'dsh-agy-link-bridge', version: '0.2.0' } } })
+    send({ jsonrpc: '2.0', id, result: { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'dsh-agy-link-bridge', version: '0.2.0' } } })
     return;
   }
   if (method.startsWith('notifications/')) return;
@@ -85,19 +110,32 @@ async function handle(id, method, params) {
   if (method === 'tools/call') {
     const name = params && params.name
     const args = (params && params.arguments) || {}
-    const tools = await listTools()
-    const hit = tools.find((t) => t.name === name)
+    let tools = await listTools()
+    let hit = tools.find((t) => t.name === name)
+    if (!hit) {
+      tools = await listTools(true)
+      hit = tools.find((t) => t.name === name)
+    }
     if (!hit) {
       send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool: ' + name } })
       return;
     }
     try {
       const res = await post('/call', { dshName: hit._dshName, arguments: args })
-      if (res.status !== 200 || res.body.ok !== true) {
+      if (res.status !== 200 || (res.body.ok !== true && !Array.isArray(res.body.content))) {
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'ERROR: ' + JSON.stringify(res.body) }], isError: true } })
         return;
       }
-      send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: res.body.text || '' }] } })
+      const result = {
+        content: Array.isArray(res.body.content) ? res.body.content : [{ type: 'text', text: res.body.text || '' }],
+        ...(res.body.structuredContent !== undefined ? { structuredContent: res.body.structuredContent } : {}),
+        ...(res.body.ok !== true ? { isError: true } : res.body.isError !== undefined ? { isError: res.body.isError } : {}),
+      }
+      send({ jsonrpc: '2.0', id, result })
+      if (hit._dshName === 'dev_tool_search' && res.body.ok === true && res.body.isError !== true) {
+        invalidateTools()
+        send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+      }
     } catch (e) {
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'ERROR: ' + String(e) }], isError: true } })
     }
@@ -110,6 +148,11 @@ async function handle(id, method, params) {
   send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } })
 }
 
+let pending = 0
+let inputClosed = false
+function finishIfDrained() {
+  if (inputClosed && pending === 0) process.stdout.write('', () => process.exit(0))
+}
 const rl = createInterface({ input: process.stdin, terminal: false })
 rl.on('line', (line) => {
   const text = line.trim()
@@ -121,12 +164,16 @@ rl.on('line', (line) => {
     return;
   }
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') return
-  if (msg.id === undefined) {
-  void handle(null, msg.method, msg.params).catch(() => {})
-    return;
-  }
+  if (msg.id === undefined) return
+  pending += 1
   void handle(msg.id, msg.method, msg.params).catch((e) => {
     send({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: String(e) } })
+  }).finally(() => {
+    pending -= 1
+    finishIfDrained()
   })
 })
-process.stdin.on('end', () => process.exit(0))
+rl.on('close', () => {
+  inputClosed = true
+  finishIfDrained()
+})
