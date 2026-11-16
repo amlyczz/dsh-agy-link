@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.32 (2026-11-17)
+
+### English
+
+- **Fix(provider): a turn can no longer hang for hours on agy background tasks (merges PR #119).** When a command backgrounds itself (a dev server, or a GUI dialog blocking on an uncaught exception), agy's root agent finishes the reply but then waits up to 4h for the background task. Routine daemon stderr chatter (`fetchAvailableModels`, `token refreshed`, `loadCodeAssist`, …) was re-arming the stderr keepalive watchdog every ~6 minutes, so neither the 10-minute idle budget nor the 240-minute print timeout ever fired and `proc.outcome` never settled — DSH hung at `eventsFrom`. Now background stderr noise is filtered, `root agent idle; waiting …` starts a 5s grace then terminates the process tree (`idleGraceTerminated`), `classifyFailure()` treats that as a normal completion, and a synthetic successful `result` event closes the mapper/usage/finish chain when agy emitted no envelope. `openToolKeys` is released when the model resumes text/thinking or a tool reaches `RUNNING`, and `printTimeoutMinutes` respects `maxTurnMinutes` (default `longToolIdleMinutes: 240` is unchanged).
+- **Refactor(timeouts): `IDLE_BACKGROUND_GRACE_MS` lives in `common/timeouts.ts`** alongside the other deadlines — no second constant inside `process.ts`. `.spec/process-lifecycle.md` documents the termination invariants (local, gitignored).
+- Tests: five subprocess-bounded regressions (idle grace, both message forms, normal-completion classification, `RUNNING` tool card, noise not feeding the watchdog). Thanks to @Ronnoc for the diagnosis and patch.
+
+### 中文
+
+- **修复(provider)：一轮对话不再因 agy 后台任务挂起数小时（合并 PR #119）。** 命令自行后台化（dev server、未捕获异常卡住的 GUI 弹窗等）时，agy 根 Agent 已产出全部回复，却会为后台任务等待最多 4 小时；守护进程每约 6 分钟打印的例行 stderr 日志（`fetchAvailableModels`、`token refreshed`、`loadCodeAssist` 等）又不断喂狗，10 分钟空闲预算与 240 分钟 print 超时都不会触发，`proc.outcome` 永不 settle，DSH 卡在 `eventsFrom`。现在过滤后台噪声、识别 `root agent idle; waiting …` 后给 5s 宽限并终止进程树（`idleGraceTerminated`），`classifyFailure()` 视为正常完成；若 agy 未发 result envelope，则合成一条成功的 result 事件闭合 mapper/usage/finish 链。模型恢复 text/thinking 或工具进入 `RUNNING` 时释放 `openToolKeys`，`printTimeoutMinutes` 受 `maxTurnMinutes` 约束（缺省 `longToolIdleMinutes: 240` 不变）。
+- **重构(超时常量)**：`IDLE_BACKGROUND_GRACE_MS` 与其他 deadline 一起收敛到 `common/timeouts.ts`，`process.ts` 不再另立常量。`.spec/process-lifecycle.md` 记录终止不变式（本地 gitignored）。
+- 测试：5 条子进程有界回归（idle 宽限、两种文案、正常完成分类、`RUNNING` 工具卡片、噪声不喂狗）。感谢 @Ronnoc 的定位与补丁。
+
 ## 0.6.31 (2026-11-16)
 
 ### English

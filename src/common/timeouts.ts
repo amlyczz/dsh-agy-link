@@ -45,3 +45,11 @@ export const QUOTA_REFRESH_DEDUP_MS = 90_000
  * own idle budget so short-budget tests and genuine idle kills stay prompt.
  */
 export const WATCHDOG_GRACE_MS = 5_000
+
+/**
+ * Grace after agy reports `root agent idle; waiting ... for background task(s)`.
+ * The prompt turn's answer is already streamed; a stuck GUI dialog / background
+ * child would otherwise keep print mode alive for hours (issue #119). Short and
+ * fixed so the turn settles promptly instead of hanging DSH's event stream.
+ */
+export const IDLE_BACKGROUND_GRACE_MS = 5_000

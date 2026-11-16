@@ -6,7 +6,7 @@
 // are unchanged. The only difference is that the single 170-line
 // `startAgyProcess` is organised into small helpers that share one RunState.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { WATCHDOG_GRACE_MS } from '../../common/timeouts.ts'
+import { WATCHDOG_GRACE_MS, IDLE_BACKGROUND_GRACE_MS } from '../../common/timeouts.ts'
 import { preemptAgyAutoUpdate } from '../../host/auto-updater.ts'
 import { isCmdShim, windowsQuote } from './bin.ts'
 import { makeLineDecoder, consoleOutputEncoding } from './console.ts'
@@ -81,7 +81,6 @@ export interface RunningProcess {
   noteActivity(budgetMs?: number): void
 }
 
-const GRACE_MS = 5000
 
 /**
  * Windows CreateProcess caps the command line at ~32767 chars. Leave headroom
@@ -327,7 +326,7 @@ function attachOutputStreams(
               state.idleGraceTerminated = true
               killTree(child)
             }
-          }, GRACE_MS)
+          }, IDLE_BACKGROUND_GRACE_MS)
           state.idleGraceTimer.unref?.()
         }
       } else if (opts.stderrKeepalive && !isBackgroundStderrNoise(text)) {
