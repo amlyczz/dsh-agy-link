@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.30 (2026-11-16)
+
+### English
+
+- **Fix(parser): bounded protobuf varint lengths — no more main-thread hangs (fixes #116, merges PR #117).** `readVarint()` accumulated with `val |= (byte & 0x7f) << shift`, which coerces to signed 32-bit: `2 ** 31` decoded as `-2147483648`, and six-byte lengths wrapped the shift modulo 32 (`2 ** 35 + 1` → `9`). Both length-delimited walkers only checked the upper bound, so a negative/oversized length moved the cursor backwards (observed `pos = -2064995381` on a 336-byte buffer) and the synchronous parse wedged DSH's web listener. Lengths now accumulate numerically with a safe-integer check, offsets are validated, and both outer and field-20 walkers reject any length that exceeds the remaining bytes. Four subprocess-bounded regressions cover nested overflow, six-byte wraparound, valid sibling thoughts after malformed nesting, and truncated input — the dangerous cases run in a killable child so the suite itself cannot hang. Thanks to @MorseWayne for the stack trace, synthetic reproduction and patch.
+
+### 中文
+
+- **修复(解析器)：为 protobuf 长度 varint 加边界，避免主线程卡死（修复 #116，合并 PR #117）。** `readVarint()` 原先用 `val |= (byte & 0x7f) << shift` 累积，JS 位运算会截断成有符号 32 位：`2 ** 31` 被解成 `-2147483648`，六字节长度的 shift 还会按 32 回绕（`2 ** 35 + 1` → `9`）。两层 length-delimited walker 只检查长度上界，负长度会让游标大幅回退（现场 336 字节 buffer 上 `pos = -2064995381`），同步解析直接把 DSH web 监听器卡住。现在改为数值累积 + 安全整数校验、校验读取偏移，outer 与 field-20 两层均拒绝超过剩余字节数的长度。四条子进程有界回归覆盖多层嵌套溢出、六字节回绕、异常嵌套后仍能取到后续有效思考内容、截断输入；危险输入放在可被 kill 的子进程里，避免测试自身阻塞。感谢 @MorseWayne 提供堆栈、合成复现与补丁。
+
 ## 0.6.29 (2026-11-15)
 
 ### English
