@@ -159,6 +159,9 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
     if (stateV === 'ERROR' && toolInfo && !toolInfo.error) {
       toolInfo.error = 'tool execution failed'
     }
+    if (stateV === 'RUNNING' && toolInfo && toolInfo.output === undefined && text !== '') {
+      toolInfo.output = text
+    }
     const usageRaw = pick(src, ['usage'])
     return {
       kind: 'step',

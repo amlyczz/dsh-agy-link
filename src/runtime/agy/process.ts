@@ -21,6 +21,8 @@ export interface RunOutcome {
   aborted: boolean
   /** True when the turn's wall-clock cap (opts.maxTurnMs) fired. */
   capped: boolean
+  /** True when agy root agent was idle waiting on background tasks and was terminated after grace period. */
+  idleGraceTerminated?: boolean
   stdout: string
   stderrTail: string
   durationMs: number
@@ -170,6 +172,8 @@ interface RunState {
   watchdog: NodeJS.Timeout | null
   watchdogGraceUsed: boolean
   turnCap: NodeJS.Timeout | null
+  idleGraceTimer: NodeJS.Timeout | null
+  idleGraceTerminated: boolean
 }
 
 function createRunState(opts: RunOptions): RunState {
@@ -185,6 +189,8 @@ function createRunState(opts: RunOptions): RunState {
     watchdog: null,
     watchdogGraceUsed: false,
     turnCap: null,
+    idleGraceTimer: null,
+    idleGraceTerminated: false,
   }
 }
 
@@ -270,6 +276,18 @@ function armTurnCap(child: ChildProcess, opts: RunOptions, state: RunState): voi
   }
 }
 
+function isBackgroundStderrNoise(line: string): boolean {
+  return (
+    line.includes('fetchAvailableModels') ||
+    line.includes('loadCodeAssist') ||
+    line.includes('token refreshed') ||
+    line.includes('FetchConfig') ||
+    line.includes('ListExperiments') ||
+    line.includes('daily-cloudcode-pa.googleapis.com') ||
+    line.includes('http_helpers.go')
+  )
+}
+
 function attachOutputStreams(
   child: ChildProcess,
   opts: RunOptions,
@@ -295,9 +313,27 @@ function attachOutputStreams(
     }
   })
   child.stderr?.on('data', (chunk: Buffer) => {
-    if (opts.stderrKeepalive) refreshWatchdog()
     const text = stderrDecoder.push(chunk)
-    if (text !== '') state.stderr = (state.stderr + text).slice(-4096)
+    if (text !== '') {
+      state.stderr = (state.stderr + text).slice(-4096)
+      if (/root agent idle;\s*waiting/i.test(text)) {
+        // agy finished its prompt turn and root agent is now idle, waiting up
+        // to hours for background tasks (e.g. dev servers or stuck GUI dialogs).
+        // Give background tasks a brief 5s grace period to finish, then terminate
+        // so the turn flushes and settles instead of hanging indefinitely.
+        if (!state.idleGraceTimer) {
+          state.idleGraceTimer = setTimeout(() => {
+            if (!state.settled) {
+              state.idleGraceTerminated = true
+              killTree(child)
+            }
+          }, GRACE_MS)
+          state.idleGraceTimer.unref?.()
+        }
+      } else if (opts.stderrKeepalive && !isBackgroundStderrNoise(text)) {
+        refreshWatchdog()
+      }
+    }
   })
   return { stdoutDecoder, stderrDecoder }
 }
@@ -316,6 +352,7 @@ function awaitOutcome(
       state.settled = true
       if (state.watchdog) clearTimeout(state.watchdog)
       if (state.turnCap) clearTimeout(state.turnCap)
+      if (state.idleGraceTimer) clearTimeout(state.idleGraceTimer)
       opts.signal?.removeEventListener('abort', onAbort)
       // Flush the partial tails before settling: a final line without a
       // trailing newline must still be decoded (and parsed) exactly once.
@@ -336,6 +373,7 @@ function awaitOutcome(
         timedOut: state.timedOut,
         aborted: state.aborted,
         capped: state.capped,
+        idleGraceTerminated: state.idleGraceTerminated,
         stdout: state.stdout,
         stderrTail: state.stderr,
         durationMs: Date.now() - started,
@@ -393,6 +431,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
       else state.aborted = true
       if (state.watchdog) clearTimeout(state.watchdog)
       if (state.turnCap) clearTimeout(state.turnCap)
+      if (state.idleGraceTimer) clearTimeout(state.idleGraceTimer)
       killTree(child)
     },
   }

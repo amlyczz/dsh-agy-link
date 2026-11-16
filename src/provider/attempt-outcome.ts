@@ -13,6 +13,7 @@ import {
   looksLikeAuthVerificationJitter,
   looksLikeRateLimit,
   networkRetryDelayMs,
+  type AgyEvent,
   type PluginConfig,
 } from '../common/types.ts'
 import { readAgyRunLogText } from '../host/agy-log.ts'
@@ -342,6 +343,18 @@ export async function handleAttemptOutcome(
   deps.clearInFlightPrompt(sessionKey, spawn.prompt)
   recorder.drain(input.agyOnEvent)
   const conversationId = recorder.conversationId()
+  if (!rec.hasResult && outcome.idleGraceTerminated) {
+    const synthResult: AgyEvent = {
+      kind: 'result',
+      conversationId: conversationId ?? '',
+      ok: true,
+      response: '',
+      usage: rec.finalUsage({}),
+      raw: {},
+    }
+    rec.append(synthResult)
+    input.agyOnEvent?.(synthResult)
+  }
   const { failure, rawErrText, runLogText, silentTimeout } = classifyRun({
     cfg,
     outcome,
