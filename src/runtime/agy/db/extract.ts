@@ -3,12 +3,16 @@
 import type { CachedStep } from './schema.ts'
 
 function readVarint(b: Buffer, offset: number): { val: number; next: number } | null {
+  if (!Number.isInteger(offset) || offset < 0 || offset >= b.length) return null
   let val = 0
   let shift = 0
   let pos = offset
   while (pos < b.length) {
     const byte = b[pos++]!
-    val |= (byte & 0x7f) << shift
+    // Bitwise shifts truncate to signed 32 bits and wrap shifts above 31.
+    // A negative length can move the protobuf cursor billions of bytes back.
+    val += (byte & 0x7f) * 2 ** shift
+    if (!Number.isSafeInteger(val)) return null
     shift += 7
     if ((byte & 0x80) === 0) return { val, next: pos }
     if (shift > 35) return null
@@ -100,7 +104,7 @@ function walkProtobuf(
       if (lenRes === null) break
       pos = lenRes.next
       const len = lenRes.val
-      if (pos + len > buf.length) break
+      if (len < 0 || len > buf.length - pos) break
       const slice = buf.subarray(pos, pos + len)
       pos += len
       // Field 20 wraps agent_response fields:
@@ -120,7 +124,7 @@ function walkProtobuf(
             if (l20Res === null) break
             p20 = l20Res.next
             const l20 = l20Res.val
-            if (p20 + l20 > slice.length) break
+            if (l20 < 0 || l20 > slice.length - p20) break
             const s20 = slice.subarray(p20, p20 + l20)
             p20 += l20
             if (f20 === 3) {
