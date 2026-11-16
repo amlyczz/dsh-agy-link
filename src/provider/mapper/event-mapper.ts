@@ -323,6 +323,7 @@ export class EventMapper {
         const isCompleted =
           ev.state === 'DONE' ||
           ev.state === 'ERROR' ||
+          ev.state === 'RUNNING' ||
           (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
         if (!isCompleted) {
           // Live progress for long-running agy tools: while a step is ACTIVE
@@ -346,6 +347,9 @@ export class EventMapper {
             if (d) yield d
           }
           return
+        }
+        if (ev.state === 'RUNNING' && ev.tool.output === undefined) {
+          ev.tool.output = ev.text !== '' ? ev.text : 'Tool is running as a background task'
         }
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)

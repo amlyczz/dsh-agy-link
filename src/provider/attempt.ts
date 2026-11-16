@@ -192,10 +192,13 @@ function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg: Plugi
   const openToolKeys = new Set<string>()
   const openToolSince = new Map<string, number>()
   const longToolIdleMinutes = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes : 0
-  const printTimeoutMinutes = Math.max(
-    longToolIdleMinutes > 0 ? longToolIdleMinutes : 240,
+  let printTimeoutMinutes = Math.max(
+    longToolIdleMinutes > 0 ? longToolIdleMinutes : Math.ceil(cfg.timeoutMs / 60_000),
     Math.ceil(cfg.timeoutMs / 60_000),
   )
+  if (cfg.maxTurnMinutes > 0 && printTimeoutMinutes > cfg.maxTurnMinutes) {
+    printTimeoutMinutes = cfg.maxTurnMinutes
+  }
   const longToolIdleMs = longToolIdleMinutes > 0 ? longToolIdleMinutes * 60_000 : cfg.timeoutMs
   const generationIdleMs = Math.max(cfg.timeoutMs, 15 * 60_000)
   let runningProc: RunningProcess | null = null
@@ -250,24 +253,37 @@ function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg: Plugi
       apply()
     },
     trackStep: (ev) => {
-      if (ev.kind !== 'step' || ev.stepKind !== 'tool' || ev.tool === undefined) return
-      // Mirror mapper's completion rule: DONE/ERROR state, or legacy events
-      // that carry output/error without an explicit state.
-      const completed =
-        ev.state === 'DONE' ||
-        ev.state === 'ERROR' ||
-        (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
-      if (!completed) {
-        if (!openToolKeys.has(ev.stepKey)) {
-          openToolKeys.add(ev.stepKey)
-          openToolSince.set(ev.stepKey, Date.now())
+      if (ev.kind !== 'step') return
+      if (ev.stepKind === 'tool' && ev.tool !== undefined) {
+        // Mirror mapper's completion rule: DONE/ERROR/RUNNING state, or legacy events
+        // that carry output/error without an explicit state.
+        const completed =
+          ev.state === 'DONE' ||
+          ev.state === 'ERROR' ||
+          ev.state === 'RUNNING' ||
+          (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
+        if (!completed) {
+          if (!openToolKeys.has(ev.stepKey)) {
+            openToolKeys.add(ev.stepKey)
+            openToolSince.set(ev.stepKey, Date.now())
+            apply()
+            start()
+          }
+        } else if (openToolKeys.delete(ev.stepKey)) {
+          openToolSince.delete(ev.stepKey)
           apply()
-          start()
+          if (openToolKeys.size === 0) stop()
         }
-      } else if (openToolKeys.delete(ev.stepKey)) {
-        openToolSince.delete(ev.stepKey)
-        apply()
-        if (openToolKeys.size === 0) stop()
+      } else if (ev.stepKind === 'text' || ev.stepKind === 'thinking') {
+        // When the model resumes generating text or thinking, no tool is running synchronously.
+        // Any previously open tool has completed or backgrounded. Clear openToolKeys so the
+        // idle budget restores to normal generationIdleMs instead of staying raised.
+        if (openToolKeys.size > 0) {
+          openToolKeys.clear()
+          openToolSince.clear()
+          apply()
+          stop()
+        }
       }
     },
     stop: () => {

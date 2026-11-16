@@ -25,6 +25,7 @@ export interface FailureContext {
     aborted: boolean
     capped: boolean
     timedOut: boolean
+    idleGraceTerminated?: boolean
     code: number | null
     stderrTail: string
   }
@@ -58,6 +59,10 @@ export function classifyFailure(c: FailureContext): AttemptFailure | null {
         + (c.silentTimeout
           ? ' — agy never emitted a single event; it is likely unable to reach Google (check proxy/network). 无法连接 Google，请检查代理或网络配置'
           : '') }
+    } else if (c.outcome.idleGraceTerminated) {
+      // The prompt turn completed and agy was terminated after idling on background tasks.
+      // The answer was already produced; do not report as a process exit error.
+      return null
     } else if (!c.consumable) {
       if (c.sawAuthFailure) {
         // agy says "not logged in" both for a real sign-out AND when it cannot
