@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.31 (2026-11-16)
+
+### English
+
+- **Refactor(host): extract the effort-unsupported persistence into its own store (5-day review).** `createEffortUnsupportedStore()` now owns the file path, the filter/dedupe rules, the picker notification and the live-reload invariant; the composition factory only wires it in. `src/host/services.ts` drops from 599 to 576 lines, giving the three modules that sat on the 600-line ceiling real headroom again. **No behaviour change** — the existing `HostServices` surface and `test/services.test.ts` contract are unchanged, and the new module has its own filesystem-level tests (filtering, invalid/missing file, live reload, dedupe, persistence failure). Architecture/budget gates stay at 215 modules, 0 cycles, 0 violations.
+
+### 中文
+
+- **重构(host)：把 effort-unsupported 持久化拆成独立 store（5 天全面 review）。** `createEffortUnsupportedStore()` 统一持有文件路径、过滤/去重规则、picker 广播与即时重载不变式；组合工厂只负责装配。`src/host/services.ts` 从 599 行降到 576 行，让三处贴在 600 行上限的模块重新有了余量。**行为零变化**：`HostServices` 对外形状与 `test/services.test.ts` 契约保持不变，新模块自带文件系统级测试（过滤、缺失/非法文件、外部修改即时生效、去重、写盘失败）。架构/预算门禁仍为 215 模块、0 环、0 违规。
+
 ## 0.6.30 (2026-11-16)
 
 ### English

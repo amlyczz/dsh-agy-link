@@ -23,6 +23,7 @@ import { SessionStore } from './sessions.ts'
 import { AccountPoolManager } from './pool.ts'
 import { PoolAuthFlow } from './pool-auth.ts'
 import { QuotaService } from './quota.ts'
+import { createEffortUnsupportedStore } from './effort-unsupported-store.ts'
 import { WarmupService } from './warmup.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
@@ -142,37 +143,11 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       telemetryFlags: true,
     })
 
-  // Models agy refused `--effort` for (issue #67). Effort support is advisory in
-  // our catalog — with the fallback list active, an agy build that rejects the
-  // flag for a model would otherwise fail EVERY turn that asks for a level. The
-  // refusal is learned once, persisted here, and the picker is told to re-read
-  // the capabilities (the model's effort row then disappears).
-  const effortUnsupportedPath = (): string => join(stateDir(), 'effort-unsupported.json')
-  // No in-process cache: an operator clearing/fixing this file must take effect
-  // without restarting DSH (issue #115). The file is tiny and read at most a
-  // few times per turn.
-  const readEffortUnsupported = (): readonly string[] => {
-    try {
-      const raw = existsSync(effortUnsupportedPath()) ? JSON.parse(readFileSync(effortUnsupportedPath(), 'utf8')) : []
-      return Array.isArray(raw)
-        ? raw.filter((m): m is string => typeof m === 'string' && m.trim() !== '')
-        : []
-    } catch {
-      return []
-    }
-  }
-  const rememberEffortUnsupported = (model: string): void => {
-    const known = readEffortUnsupported()
-    if (known.some((m) => m.trim().toLowerCase() === model.trim().toLowerCase())) return
-    const next = [...known, model]
-    try {
-      mkdirSync(stateDir(), { recursive: true })
-      writeFileSync(effortUnsupportedPath(), JSON.stringify(next, null, 2), 'utf8')
-    } catch (e) {
-      log('failed to persist the effort-unsupported list: ' + String(e))
-    }
-    notifyPicker()
-  }
+  // Models agy refused `--effort` for (issue #67): effort support is advisory
+  // in the catalog, so a refusal is learned once and the picker re-reads the
+  // capabilities. Persistence lives in its own store (see that module) — the
+  // composition factory only wires it in.
+  const effortStore = createEffortUnsupportedStore({ stateDir, notifyPicker, log })
 
   /** The DSH session's own workspace (agy runs there, per the translation spec). */
   const sessionWorkspace = (sessionId: string): string | undefined => {
@@ -303,8 +278,8 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     log,
     runs,
     getMediaBaseUrl: () => (webServerPort.current ? `http://127.0.0.1:${webServerPort.current}/plugins/agy-link/media` : null),
-    effortUnsupported: () => readEffortUnsupported(),
-    onEffortUnsupported: (model) => rememberEffortUnsupported(model),
+    effortUnsupported: () => effortStore.read(),
+    onEffortUnsupported: (model) => effortStore.remember(model),
     sessionCwd: (sessionId) => sessionWorkspace(sessionId),
     sessionGoal: (sessionId) => {
       try {
@@ -584,7 +559,9 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   return {
     getConfig, log, notifyPicker, bin, version, status, store, pool, quota, warmup,
     catalog, auth, poolAuth, runs, adapter, translation, setOverride,
-    readEffortUnsupported, rememberEffortUnsupported, sessionsSvc, sessionAuto,
+    readEffortUnsupported: effortStore.read,
+    rememberEffortUnsupported: effortStore.remember,
+    sessionsSvc, sessionAuto,
     get lastRun() { return lastRun },
     get lastParser() { return lastParser },
     mediaDir, bridgeState, webServerPort, activeCwds,
