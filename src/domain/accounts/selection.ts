@@ -29,7 +29,7 @@ export const LOW_QUOTA_5H = 0.10
 export const LOW_QUOTA_WEEKLY = 0.05
 
 /** Why a pool account cannot serve a family right now (diagnostics only). */
-export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported'
+export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported' | 'model-unsupported'
 
 /**
  * The slice of the pool the Argon check needs: whether an account has itself
@@ -98,8 +98,10 @@ export function explainIneligibility(
   if (!acc.enabled) return 'disabled'
   if (acc.authRequired) return 'auth'
   if (family === 'argon' && !accountHasArgon(acc, pool)) return 'unsupported'
+  // "This model is not in the account's catalog" is NOT the same diagnosis as
+  // "the account has no access to this family / plan" (issues #120, #122).
   if (model && pool && typeof (pool as any).isModelSupported === 'function' && !(pool as any).isModelSupported(acc, model)) {
-    return 'unsupported'
+    return 'model-unsupported'
   }
   const cd = acc.cooldowns?.[family]
   if (cd && cd.cooldownUntil > now) return 'cooldown'

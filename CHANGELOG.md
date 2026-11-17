@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.33 (2026-11-17)
+
+### English
+
+- **Fix(diagnostics): "model not in catalog" is no longer reported as a missing plan (fixes #120, #122).** `explainIneligibility()` used one `'unsupported'` reason for both "the account has no access to this family/plan" and "this model id isn't in the account's catalog"; `unavailableError()` then always hinted `requires a plan with google enabled`. That sent users account-shopping when every account simply lacked the model. A distinct `'model-unsupported'` reason now produces a targeted message ("not in any enabled account's catalog — refresh the model list or pick a listed model; NOT a missing plan"), while genuine family-level `unsupported` keeps its original wording.
+- **Fix(models): a stale/fallback `agy models` snapshot can no longer veto the account's own quota groups (fixes #122).** `accountSupportsModel()` treated a negative `source: 'discovered'` catalog as authoritative even when the snapshot was captured while agy's auth was unavailable (a static 4/6-item fallback list) or simply stale. A discovered catalog still affirms positively; a *negative* entry now yields to explicit per-model quota evidence, so `gemini-4-hydrogen` from a fresh `/pool/refresh-quota` is selected without manually re-activating every account.
+- Tests: new pure regression file for the reason split and stale-catalog veto, plus an updated error-message assertion. A family with no quota evidence still reports `unsupported`; a catalog with no quota evidence remains authoritative.
+
+### 中文
+
+- **修复(诊断)：「模型不在目录」不再误报为套餐缺失（修复 #120、#122）。** `explainIneligibility()` 把「账号没有该 family/套餐权限」与「该 model id 不在账号目录」都归为 `'unsupported'`，`unavailableError()` 于是一律提示 `requires a plan with google enabled`——用户会误以为掉权限而反复换号，实则所有账号都没有这个型号。现在新增独立的 `'model-unsupported'` 原因，文案改为「不在任何启用账号的目录里——刷新模型列表或换一个已列出的型号；不是套餐问题」；真正的 family 级 `unsupported` 文案保持不变。
+- **修复(模型)：陈旧/兜底的 `agy models` 快照不再否决账号自身额度组（修复 #122）。** `accountSupportsModel()` 此前把 `source: 'discovered'` 目录的**否定**结果当权威，即使该快照是 agy 鉴权未就绪时打印的静态 4/6 条兜底清单、或已经陈旧。现在已发现目录仍可**正向确认**模型；但**否定**结果要让位于明确的 per-model 额度证据，因此执行 `/pool/refresh-quota` 后即可选到 `gemini-4-hydrogen`，无需逐账号手工 `set-active` 重探。
+- 测试：新增纯函数回归覆盖原因分流与陈旧目录否决，并更新错误文案断言。无额度证据时 family 仍报 `unsupported`，无额度证据时目录仍为权威。
+
 ## 0.6.32 (2026-11-17)
 
 ### English

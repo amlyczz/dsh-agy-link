@@ -105,6 +105,7 @@ function unavailableError(pool: AccountPoolManager, family: ModelFamily, model?:
   const cooling = reasons.filter((r) => r === 'cooldown').length
   const quotaBlocked = reasons.filter((r) => r === 'quota').length
   const unsupported = reasons.filter((r) => r === 'unsupported').length
+  const modelUnsupported = reasons.filter((r) => r === 'model-unsupported').length
   const signedOut = accounts.filter((a) => a.authRequired === true).length
   const countdown = pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
   let why: string
@@ -117,13 +118,16 @@ function unavailableError(pool: AccountPoolManager, family: ModelFamily, model?:
     if (cooling > 0) details.push(`${cooling} in cooldown`)
     if (quotaBlocked > 0) details.push(`${quotaBlocked} quota-exhausted`)
     if (unsupported > 0) details.push(`${unsupported} lack ${family} access`)
+    if (modelUnsupported > 0) details.push(`${modelUnsupported} lack model "${model ?? ''}" in their catalog`)
     if (signedOut > 0) details.push(`${signedOut} signed out`)
     if (disabled > 0) details.push(`${disabled} disabled`)
     why = `no account can serve ${family} right now${details.length > 0 ? ` (${details.join(', ')})` : ''}`
   }
   const waitStr = countdown !== null && countdown > 0 ? ` (earliest reset in ${Math.ceil(countdown / 1000)}s)` : ''
-  const hint = unsupported > 0 && quotaBlocked === 0 && cooling === 0
-    ? `No enabled account has access to ${family} (requires a plan with ${family} enabled).`
+  const hint = modelUnsupported > 0 && unsupported === 0 && quotaBlocked === 0 && cooling === 0
+    ? `Requested model "${model ?? ''}" is not in any enabled account's catalog — refresh the model list (POST /plugins/agy-link/pool/refresh-quota) or pick a listed model. It is NOT a missing ${family} plan.`
+    : unsupported > 0 && quotaBlocked === 0 && cooling === 0
+      ? `No enabled account has access to ${family} (requires a plan with ${family} enabled).`
     : quotaBlocked > 0 && cooling === 0
       ? 'Add an account, wait for the quota reset, or run /agy clear-cooldown to override the current quota snapshot.'
       : 'Add an account, wait for reset, or run /agy clear-cooldown.'

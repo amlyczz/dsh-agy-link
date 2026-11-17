@@ -193,9 +193,16 @@ export function accountSupportsModel(
     return accountHasArgon(acc, pool, catalog)
   }
 
-  // If the account has an authoritative discovered catalog from `agy models`:
+  // A discovered catalog is authoritative when it AFFIRMS the model. A
+  // NEGATIVE answer is weaker: `agy models` silently prints a stale/fallback
+  // snapshot when auth was unavailable, and that snapshot used to veto the
+  // account's own quota groups forever (issue #122). Let explicit quota
+  // evidence win over a negative catalog entry.
   if (catalog && catalog.source === 'discovered' && Array.isArray(catalog.models) && catalog.models.length > 0) {
-    return catalog.models.some((m) => modelMatches(clean, m.id))
+    if (catalog.models.some((m) => modelMatches(clean, m.id))) return true
+    const familyQuotaModels = acc.quotas?.[modelFamilyOf(clean)]?.models
+    if (Array.isArray(familyQuotaModels) && familyQuotaModels.some((m) => modelMatches(clean, m.modelId))) return true
+    return false
   }
 
   const family = modelFamilyOf(clean)

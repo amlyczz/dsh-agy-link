@@ -221,7 +221,7 @@ type SelPoolOpts = {
   accounts?: ManagedAccount[]
   eligible?: (a: ManagedAccount, f: string) => boolean
   select?: (f: string) => ManagedAccount | null
-  explain?: (a: ManagedAccount, f: string) => 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported' | null
+  explain?: (a: ManagedAccount, f: string) => 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported' | 'model-unsupported' | null
   lastActive?: string
   countdown?: number | null
   resetCountdown?: number | null
@@ -432,6 +432,17 @@ test('account-selection: error reasons — unsupported-only hint', async () => {
   })
   const { message } = await expectUnavailable(pool)
   assert.match(message, /No enabled account has access to google/)
+})
+
+test('account-selection: model-unsupported hint does not blame the plan', async () => {
+  const { pool } = selPool({
+    accounts: [account('acc_m')],
+    select: () => null,
+    explain: () => 'model-unsupported',
+  })
+  const { message } = await expectUnavailable(pool)
+  assert.match(message, /model.*not in any enabled account/i)
+  assert.doesNotMatch(message, /requires a plan with google enabled/)
 })
 
 test('account-selection: error reasons — quota-only hint', async () => {
