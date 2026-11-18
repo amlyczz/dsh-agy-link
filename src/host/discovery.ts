@@ -64,6 +64,12 @@ export function diffConversations(before: DirSnapshot, dir = defaultConversation
   if (added.length === 0) return { conversationId: null, ambiguous: false };
   added.sort((a, b) => b.mtime - a.mtime);
   const top = added[0];
+  // Several conversations appeared while this run was live: the newest one is
+  // not provably ours (concurrent children share one account HOME). Report no
+  // id so no binding is written, instead of binding every sibling to one
+  // thread — that is what made four parallel teams answer the same prompt.
+  const ambiguous = added.length > 1;
+  if (ambiguous) return { conversationId: null, ambiguous };
   const id = top !== undefined ? top.name.replace(/\.db$/, '') : '';
-  return { conversationId: id, ambiguous: added.length > 1 };
+  return { conversationId: id, ambiguous };
 }
