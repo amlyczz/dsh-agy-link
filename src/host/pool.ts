@@ -10,13 +10,13 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import {
   accountHasArgon,
-  accountSupportsModel,
   baseModelSlug,
   type AccountPoolData,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
 } from '../common/pool-types.ts'
+import { accountCanServeModel } from './model-support.ts'
 import { defaultPoolDir } from '../domain/accounts/paths.ts'
 import { PoolAdmin } from '../domain/accounts/admin.ts'
 import { PoolStore } from '../domain/accounts/store.ts'
@@ -93,11 +93,7 @@ export class AccountPoolManager {
 
   /** Determine whether a managed account supports a specific model. */
   isModelSupported(acc: ManagedAccount, model: string): boolean {
-    if (this.unsupportedModels.get(acc.id)?.has(baseModelSlug(model))) {
-      return false
-    }
-    const cat = this.catalog?.get(acc.id)
-    return accountSupportsModel(acc, model, this, cat)
+    return accountCanServeModel(acc, model, { unsupportedModels: this.unsupportedModels, catalogFor: (id) => this.catalog?.get(id), pool: this })
   }
 
   markModelUnsupported(accountId: string, model: string): void {

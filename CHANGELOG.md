@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.34 (2026-11-18)
+
+### English
+
+- **Fix(regression from v0.6.32/PR #119): subagent turns no longer die 5s after going idle (fixes #124).** Two linked defects. (1) `RunRecording.hasResult` was `resultConversationId !== null`, but `init` sets that id on the very first frame — so it was true before any `result` envelope, the synthetic result appended on an idle-grace kill never ran, and every such turn ended in `agy stream ended without a result event`. It now reflects an actual `result` event; the conversation id still comes from `init`. (2) The 5s idle reaper could not tell an orphaned background command from agy legitimately waiting for `invoke_subagent` / `send_message` / `run_workflow` / `swarm`. `RunningProcess.exemptIdleGrace()` now suspends the reaper while such a tool is outstanding (raised by the tool watchdog, cleared when the root agent speaks again), and new stdout output cancels a pending kill so a wake-up cannot race it. The orphan reaper still fires once the wait ends, and `maxTurnMinutes` / the activity watchdog still bound the total.
+- **Fix(diagnostics): a stale model snapshot heals itself before failing the turn (fixes #125).** `accountSupportsModel()` still answers per account — that answer routes requests, so corroborating across accounts made selection pick an account that could not serve the model. Instead, when EVERY enabled account is denied *solely* because the requested model is missing from its per-model snapshot, `selectSessionAccount()` now refreshes pool quotas + catalog once (20s cap, non-forced so cooldowns are respected) and retries selection. A genuinely unsupported model simply fails the retry; quota/auth/cooldown blockers never trigger the refresh.
+- **Refactor(modules):** extracted `src/provider/tool-watchdog.ts` and `src/host/model-support.ts` so `attempt.ts` / `pool.ts` stay under the 600-line budget with cohesive units rather than compressed comments. Test margins for two subprocess-based suites were widened so a cold Node start on a busy host cannot fail them spuriously.
+
+### 中文
+
+- **修复(v0.6.32 / PR #119 的回归)：子代理轮次不再在空闲 5 秒后被误杀（修复 #124）。** 两个联动缺陷。(1) `RunRecording.hasResult` 原先判断 `resultConversationId !== null`，而 `init` 在第一帧就写入了该 id——于是任何真实运行从第一帧起 `hasResult` 就为真，idle 宽限终止时合成的 result 成了死代码，每轮都以 `agy stream ended without a result event` 结束。现在只认真正的 `result` 事件；会话 id 仍由 `init` 提供。(2) 5 秒 idle 回收器无法区分「残留后台命令」与「agy 正常等待子代理回报」。新增 `RunningProcess.exemptIdleGrace()`：子代理协作工具未完成时挂起回收器（由工具看门狗置位、根 Agent 再次发言时清除），并让新的 stdout 输出取消已挂起的终止，避免唤醒竞态被误杀。等待结束后残留后台任务仍会被回收，总时长仍受 `maxTurnMinutes` 与活动看门狗约束。
+- **修复(诊断)：陈旧模型快照在整轮失败前先自愈一次（修复 #125）。** `accountSupportsModel()` 仍按账号作答——该答案用于路由，跨账号互证会让选择器挑到无法服务该模型的账号。改为：当**所有启用账号都仅因「型号不在 per-model 快照」被淘汰**时，`selectSessionAccount()` 先刷新一次号池额度与目录（上限 20s、非强制以尊重冷却），再重试选择。型号确实不受支持时重试仍失败；额度/认证/冷却类阻塞不会触发刷新。
+- **重构(模块)**：抽出 `src/provider/tool-watchdog.ts` 与 `src/host/model-support.ts`，让 `attempt.ts` / `pool.ts` 以高内聚单元而非压缩注释维持在 600 行预算内。两处子进程测试的 margin 放宽，避免忙主机上冷启动 Node 造成的假失败。
+
 ## 0.6.33 (2026-11-17)
 
 ### English

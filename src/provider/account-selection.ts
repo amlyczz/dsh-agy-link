@@ -13,7 +13,17 @@ export interface AccountSelectionDeps {
   pool?: AccountPoolManager
   store: SessionStore
   syncSessionModel?: (sessionId: string, model: string, effort?: string) => void
+  /**
+   * Re-poll quotas (and the model catalog) for the whole pool. Used only as a
+   * self-heal: when EVERY enabled account is denied purely because the model is
+   * missing from its snapshot, that snapshot is far more likely truncated than
+   * the pool is genuinely incapable (issue #125).
+   */
+  refreshQuota?: () => Promise<void>
 }
+
+/** Upper bound on the self-heal refresh so a slow network cannot stall a turn. */
+const MODEL_HEAL_TIMEOUT_MS = 20_000
 
 export interface AccountSelectionInput {
   deps: AccountSelectionDeps
@@ -89,6 +99,41 @@ async function waitForShortReset(pool: AccountPoolManager, family: ModelFamily, 
   const countdown = pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
   if (countdown === null || countdown <= 0 || countdown > 20_000) return undefined
   await new Promise((r) => setTimeout(r, countdown + 250))
+  return pool.selectAccount(family, model) ?? undefined
+}
+
+/**
+ * One self-heal attempt for issue #125: if EVERY enabled account was denied
+ * solely because the requested model is absent from its per-model snapshot,
+ * refresh quotas and retry selection once. A truncated snapshot is the common
+ * cause (the pool demonstrably served the model minutes earlier); a genuinely
+ * unsupported model simply fails the retry and reports as before.
+ */
+async function healStaleModelSnapshot(
+  deps: AccountSelectionDeps,
+  pool: AccountPoolManager,
+  family: ModelFamily,
+  model: string,
+): Promise<ManagedAccount | undefined> {
+  const refresh = deps.refreshQuota
+  if (refresh === undefined || model === '') return undefined
+  const enabled = pool.getAccounts().filter((a) => a.enabled)
+  if (enabled.length === 0) return undefined
+  const reasons = enabled.map((a) => pool.explainIneligibility?.(a, family, Date.now(), model) ?? null)
+  // Only the model-mismatch reason qualifies: quota/auth/cooldown have their own
+  // remedies and must not trigger a network round-trip here.
+  if (!reasons.every((r) => r === 'model-unsupported')) return undefined
+  try {
+    await Promise.race([
+      refresh(),
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, MODEL_HEAL_TIMEOUT_MS)
+        t.unref?.()
+      }),
+    ])
+  } catch {
+    return undefined
+  }
   return pool.selectAccount(family, model) ?? undefined
 }
 
@@ -170,6 +215,7 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
       }
     }
     if (account === undefined) account = await waitForShortReset(pool, family, activeModel)
+    if (account === undefined) account = await healStaleModelSnapshot(deps, pool, family, activeModel)
     if (account === undefined) throw unavailableError(pool, family, activeModel)
   }
 
