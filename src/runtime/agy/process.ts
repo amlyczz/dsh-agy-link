@@ -66,6 +66,11 @@ export interface RunOptions {
    * path so that chain never starts (see auto-updater.ts).
    */
   preemptAutoUpdate?: boolean
+  /**
+   * Grace before the `root agent idle; waiting …` reaper kills the tree.
+   * Defaults to IDLE_BACKGROUND_GRACE_MS; tests shrink it to stay fast.
+   */
+  idleGraceMs?: number
 }
 
 export interface RunningProcess {
@@ -79,6 +84,12 @@ export interface RunningProcess {
    * restores the normal budget when the tool completes.
    */
   noteActivity(budgetMs?: number): void
+  /**
+   * Suspend/resume the `root agent idle` reaper. The attempt layer raises this
+   * while a subagent wake-up is pending, so a legitimately idle root agent is
+   * not killed after the grace window (issue #124).
+   */
+  exemptIdleGrace(exempt: boolean): void
 }
 
 
@@ -173,6 +184,10 @@ interface RunState {
   turnCap: NodeJS.Timeout | null
   idleGraceTimer: NodeJS.Timeout | null
   idleGraceTerminated: boolean
+  /** True while agy legitimately waits for a subagent (issue #124). */
+  idleGraceExempt: boolean
+  /** Last observed state was the idle line; cleared by new stdout. */
+  idleObserved: boolean
 }
 
 function createRunState(opts: RunOptions): RunState {
@@ -190,6 +205,8 @@ function createRunState(opts: RunOptions): RunState {
     turnCap: null,
     idleGraceTimer: null,
     idleGraceTerminated: false,
+    idleGraceExempt: false,
+    idleObserved: false,
   }
 }
 
@@ -287,6 +304,40 @@ function isBackgroundStderrNoise(line: string): boolean {
   )
 }
 
+function clearIdleGrace(state: RunState): void {
+  if (state.idleGraceTimer !== null) {
+    clearTimeout(state.idleGraceTimer)
+    state.idleGraceTimer = null
+  }
+}
+
+/**
+ * Arm the idle-grace reaper for a `root agent idle; waiting …` line.
+ *
+ * The reaper exists for genuinely orphaned background work (a dev server, a
+ * blocked GUI dialog) that would otherwise keep print mode alive for hours
+ * (#119). It must NOT fire while agy is legitimately waiting for a subagent to
+ * wake the root agent — `exemptIdleGrace(true)` is how the attempt layer marks
+ * that state (#124). When exempt, the check re-arms instead of killing, and the
+ * normal activity watchdog / maxTurnMinutes still bound the wait.
+ */
+function armIdleGrace(child: ChildProcess, opts: RunOptions, state: RunState): void {
+  if (state.idleGraceTimer !== null || state.settled) return
+  const graceMs = opts.idleGraceMs ?? IDLE_BACKGROUND_GRACE_MS
+  state.idleGraceTimer = setTimeout(() => {
+    state.idleGraceTimer = null
+    if (state.settled) return
+    if (state.idleGraceExempt) {
+      // Waiting on a subagent: keep watching, do not kill.
+      armIdleGrace(child, opts, state)
+      return
+    }
+    state.idleGraceTerminated = true
+    killTree(child)
+  }, graceMs)
+  state.idleGraceTimer.unref?.()
+}
+
 function attachOutputStreams(
   child: ChildProcess,
   opts: RunOptions,
@@ -299,6 +350,10 @@ function attachOutputStreams(
   const stderrDecoder = makeLineDecoder(consoleOutputEncoding())
   child.stdout?.on('data', (chunk: Buffer) => {
     refreshWatchdog()
+    // Any new output means agy woke up: a pending idle-grace kill is stale and
+    // must not fire mid-turn (issue #124, subagent wake-up race).
+    clearIdleGrace(state)
+    state.idleObserved = false
     const text = stdoutDecoder.push(chunk)
     if (text === '') return
     state.stdout += text
@@ -318,17 +373,10 @@ function attachOutputStreams(
       if (/root agent idle;\s*waiting/i.test(text)) {
         // agy finished its prompt turn and root agent is now idle, waiting up
         // to hours for background tasks (e.g. dev servers or stuck GUI dialogs).
-        // Give background tasks a brief 5s grace period to finish, then terminate
+        // Give background tasks a brief grace period to finish, then terminate
         // so the turn flushes and settles instead of hanging indefinitely.
-        if (!state.idleGraceTimer) {
-          state.idleGraceTimer = setTimeout(() => {
-            if (!state.settled) {
-              state.idleGraceTerminated = true
-              killTree(child)
-            }
-          }, IDLE_BACKGROUND_GRACE_MS)
-          state.idleGraceTimer.unref?.()
-        }
+        state.idleObserved = true
+        armIdleGrace(child, opts, state)
       } else if (opts.stderrKeepalive && !isBackgroundStderrNoise(text)) {
         refreshWatchdog()
       }
@@ -424,6 +472,14 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     noteActivity: (budgetMs?: number) => {
       if (budgetMs !== undefined) state.idleBudgetMs = budgetMs
       refreshWatchdog()
+    },
+    exemptIdleGrace: (exempt: boolean) => {
+      state.idleGraceExempt = exempt
+      // Raising the exemption cancels a kill that is already scheduled; lifting
+      // it re-arms when the child is still sitting on the idle line, so the
+      // orphan reaper still fires after a finished subagent wait (#124).
+      if (exempt) clearIdleGrace(state)
+      else if (state.idleObserved) armIdleGrace(child, opts, state)
     },
     kill: (reason) => {
       if (reason === 'timeout') state.timedOut = true

@@ -263,6 +263,12 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     log,
     runs,
     getMediaBaseUrl: () => (webServerPort.current ? `http://127.0.0.1:${webServerPort.current}/plugins/agy-link/media` : null),
+    // Non-forced: honours per-account cooldowns so a heal cannot stampede the
+    // pool. Catalog re-discovery repairs `agy models` in the same pass.
+    refreshQuota: async () => {
+      await quota.refreshAllQuotas(false).catch(() => undefined)
+      await catalog.forceRefreshAndNotify().catch(() => undefined)
+    },
     effortUnsupported: () => effortStore.read(),
     onEffortUnsupported: (model) => effortStore.remember(model),
     sessionCwd: (sessionId) => sessionWorkspace(sessionId),

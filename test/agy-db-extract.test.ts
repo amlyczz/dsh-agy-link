@@ -16,7 +16,12 @@ function extractBounded(payloads: Buffer[]): Array<string | null> {
     '--experimental-transform-types', '--input-type=module', '-e', script,
   ], {
     input: JSON.stringify(payloads.map((payload) => payload.toString('hex'))),
-    encoding: 'utf8', timeout: 3000,
+    encoding: 'utf8',
+    // Generous: the point is that the parser TERMINATES, not that a cold Node
+    // start with --experimental-transform-types fits in 3s. A tight budget made
+    // this suite fail on slower hosts (Node 25, worktree node_modules) even
+    // though the guard itself returned immediately.
+    timeout: 20_000,
   })
   assert.ifError(result.error)
   assert.equal(result.status, 0, result.stderr)

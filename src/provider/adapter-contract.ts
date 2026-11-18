@@ -20,6 +20,12 @@ export interface AgyAdapterDeps {
   /** Shared semaphore for cross-session concurrency (ADR-12). */
   acquire: (signal?: AbortSignal) => Promise<() => void>
   log?: (msg: string) => void
+  /**
+   * Re-poll pool quotas and the model catalog. Used ONLY as a self-heal when
+   * every enabled account is denied purely because the requested model is
+   * missing from its per-model snapshot (issue #125).
+   */
+  refreshQuota?: () => Promise<void>
   /** Recordings shared with the agy_tool mirror (native tool-card mirroring). */
   runs: RunRegistry
   /**

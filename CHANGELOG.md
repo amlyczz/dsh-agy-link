@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.35 (2026-11-18)
+
+### English
+
+- **Risk control & quota pacing:** Added quota burn-rate & reset-pacing estimator (`common/quota-pacing.ts`), serialized burst spawns via `spawn-limiter.ts`, tightened false `authRequired` prevention against transient auth-check jitter (`pool-auth.ts`, `failure.ts`), and avoided aggressive/redundant network probes (`http.ts`, `token.ts`, `refresh.ts`, `warmup/service.ts`).
+- **Instant model sync & 1-click reauth:** Pushed live model-catalog updates cleanly to DSH's session picker and added direct per-account 1-click re-authentication (`/pool/begin-add`, `AccountsPanel`, `useAuthFlow`) plus ETag/304 conditional polling on `/plugins/agy-link/status`.
+- **Subagent state consistency & `CANCELED` handling:** `SubagentTracker` now baselines pre-existing descriptors when `conversationId` arrives late via `setConversationId()` on resumed turns (stopping stale `SUBAGENT_STATE_ALIVE` files from re-announcing as newly opened), honors descriptor `state` (never announces `已启动协同专员` for killed/failed descriptors), polls `ALIVE -> KILLED/STOPPED` transitions and transcript `ERROR`/`CANCELED` statuses, and surfaces `CANCELED` tool steps cleanly across `parser.ts`, `EventMapper`, and `tool-watchdog.ts` (including dropping idle-grace exemption when a subagent spawn fails or cancels).
+- **Performance, UI & SSOT architecture:** O(1) SQLite metadata caching & async `git` HEAD lookup (`git-head.ts`), zero unkeyed React array-child warnings across client components, locales split under `src/client/locales/`, zero-redundancy domain consolidation (`quota-pacing.ts`, `countdown.ts`, `models/parse.ts`, `service-helpers.ts`), and living `.spec/` single-source-of-truth specifications across 225 modules.
+
+### 中文
+
+- **风控与额度节律保护**：新增额度消耗速率与重置节律估算（`common/quota-pacing.ts`）、并发限流启动器（`spawn-limiter.ts`），收紧瞬时鉴权抖动对 `authRequired` 的误判（`pool-auth.ts`、`failure.ts`），避免过度轮询与冗余网络探测。
+- **模型列表实时同步与一键重登**：切换账号/刷新目录时及时同步推送更新到 DSH 会话模型选择器；新增账号池一键原位重登（`/pool/begin-add`、`AccountsPanel`、`useAuthFlow`）及 `/status` ETag/304 条件轮询，减少高频重绘与状态抖动。
+- **子代理状态一致性与 `CANCELED` 收口**：修复 `SubagentTracker` 在续接会话延迟拿到 `conversationId` 时漏做历史基线导致重放旧 `SUBAGENT_STATE_ALIVE` 为「已启动协同专员」的问题；校验描述符 `state`（初始即终止不误报启动）、持续感知 `ALIVE -> KILLED` 跃迁与 `transcript.jsonl` 中的 `ERROR`/`CANCELED` 状态；并在 `parser.ts`、`EventMapper` 与 `tool-watchdog.ts` 中将 `CANCELED` 工具步按异常收口（子代理派发失败/取消时立即解除 idle 回收豁免）。
+- **性能、前端零告警与 `.spec/` 单一事实源**：SQLite 元数据 O(1) 缓存、异步 `git HEAD` 查询（`git-head.ts`）、修复前端数组子元素缺 `key` 告警、拆分 `src/client/locales/`、收敛冗余逻辑，并建立覆盖 225 模块的 `.spec/` 活文档。
+
+## 0.6.34 (2026-11-18)
+
+### English
+
+- **Fix(regression from v0.6.32/PR #119): subagent turns no longer die 5s after going idle (fixes #124).** Two linked defects. (1) `RunRecording.hasResult` was `resultConversationId !== null`, but `init` sets that id on the very first frame — so it was true before any `result` envelope, the synthetic result appended on an idle-grace kill never ran, and every such turn ended in `agy stream ended without a result event`. It now reflects an actual `result` event; the conversation id still comes from `init`. (2) The 5s idle reaper could not tell an orphaned background command from agy legitimately waiting for `invoke_subagent` / `send_message` / `run_workflow` / `swarm`. `RunningProcess.exemptIdleGrace()` now suspends the reaper while such a tool is outstanding (raised by the tool watchdog, cleared when the root agent speaks again), and new stdout output cancels a pending kill so a wake-up cannot race it. The orphan reaper still fires once the wait ends, and `maxTurnMinutes` / the activity watchdog still bound the total.
+- **Fix(diagnostics): a stale model snapshot heals itself before failing the turn (fixes #125).** `accountSupportsModel()` still answers per account — that answer routes requests, so corroborating across accounts made selection pick an account that could not serve the model. Instead, when EVERY enabled account is denied *solely* because the requested model is missing from its per-model snapshot, `selectSessionAccount()` now refreshes pool quotas + catalog once (20s cap, non-forced so cooldowns are respected) and retries selection. A genuinely unsupported model simply fails the retry; quota/auth/cooldown blockers never trigger the refresh.
+- **Refactor(modules):** extracted `src/provider/tool-watchdog.ts` and `src/host/model-support.ts` so `attempt.ts` / `pool.ts` stay under the 600-line budget with cohesive units rather than compressed comments. Test margins for two subprocess-based suites were widened so a cold Node start on a busy host cannot fail them spuriously.
+
+### 中文
+
+- **修复(v0.6.32 / PR #119 的回归)：子代理轮次不再在空闲 5 秒后被误杀（修复 #124）。** 两个联动缺陷。(1) `RunRecording.hasResult` 原先判断 `resultConversationId !== null`，而 `init` 在第一帧就写入了该 id——于是任何真实运行从第一帧起 `hasResult` 就为真，idle 宽限终止时合成的 result 成了死代码，每轮都以 `agy stream ended without a result event` 结束。现在只认真正的 `result` 事件；会话 id 仍由 `init` 提供。(2) 5 秒 idle 回收器无法区分「残留后台命令」与「agy 正常等待子代理回报」。新增 `RunningProcess.exemptIdleGrace()`：子代理协作工具未完成时挂起回收器（由工具看门狗置位、根 Agent 再次发言时清除），并让新的 stdout 输出取消已挂起的终止，避免唤醒竞态被误杀。等待结束后残留后台任务仍会被回收，总时长仍受 `maxTurnMinutes` 与活动看门狗约束。
+- **修复(诊断)：陈旧模型快照在整轮失败前先自愈一次（修复 #125）。** `accountSupportsModel()` 仍按账号作答——该答案用于路由，跨账号互证会让选择器挑到无法服务该模型的账号。改为：当**所有启用账号都仅因「型号不在 per-model 快照」被淘汰**时，`selectSessionAccount()` 先刷新一次号池额度与目录（上限 20s、非强制以尊重冷却），再重试选择。型号确实不受支持时重试仍失败；额度/认证/冷却类阻塞不会触发刷新。
+- **重构(模块)**：抽出 `src/provider/tool-watchdog.ts` 与 `src/host/model-support.ts`，让 `attempt.ts` / `pool.ts` 以高内聚单元而非压缩注释维持在 600 行预算内。两处子进程测试的 margin 放宽，避免忙主机上冷启动 Node 造成的假失败。
+
 ## 0.6.33 (2026-11-17)
 
 ### English

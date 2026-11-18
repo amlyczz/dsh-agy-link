@@ -217,7 +217,11 @@ export class RunRecording {
 
   /** Whether a result event (ok or error-with-response) was recorded. */
   get hasResult(): boolean {
-    return this.resultConversationId !== null || this.events.some((e) => e.kind === 'result')
+    // NOT `resultConversationId !== null`: `init` sets that id from the very
+    // first frame, which made this true before any result envelope arrived and
+    // turned the synthetic result on an idle-grace kill into dead code
+    // (issue #124). Conversation-id lookups use `conversationId` instead.
+    return this.events.some((e) => e.kind === 'result')
   }
 
   /** The last result envelope's finish-relevant projection, when one arrived. */

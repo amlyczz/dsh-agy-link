@@ -291,8 +291,11 @@ test('watchdog: stdout activity DOES keep the run alive', async () => {
   // still outlives the idle budget, so the keep-alive semantics stay intact.
   const p = startAgyProcess({
     bin: process.execPath,
-    args: nodeChild('console.log("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>3200){clearInterval(i);process.exit(0)};console.log("progress")},50)'),
-    timeoutMs: 2000,
+    // The child must outlive the idle budget by a wide margin: a cold Node
+    // start on a busy host can take >2s before the first line lands, which made
+    // this assertion flaky without changing the keep-alive semantics.
+    args: nodeChild('console.log("start");const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>9000){clearInterval(i);process.exit(0)};console.log("progress")},50)'),
+    timeoutMs: 3000,
   })
   const outcome = await p.outcome
   assert.equal(outcome.timedOut, false)

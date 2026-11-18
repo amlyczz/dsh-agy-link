@@ -350,9 +350,9 @@ export class AgyAdapter extends LlmAdapter {
       deps: {
         ...(this.deps.pool === undefined ? {} : { pool: this.deps.pool }),
         store: this.deps.store,
-        ...(this.deps.syncSessionModel === undefined
-          ? {}
+        ...(this.deps.syncSessionModel === undefined ? {}
           : { syncSessionModel: (id: string, m: string, effort?: string) => this.deps.syncSessionModel?.(id, m, effort) }),
+        ...(this.deps.refreshQuota === undefined ? {} : { refreshQuota: this.deps.refreshQuota }),  // #125 heal
       },
       cfg,
       model,
