@@ -18,6 +18,7 @@ import {
   type PluginConfig,
 } from '../common/types.ts'
 import { readAgyRunLogText, type AgyLogSnapshot } from '../host/agy-log.ts'
+import { IDLE_GRACE_NO_REPLY_NOTICE, recoverFinalReply } from './idle-grace-reply.ts'
 import type { RunRecording } from '../host/recording.ts'
 import type { StreamJsonParser } from '../host/parser.ts'
 import type { RunningProcess } from '../host/runner.ts'
@@ -364,11 +365,16 @@ export async function handleAttemptOutcome(
   recorder.drain(input.agyOnEvent)
   const conversationId = recorder.conversationId()
   if (!rec.hasResult && outcome.idleGraceTerminated) {
+    // The idle reaper can end a turn whose answer agy already wrote to its own
+    // transcript but had not flushed as a stdout step. Recovering it keeps the
+    // reply visible; leaving it empty made DSH show "completed" with no bubble
+    // at all (issues #127, #128).
+    const recovered = conversationId === null ? '' : recoverFinalReply(conversationId, rec.accountHome)
     const synthResult: AgyEvent = {
       kind: 'result',
       conversationId: conversationId ?? '',
       ok: true,
-      response: '',
+      response: recovered === '' ? IDLE_GRACE_NO_REPLY_NOTICE : recovered,
       usage: rec.finalUsage({}),
       raw: {},
     }

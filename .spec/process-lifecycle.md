@@ -16,6 +16,8 @@
 
 - **stderr 噪声不算活动**：agy 内部守护进程每约 6 分钟打印 `fetchAvailableModels` / `token refreshed` / `loadCodeAssist` / `ListExperiments` 等例行日志。`isBackgroundStderrNoise()` 过滤后再 `refreshWatchdog()`；stdout 始终算活动。
 - **root agent idle 必须能收敛（issue #119）**：模型回复全部产出后，agy 在 print 模式下若等待遗留后台任务，5s 宽限后终止；`classifyFailure()` 对 `idleGraceTerminated` 返回 `null` 并合成 `ok: true` 的 result 事件，正常闭合输出块。
+- **合成 result 必须带上真实答复（issue #127 / #128）**：回收发生在最终答复「已写入 agy transcript、尚未由 stdout 刷出」的时间窗内时，`synthResult.response` 不能用空串——`recoverFinalReply()` 从 `<brainDir>/.system_generated/logs/transcript.jsonl` 尾部（≤256 KiB，O(1)）恢复**最后一条 `USER_INPUT` 之后**、`content` 非空且**无 `tool_calls`** 的 `PLANNER_RESPONSE`。恢复不到时写入 `IDLE_GRACE_NO_REPLY_NOTICE`（中英双语「结果未确认、可能已执行」），而不是让 DSH 显示「完成」却零正文——空答复会被读成任务成功。
+- **`hasResult` 只认 result 事件（issue #124）**：`init` 会写入 `resultConversationId`，若用它判断「已有结果」，合成 result 永远不执行，所有回收轮次都会以 `agy stream ended without a result event` 失败。
 - **长会话默认不被缩短**：`printTimeoutMinutes` 由 `longToolIdleMinutes`（缺省 240）与 `timeoutMs` 取大，并受 `maxTurnMinutes` 约束。
 - **同步工具预算可释放**：工具步骤 `DONE`/`ERROR`/`RUNNING` 或模型恢复产出 text/thinking 时清理 `openToolKeys`，恢复 `generationIdleMs`。
 - **Headless 权限拦截显式诊断（issue #121）**：当 `permissionMode: 'accept-edits'` 下无头 `agy -p` 因权限门禁无法弹窗而被拦截时，明确给出切换为 `skip` 或 `plan` 的可操作提示，不静默结束。
@@ -31,5 +33,7 @@
 ## 4. 验证锚点
 
 - `test/background-task-hang.test.ts`：idle 宽限终止、stderr 噪声不喂狗。
+- `test/issue124-125-regressions.test.ts`：init 不冒充 result、子代理豁免与解除、stdout 唤醒取消回收。
+- `test/issue128-idle-reply.test.ts`：transcript 答复恢复、带 `tool_calls` 与上一轮答复都不算、无答复时的提示文案。
 - `test/updater-preempt.test.ts`：隔离 HOME 下 `last_check.timestamp` 创建与刷新、`suppressAgyAutoUpdate: false` 不触碰文件。
 - `test/proxy-keychain.test.ts`：活动看门狗与事件循环阻塞宽限。

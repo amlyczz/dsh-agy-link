@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.36 (2026-11-19)
+
+### English
+
+- **Fix: an idle-reaped turn no longer loses its final answer (fixes #128 bug 2, addresses #127).** When the 5s idle reaper ended a turn whose final `PLANNER_RESPONSE` was already written to agy's `transcript.jsonl` but had not been flushed to stdout, the synthesized result carried `response: ''` — DSH then rendered a clean "completed" turn with **no reply bubble**, which reads as success for work that was never confirmed. `recoverFinalReply()` now reads a bounded (≤256 KiB) tail of `<brainDir>/.system_generated/logs/transcript.jsonl` and returns the last `PLANNER_RESPONSE` **after the final `USER_INPUT`** whose `content` is non-empty and which carries no pending `tool_calls`; the synthesized result uses it. When nothing can be recovered, a bilingual notice states the background wait ended without a confirmed outcome and that some steps may have run — the turn still finishes cleanly, and turns that already produced an answer are untouched.
+- **Already fixed upstream, verified:** #128 bug 1 (historical subagent banners replayed on `--conversation` resume) is covered by v0.6.35's `SubagentTracker` baseline (`resumed` + `baselineExisting()`), which seeds pre-existing descriptors into `seenStepKeys` and starts transcripts at EOF.
+
+### 中文
+
+- **修复：被 idle 回收的轮次不再丢失最终答复（修复 #128 bug 2，回应 #127）。** 当 5s 回收发生在「最终 `PLANNER_RESPONSE` 已写入 agy `transcript.jsonl`、但尚未由 stdout 刷出」的时间窗内时，合成的 result 里 `response` 是空串，DSH 因此显示「正常完成」却**没有任何正文气泡**——这会被读成任务成功，而实际结果未确认。新增 `recoverFinalReply()`：有界读取（≤256 KiB）`<brainDir>/.system_generated/logs/transcript.jsonl` 尾部，返回**最后一条 `USER_INPUT` 之后**、`content` 非空且**无待执行 `tool_calls`** 的 `PLANNER_RESPONSE`，并写入合成 result。恢复不到时改为中英双语提示「后台等待已结束、结果未确认、部分操作可能已执行」；该轮仍以正常 finish 收尾，已有答复的回合完全不受影响。
+- **上游已修复并核实**：#128 bug 1（`--conversation` 续接时重放历史子代理横幅）已由 v0.6.35 的 `SubagentTracker` 基线机制覆盖（`resumed` + `baselineExisting()`，把既有描述符预先记入 `seenStepKeys` 并把 transcript 起点设在 EOF）。
+
 ## 0.6.35 (2026-11-18)
 
 ### English
