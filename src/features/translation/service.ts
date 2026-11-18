@@ -110,9 +110,17 @@ function sameModel(a: string, b: string): boolean {
  * retry, optional durable record. Session text extraction lives in session.ts
  * as pure functions so the command, the auto hook and the button share one logic.
  */
+interface InflightTranslation {
+  promise: Promise<TranslateResult>
+  ac: AbortController
+  waiters: number
+}
+
+const MAX_AUTO_SESSIONS = 500
+
 export class TranslationService {
   private readonly cache = new Map<string, TranslateResult>()
-  private readonly inflight = new Map<string, Promise<TranslateResult>>()
+  private readonly inflight = new Map<string, InflightTranslation>()
   private readonly pending = new Map<string, PendingTranslation>()
   private readonly lastAutoAt = new Map<string, number>()
   private last: TranslateResult | null = null
@@ -148,6 +156,9 @@ export class TranslationService {
     if (text.trim() === '') {
       return { ...emptyResult(target.model, target.effort), error: 'nothing to translate', code: 'EMPTY_TEXT' }
     }
+    if (signal?.aborted === true) {
+      return { ...emptyResult(target.model, target.effort), error: 'aborted', code: 'ABORTED' }
+    }
     const language = req.targetLanguage ?? this.deps.cfg().translateTargetLanguage
     const key = cacheKey(target.model, target.effort, language, text)
     if (req.force !== true) {
@@ -158,13 +169,60 @@ export class TranslationService {
         return this.last
       }
       const running = this.inflight.get(key)
-      if (running !== undefined) return running
+      if (running !== undefined) return this.awaitInflight(running, target, signal)
     }
-    const task = this.runChunked(text, target, language, signal, req.sessionId).finally(() => {
-      this.inflight.delete(key)
+    const ac = new AbortController()
+    const promise = this.runChunked(text, target, language, ac.signal, req.sessionId).finally(() => {
+      if (this.inflight.get(key)?.promise === promise) this.inflight.delete(key)
     })
-    this.inflight.set(key, task)
-    return task
+    const entry: InflightTranslation = { promise, ac, waiters: 0 }
+    this.inflight.set(key, entry)
+    return this.awaitInflight(entry, target, signal)
+  }
+
+  /** Attach an independent caller AbortSignal without aborting peer waiters on the same key. */
+  private awaitInflight(
+    entry: InflightTranslation,
+    target: TranslateTarget,
+    signal?: AbortSignal,
+  ): Promise<TranslateResult> {
+    entry.waiters++
+    if (!signal) {
+      return entry.promise.finally(() => {
+        entry.waiters = Math.max(0, entry.waiters - 1)
+      })
+    }
+    return new Promise((resolve) => {
+      let settled = false
+      const onAbort = () => {
+        if (settled) return
+        settled = true
+        entry.waiters = Math.max(0, entry.waiters - 1)
+        if (entry.waiters === 0) entry.ac.abort()
+        resolve({ ...emptyResult(target.model, target.effort), error: 'aborted', code: 'ABORTED' })
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      entry.promise.then(
+        (res) => {
+          signal.removeEventListener('abort', onAbort)
+          if (settled) return
+          settled = true
+          entry.waiters = Math.max(0, entry.waiters - 1)
+          resolve(res)
+        },
+        (err) => {
+          signal.removeEventListener('abort', onAbort)
+          if (settled) return
+          settled = true
+          entry.waiters = Math.max(0, entry.waiters - 1)
+          resolve({
+            ...emptyResult(target.model, target.effort),
+            error: err instanceof Error ? err.message : String(err),
+            code: 'AGY_ERROR',
+          })
+        },
+      )
+    })
   }
 
   private async runChunked(
@@ -468,7 +526,13 @@ export class TranslationService {
     const lastAt = this.lastAutoAt.get(sessionId)
     const now = this.now()
     if (lastAt !== undefined && cfg.translateMinIntervalMs > 0 && now - lastAt < cfg.translateMinIntervalMs) return null
+    this.lastAutoAt.delete(sessionId)
     this.lastAutoAt.set(sessionId, now)
+    while (this.lastAutoAt.size > MAX_AUTO_SESSIONS) {
+      const oldest = this.lastAutoAt.keys().next()
+      if (oldest.done) break
+      this.lastAutoAt.delete(oldest.value)
+    }
     this.pending.set(sessionId, { turn, startedAt: now })
     try {
       return await this.translateTurn(sessionId, turn, { persist: true })

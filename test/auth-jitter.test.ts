@@ -11,7 +11,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { Err, isAuthoritativeAuthError, looksLikeAuthVerificationJitter } from '../src/common/types.ts'
+import {
+  Err,
+  isAuthoritativeAuthError,
+  looksLikeAuthFailure,
+  looksLikeAuthVerificationJitter,
+  looksLikeNetworkError,
+} from '../src/common/types.ts'
 import { AUTH_CONFIRM_STRIKES } from '../src/common/pool-types.ts'
 import { AccountPoolManager } from '../src/host/pool.ts'
 import { readAgyRunLogText, snapshotAgyLogs } from '../src/host/agy-log.ts'
@@ -117,4 +123,45 @@ test('markAuthRequired keeps its immediate, authoritative semantics', () => {
   const acc = pool.createAccountSlot('Revoked')
   pool.markAuthRequired(acc.id, 'invalid_grant: Token has been expired or revoked')
   assert.equal(pool.getAccount(acc.id)!.authRequired, true, 'the direct OAuth path must still quarantine on first sight')
+})
+
+test('incidental "disabled" log lines never poison looksLikeAuthVerificationJitter or isAuthoritativeAuthError', () => {
+  assert.equal(isAuthoritativeAuthError('I1016 main.go:42] auto-update disabled; telemetry disabled'), false)
+  assert.equal(
+    looksLikeAuthVerificationJitter('I1016 main.go:42] auto-update disabled\n' + JITTER_LOG),
+    true,
+    'benign "disabled" config log must not short-circuit keyring jitter detection',
+  )
+  assert.equal(isAuthoritativeAuthError('oauth2: account_disabled'), true)
+  assert.equal(isAuthoritativeAuthError('PERMISSION_DENIED: TOS_VIOLATION'), true)
+})
+
+test('looksLikeNetworkError covers HTTP/2 stream drops, proxy 502/504/522, and TLS resets', () => {
+  assert.equal(looksLikeNetworkError('http2: client connection lost'), true)
+  assert.equal(looksLikeNetworkError('stream error: stream ID 3; REFUSED_STREAM'), true)
+  assert.equal(looksLikeNetworkError('502 Bad Gateway from upstream proxy'), true)
+  assert.equal(looksLikeNetworkError('504 Gateway Time-out'), true)
+  assert.equal(looksLikeNetworkError('HTTP 522 Cloudflare connection timed out'), true)
+  assert.equal(looksLikeNetworkError('local error: tls: bad record mac'), true)
+  assert.equal(looksLikeNetworkError('write tcp: broken pipe'), true)
+})
+
+test('looksLikeAuthFailure ignores third-party MCP server auth errors', () => {
+  assert.equal(looksLikeAuthFailure('MCP server "github": authentication required'), false)
+  assert.equal(looksLikeAuthFailure('[mcp] linear tool failed: authentication failed (401)'), false)
+  assert.equal(looksLikeAuthFailure('Authentication required. Please sign in to Antigravity.'), true)
+})
+
+test('readAgyRunLogText captures bytes appended to a same-second cli-*.log file', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-log-samesec-'))
+  const logDir = join(home, '.gemini', 'antigravity-cli', 'log')
+  mkdirSync(logDir, { recursive: true })
+  const sameSecFile = join(logDir, 'cli-20261118_120000.log')
+  writeFileSync(sameSecFile, 'first run prefix\n')
+
+  const before = snapshotAgyLogs(home)
+  writeFileSync(sameSecFile, 'first run prefix\n' + JITTER_LOG)
+  const text = readAgyRunLogText(home, before)
+  assert.ok(text.includes('keyringAuth: timed out after 10s'), 'must read appended bytes on same-second collision')
+  assert.ok(!text.includes('first run prefix'), 'must not re-read pre-snapshot bytes')
 })

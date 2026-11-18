@@ -7,10 +7,11 @@
    - All release actions **MUST** receive explicit user confirmation and permission beforehand.
 
 2. **Standard Workflow Before Release Request**
-   - Implement changes and ensure local code quality gates pass:
-     - `pnpm run check` (TypeScript typecheck)
-     - `pnpm run build` (Bundle and compilation)
-     - `pnpm test` (100% test suite passing)
+   - Implement changes and ensure local code quality gates pass (single source of truth specifications live in [`.spec/README.md`](.spec/README.md)):
+     - `npm run check` (TypeScript typecheck)
+     - `npm run lint:arch` & `npm run lint:budget` (Architecture & module size gates)
+     - `npm run build` (Bundle and compilation)
+     - `npm test` (100% test suite passing)
    - Update `CHANGELOG.md` and bump `package.json` version accordingly.
    - Present a clear summary of changes, test results, and status to the user.
    - **STOP and wait for the user's explicit command** (e.g. "发布", "可以发布", "release") before creating any release or publishing package.
@@ -19,14 +20,14 @@
 
 ## ⚡ 两级双环测试原则（对齐 academic-agent）
 
-> ⚠️ **严禁在日常编码与 TDD 循环中直接运行全量测试套件**！系统累计 491 项用例，全量运行耗时较长会严重打断开发心流。日常开发必须遵循两级双环测试：
+> ⚠️ **严禁在日常编码与 TDD 循环中直接运行全量测试套件**！全量测试套件包含 1,100+ 项用例，日常开发必须遵循两级双环测试：
 
 1. **内环（TDD 极速环，0.3 ~ 2 秒，日常开发必用）**：
-   - 自动基于 Git 变更精准执行关联测试：`pnpm run test:fast`
-   - 指定模块关键字秒级直跑：`pnpm run test:fast <name>`（例如 `pnpm run test:fast models` 仅需 0.5s，`pnpm run test:fast reasoning` 仅需 0.4s）
+   - 自动基于 Git 变更精准执行关联测试：`npm run test:fast`（或 `node scripts/fast-test.mjs`）
+   - 指定模块关键字秒级直跑：`npm run test:fast -- <name>`（例如 `node scripts/fast-test.mjs models`、`node scripts/fast-test.mjs warmup`）
    - 单文件直跑：`node --experimental-transform-types --test test/xxx.test.ts`
 2. **外环（全量回归门禁，仅提 PR 或发版打 Tag 前）**：
-   - 全量回归测试：`pnpm test`（确保 491 项用例 100% 全部通过）
+   - 全量回归测试：`npm test`（或带覆盖率门禁的 `npm run test:coverage`）
 
 ---
 

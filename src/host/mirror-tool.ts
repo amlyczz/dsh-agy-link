@@ -23,7 +23,7 @@ export {
   MIRROR_TOOL_NAME,
   WRAPPER_TOOL_NAME,
 } from '../provider/mirror/names.ts'
-export { getGitHeadContent } from '../provider/mirror/git-head.ts'
+export { getGitHeadContent, getGitHeadContentAsync } from '../provider/mirror/git-head.ts'
 export { buildMirrorRunCode, parseMirrorInvocation } from '../provider/mirror/runcode.ts'
 export { toolStepBrief } from '../provider/mirror/brief.ts'
 export {

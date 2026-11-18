@@ -428,6 +428,7 @@ class SlotAcquire {
         throw new SlotUnavailableError(
           'Cannot verify the primary Antigravity credential, so the Windows credential slot cannot be ' +
             'handed over safely. Sign the primary account in again, then retry.',
+          'primary',
         )
       }
 

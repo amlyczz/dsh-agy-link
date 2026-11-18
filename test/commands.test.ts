@@ -241,3 +241,131 @@ test('agy import subcommand parses token and alias and calls poolAuth.importRefr
   assert.match(jsonRes.text ?? '', /成功导入凭据/)
 })
 
+test('agy config, status, models, use, refresh-quota and non-destructive auth-code commands work end-to-end', async () => {
+  const { AccountPoolManager } = await import('../src/host/pool.ts')
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'agy-cmd-full-'))
+  try {
+    const pool = new AccountPoolManager(dir)
+    const sec = pool.createAccountSlot('Backup')
+    pool.clearAuthRequired(sec.id, true)
+    const overrides: Record<string, unknown> = {}
+    let pickerNotified = 0
+    let refreshForced: boolean | undefined = undefined
+    let storeCleared = false
+
+    const cfg = defaultConfig()
+    const def = agyCommandDefinition({
+      ...baseDeps,
+      cfg: () => ({ ...cfg, ...overrides }),
+      setOverride: (k: string, v: unknown) => { overrides[k] = v },
+      notifyPicker: () => { pickerNotified++ },
+      bin: () => '/usr/local/bin/agy',
+      version: () => '1.5.12',
+      auth: () => ({ resolvedStatus: async () => ({ phase: 'ok', message: 'signed in' }) }),
+      catalog: () => ({
+        get: () => ({ source: 'discovered', models: [{ id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['low', 'high'] }] }),
+        forceRefresh: async () => ({ source: 'discovered', models: [{ id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['low', 'high'] }] }),
+      }),
+      store: () => ({
+        all: () => ({ 's1:acc_primary': { conversationId: 'c1' } }),
+        clear: () => { storeCleared = true },
+      }),
+      lastRun: () => ({
+        processOk: true,
+        processCode: 'OK',
+        model: 'gemini-4-argon',
+        durationMs: 1200,
+        toolErrors: [],
+        tokenSpeed: { measuredSteps: 1, outputTokens: 120, avgTps: 42.5, lastTps: 45 },
+      }),
+      pool: () => pool,
+      quota: () => ({
+        refreshAllQuotas: async (force?: boolean) => { refreshForced = force },
+      }),
+      poolAuth: () => ({
+        submitCode: async () => ({ ok: true }),
+      }),
+    } as never)
+
+    assert.match((await def.handler({ rawInput: 'mode plan' } as never)).text ?? '', /\*\*plan\*\*/)
+    assert.equal(overrides.permissionMode, 'plan')
+    assert.match((await def.handler({ rawInput: 'mode bogus' } as never)).text ?? '', /usage:/)
+
+    assert.match((await def.handler({ rawInput: 'effort xhigh' } as never)).text ?? '', /\*\*xhigh\*\*/)
+    assert.equal(overrides.defaultEffort, 'xhigh')
+    assert.ok(pickerNotified >= 1)
+
+    assert.match((await def.handler({ rawInput: 'dispatch' } as never)).text ?? '', /dispatch guards/)
+    assert.match((await def.handler({ rawInput: 'dispatch 10' } as never)).text ?? '', /10 分钟/)
+    assert.equal(overrides.dispatchTimeoutMinutes, 10)
+    assert.match((await def.handler({ rawInput: 'dispatch off' } as never)).text ?? '', /无限等待/)
+    assert.equal(overrides.dispatchTimeoutMinutes, 0)
+
+    assert.match((await def.handler({ rawInput: 'dispatch-retries 3' } as never)).text ?? '', /3/)
+    assert.equal(overrides.dispatchRetries, 3)
+
+    assert.match((await def.handler({ rawInput: 'parallel off' } as never)).text ?? '', /关闭/)
+    assert.equal(overrides.parallelSameAccount, false)
+
+    assert.match((await def.handler({ rawInput: 'max-concurrent 4' } as never)).text ?? '', /4/)
+    assert.equal(overrides.maxConcurrent, 4)
+
+    assert.match((await def.handler({ rawInput: 'workspace /tmp/ws-test' } as never)).text ?? '', /\/tmp\/ws-test/)
+    assert.equal(overrides.workspaceRoot, '/tmp/ws-test')
+    assert.match((await def.handler({ rawInput: 'workspace clear' } as never)).text ?? '', /reset/)
+    assert.equal(overrides.workspaceRoot, '')
+
+    const statusOut = await def.handler({ rawInput: 'status' } as never)
+    assert.match(statusOut.text ?? '', /1\.5\.12/)
+    assert.match(statusOut.text ?? '', /42\.5 tok\/s/)
+
+    const modelsOut = await def.handler({ rawInput: 'models' } as never)
+    assert.match(modelsOut.text ?? '', /gemini-4-argon/)
+
+    const useOut = await def.handler({ rawInput: `use ${sec.id}` } as never)
+    assert.match(useOut.text ?? '', new RegExp(sec.id))
+
+    await def.handler({ rawInput: 'refresh-quota' } as never)
+    assert.equal(refreshForced, true, '/agy refresh-quota should pass force=true')
+
+    const authCodeOut = await def.handler({ rawInput: 'auth-code 4/code123' } as never)
+    assert.match(authCodeOut.text ?? '', /Logged in/)
+    assert.equal(storeCleared, false, 'auth-code must NOT wipe unrelated multi-account session bindings')
+
+    assert.match((await def.handler({ rawInput: 'add-account BackupNew' } as never)).text ?? '', /BackupNew/)
+    assert.match((await def.handler({ rawInput: `clear-cooldown ${sec.id}` } as never)).text ?? '', /Cleared cooldown/)
+    assert.match((await def.handler({ rawInput: `remove-account ${sec.id}` } as never)).text ?? '', /Removed account/)
+    assert.match((await def.handler({ rawInput: 'remove-account' } as never)).text ?? '', /usage:/)
+    assert.match((await def.handler({ rawInput: 'enable-account' } as never)).text ?? '', /usage:/)
+    assert.match((await def.handler({ rawInput: 'use' } as never)).text ?? '', /usage:/)
+    assert.match((await def.handler({ rawInput: 'use missing_id' } as never)).text ?? '', /not found/)
+    assert.match((await def.handler({ rawInput: 'dispatch 0' } as never)).text ?? '', /无限等待/)
+    assert.match((await def.handler({ rawInput: 'dispatch 999' } as never)).text ?? '', /999 分钟/)
+    assert.match((await def.handler({ rawInput: 'parallel on' } as never)).text ?? '', /开启/)
+    assert.match((await def.handler({ rawInput: 'max-concurrent off' } as never)).text ?? '', /不限制/)
+    assert.match((await def.handler({ rawInput: 'auth-code' } as never)).text ?? '', /usage:/)
+
+    // Exercise status guidance branches (missing_file / system_protection / approval)
+    const defErr = agyCommandDefinition({
+      ...baseDeps,
+      cfg: () => ({ ...cfg, permissionMode: 'plan' }),
+      lastRun: () => ({
+        processOk: false,
+        processCode: 'TOOL_ERROR',
+        model: 'gemini-4-argon',
+        durationMs: 900,
+        toolErrors: ['ENOENT: no such file', 'blocked by system protection', 'requires permission approval'],
+      }),
+    } as never)
+    assert.match((await defErr.handler({ rawInput: 'auth-status' } as never)).text ?? '', /not available/)
+    assert.match((await defErr.handler({ rawInput: 'refresh-quota' } as never)).text ?? '', /not available/)
+    const statusErrOut = await defErr.handler({ rawInput: 'status' } as never)
+    assert.match(statusErrOut.text ?? '', /last run tool errors/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+

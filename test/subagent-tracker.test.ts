@@ -202,4 +202,193 @@ describe('SubagentTracker and action formatting', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('SubagentTracker with resumed=true baselines pre-existing transcripts at EOF without replaying prior turns', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agy-tracker-resumed-'))
+    const convDir = join(root, '.gemini', 'antigravity-cli', 'conversations')
+    const brainBase = join(root, '.gemini', 'antigravity-cli', 'brain')
+    mkdirSync(convDir, { recursive: true })
+    setAgyDbDir(convDir)
+
+    const mainConvId = 'main-conv-resumed'
+    const mainBrain = join(brainBase, mainConvId)
+    mkdirSync(join(mainBrain, '.system_generated', 'subagents'), { recursive: true })
+
+    const subConvId = 'sub-prior-turn'
+    const subLogsDir = join(brainBase, subConvId, '.system_generated', 'logs')
+    mkdirSync(subLogsDir, { recursive: true })
+    writeFileSync(
+      join(mainBrain, '.system_generated', 'subagents', `${subConvId}.json`),
+      JSON.stringify({ conversationId: subConvId, subagentDescriptor: { typeName: 'Researcher', role: 'Prior Worker' } }),
+    )
+    const transcriptFile = join(subLogsDir, 'transcript.jsonl')
+    writeFileSync(
+      transcriptFile,
+      JSON.stringify({
+        step_index: 1,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'view_file', args: { Path: 'src/old_turn.ts' } }],
+      }) + '\n',
+    )
+
+    const events: AgyEvent[] = []
+    const tracker = new SubagentTracker({
+      conversationId: mainConvId,
+      accountHome: root,
+      resumed: true,
+      pollIntervalMs: 40,
+      onEvent: (ev) => { events.push(ev) },
+    })
+
+    try {
+      tracker.start()
+      await new Promise((r) => setTimeout(r, 90))
+      assert.equal(events.length, 0, 'prior-turn subagent history must NOT be replayed on turn resume')
+
+      // Appending a NEW action during the resumed turn MUST stream immediately
+      writeFileSync(
+        transcriptFile,
+        JSON.stringify({
+          step_index: 2,
+          source: 'MODEL',
+          type: 'PLANNER_RESPONSE',
+          tool_calls: [{ name: 'edit_file', args: { Path: 'src/new_turn.ts' } }],
+        }) + '\n',
+        { flag: 'a' },
+      )
+      await new Promise((r) => setTimeout(r, 90))
+      assert.equal(events.length, 1)
+      assert.ok(events[0]?.kind === 'step' && events[0].text.includes('new_turn.ts'))
+    } finally {
+      tracker.stop()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('SubagentTracker baselines pre-existing subagents when conversationId arrives late via setConversationId on resumed runs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agy-tracker-late-cid-'))
+    const convDir = join(root, '.gemini', 'antigravity-cli', 'conversations')
+    const brainBase = join(root, '.gemini', 'antigravity-cli', 'brain')
+    mkdirSync(convDir, { recursive: true })
+    setAgyDbDir(convDir)
+
+    const mainConvId = 'main-conv-late-resumed'
+    const mainBrain = join(brainBase, mainConvId)
+    mkdirSync(join(mainBrain, '.system_generated', 'subagents'), { recursive: true })
+
+    const subConvId = 'sub-stale-alive'
+    const subLogsDir = join(brainBase, subConvId, '.system_generated', 'logs')
+    mkdirSync(subLogsDir, { recursive: true })
+    writeFileSync(
+      join(mainBrain, '.system_generated', 'subagents', `${subConvId}.json`),
+      JSON.stringify({ conversationId: subConvId, subagentDescriptor: { typeName: 'DeepCoder', role: 'Prior Coder' }, state: 'SUBAGENT_STATE_ALIVE' }),
+    )
+    const transcriptFile = join(subLogsDir, 'transcript.jsonl')
+    writeFileSync(
+      transcriptFile,
+      JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'view_file', args: { Path: 'src/old.ts' } }] }) + '\n',
+    )
+
+    const events: AgyEvent[] = []
+    const tracker = new SubagentTracker({
+      resumed: true,
+      accountHome: root,
+      pollIntervalMs: 40,
+      onEvent: (ev) => { events.push(ev) },
+    })
+    try {
+      tracker.start()
+      // Defer cid delivery (like init envelope arriving after spawn)
+      tracker.setConversationId(mainConvId)
+      await new Promise((r) => setTimeout(r, 90))
+      assert.equal(events.length, 0, 'deferred setConversationId on resumed run must NOT replay stale SUBAGENT_STATE_ALIVE files')
+
+      writeFileSync(
+        transcriptFile,
+        JSON.stringify({ step_index: 2, source: 'MODEL', type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'edit_file', args: { Path: 'src/fresh.ts' } }] }) + '\n',
+        { flag: 'a' },
+      )
+      await new Promise((r) => setTimeout(r, 90))
+      assert.equal(events.length, 1)
+      assert.ok(events[0]?.kind === 'step' && events[0].text.includes('fresh.ts'))
+    } finally {
+      tracker.stop()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('SubagentTracker does not claim killed subagent opened, surfaces state transitions and transcript errors', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agy-tracker-state-'))
+    const convDir = join(root, '.gemini', 'antigravity-cli', 'conversations')
+    const brainBase = join(root, '.gemini', 'antigravity-cli', 'brain')
+    mkdirSync(convDir, { recursive: true })
+    setAgyDbDir(convDir)
+
+    const mainConvId = 'main-conv-state'
+    const mainBrain = join(brainBase, mainConvId)
+    const subagentsDir = join(mainBrain, '.system_generated', 'subagents')
+    mkdirSync(subagentsDir, { recursive: true })
+
+    const deadSubId = 'sub-already-killed'
+    mkdirSync(join(brainBase, deadSubId, '.system_generated', 'logs'), { recursive: true })
+    const liveSubId = 'sub-will-die'
+    const liveLogsDir = join(brainBase, liveSubId, '.system_generated', 'logs')
+    mkdirSync(liveLogsDir, { recursive: true })
+
+    const events: AgyEvent[] = []
+    const tracker = new SubagentTracker({
+      conversationId: mainConvId,
+      accountHome: root,
+      pollIntervalMs: 40,
+      onEvent: (ev) => { events.push(ev) },
+    })
+
+    try {
+      tracker.start()
+      // 1. Subagent created already KILLED must never emit 已启动协同专员
+      writeFileSync(
+        join(subagentsDir, `${deadSubId}.json`),
+        JSON.stringify({ conversationId: deadSubId, subagentDescriptor: { typeName: 'DeepCoder', role: 'Dead Worker' }, state: 'SUBAGENT_STATE_KILLED' }),
+      )
+      // 2. Live subagent starts ALIVE, reports transcript error, then transitions to KILLED
+      const liveDescriptorPath = join(subagentsDir, `${liveSubId}.json`)
+      writeFileSync(
+        liveDescriptorPath,
+        JSON.stringify({ conversationId: liveSubId, subagentDescriptor: { typeName: 'DeepInvestigator', role: 'Research Worker' }, state: 'SUBAGENT_STATE_ALIVE' }),
+      )
+      const liveTranscript = join(liveLogsDir, 'transcript.jsonl')
+      writeFileSync(
+        liveTranscript,
+        JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'ERROR', content: 'Tool failed' }) + '\n',
+      )
+
+      await new Promise((r) => setTimeout(r, 100))
+      const texts = () => events.filter((e) => e.kind === 'step').map((e) => (e.kind === 'step' ? e.text : ''))
+      assert.ok(!texts().some((t) => t.includes('Dead Worker') && t.includes('已启动协同专员')), `killed subagent must not announce launch: ${JSON.stringify(texts())}`)
+      assert.ok(texts().some((t) => t.includes('Dead Worker') && t.includes('未保持运行')), JSON.stringify(texts()))
+      assert.ok(texts().some((t) => t.includes('Research Worker') && t.includes('执行异常/中止')), JSON.stringify(texts()))
+
+      // Transition live subagent to KILLED
+      writeFileSync(
+        liveDescriptorPath,
+        JSON.stringify({ conversationId: liveSubId, subagentDescriptor: { typeName: 'DeepInvestigator', role: 'Research Worker' }, state: 'SUBAGENT_STATE_KILLED' }),
+      )
+      await new Promise((r) => setTimeout(r, 100))
+      assert.ok(texts().some((t) => t.includes('Research Worker') && t.includes('已停止')), JSON.stringify(texts()))
+
+      // Once terminal, further transcript appends must not emit noise
+      const countAfterStop = events.length
+      writeFileSync(
+        liveTranscript,
+        JSON.stringify({ step_index: 2, source: 'MODEL', type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'view_file', args: { Path: 'src/late.ts' } }] }) + '\n',
+        { flag: 'a' },
+      )
+      await new Promise((r) => setTimeout(r, 90))
+      assert.equal(events.length, countAfterStop)
+    } finally {
+      tracker.stop()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

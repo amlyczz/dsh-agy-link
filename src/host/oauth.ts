@@ -15,10 +15,12 @@
 // directly for isolated-HOME pool accounts.
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, writeFileSync, chmodSync } from 'node:fs'
+import { chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
+import { writeFileAtomicSync } from '../common/atomic-write.ts'
 import { agyFetch } from './net.ts'
+import { agyUserAgent } from '../domain/quota/identity.ts'
 
 /**
  * Public Google consumer-OAuth credentials shipped inside the Antigravity
@@ -61,11 +63,22 @@ export const OAUTH_CALLBACK_PORT = 51121
 export const OAUTH_CALLBACK_PATH = '/oauth-callback'
 export const OAUTH_REDIRECT_URI = `http://localhost:${OAUTH_CALLBACK_PORT}${OAUTH_CALLBACK_PATH}`
 
-/** Runtime endpoint fallback order (Antigravity endpoint first, then Cloud Code PA fallbacks). */
+/** Runtime consumer endpoint fallback order (Daily primary, Daily Sandbox disaster recovery). */
 export const AGY_ENDPOINTS: readonly string[] = [
   'https://daily-cloudcode-pa.googleapis.com',
-  'https://cloudcode-pa.googleapis.com',
+  'https://daily-cloudcode-pa.sandbox.googleapis.com',
 ]
+
+let runtimeAgyVersion: string | null = null
+
+/** Sync the probed `agy --version` so OAuth/UserInfo emit the exact same UA as CloudCode PA. */
+export function setRuntimeAgyVersion(version: string | null): void {
+  runtimeAgyVersion = version
+}
+
+export function getRuntimeAgyVersion(): string | null {
+  return runtimeAgyVersion
+}
 
 export interface PkcePair {
   verifier: string
@@ -110,14 +123,21 @@ interface TokenEndpointPayload {
   error_description?: string
 }
 
-async function postTokenForm(fields: Record<string, string>, proxyUrl?: string): Promise<TokenEndpointPayload> {
+async function postTokenForm(
+  fields: Record<string, string>,
+  proxyUrl?: string,
+  accountScope?: string,
+): Promise<TokenEndpointPayload> {
   const { clientId, clientSecret } = resolveClientCredentials()
   const body = new URLSearchParams({ client_id: clientId, client_secret: clientSecret, ...fields })
   const res = await agyFetch(OAUTH_TOKEN_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': agyUserAgent(runtimeAgyVersion),
+    },
     body: body.toString(),
-  }, proxyUrl)
+  }, proxyUrl, accountScope)
   const payload = (await res.json().catch(() => ({}))) as TokenEndpointPayload
   if (!res.ok) {
     const code = typeof payload.error === 'string' ? payload.error : payload.error?.status
@@ -138,37 +158,73 @@ function toTokenSet(payload: TokenEndpointPayload, refreshTokenFallback?: string
 }
 
 /** Exchange an authorization code for tokens (PKCE-verified). */
-export async function exchangeCode(code: string, verifier: string, proxyUrl?: string): Promise<TokenSet> {
+export async function exchangeCode(
+  code: string,
+  verifier: string,
+  proxyUrl?: string,
+  accountScope?: string,
+): Promise<TokenSet> {
   return toTokenSet(
     await postTokenForm({
       grant_type: 'authorization_code',
       code: code.trim(),
       redirect_uri: OAUTH_REDIRECT_URI,
       code_verifier: verifier,
-    }, proxyUrl),
+    }, proxyUrl, accountScope),
   )
 }
 
-/** Refresh an access token; throws on invalid_grant (credential revoked). */
-export async function refreshTokens(refreshToken: string, proxyUrl?: string): Promise<TokenSet> {
-  return toTokenSet(
-    await postTokenForm({ grant_type: 'refresh_token', refresh_token: refreshToken }, proxyUrl),
-    refreshToken,
-  )
+/** Refresh an access token (with one 500ms confirmation retry on transient invalid_grant). */
+export async function refreshTokens(
+  refreshToken: string,
+  proxyUrl?: string,
+  accountScope?: string,
+): Promise<TokenSet> {
+  try {
+    return toTokenSet(
+      await postTokenForm({ grant_type: 'refresh_token', refresh_token: refreshToken }, proxyUrl, accountScope),
+      refreshToken,
+    )
+  } catch (err) {
+    if (/invalid_grant/i.test(String(err))) {
+      await new Promise((r) => setTimeout(r, 500))
+      return toTokenSet(
+        await postTokenForm({ grant_type: 'refresh_token', refresh_token: refreshToken }, proxyUrl, accountScope),
+        refreshToken,
+      )
+    }
+    throw err
+  }
+}
+
+/** Canonical Google OAuth userinfo reader shared across auth, quota and slot identity checks. */
+export async function fetchUserInfo(
+  accessToken: string,
+  proxyUrl?: string,
+  accountScope?: string,
+): Promise<{ email?: string; name?: string } | null> {
+  try {
+    const res = await agyFetch(OAUTH_USERINFO_URL, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'User-Agent': agyUserAgent(runtimeAgyVersion),
+      },
+    }, proxyUrl, accountScope)
+    if (!res.ok) return null
+    return (await res.json()) as { email?: string; name?: string }
+  } catch {
+    return null
+  }
 }
 
 /** Fetch the account email for a valid access token (best effort). */
-export async function fetchUserEmail(accessToken: string, proxyUrl?: string): Promise<string | undefined> {
-  try {
-    const res = await agyFetch(OAUTH_USERINFO_URL, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }, proxyUrl)
-    if (!res.ok) return undefined
-    const info = (await res.json()) as { email?: string }
-    return typeof info.email === 'string' && info.email ? info.email : undefined
-  } catch {
-    return undefined
-  }
+export async function fetchUserEmail(
+  accessToken: string,
+  proxyUrl?: string,
+  accountScope?: string,
+): Promise<string | undefined> {
+  const info = await fetchUserInfo(accessToken, proxyUrl, accountScope)
+  return typeof info?.email === 'string' && info.email ? info.email : undefined
 }
 
 /**
@@ -198,9 +254,8 @@ export function buildAgyCredentialDoc(tokens: TokenSet, now = Date.now()): strin
 
 export function writeAgyTokenFile(homeDir: string, tokens: TokenSet): string {
   const dir = join(homeDir, '.gemini', 'antigravity-cli')
-  mkdirSync(dir, { recursive: true })
   const file = join(dir, 'antigravity-oauth-token')
-  writeFileSync(file, buildAgyCredentialDoc(tokens), { encoding: 'utf8', mode: 0o600 })
+  writeFileAtomicSync(file, buildAgyCredentialDoc(tokens), 0o600)
   try {
     chmodSync(file, 0o600)
   } catch {
@@ -210,7 +265,7 @@ export function writeAgyTokenFile(homeDir: string, tokens: TokenSet): string {
 }
 
 /** ISO-8601 with local timezone offset, matching agy's writer. */
-function formatLocalIso(ms: number): string {
+export function formatLocalIso(ms: number): string {
   const d = new Date(ms)
   const pad = (n: number, w = 2): string => String(n).padStart(w, '0')
   const offMin = -d.getTimezoneOffset()

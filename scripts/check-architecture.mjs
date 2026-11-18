@@ -47,7 +47,7 @@ for (const file of files) {
   const sf = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
   const deps = []
   sf.forEachChild((n) => {
-    if (ts.isImportDeclaration(n) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
+    if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
       const to = resolveImport(file, n.moduleSpecifier.text)
       if (to) deps.push(to)
     }

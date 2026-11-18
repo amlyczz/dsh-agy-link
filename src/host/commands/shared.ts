@@ -28,6 +28,7 @@ export interface CommandDeps {
     tokenSpeed?: { lastTps: number | null; avgTps: number | null; outputTokens: number; measuredSteps: number; generatingMs: number }
   } | null
   setOverride: (key: string, value: unknown) => void
+  notifyPicker?: () => void
   runDoctor: () => Promise<string>
   sessions?: () => { get(id: unknown): unknown } | undefined
 }
@@ -50,6 +51,7 @@ export const HELP = [
   '- `/agy goal [status|complete|clear|pause]` — inspect or control the current DSH goal',
   '- `/agy session [info|clear]` — view or drop the current session agy binding',
   '- `/agy add-account [alias]` — start OAuth login for a new account slot',
+  '- `/agy use <id>` — switch the active account immediately',
   '- `/agy enable-account <id>` — enable an account slot',
   '- `/agy disable-account <id>` — disable an account slot (skips in rotation)',
   '- `/agy refresh-quota` — query Google backend for fresh quota %',

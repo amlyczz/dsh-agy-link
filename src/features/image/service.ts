@@ -167,7 +167,12 @@ export class ImageService {
     if (!prepared.ok) return prepared.result
     const input = prepared.value
     const cached = this.cache.get(input.cacheKey)
-    if (req.force !== true && cached !== undefined && cached.ok) return { ...cached, durationMs: 0, attempts: 0 }
+    if (req.force !== true && cached !== undefined && cached.ok) {
+      if (cached.path !== '' && existsSync(cached.path)) {
+        return { ...cached, durationMs: 0, attempts: 0 }
+      }
+      this.cache.delete(input.cacheKey)
+    }
 
     const last: ImageResult = { ...emptyImageResult({ ...req, name: input.name, ...(input.aspectRatio === undefined ? {} : { aspectRatio: input.aspectRatio }) }, target.model, target.effort) }
     return this.runAttempts({ ...input, req, cfg, target, last }, signal)

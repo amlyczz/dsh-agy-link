@@ -101,7 +101,7 @@ test('REGRESSION: setOpen suspends overlay scanners and toggles the scroll-lock 
 test('GUARDRAIL: no full-viewport backdrop-filter anywhere in the plugin CSS', () => {
 	// The whole class of flicker comes from filtering the full viewport. Keep the
 	// invariant global so a future overlay (or the lightbox) cannot reintroduce it.
-	for (const rel of ['src/client/global-css.ts', 'src/client/images.ts']) {
+	for (const rel of ['src/client/global-css.ts', 'src/client/images.ts', 'src/client/images/styles.ts']) {
 		const text = readFileSync(join(root, rel), 'utf8')
 		assert.equal(
 			/backdrop-filter\s*:/.test(text),

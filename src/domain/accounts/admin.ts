@@ -249,6 +249,7 @@ export class PoolAdmin {
     if (!data.activeAccountIds) data.activeAccountIds = {}
     data.activeAccountIds[family] = id
     data.lastActiveAccountId = id
+    data.manualPinAt = Date.now()
     if (!accountHasArgon(acc, this.deps.pool)) {
       delete data.activeAccountIds.argon
     } else {
@@ -362,13 +363,17 @@ export class PoolAdmin {
     data.primaryAccountId = id
     // Move to front of accounts list
     data.accounts.unshift(acc)
-    // Make primary immediately active for all families
-    data.activeAccountIds = {
-      google: id,
-      anthropic: id,
-      openai: id,
+    // Make primary immediately active for all eligible families
+    if (!acc.authRequired) {
+      data.activeAccountIds = {
+        google: id,
+        anthropic: id,
+        openai: id,
+        ...(accountHasArgon(acc, this.deps.pool) ? { argon: id } : {}),
+      }
+      data.lastActiveAccountId = id
     }
-    data.lastActiveAccountId = id
+    data.manualPinAt = Date.now()
     this.deps.persist()
     return true
   }
@@ -392,6 +397,7 @@ export class PoolAdmin {
     // Clear stale sticky pointers so the user-prioritized 1st account immediately takes primary effect
     data.activeAccountIds = {}
     data.lastActiveAccountId = undefined
+    data.manualPinAt = Date.now()
     this.deps.persist()
     return true
   }
@@ -449,7 +455,7 @@ export class PoolAdmin {
     const acc = this.account(id)
     if (!acc) return
     acc.lastUsedAt = Date.now()
-    if (acc.authRequired) {
+    if (acc.authRequired && !isTerminalAuthError(acc.authError)) {
       delete acc.authRequired
       delete acc.authError
       delete acc.authMarkedAt

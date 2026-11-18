@@ -79,27 +79,47 @@ function loadInitialStatusCache(): StatusPayload | null {
 
 // Module-level cache for instant remount rendering (preloaded from localStorage for zero-flicker startup)
 let statusCache: StatusPayload | null = loadInitialStatusCache();
+let lastEtag: string | null = null;
+let inFlightStatus: Promise<{ kind: 'ok'; data: StatusPayload } | { kind: 'not-modified' } | { kind: 'error' }> | null = null;
 
-async function getStatus(): Promise<StatusPayload | null> {
-	try {
-		// A bounded fetch: the poll loop must never stack behind a hung request
-		// (undici/browser defaults can park far longer than one poll period).
-		// The signal helper is shared with every write in api.ts.
-		const init: Record<string, unknown> = {};
-		const signal = timedSignal(STATUS_TIMEOUT_MS);
-		if (signal !== undefined) init.signal = signal;
-		const res = await win.fetch?.(base + '/plugins/agy-link/status', init);
-		if (!res || !res.ok) return null;
-		return (await res.json()) as StatusPayload;
-	} catch {
-		return null;
-	}
+async function fetchStatusRaw(force: boolean): Promise<{ kind: 'ok'; data: StatusPayload } | { kind: 'not-modified' } | { kind: 'error' }> {
+	if (!force && inFlightStatus !== null) return inFlightStatus;
+	const job = (async (): Promise<{ kind: 'ok'; data: StatusPayload } | { kind: 'not-modified' } | { kind: 'error' }> => {
+		try {
+			const init: Record<string, unknown> = {};
+			const signal = timedSignal(STATUS_TIMEOUT_MS);
+			if (signal !== undefined) init.signal = signal;
+			if (!force && lastEtag !== null) {
+				init.headers = { 'If-None-Match': lastEtag };
+			}
+			const res = await win.fetch?.(base + '/plugins/agy-link/status', init) as {
+				ok?: boolean;
+				status?: number;
+				headers?: { get?: (name: string) => string | null };
+				json?: () => Promise<unknown>;
+			} | undefined;
+			if (!res) return { kind: 'error' };
+			if (res.status === 304) return { kind: 'not-modified' };
+			if (!res.ok) return { kind: 'error' };
+			const etag = res.headers?.get?.('etag') ?? res.headers?.get?.('ETag') ?? null;
+			if (typeof etag === 'string' && etag !== '') lastEtag = etag;
+			const data = (await res.json?.()) as StatusPayload;
+			return data && typeof data === 'object' ? { kind: 'ok', data } : { kind: 'error' };
+		} catch {
+			return { kind: 'error' };
+		}
+	})().finally(() => {
+		if (inFlightStatus === job) inFlightStatus = null;
+	});
+	inFlightStatus = job;
+	return job;
 }
 
 const statusListeners = new Set<(s: StatusPayload) => void>();
 let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 let statusPollInterval = 3000;
 let statusFetchSeq = 0;
+let visibilityCleanup: (() => void) | null = null;
 
 function isStatusEqual(a: StatusPayload | null, b: StatusPayload | null): boolean {
 	if (a === b) return true;
@@ -142,19 +162,39 @@ export function publishStatusSnapshot(st: StatusPayload): void {
 	publishStatus(st)
 }
 
-async function statusPollTick(): Promise<void> {
+async function statusPollTick(force = false): Promise<void> {
+	// Skip background ticks when window/tab is hidden to avoid idle CPU/network.
+	if (!force && (win.document as { hidden?: boolean } | undefined)?.hidden === true) return;
 	const seq = ++statusFetchSeq;
-	const st = await getStatus();
+	const res = await fetchStatusRaw(force);
 	// A slow response from an older tick must never overwrite newer data.
-	// Only notify when payload actually changed to prevent needless re-renders.
-	if (st !== null && seq === statusFetchSeq) {
-		if (!isStatusEqual(statusCache, st)) {
-			publishStatus(st);
+	// 304 Not Modified or equal JSON skips notification and re-renders.
+	if (res.kind === 'ok' && seq === statusFetchSeq) {
+		if (!isStatusEqual(statusCache, res.data)) {
+			publishStatus(res.data);
 		}
 	}
 }
 
+function attachVisibilityWake(): void {
+	if (visibilityCleanup !== null) return;
+	const doc = win.document as { addEventListener?: (t: string, cb: () => void) => void; removeEventListener?: (t: string, cb: () => void) => void; hidden?: boolean } | undefined;
+	const w = win as { addEventListener?: (t: string, cb: () => void) => void; removeEventListener?: (t: string, cb: () => void) => void };
+	const onWake = () => {
+		if (doc?.hidden !== true && statusListeners.size > 0) {
+			void statusPollTick(false);
+		}
+	};
+	doc?.addEventListener?.('visibilitychange', onWake);
+	w.addEventListener?.('focus', onWake);
+	visibilityCleanup = () => {
+		doc?.removeEventListener?.('visibilitychange', onWake);
+		w.removeEventListener?.('focus', onWake);
+	};
+}
+
 export function ensureStatusPolling(): void {
+	attachVisibilityWake();
 	if (statusPollTimer !== null) {
 		if (statusPollInterval !== 3000) {
 			clearInterval(statusPollTimer);
@@ -164,8 +204,8 @@ export function ensureStatusPolling(): void {
 		}
 	}
 	statusPollInterval = 3000;
-	void statusPollTick();
-	statusPollTimer = setInterval(() => { void statusPollTick(); }, 3000);
+	void statusPollTick(false);
+	statusPollTimer = setInterval(() => { void statusPollTick(false); }, 3000);
 }
 
 export function stopStatusPollingIfIdle(): void {
@@ -174,7 +214,7 @@ export function stopStatusPollingIfIdle(): void {
 	if (statusListeners.size === 0 && statusPollTimer !== null && statusPollInterval === 3000) {
 		clearInterval(statusPollTimer);
 		statusPollInterval = 15000;
-		statusPollTimer = setInterval(() => { void statusPollTick(); }, 15000);
+		statusPollTimer = setInterval(() => { void statusPollTick(false); }, 15000);
 	}
 }
 
@@ -184,6 +224,10 @@ export function disposeStatusPolling(): void {
 		clearInterval(statusPollTimer);
 		statusPollTimer = null;
 	}
+	visibilityCleanup?.();
+	visibilityCleanup = null;
+	lastEtag = null;
+	inFlightStatus = null;
 }
 
 /**
@@ -202,9 +246,6 @@ export function useAgyStatus(): { status: StatusPayload | null; refresh: () => P
 			stopStatusPollingIfIdle();
 		};
 	}, []);
-	const refresh = async (): Promise<void> => {
-		const st = await getStatus();
-		if (st !== null && !isStatusEqual(statusCache, st)) publishStatus(st);
-	};
+	const refresh = (): Promise<void> => statusPollTick(true);
 	return { status, refresh };
 }

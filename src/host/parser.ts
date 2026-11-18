@@ -158,11 +158,15 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
     const stateV = pick(src, ['state'])
     if (stateV === 'ERROR' && toolInfo && !toolInfo.error) {
       toolInfo.error = 'tool execution failed'
+    } else if ((stateV === 'CANCELED' || stateV === 'CANCELLED') && toolInfo && !toolInfo.error) {
+      toolInfo.error = 'tool execution canceled'
     }
     if (stateV === 'RUNNING' && toolInfo && toolInfo.output === undefined && text !== '') {
       toolInfo.output = text
     }
     const usageRaw = pick(src, ['usage'])
+    const convIdRaw = pick(o, ['conversation_id', 'conversationId']) ?? pick(src, ['conversation_id', 'conversationId'])
+    const isTextFragment = stepKind === 'text' && delta !== undefined
     return {
       kind: 'step',
       stepKey,
@@ -172,7 +176,9 @@ export function classifyEvent(obj: unknown, seq: number): AgyEvent | undefined {
       ...(toolInfo !== undefined ? { tool: toolInfo } : {}),
       ...(typeof stateV === 'string' ? { state: stateV } : {}),
       ...(usageRaw && typeof usageRaw === 'object' ? { usage: parseUsage(usageRaw) } : {}),
-      raw: o,
+      ...(typeof convIdRaw === 'string' && convIdRaw !== '' ? { conversationId: convIdRaw } : {}),
+      // Drop raw JSON AST bloat on high-frequency text_delta fragments once conversationId is lifted.
+      ...(isTextFragment ? {} : { raw: o }),
     };
   }
   if (evt === 'result' || evt === 'done' || evt === 'final') {

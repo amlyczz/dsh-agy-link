@@ -11,7 +11,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
-          'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
+          'enabled', 'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog',
@@ -35,7 +35,9 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         // active account's catalog and the pool-wide union (issue #107/#108).
         // Without this event the cached picker keeps the old list until a
         // restart, so enabling the switch looked like "it did nothing".
-        if (key === 'hiddenModels' || key === 'poolWideCatalog') notifyPicker()
+        if (key === 'hiddenModels' || key === 'poolWideCatalog' || key === 'enabled') {
+          notifyPicker()
+        }
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })
       })
 }

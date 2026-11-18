@@ -82,5 +82,7 @@ export function Button(props: ButtonProps): unknown {
 	const merged: Record<string, unknown> = { ...base, ...(style ?? {}) };
 	const attrs: Record<string, unknown> = { type: 'button', ...rest, style: merged };
 	if (className !== undefined) attrs.className = className;
-	return h('button', attrs, children);
+	return Array.isArray(children)
+		? h('button', attrs, ...children)
+		: h('button', attrs, children);
 }

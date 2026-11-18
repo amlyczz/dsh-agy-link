@@ -54,12 +54,24 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
   const { sub, arg } = ctx
   if (sub === 'pool' || sub === 'accounts') return renderPool(deps)
 
+  if (sub === 'use' || sub === 'set-active') {
+    if (!arg) return err('usage: /agy use <id>')
+    const pool = deps.pool?.()
+    if (!pool) return err('Account pool not available')
+    const prev = pool.getActiveAccountId('google')
+    const success = pool.setActiveAccount(arg)
+    if (!success) return err(`Account ${arg} not found or not eligible (disabled / auth required)`)
+    if (arg === prev) deps.notifyPicker?.()
+    return ok(`Active account set to **${arg}** — model picker synced.`)
+  }
+
   if (sub === 'enable-account' || sub === 'disable-account') {
     if (!arg) return err(`usage: /agy ${sub} <id>`)
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
     const enabled = sub === 'enable-account'
     const success = pool.setAccountEnabled(arg, enabled)
+    if (success) deps.notifyPicker?.()
     return success ? ok(`${enabled ? 'Enabled' : 'Disabled'} account ${arg}`) : err(`Account ${arg} not found`)
   }
 
@@ -84,7 +96,7 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
   if (sub === 'refresh-quota') {
     const quota = deps.quota?.()
     if (!quota) return err('Quota service not available')
-    await quota.refreshAllQuotas()
+    await quota.refreshAllQuotas(true)
     return ok('Refreshed quota statistics for all accounts in pool.')
   }
 
@@ -95,6 +107,7 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
     // cached snapshot. Without it this command only touched 429 timers, so
     // it could never clear the "quota-exhausted" block the error mentioned.
     pool.clearCooldown(arg || undefined, undefined, true)
+    deps.notifyPicker?.()
     return ok('Cleared cooldown timers and any active low-quota bench (until the next quota refresh).')
   }
 
@@ -103,6 +116,7 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
     const success = pool.deleteAccount(arg)
+    if (success) deps.notifyPicker?.()
     return success ? ok(`Removed account ${arg}`) : err(`Account ${arg} not found`)
   }
 

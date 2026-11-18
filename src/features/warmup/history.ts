@@ -1,8 +1,9 @@
 // Warmup cooldown history: durable per-key timestamps with write-then-rename
 // persistence. Re-reads before deciding so web + headless hosts do not fire the
 // same probe twice.
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tryWriteFileAtomic } from '../../common/atomic-write.ts'
 import { stateDir } from '../../common/config.ts'
 import { THIRTY_DAYS_MS } from './policy.ts'
 
@@ -36,17 +37,9 @@ export class WarmupHistoryStore {
   }
 
   save(): void {
-    try {
-      this.pruneOldEntries()
-      const obj = Object.fromEntries(this.history.entries())
-      // Write-then-rename: a crash mid-write must not leave a truncated JSON
-      // file that resets every cooldown on the next boot.
-      const tmp = `${this.filePath}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8')
-      renameSync(tmp, this.filePath)
-    } catch {
-      // best-effort save
-    }
+    this.pruneOldEntries()
+    const obj = Object.fromEntries(this.history.entries())
+    tryWriteFileAtomic(this.filePath, JSON.stringify(obj, null, 2))
   }
 
   checkCooldown(key: string, cooldownMs: number, now = Date.now()): boolean {

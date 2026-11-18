@@ -2,11 +2,13 @@
 // Covers stale staging/log cleanup, per-account login keychains (macOS) and the
 // process-global credential slot (Windows). Keeps index.ts a thin root.
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
+import { writeFileAtomicSync } from '../common/atomic-write.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { ensureIsolatedKeychain, purgeStaleIsolatedKeychain, repairMacSystemKeychain } from './runner.ts'
+import { unwrapGoKeyringPayload } from '../runtime/agy/keychain.ts'
 import { resolvePrimaryCredential, findDuplicateCredentialIdentities } from './credential-slot.ts'
 import { hasRefreshToken, readAccountCredential, saveCredentialBackup } from './credential-backup.ts'
 import type { HostServices } from './services.ts'
@@ -32,11 +34,10 @@ export function restoreTokenFromMacKeychain(accDir: string, tokenFile: string, l
       timeout: 3000,
       windowsHide: true,
     }).trim()
-    if (!raw.startsWith('go-keyring-base64:')) return null
-    const jsonStr = Buffer.from(raw.slice('go-keyring-base64:'.length), 'base64').toString('utf8')
+    if (!raw) return null
+    const jsonStr = unwrapGoKeyringPayload(raw)
     if (!hasRefreshToken(jsonStr)) return null
-    mkdirSync(dirname(tokenFile), { recursive: true })
-    writeFileSync(tokenFile, jsonStr, { mode: 0o600 })
+    writeFileAtomicSync(tokenFile, jsonStr, 0o600)
     saveCredentialBackup(tokenFile, jsonStr)
     log?.(`[agy-link] restored account credential from macOS isolated keychain for ${accDir}`)
     return jsonStr
@@ -50,6 +51,8 @@ export function runBootHygiene(services: HostServices): void {
   try {
     const validAccIds = new Set(pool.getAccounts().map((a) => a.id))
     store.cleanupStaleAccounts(validAccIds)
+    const pruned = store.pruneStaleBindings()
+    if (pruned > 0) log('pruned ' + pruned + ' expired session binding(s)')
   } catch {
     // best-effort hygiene
   }

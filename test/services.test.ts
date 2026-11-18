@@ -184,12 +184,12 @@ test('log prefixes messages and tolerates a ctx without a logger', (t) => {
   assert.doesNotThrow(() => noLogger.log('silent'))
 })
 
-test('notifyPicker emits llm/adapters-updated and tolerates missing/throwing emit', (t) => {
+test('notifyPicker emits llm/models-updated + llm/adapters-updated and tolerates missing/throwing emit', (t) => {
   sandbox(t)
   const events: string[] = []
   const emitted = createHostServices(asCtx({ emit: (e: string) => events.push(e) }), {})
   emitted.notifyPicker()
-  assert.deepEqual(events, ['llm/adapters-updated'])
+  assert.deepEqual(events, ['llm/models-updated', 'llm/adapters-updated'])
 
   const noEmit = createHostServices(asCtx({}), {})
   assert.doesNotThrow(() => noEmit.notifyPicker())
@@ -305,12 +305,40 @@ test('rememberEffortUnsupported persists, announces, and de-duplicates case/spac
   services.rememberEffortUnsupported('claude-sonnet-4-6')
   const file = join(root, 'agy-link', 'effort-unsupported.json')
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), ['a', 'claude-sonnet-4-6'])
-  assert.deepEqual(events, ['llm/adapters-updated'])
+  assert.deepEqual(events, ['llm/models-updated', 'llm/adapters-updated'])
 
   // Same model (case/whitespace-insensitive) is a no-op: no second event/write.
   services.rememberEffortUnsupported('  CLAUDE-SONNET-4-6 ')
-  assert.deepEqual(events, ['llm/adapters-updated'])
+  assert.deepEqual(events, ['llm/models-updated', 'llm/adapters-updated'])
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), ['a', 'claude-sonnet-4-6'])
+})
+
+test('createHostServices wires per-account catalog into pool.isModelSupported and dsh-agent model.select', async (t) => {
+  sandbox(t)
+  const selected: unknown[] = []
+  const fakeAgents = {
+    resolve: async (id: unknown) => (id === 'sess-1' ? { model: { select: (s: unknown) => selected.push(s) } } : undefined),
+  }
+  const services = createHostServices(asCtx({ get: (k) => (k === 'agents' ? fakeAgents : undefined) }), {})
+  const acc1 = services.pool.getAccounts()[0]!
+  const acc2 = services.pool.createAccountSlot('Secondary')
+
+  // Populate discovered catalog ONLY for acc1 (with Argon), leave acc2 un-probed
+  ;(services.catalog as any).accountCatalogs.set(acc1.id, {
+    source: 'discovered',
+    models: [{ id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['high'] }],
+    discoveredAt: Date.now(),
+  })
+  ;(services.catalog as any).current = (services.catalog as any).accountCatalogs.get(acc1.id)
+
+  assert.equal(services.pool.isModelSupported(acc1, 'gemini-4-argon'), true, 'pool must see acc1 discovered catalog')
+  assert.equal(services.pool.isModelSupported(acc2, 'gemini-4-argon'), false, 'un-probed acc2 must not inherit acc1 Argon')
+
+  // Verify syncSessionModel reaches dsh-agent's resolve(id).model.select(...)
+  ;(services.adapter as any).deps.syncSessionModel('sess-1', 'gemini-3.8-flash', 'high')
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(selected.length, 1)
+  assert.deepEqual(selected[0], { provider: 'antigravity', model: 'gemini-3.8-flash', reasoningEffort: 'high' })
 })
 
 test('rememberEffortUnsupported logs instead of throwing when persistence fails', (t) => {

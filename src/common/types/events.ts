@@ -43,7 +43,9 @@ export type AgyEvent =
       state?: string
       /** Per-step usage (agy ≥1.1.15 reports usage on agent_response steps). */
       usage?: RawUsage
-      raw: unknown
+      /** Conversation id carried directly on step_update when init hasn't been seen yet. */
+      conversationId?: string
+      raw?: unknown
     }
   | {
       kind: 'result'

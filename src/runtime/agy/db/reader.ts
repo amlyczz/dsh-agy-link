@@ -8,6 +8,7 @@ import { extractStepThoughts, extractToolInfo } from './extract.ts'
 import { findConversationDb, isSafeConversationId } from './paths.ts'
 import {
   MAX_CACHE_AGE_MS,
+  STEP_QUERY_RAW_SQL,
   STEP_QUERY_SQL,
   TOOL_STEP_TYPES,
   type AgyDbData,
@@ -15,6 +16,12 @@ import {
 } from './schema.ts'
 
 const execFileAsync = promisify(execFile)
+
+interface RawStepRow {
+  idx: number
+  stepType: number
+  payload: Buffer
+}
 
 /**
  * node:sqlite reader (Node >= 22.5, REQUIRED node >= 24 for this plugin).
@@ -24,6 +31,7 @@ const execFileAsync = promisify(execFile)
  * report (issue #43). `undefined` = not probed yet, `null` = unavailable.
  */
 let nodeSqliteQuery: ((dbPath: string, sql: string) => Promise<string[]>) | null | undefined
+let nodeSqliteRawQuery: ((dbPath: string, minIdx: number) => Promise<RawStepRow[]>) | null | undefined
 
 /**
  * TEST-ONLY injection: override the node:sqlite reader function.
@@ -34,11 +42,13 @@ export function __setNodeSqliteQueryForTest(
   fn: ((dbPath: string, sql: string) => Promise<string[]>) | null | undefined,
 ): void {
   nodeSqliteQuery = fn
+  if (fn !== undefined) nodeSqliteRawQuery = null
+  else nodeSqliteRawQuery = undefined
 }
 
-async function queryViaNodeSqlite(dbPath: string, sql: string): Promise<string[]> {
+async function queryRawViaNodeSqlite(dbPath: string, minIdx: number): Promise<RawStepRow[]> {
   if (nodeSqliteQuery === null) throw new Error('node:sqlite unavailable')
-  if (nodeSqliteQuery === undefined) {
+  if (nodeSqliteRawQuery === undefined && nodeSqliteQuery === undefined) {
     try {
       const mod = (await import('node:sqlite')) as {
         DatabaseSync?: new (path: string, options?: { open?: boolean; readOnly?: boolean }) => {
@@ -49,7 +59,7 @@ async function queryViaNodeSqlite(dbPath: string, sql: string): Promise<string[]
       }
       if (typeof mod.DatabaseSync !== 'function') throw new Error('DatabaseSync missing')
       const Database = mod.DatabaseSync
-      nodeSqliteQuery = async (p, q) => {
+      nodeSqliteRawQuery = async (p, startIdx) => {
         let db: {
           exec(sql: string): unknown
           prepare(sql: string): { all(...params: unknown[]): unknown[] }
@@ -63,18 +73,61 @@ async function queryViaNodeSqlite(dbPath: string, sql: string): Promise<string[]
         try {
           try { db.exec('PRAGMA busy_timeout = 2000;') } catch { /* ignore */ }
           try { db.exec('PRAGMA query_only = ON;') } catch { /* ignore */ }
-          const rows = db.prepare(q).all() as Array<{ idx?: unknown; step_type?: unknown; payload_hex?: unknown }>
-          return rows.map((r) => `${String(r.idx)}|${String(r.step_type)}|${typeof r.payload_hex === 'string' ? r.payload_hex : ''}`)
+          const rows = db.prepare(STEP_QUERY_RAW_SQL).all(startIdx) as Array<{
+            idx?: unknown
+            step_type?: unknown
+            step_payload?: unknown
+          }>
+          const out: RawStepRow[] = []
+          for (const r of rows) {
+            const idx = typeof r.idx === 'number' ? r.idx : Number(r.idx)
+            const stepType = typeof r.step_type === 'number' ? r.step_type : Number(r.step_type)
+            if (!Number.isFinite(idx) || !Number.isFinite(stepType)) continue
+            let payload: Buffer
+            if (r.step_payload instanceof Uint8Array) {
+              payload = Buffer.from(r.step_payload.buffer, r.step_payload.byteOffset, r.step_payload.byteLength)
+            } else if (typeof r.step_payload === 'string' && r.step_payload !== '') {
+              payload = Buffer.from(r.step_payload, 'utf8')
+            } else {
+              continue
+            }
+            out.push({ idx, stepType, payload })
+          }
+          return out
         } finally {
           db.close()
         }
       }
     } catch (err) {
-      nodeSqliteQuery = null
+      nodeSqliteRawQuery = null
       throw err instanceof Error ? err : new Error(String(err))
     }
   }
-  return nodeSqliteQuery(dbPath, sql)
+  if (nodeSqliteRawQuery) {
+    return nodeSqliteRawQuery(dbPath, minIdx)
+  }
+  if (typeof nodeSqliteQuery === 'function') {
+    const sql = minIdx > 0 ? `${STEP_QUERY_SQL} AND idx >= ${Math.floor(minIdx)}` : STEP_QUERY_SQL
+    return parseHexLines(await nodeSqliteQuery(dbPath, sql))
+  }
+  throw new Error('node:sqlite unavailable')
+}
+
+function parseHexLines(lines: readonly string[]): RawStepRow[] {
+  const out: RawStepRow[] = []
+  for (const line of lines) {
+    const firstPipe = line.indexOf('|')
+    if (firstPipe < 0) continue
+    const secondPipe = line.indexOf('|', firstPipe + 1)
+    if (secondPipe < 0) continue
+    const idx = parseInt(line.slice(0, firstPipe), 10)
+    const stepType = parseInt(line.slice(firstPipe + 1, secondPipe), 10)
+    if (!Number.isFinite(idx) || !Number.isFinite(stepType)) continue
+    const hexPayload = line.slice(secondPipe + 1).trim()
+    if (hexPayload === '' || hexPayload === 'NULL') continue
+    out.push({ idx, stepType, payload: Buffer.from(hexPayload, 'hex') })
+  }
+  return out
 }
 
 /**
@@ -111,62 +164,55 @@ export function resetReaderState(): void {
  * during copy. SQLite WAL mode provides concurrent read MVCC snapshots
  * natively without copying to temp.
  */
-export async function loadAgyDbData(conversationId: string, accountHome?: string): Promise<AgyDbData> {
+export async function loadAgyDbData(conversationId: string, accountHome?: string, sinceIdx = 0): Promise<AgyDbData> {
   const steps = new Map<number, CachedStep>()
   const thoughts = new Map<number, string>()
   const seenSteps = new Set<number>()
-  if (!isSafeConversationId(conversationId)) return { steps, thoughts, seenSteps }
+  let maxSeenIdx = sinceIdx > 0 ? Math.floor(sinceIdx) - 1 : -1
+  if (!isSafeConversationId(conversationId)) return { steps, thoughts, seenSteps, maxSeenIdx }
   const dbPath = findConversationDb(conversationId, accountHome)
-  if (dbPath === null) return { steps, thoughts, seenSteps }
+  if (dbPath === null) return { steps, thoughts, seenSteps, maxSeenIdx }
 
   try {
     const st = await stat(dbPath)
-    if (st.size === 0) return { steps, thoughts, seenSteps }
+    if (st.size === 0) return { steps, thoughts, seenSteps, maxSeenIdx }
   } catch {
-    return { steps, thoughts, seenSteps }
+    return { steps, thoughts, seenSteps, maxSeenIdx }
   }
 
   try {
+    const minIdx = Number.isFinite(sinceIdx) && sinceIdx > 0 ? Math.floor(sinceIdx) : 0
     // node:sqlite first (no external binary — desktop hosts, issue #43);
     // the sqlite3 CLI stays as the fallback for runtimes without node:sqlite.
-    let lines: string[] | null = null
+    let rows: RawStepRow[] | null = null
     try {
-      lines = await queryViaNodeSqlite(dbPath, STEP_QUERY_SQL)
+      rows = await queryRawViaNodeSqlite(dbPath, minIdx)
     } catch {
       try {
+        const sql = minIdx > 0 ? `${STEP_QUERY_SQL} AND idx >= ${minIdx}` : STEP_QUERY_SQL
         const { stdout } = await execFileAsync('sqlite3', [
           '-cmd', '.timeout 2000',
           '-cmd', 'PRAGMA query_only = ON;',
           dbPath,
-          STEP_QUERY_SQL,
+          sql,
         ], {
           timeout: 5_000,
           encoding: 'utf-8',
           maxBuffer: 25 * 1024 * 1024,
         })
-        lines = stdout.split('\n')
+        rows = parseHexLines(stdout.split('\n'))
       } catch {
-        lines = null
+        rows = null
       }
     }
-    if (lines === null) {
+    if (rows === null) {
       throw new Error('no sqlite reader available (node:sqlite and sqlite3 CLI both failed)')
     }
 
-    for (const line of lines) {
-      const firstPipe = line.indexOf('|')
-      if (firstPipe < 0) continue
-      const secondPipe = line.indexOf('|', firstPipe + 1)
-      if (secondPipe < 0) continue
-
-      const idx = parseInt(line.slice(0, firstPipe), 10)
-      const stepType = parseInt(line.slice(firstPipe + 1, secondPipe), 10)
-      if (!Number.isFinite(idx)) continue
+    for (const row of rows) {
+      const { idx, stepType, payload } = row
       seenSteps.add(idx)
-      const hexPayload = line.slice(secondPipe + 1).trim()
-      if (hexPayload === '' || hexPayload === 'NULL') continue
-
-      const payload = Buffer.from(hexPayload, 'hex')
+      if (idx > maxSeenIdx) maxSeenIdx = idx
       if (TOOL_STEP_TYPES.has(stepType)) {
         const info = extractToolInfo(payload)
         if (info !== null) {
@@ -206,5 +252,5 @@ export async function loadAgyDbData(conversationId: string, accountHome?: string
     }
   }
 
-  return { steps, thoughts, seenSteps }
+  return { steps, thoughts, seenSteps, maxSeenIdx }
 }

@@ -1,34 +1,37 @@
-// Model discovery and projection (spec ADR-10): agy models output ->
-// DSH catalog entries. Gemini slugs fold into a base model plus selectable
-// reasoning efforts; non-Gemini slugs (claude-*, gpt-oss-* size variants)
-// stay verbatim with no effort toggle, matching observed agy behavior
-// (agy rejects --effort for Claude/GPT-OSS). Discovery failure falls back to
-// a bundled catalog so the /model picker is never empty.
-import type { FallbackModelDef, PluginConfig } from '../common/types.ts'
+// Model discovery cache & per-account projection (spec ADR-10).
+// Pure parsing, effort folding, and slug resolution live in ../domain/models/parse.ts.
+import { existsSync, readFileSync } from 'node:fs'
+import { writeFileAtomicSync } from '../common/atomic-write.ts'
+import type { FallbackModelDef } from '../common/types.ts'
 import type { ManagedAccount } from '../common/pool-types.ts'
 import { accountHasArgon, isArgonModel } from '../common/pool-types.ts'
-import { normalizeEfforts, splitEffortSuffix } from '../common/reasoning.ts'
-import { PREFERRED_CLAUDE, PREFERRED_CLAUDE_OPUS, PREFERRED_OPENAI } from '../common/model-lineup.ts'
+import { staggerJitterMs } from '../domain/quota/identity.ts'
 import type { AccountPoolManager } from './pool.ts'
+import {
+  buildFallbackCatalog,
+  foldEfforts,
+  isUnauthenticatedModelsFallback,
+  parseModelsOutput,
+  sameCatalogEntry,
+  sanitizeCatalogEntries,
+  type Catalog,
+  type CatalogEntry,
+} from '../domain/models/parse.ts'
 
 export { accountHasArgon, isArgonModel }
-
-export interface RawModel { slug: string; label: string }
-
-export interface CatalogEntry {
-  id: string
-  name: string
-  /** null = fixed-thinking model (no effort flag). */
-  efforts: readonly string[] | null
-}
-
-export interface Catalog {
-  source: 'discovered' | 'fallback'
-  models: readonly CatalogEntry[]
-  discoveredAt: number
-  /** Last discovery error, surfaced by /agy models and doctor. */
-  lastError?: string
-}
+export {
+  buildFallbackCatalog,
+  defaultEffortFor,
+  findEntry,
+  foldEfforts,
+  isUnauthenticatedModelsFallback,
+  parseModelsOutput,
+  resolveModelSlug,
+  sanitizeCatalogEntries,
+  type Catalog,
+  type CatalogEntry,
+  type RawModel,
+} from '../domain/models/parse.ts'
 
 /** Check whether any enabled account in the pool has confirmed access to Argon. */
 export function poolHasArgon(
@@ -37,235 +40,135 @@ export function poolHasArgon(
 ): boolean {
   if (!pool) return false
   const accounts = pool.getAccounts().filter((a) => a.enabled)
-  return accounts.some((acc) => accountHasArgon(acc, pool, catalog?.get(acc.id)))
+  return accounts.some((acc) => accountHasArgon(acc, pool, catalog?.getAccountCatalog(acc.id)))
 }
-
-/** Parse `agy models` stdout: JSON shapes first, then two-column text. */
-export function parseModelsOutput(stdout: string): RawModel[] {
-  const text = stdout.trim()
-  if (text === '') return []
-  try {
-    const parsed: unknown = JSON.parse(text)
-    const list = extractModelList(parsed)
-    if (list) return dedupeBySlug(list)
-  } catch {
-    // fall through to text parsing
-  }
-  const out: RawModel[] = []
-  for (const line of text.split(/\n/)) {
-    const t = line.trim();
-    // Skip agy banners / diagnostics case-insensitively; a lowercase
-    // "error:  …" line otherwise parsed into a bogus model slug.
-    if (t === '' || /^(fetching|error|failed|warning|please sign in|tip:)/i.test(t)) continue
-    // agy 1.1.15 prints a TAB-separated two-column table; older builds and
-    // some locales use two-or-more spaces.
-    const m = t.match(/^(\S+)(?:\t+|\s{2,})(.+)$/)
-    if (m && m[1] !== undefined && m[2] !== undefined) out.push({ slug: m[1], label: m[2].trim() });
-    else if (/^\S+$/.test(t)) out.push({ slug: t, label: t });
-  }
-  return dedupeBySlug(out);
-}
-
-/** First occurrence wins: duplicate raw slugs would become duplicate catalog ids. */
-function dedupeBySlug(raw: readonly RawModel[]): RawModel[] {
-  const seen = new Set<string>()
-  const out: RawModel[] = []
-  for (const r of raw) {
-    if (!r.slug || typeof r.slug !== 'string') continue
-    const slug = r.slug.trim()
-    if (slug === '' || seen.has(slug)) continue
-    seen.add(slug)
-    out.push({ slug, label: (typeof r.label === 'string' && r.label.trim() !== '') ? r.label.trim() : slug })
-  }
-  return out
-}
-
-function extractModelList(parsed: unknown): RawModel[] | null {
-  let arr: unknown[] | null = null;
-  if (Array.isArray(parsed)) arr = parsed;
-  else if (parsed && typeof parsed === 'object') {
-    const o = parsed as Record<string, unknown>
-    for (const k of ['models', 'items', 'data', 'result']) {
-      if (Array.isArray(o[k])) {
-        arr = o[k] as unknown[];
-        break;
-      }
-    }
-  }
-  if (!arr) return null;
-  const out: RawModel[] = []
-  for (const item of arr) {
-    if (typeof item === 'string') {
-      out.push({ slug: item, label: item });
-      continue;
-    }
-    if (!item || typeof item !== 'object') continue
-    const o = item as Record<string, unknown>
-    const slugV = o.slug ?? o.id ?? o.name ?? o.model;
-    const labelV = o.label ?? o.display_name ?? o.displayName ?? o.title ?? slugV;
-    if (typeof slugV === 'string' && slugV !== '') {
-      out.push({ slug: slugV, label: typeof labelV === 'string' ? labelV : slugV });
-    }
-  }
-  return out;
-}
-
-
-/** Fold Gemini/Argon/Claude effort variants into base + effort set (spec ADR-10).
- *  Claude 5.5 is listed only as tiered slugs by agy 1.5.3; the base slug is the
- *  one that accepts `--effort`, and passing a tiered slug together with the flag
- *  is rejected ("--model … conflicts with --effort=…").
- *
- *  The effort vocabulary itself (including agy 1.5.7's `xhigh`, which its picker
- *  labels "Extra") comes from `common/reasoning.ts` — folding must never carry
- *  its own copy of the list, or a new level silently becomes a bogus MODEL:
- *  a missed `xhigh` used to surface `gemini-4-hydrogen-xhigh` next to
- *  `gemini-4-hydrogen` in DSH's picker. */
-export function foldEfforts(raw: readonly RawModel[]): CatalogEntry[] {
-  const bases = new Map<string, { label: string; efforts: Set<string> }>()
-  const verbatim: CatalogEntry[] = []
-  const slugSet = new Set(raw.map((r) => r.slug))
-  for (const r of raw) {
-    if (!r.slug.startsWith('gemini') && !r.slug.startsWith('argon') && !r.slug.startsWith('claude')) {
-      verbatim.push({ id: r.slug, name: r.label, efforts: null });
-      continue;
-    }
-    const split = splitEffortSuffix(r.slug)
-    if (split.effort !== undefined) {
-      const base = split.base
-      const eff = split.effort
-      // Only fold when the base is a real catalog member (either listed bare
-      // or via another variant); gpt-oss-120b-medium never reaches here (not
-      // gemini), but a lone gemini-x-medium with no siblings stays verbatim
-      // rather than inventing a base.
-      const hasBare = slugSet.has(base)
-      const hasSibling = raw.some((x) => x.slug !== r.slug && splitEffortSuffix(x.slug).base === base)
-      if (hasBare || hasSibling) {
-        const entry = bases.get(base) ?? { label: stripEffortLabel(r.label, eff), efforts: new Set<string>() }
-        entry.efforts.add(eff)
-        bases.set(base, entry)
-        continue
-      }
-    }
-    verbatim.push({ id: r.slug, name: r.label, efforts: null });
-  }
-  const folded: CatalogEntry[] = []
-  for (const [id, v] of bases) {
-    const efforts = normalizeEfforts(v.efforts)
-    folded.push({ id, name: v.label !== '' ? v.label : id, efforts: efforts.length > 0 ? efforts : null });
-  }
-  // Rank every output entry by the earliest raw slug it covers.
-  const rawOrder = new Map(raw.map((r, i) => [r.slug, i] as const))
-  const rank = (e: CatalogEntry): number => {
-    let best = Infinity;
-    for (const r of raw) if (r.slug === e.id || r.slug.startsWith(e.id + '-')) best = Math.min(best, rawOrder.get(r.slug) ?? Infinity)
-    return best;
-  };
-  // A bare base listed alongside its variants (agy 1.1.13 shape) is already
-  // represented by its folded entry; emitting it verbatim too would duplicate
-  // the id and DSH's llm.listModels would reject the whole provider catalog
-  // (INVALID_CATALOG), dropping every Antigravity model from the picker.
-  //
-  // ONE list, ranked by the position of the first raw slug it covers: the
-  // picker then lists models in exactly the order `agy models` printed them
-  // (grouping folded-then-verbatim used to push Orchestrator to the bottom
-  // while agy shows it third).
-  return [...folded, ...verbatim.filter((e) => !bases.has(e.id))]
-    .sort((a, b) => rank(a) - rank(b));
-}
-
-function stripEffortLabel(label: string, eff: string): string {
-  const re = new RegExp('\\s*\\(?'+ eff +'\\)?\\s*$', 'i')
-  return label.replace(re, '').trim()
-}
-
-export function buildFallbackCatalog(defs: readonly FallbackModelDef[]): CatalogEntry[] {
-  return defs
-    .filter((d) => Boolean(d && typeof d.id === 'string' && d.id.trim() !== ''))
-    .map((d) => ({
-      id: d.id.trim(),
-      name: (typeof d.name === 'string' && d.name.trim() !== '') ? d.name.trim() : d.id.trim(),
-      efforts: Array.isArray(d.efforts) && d.efforts.length > 0 ? d.efforts.filter((e) => typeof e === 'string' && e.trim() !== '') : null,
-    }));
-}
-
-/**
- * Sanitized (id, name) projection of a catalog: trimmed non-empty ids with
- * first occurrence winning — exactly what listModels serves to DSH. Shared
- * with the settings UI's model-visibility list so the picker and the UI can
- * never disagree about which models exist.
- */
-export function sanitizeCatalogEntries(models: readonly CatalogEntry[]): {
-  entries: Array<{ id: string; name: string; efforts: string[] }>
-  dropped: string[]
-} {
-  const seen = new Set<string>()
-  const entries: Array<{ id: string; name: string; efforts: string[] }> = []
-  const dropped: string[] = []
-  for (const m of models) {
-    if (!m || typeof m.id !== 'string') continue
-    const id = m.id.trim()
-    if (id === '') continue
-    if (seen.has(id)) {
-      dropped.push(id)
-      continue
-    }
-    seen.add(id)
-    const name = typeof m.name === 'string' && m.name.trim() !== '' ? m.name.trim() : id
-    // The effort set travels with the entry so the settings dropdowns can
-    // offer exactly what the model supports instead of a second hardcoded
-    // low/medium/high list (see common/reasoning.ts).
-    entries.push({ id, name, efforts: normalizeEfforts(m.efforts) })
-  }
-  return { entries, dropped }
-}
-
-// ---------------------------------------------------------------------------
-// Catalog cache with TTL + stale-while-revalidate (pi-bridge pattern).
 
 export type DiscoverFn = (signal?: AbortSignal, accountId?: string) => Promise<{ stdout: string; stderr: string }>
 
+export interface ModelCatalogOptions {
+  cacheFile?: string
+  agyVersion?: () => string | null
+  staggerMs?: () => number
+}
+
+interface PersistedCatalogDisk {
+  version: 1
+  agyVersion?: string | null
+  current?: Catalog
+  accounts?: Record<string, Catalog>
+}
+
 export class ModelCatalog {
-  private current: Catalog;
-  private readonly accountCatalogs = new Map<string, Catalog>();
-  private refreshing: Promise<void> | null = null;
-  /**
-   * While the catalog is still on the fallback source, re-probe at most once
-   * per this interval: `agy models` costs a 30s-capped spawn, and with the
-   * user signed out EVERY listModels call (picker open, resolveModel, stream)
-   * used to trigger one — a spawn storm that never converged.
-   */
-  private static readonly FALLBACK_RETRY_MS = 60_000;
-  private lastAttemptAt = 0;
-  /**
-   * Per-account probe timestamps. `refreshIfNeeded(accountId)` used to skip
-   * the throttle whenever the account had no catalog yet, so a signed-out /
-   * expired account could be probed on EVERY listModels() read (issue #106).
-   */
-  private readonly accountAttemptAt = new Map<string, number>();
+  private current: Catalog
+  private readonly accountCatalogs = new Map<string, Catalog>()
+  private readonly refreshingByKey = new Map<string, Promise<void>>()
+  private static readonly FALLBACK_RETRY_MS = 60_000
+  private lastAttemptAt = 0
+  private readonly accountAttemptAt = new Map<string, number>()
+  private persistedAgyVersion: string | null = null
 
   constructor(
     private readonly discover: DiscoverFn,
     private readonly fallbackDefs: readonly FallbackModelDef[],
     private readonly ttlMs: number,
     private readonly onUpdate?: () => void,
+    private readonly options: ModelCatalogOptions = {},
   ) {
     this.current = {
       source: 'fallback',
       models: buildFallbackCatalog(fallbackDefs),
       discoveredAt: 0,
-    };
+    }
+    this.hydrateFromDisk()
   }
 
-  /**
-   * Return the deduplicated set of all real models discovered from `agy models`
-   * across base and per-account catalogs. Quotas are never treated as models,
-   * and fallback definitions are only used when discovery failed everywhere.
-   */
+  private sanitizePersisted(cat: Catalog | undefined): Catalog | null {
+    if (!cat || cat.source !== 'discovered' || !Array.isArray(cat.models)) return null
+    const rawEntries = sanitizeCatalogEntries(cat.models).entries
+    if (rawEntries.length === 0) return null
+    const entries: CatalogEntry[] = rawEntries.map((e) => ({
+      id: e.id,
+      name: e.name,
+      efforts: e.efforts.length === 0 ? null : e.efforts,
+    }))
+    return {
+      source: 'discovered',
+      models: entries,
+      discoveredAt: typeof cat.discoveredAt === 'number' && Number.isFinite(cat.discoveredAt) ? cat.discoveredAt : 0,
+    }
+  }
+
+  private hydrateFromDisk(): void {
+    const file = this.options.cacheFile
+    if (!file || !existsSync(file)) return
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as PersistedCatalogDisk
+      if (!parsed || parsed.version !== 1) return
+      const liveVer = this.options.agyVersion?.() ?? null
+      if (liveVer && parsed.agyVersion && parsed.agyVersion !== liveVer) return
+      this.persistedAgyVersion = parsed.agyVersion ?? null
+      const cur = this.sanitizePersisted(parsed.current)
+      if (cur) this.current = cur
+      if (parsed.accounts && typeof parsed.accounts === 'object') {
+        for (const [accId, rawCat] of Object.entries(parsed.accounts)) {
+          const valid = this.sanitizePersisted(rawCat)
+          if (valid) this.accountCatalogs.set(accId, valid)
+        }
+      }
+    } catch {
+      // ignore corrupt cache file
+    }
+  }
+
+  private persistToDisk(): void {
+    const file = this.options.cacheFile
+    if (!file) return
+    try {
+      const accounts: Record<string, Catalog> = {}
+      for (const [accId, cat] of this.accountCatalogs.entries()) {
+        if (cat.source === 'discovered' && cat.models.length > 0) {
+          accounts[accId] = cat
+        }
+      }
+      const liveVer = this.options.agyVersion?.() ?? this.persistedAgyVersion
+      this.persistedAgyVersion = liveVer
+      const doc: PersistedCatalogDisk = {
+        version: 1,
+        agyVersion: liveVer,
+        ...(this.current.source === 'discovered' ? { current: this.current } : {}),
+        accounts,
+      }
+      writeFileAtomicSync(file, JSON.stringify(doc, null, 2), 0o600)
+    } catch {
+      // best-effort disk cache
+    }
+  }
+
+  /** Invalidate cached entries if `agy --version` reveals a binary upgrade after boot. */
+  syncAgyVersion(liveVersion: string | null): void {
+    if (!liveVersion) return
+    if (this.persistedAgyVersion && this.persistedAgyVersion !== liveVersion) {
+      this.accountCatalogs.clear()
+      this.current = {
+        source: 'fallback',
+        models: buildFallbackCatalog(this.fallbackDefs),
+        discoveredAt: 0,
+      }
+      this.persistedAgyVersion = liveVersion
+      this.persistToDisk()
+      return
+    }
+    if (this.persistedAgyVersion !== liveVersion) {
+      this.persistedAgyVersion = liveVersion
+      if (this.current.source === 'discovered' || this.accountCatalogs.size > 0) {
+        this.persistToDisk()
+      }
+    }
+  }
+
   getAllKnownModels(accounts: readonly ManagedAccount[] = []): readonly CatalogEntry[] {
     const list: CatalogEntry[] = []
     const seen = new Set<string>()
-
     const addEntries = (entries: readonly CatalogEntry[]) => {
       for (const m of entries) {
         if (!m || !m.id || seen.has(m.id)) continue
@@ -273,13 +176,9 @@ export class ModelCatalog {
         list.push(m)
       }
     }
-
-    // 1. Current discovered catalog (if discovered from real agy models)
     if (this.current.source === 'discovered') {
       addEntries(this.current.models)
     }
-
-    // 2. Each account's discovered catalog (from real agy models)
     for (const acc of accounts) {
       if (!acc.enabled) continue
       const cat = this.accountCatalogs.get(acc.id)
@@ -287,39 +186,21 @@ export class ModelCatalog {
         addEntries(cat.models)
       }
     }
-
-    // 3. Fallback definitions ONLY if NO catalog was discovered anywhere
     if (list.length === 0) {
       addEntries(buildFallbackCatalog(this.fallbackDefs))
     }
-
     return list
   }
 
-  /**
-   * Return the union of all models available across all pool accounts,
-   * without Argon if no enabled account in the pool has Argon access.
-   */
   getUnion(accounts: readonly ManagedAccount[] = [], pool?: AccountPoolManager | null): readonly CatalogEntry[] {
     if (accounts.length === 0 && !pool) {
       return this.current.models
     }
     const all = this.getAllKnownModels(accounts)
-    const hasAnyArgon = pool ? poolHasArgon(pool, this) : accounts.some((a) => accountHasArgon(a, pool, this.get(a.id)))
-    return all.filter((entry) => {
-      // If no account in the pool has Argon access, exclude Argon models from picker
-      if (isArgonModel(entry.id) && !hasAnyArgon) {
-        return false
-      }
-      return true
-    })
+    const hasAnyArgon = pool ? poolHasArgon(pool, this) : accounts.some((a) => accountHasArgon(a, pool, this.getAccountCatalog(a.id)))
+    return all.filter((entry) => !(isArgonModel(entry.id) && !hasAnyArgon))
   }
 
-  /**
-   * Return the authoritative real models for a specific managed account.
-   * If the account's catalog was discovered from `agy models`, returns its models directly.
-   * If not yet discovered, uses current discovered models filtered by account capabilities.
-   */
   getModelsForAccount(acc: ManagedAccount, pool?: AccountPoolManager | null): readonly CatalogEntry[] {
     const accountCat = this.accountCatalogs.get(acc.id)
     if (accountCat && accountCat.source === 'discovered' && accountCat.models.length > 0) {
@@ -328,220 +209,178 @@ export class ModelCatalog {
 
     const hasArgon = accountHasArgon(acc, pool, this.current)
     if (this.current.source === 'discovered' && this.current.models.length > 0) {
-      return this.current.models.filter((m) => {
-        if (isArgonModel(m.id) && !hasArgon) return false
-        return true
-      })
+      const filtered = this.current.models.filter((m) => !(isArgonModel(m.id) && !hasArgon))
+      if (hasArgon && !filtered.some((m) => isArgonModel(m.id))) {
+        const argonCandidates = [
+          ...[...this.accountCatalogs.values()]
+            .filter((c) => c.source === 'discovered')
+            .flatMap((c) => c.models),
+          ...buildFallbackCatalog(this.fallbackDefs),
+        ].filter((m) => isArgonModel(m.id))
+        const seen = new Set(filtered.map((m) => m.id))
+        const extra: CatalogEntry[] = []
+        for (const m of argonCandidates) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id)
+            extra.push(m)
+          }
+        }
+        if (extra.length > 0) return [...extra, ...filtered]
+      }
+      return filtered
     }
 
-    return buildFallbackCatalog(this.fallbackDefs).filter((m) => {
-      if (isArgonModel(m.id) && !hasArgon) return false
-      return true
-    })
+    return buildFallbackCatalog(this.fallbackDefs).filter((m) => !(isArgonModel(m.id) && !hasArgon))
   }
 
   get(accountId?: string): Catalog {
     if (accountId && this.accountCatalogs.has(accountId)) {
-      return this.accountCatalogs.get(accountId)!;
+      return this.accountCatalogs.get(accountId)!
     }
-    return this.current;
+    return this.current
+  }
+
+  /** Return ONLY this account's own discovered catalog (never `this.current`). */
+  getAccountCatalog(accountId?: string): Catalog | undefined {
+    return accountId ? this.accountCatalogs.get(accountId) : undefined
   }
 
   hasAccountCatalog(accountId: string): boolean {
-    return this.accountCatalogs.has(accountId);
+    return this.accountCatalogs.has(accountId)
   }
 
-  /**
-   * Effort ids the LIVE DISCOVERED catalog advertises for one model (across the
-   * base catalog and every per-account catalog). Fallback entries are excluded:
-   * they are a static mirror, not proof about the installed agy build.
-   *
-   * Used to reject false "--effort is not supported" refusals: agy's print-mode
-   * validation emits that text when its model-config fetch fails, even though
-   * `agy models` lists the level (issue #115).
-   */
   advertisedEfforts(modelId: string): readonly string[] {
-    const out = new Set<string>();
+    const out = new Set<string>()
     for (const cat of [this.current, ...this.accountCatalogs.values()]) {
-      if (cat.source !== 'discovered') continue;
+      if (cat.source !== 'discovered') continue
       for (const m of cat.models) {
-        if (m.id !== modelId || !Array.isArray(m.efforts)) continue;
-        for (const e of m.efforts) if (typeof e === 'string' && e !== '') out.add(e);
+        if (m.id !== modelId || !Array.isArray(m.efforts)) continue
+        for (const e of m.efforts) if (typeof e === 'string' && e !== '') out.add(e)
       }
     }
-    return [...out];
+    return [...out]
   }
 
-  /** Refresh if stale; never throws — failures keep the previous catalog. */
   async refreshIfNeeded(accountId?: string): Promise<void> {
-    if (this.refreshing) return this.refreshing;
-    const now = Date.now();
-    const accountCat = accountId ? this.accountCatalogs.get(accountId) : undefined;
+    const key = accountId ?? '__default__'
+    const inFlight = this.refreshingByKey.get(key)
+    if (inFlight) return inFlight
+    const now = Date.now()
+    const accountCat = accountId ? this.accountCatalogs.get(accountId) : undefined
     if (!accountId || accountCat) {
-      const targetCat = accountCat ?? this.current;
-      const age = now - targetCat.discoveredAt;
-      if (targetCat.source === 'discovered' && age < this.ttlMs) return;
-      if (targetCat.source === 'fallback' && now - this.lastAttemptAt < ModelCatalog.FALLBACK_RETRY_MS) return;
+      const targetCat = accountCat ?? this.current
+      const age = now - targetCat.discoveredAt
+      if (targetCat.source === 'discovered' && age < this.ttlMs) return
+      const last = accountId ? (this.accountAttemptAt.get(accountId) ?? 0) : this.lastAttemptAt
+      if (targetCat.source === 'fallback' && now - last < ModelCatalog.FALLBACK_RETRY_MS) return
+      if (accountId) this.accountAttemptAt.set(accountId, now)
+      else this.lastAttemptAt = now
     } else {
-      // No catalog for this account yet: a FAILED discovery must be throttled
-      // just like the fallback case, otherwise the missing entry is re-probed
-      // on every single read (issue #106).
-      const last = this.accountAttemptAt.get(accountId) ?? 0;
-      if (now - last < ModelCatalog.FALLBACK_RETRY_MS) return;
-      this.accountAttemptAt.set(accountId, now);
+      const last = this.accountAttemptAt.get(accountId) ?? 0
+      if (now - last < ModelCatalog.FALLBACK_RETRY_MS) return
+      this.accountAttemptAt.set(accountId, now)
     }
-    this.lastAttemptAt = now;
-    this.refreshing = this.refresh(accountId).finally(() => {
-      this.refreshing = null;
-    });
-    return this.refreshing;
+    if (!accountId) this.lastAttemptAt = now
+    const job = this.refresh(accountId).finally(() => {
+      if (this.refreshingByKey.get(key) === job) {
+        this.refreshingByKey.delete(key)
+      }
+    })
+    this.refreshingByKey.set(key, job)
+    return job
   }
 
-  /**
-   * Read-path discovery for one account (listModels). Unlike
-   * `forceRefreshAndNotify()` this is throttled and NEVER broadcasts on a
-   * failed probe: an unconditional `adapters-updated` made DSH's browser
-   * re-read the catalog, which called listModels() again — a self-exciting
-   * 1:1 read/probe/announce loop while signed out (issue #106). `refresh()`
-   * itself announces only when the catalog contents actually changed, so a
-   * successful first build still updates the picker exactly once.
-   */
   async ensureAccountCatalog(accountId: string): Promise<Catalog> {
-    if (!accountId || this.accountCatalogs.has(accountId)) return this.get(accountId);
-    await this.refreshIfNeeded(accountId);
-    return this.get(accountId);
+    if (!accountId || this.accountCatalogs.has(accountId)) return this.get(accountId)
+    await this.refreshIfNeeded(accountId)
+    return this.get(accountId)
   }
 
   async forceRefresh(accountId?: string): Promise<Catalog> {
-    await this.refresh(accountId);
-    return this.get(accountId);
+    await this.refresh(accountId)
+    return this.get(accountId)
   }
 
-  /**
-   * Refresh one account's catalog, then ALWAYS announce a picker update.
-   *
-   * `refresh()` only fires onUpdate when the catalog *contents* changed. But
-   * switching the active account changes the picker's visible set even when
-   * the catalog itself is identical — `listModels()` filters the Argon family
-   * by the active account's plan, and it resolves `catalog.get(accountId)`,
-   * which must be populated for the newly active account before the picker
-   * re-reads. So an account switch must (a) discover that account's catalog and
-   * (b) emit the update unconditionally, or the composer's cached model
-   * snapshot keeps showing the previous account's models (e.g. no Argon after
-   * switching to a Pro/Ultra account).
-   */
   async forceRefreshAndNotify(accountId?: string): Promise<Catalog> {
-    const hadCatalog = accountId ? this.hasAccountCatalog(accountId) : true;
-    await this.refresh(accountId, false);
-    const hasCatalog = accountId ? this.hasAccountCatalog(accountId) : true;
-    // An account switch must announce even when the contents are unchanged,
-    // but a FAILED first discovery must not: announcing into a browser that
-    // re-reads the catalog closes the issue #106 loop. Once the account has a
-    // catalog (or on an explicit base refresh) the switch semantics are intact.
-    if (hadCatalog || hasCatalog) this.onUpdate?.();
-    return this.get(accountId);
+    const hadCatalog = accountId ? this.hasAccountCatalog(accountId) : true
+    await this.refresh(accountId, false)
+    const hasCatalog = accountId ? this.hasAccountCatalog(accountId) : true
+    if (hadCatalog || hasCatalog) this.onUpdate?.()
+    return this.get(accountId)
   }
 
-  /**
-   * Warm account catalogs in the background so switching between accounts is instant.
-   */
   async warmAccounts(accounts: readonly ManagedAccount[]): Promise<void> {
-    for (const acc of accounts) {
-      if (!acc.enabled || acc.authRequired) continue
-      if (!this.accountCatalogs.has(acc.id)) {
-        await this.refresh(acc.id, false).catch(() => undefined)
+    const now = Date.now()
+    const due = accounts.filter((acc) => {
+      if (!acc.enabled || acc.authRequired) return false
+      const cached = this.accountCatalogs.get(acc.id)
+      return !(cached && cached.source === 'discovered' && now - cached.discoveredAt < this.ttlMs)
+    })
+    for (let i = 0; i < due.length; i++) {
+      await this.refresh(due[i]!.id, false).catch(() => undefined)
+      if (i < due.length - 1) {
+        const delay = this.options.staggerMs?.() ?? (process.env.NODE_TEST_CONTEXT !== undefined ? 0 : staggerJitterMs())
+        if (delay > 0) await new Promise((r) => setTimeout(r, delay))
       }
     }
   }
 
   private async refresh(accountId?: string, announce = true): Promise<void> {
     try {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 30_000);
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(), 30_000)
       try {
-        const { stdout } = await this.discover(ac.signal, accountId);
-        const raw = parseModelsOutput(stdout);
+        const { stdout, stderr } = await this.discover(ac.signal, accountId)
+        if (isUnauthenticatedModelsFallback(stdout, stderr)) {
+          const msg = 'agy models returned unauthenticated fallback output'
+          if (accountId) {
+            const cat = this.accountCatalogs.get(accountId)
+            if (cat) cat.lastError = msg
+          } else {
+            this.current = { ...this.current, lastError: msg }
+          }
+          return
+        }
+        const raw = parseModelsOutput(stdout)
         if (raw.length > 0) {
-          const newModels = foldEfforts(raw);
-          const newCatalog: Catalog = { source: 'discovered', models: newModels, discoveredAt: Date.now() };
-          const prev = this.get(accountId);
+          const newModels = foldEfforts(raw)
+          const newCatalog: Catalog = { source: 'discovered', models: newModels, discoveredAt: Date.now() }
+          const prev = accountId ? (this.accountCatalogs.get(accountId) ?? { source: 'fallback' as const, models: [], discoveredAt: 0 }) : this.current
           const changed =
             prev.source !== 'discovered' ||
             prev.models.length !== newModels.length ||
-            prev.models.some((m, i) => m.id !== newModels[i]?.id);
+            prev.models.some((m, i) => !sameCatalogEntry(m, newModels[i]))
           if (accountId) {
-            this.accountCatalogs.set(accountId, newCatalog);
+            this.accountCatalogs.set(accountId, newCatalog)
             if (this.current.source !== 'discovered') {
-              this.current = newCatalog;
+              this.current = newCatalog
             }
           } else {
-            this.current = newCatalog;
+            this.current = newCatalog
           }
+          this.persistToDisk()
           if (changed && announce) {
-            this.onUpdate?.();
+            this.onUpdate?.()
           }
-          return;
+          return
         }
         if (accountId) {
-          const cat = this.accountCatalogs.get(accountId);
-          if (cat) cat.lastError = 'agy models returned no entries';
+          const cat = this.accountCatalogs.get(accountId)
+          if (cat) cat.lastError = 'agy models returned no entries'
         } else {
-          this.current = { ...this.current, lastError: 'agy models returned no entries' };
+          this.current = { ...this.current, lastError: 'agy models returned no entries' }
         }
       } finally {
-        clearTimeout(timer);
+        clearTimeout(timer)
       }
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = err instanceof Error ? err.message : String(err)
       if (accountId) {
-        const cat = this.accountCatalogs.get(accountId);
-        if (cat) cat.lastError = errMsg;
+        const cat = this.accountCatalogs.get(accountId)
+        if (cat) cat.lastError = errMsg
       } else {
-        this.current = { ...this.current, lastError: errMsg };
+        this.current = { ...this.current, lastError: errMsg }
       }
     }
   }
 }
-
-export function resolveModelSlug(id: string): string {
-  const s = id.trim().toLowerCase()
-  // Bare aliases follow the current generation; explicit 4.x names stay 4.6 so
-  // legacy sessions/accounts keep resolving exactly what they asked for.
-  if (s === 'claude-opus') return PREFERRED_CLAUDE_OPUS
-  if (s === 'claude-sonnet') return PREFERRED_CLAUDE
-  if (s === 'claude-opus-4-6' || s === 'claude-opus-4-8' || s === 'claude-opus-4.6' || s === 'claude-opus-4-5') {
-    return 'claude-opus-4-6-thinking'
-  }
-  if (s === 'claude-sonnet-4.6' || s === 'claude-sonnet-4-5') {
-    return 'claude-sonnet-4-6'
-  }
-  if (s === 'gpt-oss-120b' || s === 'gpt-oss-20b' || s === 'gpt-oss') {
-    return PREFERRED_OPENAI
-  }
-  // Claude 5.5: agy lists tiered slugs, but `--effort` must ride the BASE slug
-  // (a tiered slug plus the flag is rejected: "--model … conflicts with").
-  const claude55 = s.match(/^(claude-(?:sonnet|opus)-5-5)-(?:low|medium|high)$/)
-  if (claude55 !== null && claude55[1] !== undefined) return claude55[1]
-  return id.trim()
-}
-
-export function findEntry(catalog: Catalog, id: string): CatalogEntry | undefined {
-  const direct = catalog.models.find((m) => m.id === id);
-  if (direct) return direct;
-  const resolved = resolveModelSlug(id);
-  if (resolved !== id) {
-    return catalog.models.find((m) => m.id === resolved);
-  }
-  return undefined;
-}
-
-export function defaultEffortFor(entry: CatalogEntry, cfg: PluginConfig): string | undefined {
-  if (!entry.efforts || entry.efforts.length === 0) return undefined
-  if (cfg.defaultEffort !== '' && entry.efforts.includes(cfg.defaultEffort)) return cfg.defaultEffort
-  // Default to the highest reasoning effort (high), then fall back down.
-  for (const pref of ['high', 'medium', 'low']) {
-    if (entry.efforts.includes(pref)) return pref
-  }
-  return entry.efforts[entry.efforts.length - 1];
-}
-

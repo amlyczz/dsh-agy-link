@@ -17,7 +17,8 @@
 //     host resolves it back to an agent.
 
 import { createServer, type Server, type ServerResponse } from 'node:http'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
+import { writeFileAtomicSync } from '../common/atomic-write.ts'
 import { basename, dirname, join } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readJsonBody } from './read-json-body.ts'
@@ -371,6 +372,26 @@ export function mcpServerKey(port: number): string {
  * Returns a restore function that puts the previous content back (or deletes
  * the file we created). Never throws.
  */
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  if (pid === process.pid) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'EPERM'
+  }
+}
+
+function writePrivateMcpFile(file: string, content: string): void {
+  writeFileAtomicSync(file, content, 0o600)
+  try {
+    chmodSync(file, 0o600)
+  } catch {
+    // Windows: mode bits unsupported
+  }
+}
+
 export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
   const key = mcpServerKey(bridge.port)
   let previous: string | null = null
@@ -392,6 +413,16 @@ export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
   if (MCP_SERVER_KEY in servers) {
     delete servers[MCP_SERVER_KEY]
   }
+  // Prune stale dsh-tools-<port> entries left behind by crashed host PIDs while
+  // keeping live concurrent hosts untouched.
+  for (const [existingKey, val] of Object.entries(servers)) {
+    if (existingKey === key || !existingKey.startsWith(MCP_SERVER_KEY + '-')) continue
+    const envObj = (val as { env?: Record<string, unknown> } | null)?.env
+    const rawPid = envObj?.DSH_MCP_PID
+    if (typeof rawPid === 'string' && /^\d+$/.test(rawPid) && !isPidAlive(Number(rawPid))) {
+      delete servers[existingKey]
+    }
+  }
   servers[key] = {
     type: 'stdio',
     command: process.execPath,
@@ -399,6 +430,7 @@ export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
     env: {
       DSH_MCP_URL: bridge.url,
       DSH_MCP_TOKEN: bridge.token,
+      DSH_MCP_PID: String(process.pid),
     },
   }
   root.mcpServers = servers
@@ -407,7 +439,7 @@ export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
   try {
     mkdirSync(dirname(file), { recursive: true })
     writtenBytes = JSON.stringify(root, null, 2) + '\n'
-    writeFileSync(file, writtenBytes, 'utf8')
+    writePrivateMcpFile(file, writtenBytes)
     written = true
   } catch {
     return () => {}
@@ -451,7 +483,7 @@ export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
           }
           return
         }
-        writeFileSync(file, JSON.stringify({ ...live, mcpServers: liveServers }, null, 2) + '\n', 'utf8')
+        writePrivateMcpFile(file, JSON.stringify({ ...live, mcpServers: liveServers }, null, 2) + '\n')
         return
       }
       let parsed: Record<string, unknown> = {}
@@ -469,10 +501,10 @@ export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
           // We created the file and no other servers remain: remove it.
           unlinkSync(file)
         } else {
-          writeFileSync(file, JSON.stringify({ ...parsed, mcpServers: curServers }, null, 2) + '\n', 'utf8')
+          writePrivateMcpFile(file, JSON.stringify({ ...parsed, mcpServers: curServers }, null, 2) + '\n')
         }
       } else {
-        writeFileSync(file, previous, 'utf8')
+        writePrivateMcpFile(file, previous)
       }
     } catch {
       /* best effort */

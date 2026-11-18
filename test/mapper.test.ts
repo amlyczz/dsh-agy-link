@@ -4,6 +4,7 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { EventMapper, normalizeFileLinks, rewriteImageMarkdown, suffixDelta, usageFromRaw, rememberToolCallId, consumeToolBinding, expirePendingToolCalls, type ToolCallState } from '../src/host/mapper.ts'
 import { mirrorCallId, parseMirrorCallId } from '../src/host/recording.ts'
 import { parseMirrorInvocation } from '../src/host/mirror-tool.ts'
+import { classifyEvent } from '../src/host/parser.ts'
 
 type FinishChunk = Extract<StreamChunk, { type: 'finish' }>
 type UsageChunk = Extract<StreamChunk, { type: 'usage' }>
@@ -835,6 +836,27 @@ test('normalizeFileLinks rewrites file:// links to clean paths for DSH native si
     normalizeFileLinks('[web](https://example.com/file.md)'),
     '[web](https://example.com/file.md)',
   )
+})
+
+test('classifyEvent and EventMapper treat CANCELED tool steps as completed errors instead of hanging', () => {
+  const ev = classifyEvent({
+    event: 'step_update',
+    step_update: {
+      step_index: 4,
+      state: 'CANCELED',
+      step_type: 'tool',
+      tool_info: {
+        name: 'invoke_subagent',
+        parameters: { TypeName: 'research', Role: 'Researcher' },
+      },
+    },
+  }, 4)
+  assert.ok(ev && ev.kind === 'step')
+  assert.equal(ev.tool?.error, 'tool execution canceled')
+  const mapper = newSpan('run-cancel')
+  const chunks = Array.from(mapper.map(ev, 4))
+  assert.ok(chunks.some((c) => c.type === 'block-start' && c.blockType === 'tool-call'))
+  assert.equal(mapper.isFinished, true)
 })
 
 

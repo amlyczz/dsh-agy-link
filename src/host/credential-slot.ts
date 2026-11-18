@@ -46,8 +46,7 @@ import type { ManagedAccount } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { defaultPoolDir } from './pool.ts'
 import { readWindowsCredentialRaw, writeWindowsCredentialRaw } from './wincred.ts'
-import { refreshTokens } from './oauth.ts'
-import { agyFetch } from './net.ts'
+import { fetchUserEmail, refreshTokens } from './oauth.ts'
 import {
   parseCredentialDoc,
   readPrimaryCredentialAt,
@@ -83,28 +82,14 @@ export async function identifyCredential(
 ): Promise<string | undefined> {
   const doc = parseCredentialDoc(raw)
   if (!doc) return undefined
-  const probe = async (accessToken: string): Promise<string | undefined> => {
-    try {
-      const res = await agyFetch(
-        'https://www.googleapis.com/oauth2/v1/userinfo',
-        { headers: { Authorization: 'Bearer ' + accessToken } },
-        proxyUrl,
-      )
-      if (!res.ok) return undefined
-      const body = (await res.json()) as { email?: string }
-      return body.email
-    } catch {
-      return undefined
-    }
-  }
   if (doc.accessToken && (!doc.expiryMs || doc.expiryMs > Date.now() + 60_000)) {
-    const email = await probe(doc.accessToken)
+    const email = await fetchUserEmail(doc.accessToken, proxyUrl)
     if (email) return email
   }
   if (doc.refreshToken) {
     try {
       const refreshed = await refreshTokens(doc.refreshToken, proxyUrl)
-      if (refreshed?.access_token) return await probe(refreshed.access_token)
+      if (refreshed?.access_token) return await fetchUserEmail(refreshed.access_token, proxyUrl)
     } catch {
       return undefined
     }

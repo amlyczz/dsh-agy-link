@@ -12,8 +12,11 @@
 /** Status poll: keep the console responsive, never stack polls. */
 export const STATUS_TIMEOUT_MS = 5_000
 
-/** A write (sync / warmup / config / auth): the busy flag must always clear. */
+/** A write (sync / config / auth): the busy flag must always clear. */
 export const WRITE_TIMEOUT_MS = 20_000
+
+/** Manual CLI warmup across one or more accounts (up to 45s per CLI probe). */
+export const WARMUP_WRITE_TIMEOUT_MS = 90_000
 
 /** Host-side hard deadline for any plugin route; the last line of defence. */
 export const ROUTE_TIMEOUT_MS = 30_000

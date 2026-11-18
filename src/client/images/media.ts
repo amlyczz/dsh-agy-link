@@ -66,6 +66,8 @@ export function isLocalFilePath(pathOrUrl: string): boolean {
   return /\.[a-zA-Z0-9]{1,8}$/.test(clean);
 }
 
+import { timedSignal, WRITE_TIMEOUT_MS } from '../api.ts';
+
 /** Open a file in the host OS default app or reveal in Finder / Explorer */
 export async function openInSystem(
   rawPath: string,
@@ -74,7 +76,8 @@ export async function openInSystem(
   try {
     const origin = getOrigin();
     const url = `${origin}/plugins/agy-link/open?path=${encodeURIComponent(rawPath.trim())}${reveal ? '&reveal=1' : ''}`;
-    const res = await fetch(url);
+    const signal = timedSignal(WRITE_TIMEOUT_MS) as AbortSignal | undefined;
+    const res = await fetch(url, { method: 'POST', ...(signal ? { signal } : {}) });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       return { ok: false, error: (data as { error?: string })?.error ?? `HTTP ${res.status}` };

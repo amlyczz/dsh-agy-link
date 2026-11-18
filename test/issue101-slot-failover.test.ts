@@ -8,6 +8,8 @@ import { dispatchCredentialSlot } from '../src/provider/attempt-outcome.ts'
 import { defaultConfig, Err } from '../src/common/types.ts'
 import type { AttemptDeps, AttemptInput } from '../src/provider/attempt.ts'
 import { SlotUnavailableError } from '../src/domain/credentials/errors.ts'
+import { purgeStaleIsolatedKeychain } from '../src/runtime/agy/keychain.ts'
+import { existsSync, mkdirSync } from 'node:fs'
 
 test('dispatchCredentialSlot marks authRequired on SlotUnavailableError and fails over to next account (issue #101)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-issue101-'))
@@ -81,4 +83,30 @@ test('dispatchCredentialSlot marks authRequired on SlotUnavailableError and fail
   assert.equal(next?.id, acc2.id, 'must select the healthy account acc2')
 
   rmSync(dir, { recursive: true, force: true })
+})
+
+test('SlotUnavailableError with target="primary" does not blame a healthy secondary account', () => {
+  const primaryErr = new SlotUnavailableError('Cannot verify the primary Antigravity credential', 'primary')
+  const secondaryErr = new SlotUnavailableError('Account acc2 has no stored credential', 'account')
+  assert.equal((primaryErr as { target?: string }).target, 'primary')
+  assert.equal((secondaryErr as { target?: string }).target, 'account')
+})
+
+test('purgeStaleIsolatedKeychain preserves login.keychain-db when security times out under load', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-kc-timeout-'))
+  try {
+    const kcDir = join(dir, 'Library', 'Keychains')
+    mkdirSync(kcDir, { recursive: true })
+    const kc = join(kcDir, 'login.keychain-db')
+    writeFileSync(kc, 'valid-keychain-bytes')
+
+    const purged = purgeStaleIsolatedKeychain(dir, 'darwin', () => {
+      const err = Object.assign(new Error('Command timed out'), { code: 'ETIMEDOUT', killed: true })
+      throw err
+    })
+    assert.equal(purged, false, 'timeout must not purge a healthy isolated keychain')
+    assert.equal(existsSync(kc), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

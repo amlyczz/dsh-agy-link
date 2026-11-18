@@ -6,8 +6,9 @@
 // two default-argument entry points were renamed to `*At` so the host facade
 // can keep the original `defaultPoolDir()` defaults without this module
 // depending on the host.
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tryWriteFileAtomic } from '../../common/atomic-write.ts'
 import type { ManagedAccount } from '../../common/pool-types.ts'
 import { readAccountCredential } from './backup.ts'
 
@@ -129,22 +130,9 @@ export function readTokenFileRaw(file: string): string | null {
   return raw && raw.trim() ? raw : null
 }
 
-/** Atomic-ish replace: write a sibling temp file then rename over the target. */
+/** Atomic replace: write a sibling temp file then rename over the target. */
 export function writeFileAtomic(file: string, data: string): boolean {
-  const tmp = file + '.tmp-' + process.pid + '-' + Date.now()
-  try {
-    mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(tmp, data, { encoding: 'utf8' })
-    renameSync(tmp, file)
-    return true
-  } catch {
-    try {
-      unlinkSync(tmp)
-    } catch {
-      // ignore
-    }
-    return false
-  }
+  return tryWriteFileAtomic(file, data)
 }
 
 export function accountTokenFilePath(account: ManagedAccount, homeDir: string): string {

@@ -1,14 +1,13 @@
 // Media and asset route handler for dsh-agy-link.
-// Serves local images referenced by Antigravity (file://, absolute paths, WSL paths, staged media)
-// and static plugin assets (e.g. mermaid.min.js) safely to DSH Desktop and Web clients.
+// Serves local media referenced by Antigravity (file://, absolute paths, WSL paths, staged media)
+// and opens local files safely (POST-only, loopback-origin gated, workspace-confined, injection-free).
 import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 const MIME_MAP: Record<string, string> = {
-  // Images
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -19,36 +18,75 @@ const MIME_MAP: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
   '.tiff': 'image/tiff',
-  // Videos
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.mov': 'video/quicktime',
   '.mkv': 'video/x-matroska',
-  // Audios
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
   '.m4a': 'audio/mp4',
   '.aac': 'audio/aac',
-  // Text & Assets
   '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
 };
 
 const IS_WIN = process.platform === 'win32';
-
 const SKIP_DIRS = new Set([
   'node_modules', '.git', '.cache', '.venv', 'dist', 'build', '.idea', '.vscode', '.next', '.nuxt', 'Library',
 ]);
+const SENSITIVE_PATH_RE = /(?:^|[/\\])(?:\.env(?:\.[^/\\]+)?|antigravity-oauth-token(?:\.bak)?|\.primary-credential\.json|\.ssh|Keychains|id_rsa|id_ed25519)(?:$|[/\\])/i;
 
-/** decodeURIComponent that returns null instead of throwing on malformed input. */
 function safeDecodeUri(s: string): string | null {
   try {
     return decodeURIComponent(s);
   } catch {
     return null;
   }
+}
+
+function isCrossOriginBlocked(req: HttpRequestLike): boolean {
+  const rawOrigin = req.headers?.origin;
+  const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
+  if (!origin || origin === 'null') return false;
+  if (/^(?:file|app|vscode-webview):\/\//i.test(origin)) return false;
+  try {
+    const u = new URL(origin);
+    return u.hostname !== 'localhost' && u.hostname !== '127.0.0.1' && u.hostname !== '[::1]';
+  } catch {
+    return true;
+  }
+}
+
+function isConfinementAllowed(filePath: string, workspaceRoots?: string | readonly string[]): boolean {
+  if (SENSITIVE_PATH_RE.test(filePath)) return false;
+  if (workspaceRoots === undefined) return true;
+  const rawRoots = typeof workspaceRoots === 'string'
+    ? (workspaceRoots ? [workspaceRoots] : [])
+    : workspaceRoots.filter((r) => typeof r === 'string' && r !== '');
+  if (rawRoots.length === 0) return true;
+  let realTarget: string;
+  try {
+    realTarget = realpathSync(filePath);
+  } catch {
+    realTarget = resolve(filePath);
+  }
+  if (SENSITIVE_PATH_RE.test(realTarget)) return false;
+  for (const r of rawRoots) {
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(r);
+    } catch {
+      realRoot = resolve(r);
+    }
+    const cmpTarget = IS_WIN ? realTarget.toLowerCase() : realTarget;
+    const cmpRoot = IS_WIN ? realRoot.toLowerCase() : realRoot;
+    if (cmpTarget === cmpRoot || cmpTarget.startsWith(cmpRoot.endsWith(sep) ? cmpRoot : cmpRoot + sep)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parseRawMediaUri(raw: string): string | null {
@@ -61,42 +99,28 @@ function parseRawMediaUri(raw: string): string | null {
     try {
       converted = fileURLToPath(p);
     } catch {
-      // Fallback manual parsing if URL constructor or fileURLToPath throws
+      // Fallback manual parsing below
     }
-
     if (converted !== null) {
       p = converted;
     } else {
-      const withoutScheme = p.slice(7);
-      const decoded = safeDecodeUri(withoutScheme);
+      const decoded = safeDecodeUri(p.slice(7));
       if (decoded === null) return null;
       p = decoded;
-
       if (IS_WIN) {
-        if (/^\/[A-Za-z]:/.test(p)) {
-          p = p.slice(1);
-        } else if (p.startsWith('wsl.localhost/')) {
-          p = '\\\\' + p.replace(/\//g, '\\');
-        } else if (p.startsWith('/wsl.localhost/')) {
-          p = '\\\\' + p.slice(1).replace(/\//g, '\\');
-        }
-      } else {
-        if (!p.startsWith('/')) {
-          if (existsSync('/' + p) || /^(Users|home|private|tmp|var|opt|Applications)\//.test(p)) {
-            p = '/' + p;
-          }
-        }
+        if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
+        else if (p.startsWith('wsl.localhost/')) p = '\\\\' + p.replace(/\//g, '\\');
+        else if (p.startsWith('/wsl.localhost/')) p = '\\\\' + p.slice(1).replace(/\//g, '\\');
+      } else if (!p.startsWith('/') && (existsSync('/' + p) || /^(Users|home|private|tmp|var|opt|Applications)\//.test(p))) {
+        p = '/' + p;
       }
     }
   }
 
   if (IS_WIN) {
     const mntMatch = p.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
-    if (mntMatch) {
-      p = `${mntMatch[1]!.toUpperCase()}:\\${mntMatch[2]!.replace(/\//g, '\\')}`;
-    } else if (p.startsWith('/home/')) {
-      p = `\\\\wsl.localhost\\Ubuntu\\${p.replace(/\//g, '\\')}`;
-    }
+    if (mntMatch) p = `${mntMatch[1]!.toUpperCase()}:\\${mntMatch[2]!.replace(/\//g, '\\')}`;
+    else if (p.startsWith('/home/')) p = `\\\\wsl.localhost\\Ubuntu\\${p.replace(/\//g, '\\')}`;
   }
 
   if (p.includes('%')) {
@@ -138,10 +162,6 @@ function searchInDirectory(
   return null;
 }
 
-/**
- * Normalize and resolve a raw path or file:// URL into a system file path.
- * Converts WSL /mnt/X/ and /home/ paths on Windows where possible.
- */
 export function resolveLocalMediaPath(
   rawPath: string,
   workspaceRoots?: string | readonly string[],
@@ -150,23 +170,17 @@ export function resolveLocalMediaPath(
   const p = parseRawMediaUri(rawPath.trim());
   if (p === null) return null;
 
-  // Strip query string and fragment/hash (e.g. #L123-L145 or ?v=1)
   const cleanPath = p.split(/[?#]/)[0] ?? p;
 
-  // If path is already absolute, check directly
   if ((IS_WIN && (/^[A-Za-z]:/.test(cleanPath) || cleanPath.startsWith('\\\\'))) || (!IS_WIN && cleanPath.startsWith('/'))) {
     const resolved = resolve(cleanPath);
     if (existsSync(resolved)) return resolved;
   }
 
-  // Resolve candidates against workspace roots / media directory
   const roots: string[] = [];
-  if (typeof workspaceRoots === 'string' && workspaceRoots !== '') {
-    roots.push(workspaceRoots);
-  } else if (Array.isArray(workspaceRoots)) {
-    for (const r of workspaceRoots) {
-      if (typeof r === 'string' && r !== '') roots.push(r);
-    }
+  if (typeof workspaceRoots === 'string' && workspaceRoots !== '') roots.push(workspaceRoots);
+  else if (Array.isArray(workspaceRoots)) {
+    for (const r of workspaceRoots) if (typeof r === 'string' && r !== '') roots.push(r);
   }
 
   const strippedRel = cleanPath.replace(/^[/\\]+/, '');
@@ -185,18 +199,16 @@ export function resolveLocalMediaPath(
     if (existsSync(baseCandidate)) return baseCandidate;
 
     const home = homedir();
-    const isRootWide = root === home || root === '/' || (IS_WIN && /^[A-Za-z]:\\?$/.test(root));
-    const depth = isRootWide ? 1 : 3;
-    const found = searchInDirectory(root, strippedRel, baseName, depth);
-    if (found) return found;
+    const tmp = tmpdir();
+    const isRootWide = root === home || root === tmp || root === '/' || (IS_WIN && /^[A-Za-z]:\\?$/.test(root));
+    if (!isRootWide) {
+      const found = searchInDirectory(root, strippedRel, baseName, 3);
+      if (found) return found;
+    }
   }
 
   const resolved = resolve(cleanPath);
-  if (existsSync(resolved)) {
-    return resolved;
-  }
-
-  return null;
+  return existsSync(resolved) ? resolved : null;
 }
 
 export interface HttpResponseLike {
@@ -224,30 +236,23 @@ function sendMediaResponse(
     const end = parts[1] && parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
 
     if (isNaN(start) || isNaN(end) || start > end || start >= totalSize) {
-      res.writeHead(416, {
-        'Content-Range': `bytes */${totalSize}`,
-        'Content-Type': 'text/plain',
-      });
+      res.writeHead(416, { 'Content-Range': `bytes */${totalSize}`, 'Content-Type': 'text/plain' });
       res.end('requested range not satisfiable');
       return;
     }
 
-    const chunkSize = end - start + 1;
     res.writeHead(206, {
       'Content-Type': contentType,
       'Content-Range': `bytes ${start}-${end}/${totalSize}`,
       'Accept-Ranges': 'bytes',
-      'Content-Length': chunkSize,
-      'Cache-Control': 'public, max-age=3600',
-      'Access-Control-Allow-Origin': '*',
+      'Content-Length': end - start + 1,
+      'Cache-Control': 'private, max-age=3600',
       'Content-Disposition': 'inline',
       'X-Content-Type-Options': 'nosniff',
     });
 
     const stream = createReadStream(filePath, { start, end });
-    stream.on('error', () => {
-      try { res.end(); } catch { /* ignore */ }
-    });
+    stream.on('error', () => { try { res.end(); } catch { /* ignore */ } });
     // @ts-ignore
     stream.pipe(res);
     return;
@@ -257,33 +262,31 @@ function sendMediaResponse(
     'Content-Type': contentType,
     'Content-Length': totalSize,
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'public, max-age=3600',
-    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'private, max-age=3600',
     'Content-Disposition': 'inline',
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
   });
 
   const stream = createReadStream(filePath);
-  stream.on('error', () => {
-    try { res.end(); } catch { /* ignore */ }
-  });
+  stream.on('error', () => { try { res.end(); } catch { /* ignore */ } });
   // @ts-ignore
   stream.pipe(res);
 }
 
-/**
- * Handle GET /plugins/agy-link/media?path=...
- */
 export function handleMediaRequest(
   req: HttpRequestLike,
   res: HttpResponseLike,
   opts: { workspaceRoot?: string; workspaceRoots?: string | readonly string[] } = {},
 ): void {
-  const reqUrl = req.url ?? '';
+  if (isCrossOriginBlocked(req)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('cross-origin media access denied');
+    return;
+  }
   let targetPath = '';
   try {
-    const u = new URL(reqUrl, 'http://localhost');
+    const u = new URL(req.url ?? '', 'http://localhost');
     targetPath = u.searchParams.get('path') ?? u.searchParams.get('url') ?? '';
   } catch {
     res.writeHead(400, { 'Content-Type': 'text/plain' });
@@ -304,7 +307,6 @@ export function handleMediaRequest(
     res.end('file not found');
     return;
   }
-
   try {
     const st = statSync(filePath);
     if (!st.isFile()) {
@@ -315,12 +317,16 @@ export function handleMediaRequest(
 
     const ext = extname(filePath).toLowerCase();
     const contentType = MIME_MAP[ext] ?? 'application/octet-stream';
-
-    // Allow images, videos, audios and SVG
     const isMedia = contentType.startsWith('image/') || contentType.startsWith('video/') || contentType.startsWith('audio/') || ext === '.svg';
     if (!isMedia) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       res.end('access denied: not an image');
+      return;
+    }
+
+    if (!isConfinementAllowed(filePath, roots)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('access denied: outside allowed workspace roots');
       return;
     }
 
@@ -334,8 +340,7 @@ export function handleMediaRequest(
 export function executeOpenInSystem(targetPath: string, reveal = false): { ok: boolean; error?: string } {
   try {
     if (process.platform === 'darwin') {
-      const args = reveal ? ['-R', targetPath] : [targetPath];
-      const child = spawn('open', args, { detached: true, stdio: 'ignore' });
+      const child = spawn('open', reveal ? ['-R', targetPath] : [targetPath], { detached: true, stdio: 'ignore' });
       child.unref();
       return { ok: true };
     }
@@ -346,33 +351,26 @@ export function executeOpenInSystem(targetPath: string, reveal = false): { ok: b
         return { ok: true };
       }
 
-      // 1. Try modern ShellExecute via PowerShell Start-Process (respects UserChoice e.g. VS Code, unlike legacy cmd.exe assoc)
+      // Pass path via environment variable ($env:AGY_OPEN_TARGET) with -LiteralPath
+      // so `$()` / backticks / quotes in filenames can NEVER execute PowerShell code.
       try {
-        const psCmd = `Start-Process -FilePath "${targetPath.replace(/"/g, '`"')}" -ErrorAction Stop`;
-        const res = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], {
-          timeout: 4000,
-          encoding: 'utf-8',
-          windowsHide: true,
-        });
-        if (res.status === 0) {
-          return { ok: true };
-        }
+        const res = spawnSync(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -LiteralPath $env:AGY_OPEN_TARGET -ErrorAction Stop'],
+          {
+            timeout: 4000,
+            encoding: 'utf-8',
+            windowsHide: true,
+            env: { ...process.env, AGY_OPEN_TARGET: targetPath },
+          },
+        );
+        if (res.status === 0) return { ok: true };
       } catch {
         // Fall back below
       }
 
-      // 2. If it is a text-like file and PowerShell failed, try opening with code or notepad
       const ext = extname(targetPath).toLowerCase();
-      const isTextLike = ['.md', '.txt', '.json', '.jsonl', '.yaml', '.yml', '.ts', '.js', '.py', '.gd', '.log', '.env'].includes(ext);
-      if (isTextLike) {
-        try {
-          const codeRes = spawnSync('cmd.exe', ['/c', 'code', targetPath], { timeout: 3000, windowsHide: true });
-          if (codeRes.status === 0) {
-            return { ok: true };
-          }
-        } catch {
-          // ignore
-        }
+      if (['.md', '.txt', '.json', '.jsonl', '.yaml', '.yml', '.ts', '.js', '.py', '.gd', '.log'].includes(ext)) {
         try {
           const child = spawn('notepad.exe', [targetPath], { detached: true, stdio: 'ignore' });
           child.unref();
@@ -382,7 +380,6 @@ export function executeOpenInSystem(targetPath: string, reveal = false): { ok: b
         }
       }
 
-      // 3. Fallback to explorer reveal if direct opening failed
       try {
         const child = spawn('explorer.exe', [`/select,${targetPath}`], { detached: true, stdio: 'ignore' });
         child.unref();
@@ -400,65 +397,75 @@ export function executeOpenInSystem(targetPath: string, reveal = false): { ok: b
 }
 
 /**
- * Handle GET /plugins/agy-link/open?path=...&reveal=1
+ * Handle POST /plugins/agy-link/open?path=...&reveal=1
+ * Strictly POST-only and loopback-origin gated to prevent markdown-image RCE.
  */
 export function handleOpenFile(
   req: HttpRequestLike,
   res: HttpResponseLike,
   opts: { workspaceRoots?: string | readonly string[] } = {},
 ): void {
-  const reqUrl = req.url ?? '';
+  const method = (req.method ?? 'GET').toUpperCase();
+  if (method !== 'POST') {
+    res.writeHead(405, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'POST only' }));
+    return;
+  }
+  if (isCrossOriginBlocked(req)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'cross-origin open denied' }));
+    return;
+  }
+
   let targetPath = '';
   let reveal = false;
   try {
-    const u = new URL(reqUrl, 'http://localhost');
+    const u = new URL(req.url ?? '', 'http://localhost');
     targetPath = u.searchParams.get('path') ?? u.searchParams.get('url') ?? '';
     reveal = u.searchParams.get('reveal') === '1' || u.searchParams.get('reveal') === 'true';
   } catch {
-    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'invalid url' }));
     return;
   }
 
   if (!targetPath) {
-    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'missing path query parameter' }));
     return;
   }
 
   const filePath = resolveLocalMediaPath(targetPath, opts.workspaceRoots);
   if (!filePath) {
-    res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'file not found' }));
+    return;
+  }
+  if (!isConfinementAllowed(filePath, opts.workspaceRoots)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'access denied: path outside allowed workspace roots' }));
     return;
   }
 
   const result = executeOpenInSystem(filePath, reveal);
   if (!result.ok) {
-    res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: result.error }));
     return;
   }
 
-  res.writeHead(200, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-  });
+  res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true, path: filePath, revealed: reveal }));
 }
 
-/**
- * Handle static assets under /plugins/agy-link/assets/...
- */
 export function handleAssetRequest(
   req: HttpRequestLike,
   res: HttpResponseLike,
   assetDir: string,
 ): void {
-  const reqUrl = req.url ?? '';
   let subPath = '';
   try {
-    const u = new URL(reqUrl, 'http://localhost');
+    const u = new URL(req.url ?? '', 'http://localhost');
     subPath = u.pathname.replace(/^\/plugins\/agy-link\/assets\/?/, '');
   } catch {
     res.writeHead(400, { 'Content-Type': 'text/plain' });
@@ -466,8 +473,6 @@ export function handleAssetRequest(
     return;
   }
 
-  // Prevent directory traversal AND symlink escape: resolve inside the
-  // canonical asset dir and require the canonical target to stay inside it.
   let filePath: string;
   try {
     const root = realpathSync(assetDir);
@@ -505,16 +510,13 @@ export function handleAssetRequest(
       'Content-Type': contentType,
       'Content-Length': st.size,
       'Cache-Control': 'public, max-age=86400',
-      'Access-Control-Allow-Origin': '*',
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     });
 
     const stream = createReadStream(filePath);
-    stream.on('error', () => {
-      try { res.end(); } catch { /* ignore */ }
-    });
-    // @ts-ignore - pipe to response stream
+    stream.on('error', () => { try { res.end(); } catch { /* ignore */ } });
+    // @ts-ignore
     stream.pipe(res);
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });

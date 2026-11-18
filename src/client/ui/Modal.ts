@@ -167,7 +167,7 @@ export function Modal({ heading, closeLabel, onClose, ariaLabelledby, children }
 				}, uiIcon('x', 14, 'var(--agy-text-btn)')),
 			),
 			h('div', { className: 'agy-modal-body', style: { overflowY: 'auto', overscrollBehavior: 'contain', padding: '18px', flex: '1', minHeight: 0, background: 'var(--agy-bg-panel)' } },
-				children,
+				...(Array.isArray(children) ? children : [children]),
 			),
 		),
 	);

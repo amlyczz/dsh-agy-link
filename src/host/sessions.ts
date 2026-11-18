@@ -2,7 +2,7 @@
 // Atomic tmp+rename writes with dirty-key merge on reload keep concurrent
 // host processes (web + headless) from clobbering each other — the
 // pi-bridge-proven JSON layout, adapted to the DSH state directory.
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { writeFileAtomicSync } from '../common/atomic-write.ts'
 
@@ -40,22 +40,70 @@ export class SessionStore {
   private readonly dirty = new Set<string>();
   /** Keys deleted by THIS process since the last persist. */
   private readonly removed = new Set<string>();
+  private lastMtimeMs = 0;
 
   constructor(private readonly file: string) {
     this.load();
   }
 
-  private load(): void {
+  private readParsed(target: string): Record<string, SessionBinding> | null {
     try {
-      if (!existsSync(this.file)) return;
-      const v = JSON.parse(readFileSync(this.file, 'utf8'))
-      if (v && typeof v === 'object') this.data = v as Record<string, SessionBinding>;
+      if (!existsSync(target)) return null
+      const v = JSON.parse(readFileSync(target, 'utf8'))
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        return v as Record<string, SessionBinding>
+      }
     } catch {
-      // corrupted store: start empty rather than crash the plugin
+      // ignore corrupt/unreadable JSON
+    }
+    return null
+  }
+
+  private updateStatMtime(): void {
+    try {
+      this.lastMtimeMs = existsSync(this.file) ? statSync(this.file).mtimeMs : 0
+    } catch {
+      this.lastMtimeMs = 0
+    }
+  }
+
+  private load(): void {
+    const primary = this.readParsed(this.file)
+    if (primary !== null) {
+      this.data = primary
+      this.updateStatMtime()
+      return
+    }
+    const backup = this.readParsed(this.file + '.last-good')
+    if (backup !== null) {
+      this.data = backup
+    }
+    this.updateStatMtime()
+  }
+
+  /** Lazily merge bindings written by another host process when mtime advances. */
+  private reloadIfChanged(): void {
+    try {
+      if (!existsSync(this.file)) return
+      const mtime = statSync(this.file).mtimeMs
+      if (mtime === this.lastMtimeMs) return
+      const onDisk = this.readParsed(this.file)
+      this.lastMtimeMs = mtime
+      if (!onDisk) return
+      for (const [k, diskVal] of Object.entries(onDisk)) {
+        if (this.removed.has(k) || this.dirty.has(k)) continue
+        const cur = this.data[k]
+        if (!cur || (diskVal?.updatedAt ?? 0) >= (cur.updatedAt ?? 0)) {
+          this.data[k] = diskVal
+        }
+      }
+    } catch {
+      // best effort
     }
   }
 
   get(key: string): SessionBinding | undefined {
+    this.reloadIfChanged()
     return this.data[key]
   }
 
@@ -74,6 +122,7 @@ export class SessionStore {
   }
 
   clear(): void {
+    this.reloadIfChanged()
     for (const key of Object.keys(this.data)) this.removed.add(key);
     this.data = {};
     this.dirty.clear();
@@ -81,7 +130,41 @@ export class SessionStore {
   }
 
   all(): Readonly<Record<string, SessionBinding>> {
+    this.reloadIfChanged()
     return this.data;
+  }
+
+  /**
+   * Prune bindings older than `cutoffMs` and cap total entries at `maxEntries`
+   * (keeping newest `updatedAt` first) so `sessions.json` never grows unboundedly.
+   */
+  pruneStaleBindings(
+    cutoffMs = Date.now() - 30 * 86_400_000,
+    maxEntries = 2_000,
+  ): number {
+    this.reloadIfChanged()
+    let pruned = 0
+    for (const [key, b] of Object.entries(this.data)) {
+      if ((b?.updatedAt ?? 0) < cutoffMs) {
+        delete this.data[key]
+        this.dirty.delete(key)
+        this.removed.add(key)
+        pruned++
+      }
+    }
+    const entries = Object.entries(this.data)
+    if (entries.length > maxEntries) {
+      entries.sort((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0))
+      for (let i = maxEntries; i < entries.length; i++) {
+        const key = entries[i]![0]
+        delete this.data[key]
+        this.dirty.delete(key)
+        this.removed.add(key)
+        pruned++
+      }
+    }
+    if (pruned > 0) this.persist()
+    return pruned
   }
 
   /**
@@ -137,11 +220,23 @@ export class SessionStore {
       for (const key of this.removed) delete merged[key];
       for (const key of this.dirty) {
         const b = this.data[key]
-        if (b !== undefined) merged[key] = b
+        if (b !== undefined) {
+          const existing = merged[key]
+          if (!existing || (b.updatedAt ?? 0) >= (existing.updatedAt ?? 0)) {
+            merged[key] = b
+          }
+        }
       }
       // Unique temp name + rename: concurrent host processes never share a
       // temp file (see common/atomic-write.ts).
-      writeFileAtomicSync(this.file, JSON.stringify(merged, null, 2));
+      const body = JSON.stringify(merged, null, 2)
+      writeFileAtomicSync(this.file, body);
+      try {
+        writeFileAtomicSync(this.file + '.last-good', body);
+      } catch {
+        // best-effort recovery copy
+      }
+      this.updateStatMtime()
       // Adopt the merge so this process sees keys other hosts contributed.
       this.data = merged;
       this.dirty.clear();

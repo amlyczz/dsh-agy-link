@@ -5,8 +5,9 @@
 // invariant (issue #115): an operator clearing a false refusal must not need
 // a DSH restart. No in-process cache — the file is tiny and read only a few
 // times per turn.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeFileAtomicSync } from '../common/atomic-write.ts'
 
 export interface EffortUnsupportedStore {
   read(): readonly string[]
@@ -38,8 +39,7 @@ export function createEffortUnsupportedStore(deps: EffortUnsupportedStoreDeps): 
     if (known.some((m) => m.trim().toLowerCase() === model.trim().toLowerCase())) return
     const next = [...known, model]
     try {
-      mkdirSync(deps.stateDir(), { recursive: true })
-      writeFileSync(path(), JSON.stringify(next, null, 2), 'utf8')
+      writeFileAtomicSync(path(), JSON.stringify(next, null, 2))
     } catch (e) {
       deps.log?.('failed to persist the effort-unsupported list: ' + String(e))
     }

@@ -9,7 +9,7 @@
   <a href="https://github.com/amlyczz/dsh-agy-link/actions/workflows/ci.yml"><img src="https://github.com/amlyczz/dsh-agy-link/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT"/>
   <img src="https://img.shields.io/badge/node-%3E%3D24-green" alt="node"/>
-  <img src="https://img.shields.io/badge/agy-v0.5.1-purple" alt="agy v0.5.1"/>
+  <img src="https://img.shields.io/badge/agy-%3E%3D1.5-purple" alt="agy >=1.5"/>
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@
 
 > 🚨 **【国内用户核心前置：必须开启系统代理 / TUN 模式！】**
 >
-> Google Antigravity 服务及 OAuth 登录需要直连 Google 海外官方服务器（`oauth2.googleapis.com`、`cloudcode-pa.googleapis.com` 等）。
+> Google Antigravity 服务及 OAuth 登录需要直连 Google 海外官方服务器（`oauth2.googleapis.com`、`daily-cloudcode-pa.googleapis.com` 等）。
 >
 > 1. **推荐方式（最稳妥）**：开启代理工具（Clash / Surge / v2rayA / Sing-box / Loon 等）的 **TUN 虚拟网卡模式（或系统代理全局接管）**，确保终端命令、后台 Node.js 进程及浏览器均能顺畅访问 Google 网络。
 > 2. **终端代理环境变量**：若终端未被代理自动接管，启动 DSH 或运行命令前请在终端中执行：

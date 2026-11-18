@@ -68,13 +68,16 @@ export function extractStepThoughts(payload: Buffer): string | null {
     if (res !== '') return res
   }
 
-  // Fallback for tool-heavy steps without field 20: toolAction / toolSummary
-  const full = payload.toString('utf8')
-  const act = /"toolAction"\s*:\s*"([^"]{3,200})"/.exec(full)
-  const sum = /"toolSummary"\s*:\s*"([^"]{3,200})"/.exec(full)
-  if (act || sum) {
-    const line = [act?.[1] ?? '', sum?.[1] ?? ''].filter((s) => s !== '').join(' — ')
-    if (line !== '') actionCandidates.push(line)
+  // Fallback for tool-heavy steps without field 20: toolAction / toolSummary.
+  // Fast byte pre-check avoids decoding large step payloads to UTF-8 unnecessarily.
+  if (payload.includes('toolAction') || payload.includes('toolSummary')) {
+    const full = payload.toString('utf8')
+    const act = /"toolAction"\s*:\s*"([^"]{3,200})"/.exec(full)
+    const sum = /"toolSummary"\s*:\s*"([^"]{3,200})"/.exec(full)
+    if (act || sum) {
+      const line = [act?.[1] ?? '', sum?.[1] ?? ''].filter((s) => s !== '').join(' — ')
+      if (line !== '') actionCandidates.push(line)
+    }
   }
 
   if (actionCandidates.length > 0) return actionCandidates[0] as string
@@ -180,18 +183,9 @@ export function extractToolInfo(payload: Buffer): CachedStep | null {
         if (payload[i + 2 + nameLen] === 0x1a) {
           const nameStr = payload.subarray(i + 2, i + 2 + nameLen).toString('utf-8')
           if (/^[a-zA-Z0-9_]+$/.test(nameStr)) {
-            let pos = i + 3 + nameLen
-            let jsonLen = 0
-            let shift = 0
-            while (pos < payload.length) {
-              const b = payload[pos]!
-              pos++
-              jsonLen |= (b & 0x7f) << shift
-              shift += 7
-              if ((b & 0x80) === 0) break
-            }
-            if (jsonLen > 1 && pos + jsonLen <= payload.length) {
-              const jsonSlice = payload.subarray(pos, pos + jsonLen)
+            const lenRes = readVarint(payload, i + 3 + nameLen)
+            if (lenRes !== null && lenRes.val > 1 && lenRes.next + lenRes.val <= payload.length) {
+              const jsonSlice = payload.subarray(lenRes.next, lenRes.next + lenRes.val)
               if (jsonSlice[0] === 0x7b /* '{' */) {
                 try {
                   const obj = JSON.parse(jsonSlice.toString('utf-8')) as unknown

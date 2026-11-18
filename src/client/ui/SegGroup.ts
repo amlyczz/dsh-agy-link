@@ -4,5 +4,5 @@ import { h } from '../react.ts';
 import { S } from '../styles.ts';
 
 export function segGroup(children: unknown[]): unknown {
-	return h('div', { style: S.segGroup }, children);
+	return h('div', { style: S.segGroup }, ...children);
 }

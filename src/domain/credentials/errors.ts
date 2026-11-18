@@ -18,10 +18,15 @@ export class WaitTimeoutError extends Error {
   }
 }
 
+export type SlotErrorTarget = 'primary' | 'account'
+
 /** The slot cannot be handed over safely; the caller must abort the run. */
 export class SlotUnavailableError extends Error {
-  constructor(message: string) {
+  readonly target: SlotErrorTarget
+
+  constructor(message: string, target: SlotErrorTarget = 'account') {
     super(message)
     this.name = 'SlotUnavailableError'
+    this.target = target
   }
 }

@@ -492,10 +492,11 @@ test('readSystemKeychainToken dispatches per platform (GH #8 / GH #30)', async (
   assert.ok(tok === null || typeof tok.accessToken === 'string', 'dispatch resolves without throwing')
 })
 
-test('AGY_ENDPOINTS prioritizes Antigravity endpoint', async () => {
+test('AGY_ENDPOINTS prioritizes Antigravity endpoint and uses consumer sandbox fallback', async () => {
   const { AGY_ENDPOINTS } = await import('../src/host/oauth.ts')
   assert.equal(AGY_ENDPOINTS[0], 'https://daily-cloudcode-pa.googleapis.com', 'Antigravity daily endpoint must be first')
-  assert.ok(AGY_ENDPOINTS.includes('https://cloudcode-pa.googleapis.com'), 'cloudcode-pa remains as fallback')
+  assert.ok(AGY_ENDPOINTS.includes('https://daily-cloudcode-pa.sandbox.googleapis.com'), 'daily sandbox remains as consumer fallback')
+  assert.equal(AGY_ENDPOINTS.includes('https://cloudcode-pa.googleapis.com'), false, 'enterprise cloudcode-pa must not be queried')
 })
 
 test('fetchQuotaSummary falls through partial summaries omitting Gemini to complete endpoints', async () => {
@@ -1854,4 +1855,43 @@ test('a drained shared Gemini pool still benches Argon when it has no row of its
   const stored = pool.getAccount(acc.id)!
   assert.equal(pool.isAccountEligible(stored, 'argon'), false, 'the shared 3% weekly pool benches Argon')
   assert.equal(pool.isAccountEligible(stored, 'google'), false, 'and the Gemini family itself')
+})
+
+test('getValidAccessToken returns null instead of an already-expired accessToken when refresh fails on network', async () => {
+  const { getValidAccessToken } = await import('../src/features/quota/token.ts')
+  const dir = mkdtempSync(join(tmpdir(), 'agy-expired-tok-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('expired-net')
+  const tokenFile = join(acc.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+  mkdirSync(join(acc.dir, '.gemini', 'antigravity-cli'), { recursive: true })
+  const raw = JSON.stringify({
+    token: {
+      access_token: 'ya29.already_expired',
+      refresh_token: '1//valid_grant',
+      expiry: new Date(Date.now() - 120_000).toISOString(),
+    },
+  })
+  writeFileSync(tokenFile, raw)
+
+  const tok = await getValidAccessToken(
+    {
+      pool,
+      // Dead loopback proxy forces refreshTokens() to fail with transport error
+      proxyFor: () => 'http://127.0.0.1:1',
+      readSystemKeychainToken: async () => null,
+      getStoredToken: async () => ({
+        accessToken: 'ya29.already_expired',
+        refreshToken: '1//valid_grant',
+        expiryMs: Date.now() - 120_000,
+      }),
+      persistRefreshedToken: () => {},
+      readPrimaryCredential: () => null,
+      writePrimaryCredential: () => false,
+      parseCredentialDoc: () => ({ refreshToken: '1//valid_grant' }),
+    },
+    acc,
+    new Map(),
+  )
+  assert.equal(tok, null, 'must not return an already-expired accessToken after refresh failure')
+  assert.equal(pool.getAccount(acc.id)?.authRequired, undefined, 'transport failure must not mark authRequired')
 })

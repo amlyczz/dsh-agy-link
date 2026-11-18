@@ -1,6 +1,5 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { constants } from 'node:fs'
-export { extractRefreshToken } from './docs.ts'
 
 /** Extract refresh token to ensure only valid OAuth documents are backed up. */
 export function hasRefreshToken(raw: string): boolean {
@@ -27,13 +26,13 @@ function sleepMs(ms: number): void {
 
 /** Read a file with retry backoff for transient Windows sharing violations. */
 export function readWithRetry(file: string): string | null {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       return readFileSync(file, 'utf8')
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       if (code === 'ENOENT') return null
-      if (attempt < 2 && (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES')) {
+      if (attempt < 4 && (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES')) {
         sleepMs(50)
         continue
       }

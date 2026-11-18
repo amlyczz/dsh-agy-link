@@ -1,8 +1,9 @@
 import type { HostServices } from '../../../host/services.ts'
-import { type RawRes, type RouteRegistrar } from '../respond.ts'
+import { headerOf, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import {
   handleMediaRequest,
   handleAssetRequest,
@@ -12,23 +13,41 @@ import {
 } from '../../../host/media-route.ts'
 import { brainDirCandidates } from '../../../runtime/agy/db/paths.ts'
 
+let mermaidCache: { file: string; content: Buffer; etag: string } | null = null
+
 function handleMermaid(services: HostServices, req: unknown, res: unknown): void {
   const { hostDir } = services
-  const p = join(hostDir, 'mermaid.min.js')
-  const fallback = join(hostDir, '..', 'assets', 'mermaid.min.js')
-  const file = existsSync(p) ? p : existsSync(fallback) ? fallback : null
+  const candidates = [
+    join(hostDir, 'mermaid.min.js'),
+    join(hostDir, 'assets', 'mermaid.min.js'),
+    join(hostDir, '..', 'assets', 'mermaid.min.js'),
+    join(hostDir, '..', '..', 'assets', 'mermaid.min.js'),
+  ]
+  const file = candidates.find((c) => existsSync(c)) ?? null
   if (!file) {
     ;(res as RawRes).writeHead(404, { 'content-type': 'text/plain' })
     ;(res as RawRes).end('mermaid.min.js not found')
     return
   }
+
   try {
-    const content = readFileSync(file)
+    if (mermaidCache === null || mermaidCache.file !== file) {
+      const content = readFileSync(file)
+      const etag = `"${createHash('sha1').update(content).digest('base64url').slice(0, 16)}"`
+      mermaidCache = { file, content, etag }
+    }
+    const inm = headerOf(req, 'if-none-match')
+    if (inm !== '' && inm.split(',').some((t) => t.trim() === mermaidCache!.etag || t.trim() === '*')) {
+      ;(res as RawRes).writeHead(304, { etag: mermaidCache.etag, 'cache-control': 'public, max-age=86400' })
+      ;(res as RawRes).end()
+      return
+    }
     ;(res as RawRes).writeHead(200, {
       'content-type': 'application/javascript; charset=utf-8',
       'cache-control': 'public, max-age=86400',
+      etag: mermaidCache.etag,
     })
-    ;(res as RawRes).end(content)
+    ;(res as RawRes).end(mermaidCache.content)
   } catch (err) {
     ;(res as RawRes).writeHead(500, { 'content-type': 'text/plain' })
     ;(res as RawRes).end('read error: ' + String(err))
@@ -56,15 +75,19 @@ function collectWorkspaceRoots(services: HostServices): string[] {
   if (!roots.includes(cwd)) roots.push(cwd)
 
   const home = homedir()
-  const devDirs = [join(home, 'Developer'), join(home, 'Workspace'), join(home, 'Projects')]
-  for (const d of devDirs) {
+  const allowedUserDirs = [
+    join(home, 'Developer'),
+    join(home, 'Workspace'),
+    join(home, 'Projects'),
+    join(home, 'Desktop'),
+    join(home, 'Downloads'),
+  ]
+  for (const d of allowedUserDirs) {
     if (existsSync(d) && !roots.includes(d)) roots.push(d)
   }
-  const desktop = join(home, 'Desktop')
-  const downloads = join(home, 'Downloads')
-  if (existsSync(desktop) && !roots.includes(desktop)) roots.push(desktop)
-  if (existsSync(downloads) && !roots.includes(downloads)) roots.push(downloads)
-  if (!roots.includes(home)) roots.push(home)
+
+  const tmp = tmpdir()
+  if (tmp && existsSync(tmp) && !roots.includes(tmp)) roots.push(tmp)
 
   try {
     for (const b of brainDirCandidates()) {

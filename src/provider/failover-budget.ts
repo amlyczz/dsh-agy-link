@@ -54,16 +54,24 @@ export class FailoverBudget {
    * the failure is not account-scoped or the budget is spent — the caller then
    * replays the recorded failure so the turn ends with the real error.
    */
+  private sweepIfLarge(now: number): void {
+    if (this.failover.size > 256) {
+      for (const [k, v] of this.failover) if (now - v.firstAt > FailoverBudget.FAILOVER_WINDOW_MS) this.failover.delete(k)
+    }
+    if (this.rateLimit.size > 256) {
+      for (const [k, v] of this.rateLimit) if (now - v.firstAt > FailoverBudget.RATE_LIMIT_FAILOVER_WINDOW_MS) this.rateLimit.delete(k)
+    }
+    if (this.network.size > 256) {
+      for (const [k, v] of this.network) if (now - v.at > FailoverBudget.NETWORK_STREAK_WINDOW_MS) this.network.delete(k)
+    }
+  }
+
   claim(sessionKey: string, code: string | undefined, ctx: FailoverContext): boolean {
     if (!isAccountScopedFailure(code)) return false
-    // A transport failure on a SHARED egress is account-scoped in name only:
-    // the step must still be re-run (the settled recording would otherwise be
-    // replayed verbatim), but nothing is wrong with the account, so no rotation
-    // budget is spent and the sticky pointer stays put. DSH's own retry budget
-    // (three hops for NETWORK) still bounds the re-runs.
     if (code === Err.NETWORK && ctx.sharesSingleEgress()) return true
     const max = Math.max(1, ctx.enabledAccounts() - 1)
     const now = Date.now()
+    this.sweepIfLarge(now)
     // HARD rate limits are tracked separately: every claim cools the failed
     // account for the server-quoted reset, so hops are self-bounding by pool
     // depth — they must not starve the tiny soft-failure budget.

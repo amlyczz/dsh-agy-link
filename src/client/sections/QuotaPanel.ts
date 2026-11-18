@@ -4,6 +4,7 @@
 // quota visuals from one implementation.
 
 import type { ManagedAccount } from '../../common/pool-types.ts';
+import { computeQuotaPacing } from '../../common/quota-pacing.ts';
 import type { AgyLocaleKey } from '../locales.ts';
 import { h } from '../react.ts';
 import { brandIcon, FAMILY_BRAND } from '../icons.ts';
@@ -89,24 +90,50 @@ function getQuotaColors(pct: number): QuotaColors {
 	};
 }
 
+const FIVE_H_MS = 5 * 3_600_000;
+const SEVEN_D_MS = 7 * 24 * 3_600_000;
+
+function describePacing(
+	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
+	windowDurationMs: number,
+	resetStr: string,
+	rawFraction?: number,
+	rawReset?: string,
+) {
+	const pacing = typeof rawFraction === 'number' ? computeQuotaPacing(rawFraction, rawReset, windowDurationMs) : null;
+	const paceLabel = pacing === null ? ''
+		: pacing.status === 'surplus' ? t('quota.paceSurplus', { pct: Math.round(Math.abs(pacing.surplus) * 100) })
+		: pacing.status === 'burning_fast' ? t('quota.paceFast', { pct: Math.round(Math.abs(pacing.surplus) * 100) })
+		: pacing.status === 'on_track' ? t('quota.paceOnTrack')
+		: pacing.status === 'unactivated' ? t('quota.unactivated')
+		: '';
+	const tooltipText = typeof rawFraction === 'number'
+		? `${(rawFraction * 100).toFixed(1)}%${paceLabel ? ` · ${paceLabel}` : ''}${rawReset ? ` · reset: ${rawReset}` : ''}`
+		: resetStr ? `↻ ${resetStr}` : undefined;
+	const showTimeMarker = pacing !== null && (pacing.status === 'surplus' || pacing.status === 'on_track' || pacing.status === 'burning_fast');
+	const markerLeftPct = showTimeMarker ? Math.max(2, Math.min(98, Math.round(pacing.timeRemainingFraction * 100))) : 0;
+	return { pacing, tooltipText, showTimeMarker, markerLeftPct };
+}
+
 const renderLine = (
+	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
 	windowName: string,
 	percent: number,
 	c: QuotaColors,
 	resetStr: string,
+	windowDurationMs: number,
 	rawFraction?: number,
 	rawReset?: string,
 	isRefreshing = false,
 ): unknown => {
 	const isShimmer = percent < 0 || isRefreshing;
-	const tooltipText = typeof rawFraction === 'number'
-		? `${(rawFraction * 100).toFixed(1)}% (raw: ${rawFraction})${rawReset ? ` · reset: ${rawReset}` : ''}`
-		: resetStr ? `↻ ${resetStr}` : undefined;
+	const { pacing, tooltipText, showTimeMarker, markerLeftPct } = describePacing(t, windowDurationMs, resetStr, rawFraction, rawReset);
 	return h('div', { className: 'agy-quota-line', style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '2px 0' } },
 		h('span', { style: { width: '64px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' } }, windowName),
 		h('div', {
 			className: isShimmer ? 'agy-shimmer-track' : '',
-			style: S.progressBarBg,
+			style: { ...S.progressBarBg, position: 'relative' },
+			title: tooltipText,
 		},
 			h('div', {
 				className: 'agy-progress-fill',
@@ -117,6 +144,19 @@ const renderLine = (
 					borderRadius: '3px',
 				},
 			}),
+			showTimeMarker ? h('span', {
+				title: t('quota.timeMarkerTitle'),
+				style: {
+					position: 'absolute',
+					left: `${markerLeftPct}%`,
+					top: '-1px',
+					bottom: '-1px',
+					width: '1.5px',
+					background: 'var(--agy-text-primary)',
+					opacity: 0.55,
+					pointerEvents: 'none',
+				},
+			}) : null,
 		),
 		h('span', {
 			title: tooltipText,
@@ -146,7 +186,11 @@ const renderLine = (
 				marginLeft: '6px',
 			},
 		},
-			resetStr ? h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '10.5px', fontWeight: 500, whiteSpace: 'nowrap' } }, `↻ ${resetStr}`) : null,
+			resetStr
+				? h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '10.5px', fontWeight: 500, whiteSpace: 'nowrap' } }, `↻ ${resetStr}`)
+				: pacing?.status === 'unactivated'
+					? h('span', { style: { color: 'var(--agy-text-tertiary)', fontSize: '10px', fontWeight: 500, whiteSpace: 'nowrap' } }, t('quota.unactivated'))
+					: null,
 		),
 	);
 };
@@ -157,7 +201,7 @@ const renderLine = (
  * dashboard render IDENTICAL quota visuals from one implementation.
  */
 export function renderFamilyQuotaBar(
-	t: (key: AgyLocaleKey) => string,
+	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
 	label: string,
 	familyKey: 'google' | 'argon' | 'anthropic' | 'openai',
 	acc: ManagedAccount,
@@ -191,7 +235,7 @@ export function renderFamilyQuotaBar(
 			brandIcon(FAMILY_BRAND[familyKey], 13),
 			h('span', null, label),
 		),
-		(familyKey !== 'argon' || has5h) ? renderLine(t('quota.fiveHour'), pct5h, c5h, note5h, info?.remainingFraction, info?.resetTime, isRefreshing) : null,
-		renderLine(t('quota.weekly'), pctWeekly, cWeekly, noteWeekly, info?.weeklyFraction, info?.weeklyResetTime, isRefreshing),
+		(familyKey !== 'argon' || has5h) ? renderLine(t, t('quota.fiveHour'), pct5h, c5h, note5h, FIVE_H_MS, info?.remainingFraction, info?.resetTime, isRefreshing) : null,
+		renderLine(t, t('quota.weekly'), pctWeekly, cWeekly, noteWeekly, SEVEN_D_MS, info?.weeklyFraction, info?.weeklyResetTime, isRefreshing),
 	);
 }

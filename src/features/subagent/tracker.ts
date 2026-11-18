@@ -3,12 +3,19 @@
 // reasoning channel so the user sees 1:1 what agy and its workers are doing.
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import type { AgyEvent } from '../../common/types.ts'
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
 
 export interface SubagentTrackerOptions {
   conversationId?: string
   accountHome?: string
+  /**
+   * True when attaching to a resumed multi-turn conversation: pre-existing
+   * subagent transcripts are baselined at current EOF so previous turns'
+   * subagent history is never replayed.
+   */
+  resumed?: boolean
   onEvent: (event: AgyEvent) => void
   noteActivity?: () => void
   pollIntervalMs?: number
@@ -33,12 +40,26 @@ interface TrackedSubagent {
   role: string
   typeName: string
   brainDir: string
+  /** Last observed descriptor state (e.g. SUBAGENT_STATE_ALIVE / KILLED). */
+  state?: string
+  /** True once descriptor reached a non-active state (stop polling transcript). */
+  terminal: boolean
   /** Bytes of `transcript.jsonl` already consumed. */
   offset: number
+  /** Incremental UTF-8 decoder so split multi-byte characters never corrupt. */
+  decoder: StringDecoder
   /** Trailing partial line from the last read (the file ends without a newline). */
   rest: string
   /** Lines consumed so far — the fallback step index when a row carries none. */
   lines: number
+}
+
+function isActiveSubagentState(state: string | undefined): boolean {
+  return state === undefined || state === '' || state === 'SUBAGENT_STATE_ALIVE'
+}
+
+function isTerminalTranscriptStatus(status: unknown): status is string {
+  return typeof status === 'string' && /^(ERROR|FAILED|CANCELED|CANCELLED)$/i.test(status.trim())
 }
 
 function stripQuotes(s: string): string {
@@ -156,15 +177,43 @@ export class SubagentTracker {
     if (cid === '' || cid === this.conversationId) return
     this.conversationId = cid
     this.brainDir = null
-    if (this.active) this.poll()
+    this.baselined = false
+    if (this.active) {
+      if (this.opts.resumed === true) {
+        this.baselined = true
+        this.baselineExisting()
+      }
+      this.poll()
+    }
   }
+
+  private baselined = false
 
   start(): void {
     if (this.active) return
     this.active = true
+    if (this.opts.resumed === true && !this.baselined && this.conversationId !== '') {
+      this.baselined = true
+      this.baselineExisting()
+    }
     this.poll()
     this.timer = setInterval(() => this.poll(), this.pollIntervalMs)
     this.timer.unref?.()
+  }
+
+  private baselineExisting(): void {
+    try {
+      if (!this.brainDir) {
+        this.brainDir = findBrainDir(this.conversationId, this.accountHome)
+      }
+      if (!this.brainDir) return
+      this.scanSubagentsForConv(this.conversationId, true)
+      for (const cid of Array.from(this.trackedSubagents.keys())) {
+        this.scanSubagentsForConv(cid, true)
+      }
+    } catch (err) {
+      noteFailure(this.opts.log, 'baseline', err)
+    }
   }
 
   stop(): void {
@@ -192,9 +241,9 @@ export class SubagentTracker {
         this.scanSubagentsForConv(cid)
       }
 
-      // Read incremental logs from all tracked subagents
+      // Read incremental logs from all still-active subagents
       for (const sub of this.trackedSubagents.values()) {
-        this.pollSubagentTranscript(sub)
+        if (!sub.terminal) this.pollSubagentTranscript(sub)
       }
     } catch (err) {
       // A poll races a live writer: keep the interval alive, but not silently.
@@ -204,7 +253,20 @@ export class SubagentTracker {
     }
   }
 
-  private scanSubagentsForConv(cid: string): void {
+  private emitSubagentEvent(stepKey: string, text: string, raw: unknown): void {
+    if (this.seenStepKeys.has(stepKey)) return
+    this.seenStepKeys.add(stepKey)
+    this.opts.onEvent({
+      kind: 'step',
+      stepKey,
+      stepKind: 'subagent',
+      text,
+      raw,
+    })
+    this.opts.noteActivity?.()
+  }
+
+  private scanSubagentsForConv(cid: string, baselineOnly = false): void {
     const bDir = cid === this.conversationId ? this.brainDir : findBrainDir(cid, this.accountHome)
     if (!bDir) return
     const subagentsDir = join(bDir, '.system_generated', 'subagents')
@@ -228,37 +290,70 @@ export class SubagentTracker {
           state?: unknown
         }
         const subId = typeof obj?.conversationId === 'string' ? obj.conversationId : f.replace(/\.json$/, '')
-        if (!subId || this.trackedSubagents.has(subId)) continue
+        if (!subId) continue
+
+        const rawState = typeof obj?.state === 'string' && obj.state.trim() !== '' ? obj.state.trim() : undefined
+        const existing = this.trackedSubagents.get(subId)
+        if (existing) {
+          if (!existing.terminal && rawState !== undefined && rawState !== existing.state && !isActiveSubagentState(rawState)) {
+            this.pollSubagentTranscript(existing)
+            existing.state = rawState
+            existing.terminal = true
+            const stateKey = `subagent-state-${subId}-${rawState}`
+            if (baselineOnly) {
+              this.seenStepKeys.add(stateKey)
+            } else {
+              this.emitSubagentEvent(stateKey, `[子代理 · ${existing.role}] 协同专员已停止 (${rawState})\n`, obj)
+            }
+          }
+          continue
+        }
 
         const desc = obj?.subagentDescriptor
         const role = typeof desc?.role === 'string' && desc.role !== '' ? desc.role : '专员'
         const typeName = typeof desc?.typeName === 'string' && desc.typeName !== '' ? desc.typeName : 'Subagent'
 
         const subBrainDir = findBrainDir(subId, this.accountHome) ?? join(bDir, '..', subId)
+        const active = isActiveSubagentState(rawState)
+        let initialOffset = 0
+        if (baselineOnly || !active) {
+          try {
+            const logPath = join(subBrainDir, '.system_generated', 'logs', 'transcript.jsonl')
+            const st = statSync(logPath)
+            if (st.isFile()) initialOffset = st.size
+          } catch {
+            initialOffset = 0
+          }
+        }
         const tracked: TrackedSubagent = {
           conversationId: subId,
           role,
           typeName,
           brainDir: subBrainDir,
-          offset: 0,
+          state: rawState,
+          terminal: !active,
+          offset: initialOffset,
+          decoder: new StringDecoder('utf8'),
           rest: '',
           lines: 0,
         }
         this.trackedSubagents.set(subId, tracked)
 
-        // Announce the spawn once, in the same `[子代理 · role]` shape as its actions.
+        // Announce spawn only when the descriptor represents an active subagent.
         const spawnKey = `subagent-spawn-${subId}`
-        if (!this.seenStepKeys.has(spawnKey)) {
+        if (baselineOnly) {
           this.seenStepKeys.add(spawnKey)
-          const ev: AgyEvent = {
-            kind: 'step',
-            stepKey: spawnKey,
-            stepKind: 'subagent',
-            text: `[子代理 · ${role}] 已启动协同专员 (${typeName})\n`,
-            raw: obj,
+        } else if (active) {
+          this.emitSubagentEvent(spawnKey, `[子代理 · ${role}] 已启动协同专员 (${typeName})\n`, obj)
+        } else {
+          this.seenStepKeys.add(spawnKey)
+          if (rawState !== undefined) {
+            this.emitSubagentEvent(
+              `subagent-state-${subId}-${rawState}`,
+              `[子代理 · ${role}] 协同专员未保持运行 (${rawState})\n`,
+              obj,
+            )
           }
-          this.opts.onEvent(ev)
-          this.opts.noteActivity?.()
         }
       } catch (err) {
         noteFailure(this.opts.log, `descriptor ${f}`, err)
@@ -286,27 +381,29 @@ export class SubagentTracker {
     // A shrunk file means the conversation was recreated; start over.
     if (size < sub.offset) {
       sub.offset = 0
+      sub.decoder = new StringDecoder('utf8')
       sub.rest = ''
     }
     if (size === sub.offset) return []
 
     const length = size - sub.offset
     const buffer = Buffer.allocUnsafe(length)
+    let bytesRead = 0
     try {
       const fd = openSync(logPath, 'r')
       try {
-        readSync(fd, buffer, 0, length, sub.offset)
+        bytesRead = readSync(fd, buffer, 0, length, sub.offset)
       } finally {
         closeSync(fd)
       }
     } catch {
       return []
     }
-    sub.offset = size
+    if (bytesRead <= 0) return []
+    sub.offset += bytesRead
 
-    // The tail may end mid-line while the writer is appending: keep it for the
-    // next poll instead of parsing a truncated JSON row.
-    const chunk = sub.rest + buffer.toString('utf8')
+    // The tail may end mid-line or mid-UTF-8 codepoint while the writer appends.
+    const chunk = sub.rest + sub.decoder.write(buffer.subarray(0, bytesRead))
     const parts = chunk.split('\n')
     sub.rest = parts.pop() ?? ''
     return parts.filter((line) => line.trim() !== '')
@@ -332,38 +429,17 @@ export class SubagentTracker {
             const tc = o.tool_calls[tcIdx]!
             const toolName = typeof tc?.name === 'string' ? tc.name : ''
             if (toolName === '') continue
-            const k = `${baseKey}-tc-${tcIdx}`
-            if (this.seenStepKeys.has(k)) continue
-            this.seenStepKeys.add(k)
-
             const msg = formatSubagentAction(sub.role, toolName, tc.args)
-            const ev: AgyEvent = {
-              kind: 'step',
-              stepKey: k,
-              stepKind: 'subagent',
-              text: `${msg}\n`,
-              raw: o,
-            }
-            this.opts.onEvent(ev)
-            this.opts.noteActivity?.()
+            this.emitSubagentEvent(`${baseKey}-tc-${tcIdx}`, `${msg}\n`, o)
           }
         } else if (o.type === 'PLANNER_RESPONSE' && typeof o.content === 'string' && o.content.trim() !== '') {
-          const k = `${baseKey}-content`
-          if (this.seenStepKeys.has(k)) continue
-          this.seenStepKeys.add(k)
-
           const firstLine = o.content.trim().split('\n')[0]!.replace(/^#+\s*/, '').slice(0, 100)
           if (firstLine !== '') {
-            const ev: AgyEvent = {
-              kind: 'step',
-              stepKey: k,
-              stepKind: 'subagent',
-              text: `[子代理 · ${sub.role}] 阶段进展: ${firstLine}\n`,
-              raw: o,
-            }
-            this.opts.onEvent(ev)
-            this.opts.noteActivity?.()
+            this.emitSubagentEvent(`${baseKey}-content`, `[子代理 · ${sub.role}] 阶段进展: ${firstLine}\n`, o)
           }
+        }
+        if (isTerminalTranscriptStatus(o.status)) {
+          this.emitSubagentEvent(`${baseKey}-status`, `[子代理 · ${sub.role}] 执行异常/中止 (${o.status})\n`, o)
         }
       } catch {
         // skip malformed line

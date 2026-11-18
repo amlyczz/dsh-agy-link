@@ -1,7 +1,6 @@
 import type { HostServices } from '../../../host/services.ts'
-import { runRoute, sendJson, type RawRes, type RouteRegistrar } from '../respond.ts'
+import { runRoute, sendJsonWithEtag, type RawRes, type RouteRegistrar } from '../respond.ts'
 import { sanitizeCatalogEntries } from '../../../host/models.ts'
-import { accountSupportsModel } from '../../../common/pool-types.ts'
 
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, bin, store, pool, catalog, auth, poolAuth, adapter, translation, lastRun } = services
@@ -27,7 +26,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
         } else {
           supportedModels = catalog.getModelsForAccount(activeAcc, pool)
         }
-        sendJson(res as RawRes, 200, {
+        sendJsonWithEtag(req, res as RawRes, 200, {
           plugin: 'dsh-agy-link',
           bin: bin(),
           version: versionCache,

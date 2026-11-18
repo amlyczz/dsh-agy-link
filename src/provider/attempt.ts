@@ -27,9 +27,10 @@ import {
   startAgyProcess,
   stripNulBytes,
 } from '../host/runner.ts'
-import { agyHomeDirFor, snapshotAgyLogs } from '../host/agy-log.ts'
+import { agyHomeDirFor, snapshotAgyLogs, type AgyLogSnapshot } from '../host/agy-log.ts'
 import { acquireCredentialSlot, armSlotHandoff, type SlotHandoff } from '../host/credential-slot.ts'
-import { buildAgyEnv } from '../runtime/net/account-env.ts'
+import { buildAgyEnv, pickProxy } from '../runtime/net/account-env.ts'
+import type { SpawnLimiter } from './spawn-limiter.ts'
 import { resolveModelSlug } from '../host/models.ts'
 import type { RunTelemetry } from './finalize.ts'
 import { SubagentTracker } from '../features/subagent/tracker.ts'
@@ -64,6 +65,7 @@ export interface AttemptDeps {
   /** Per-account burst spacing throttle state (adapter-owned). */
   lastAccountSpawnTime: Map<string, number>
   minSpawnIntervalMs: number
+  spawnLimiter?: SpawnLimiter
 }
 
 /** Everything one attempt needs. Values are produced by streamAttempt. */
@@ -260,6 +262,8 @@ function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg: Plugi
         const completed =
           ev.state === 'DONE' ||
           ev.state === 'ERROR' ||
+          ev.state === 'CANCELED' ||
+          ev.state === 'CANCELLED' ||
           ev.state === 'RUNNING' ||
           (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
         if (!completed) {
@@ -322,6 +326,7 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
   const watchdog = createToolWatchdog(deps.log, cfg)
   const tracker = new SubagentTracker({
     conversationId: initialConversationId,
+    resumed: Boolean(initialConversationId),
     accountHome: rec.accountHome,
     log: deps.log,
     onEvent: (ev) => {
@@ -475,7 +480,7 @@ export async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: n
 export interface SpawnedAttempt {
   proc: RunningProcess
   runLogHome: string
-  runLogsBefore: Set<string>
+  runLogsBefore: AgyLogSnapshot
 }
 
 /**
@@ -527,13 +532,15 @@ export async function startAttemptProcess(
     // high-frequency flood to Google endpoints). Suspension point INSIDE the
     // slot-owning window: a generator abandoned here must still give the slot
     // back — the finally below owns that.
+    // TAT per-account + shared-egress burst spacing throttle (reserves slot
+    // synchronously BEFORE await so parallel sessions never wake together).
     if (account) {
-      const lastSpawn = deps.lastAccountSpawnTime.get(account.id) ?? 0
-      const elapsed = Date.now() - lastSpawn
-      const jitter = Math.floor(Math.random() * 300) // 100~400ms organic jitter
-      const targetInterval = deps.minSpawnIntervalMs + jitter
-      if (elapsed < targetInterval) {
-        await abortableDelay(targetInterval - elapsed, signal, 'request aborted before the agy process was spawned')
+      const egressKey = pickProxy(account.proxyUrl, cfg.proxyUrl) || '__direct__'
+      const delayMs = deps.spawnLimiter
+        ? deps.spawnLimiter.reserveSpawnDelay(account.id, egressKey, deps.minSpawnIntervalMs)
+        : Math.max(0, deps.minSpawnIntervalMs + Math.floor(Math.random() * 300) - (Date.now() - (deps.lastAccountSpawnTime.get(account.id) ?? 0)))
+      if (delayMs > 0) {
+        await abortableDelay(delayMs, signal, 'request aborted before the agy process was spawned')
       }
       deps.lastAccountSpawnTime.set(account.id, Date.now())
     }

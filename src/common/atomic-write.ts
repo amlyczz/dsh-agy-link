@@ -1,12 +1,10 @@
 // Atomic file replacement with a UNIQUE per-write temp name.
 //
-// Several DSH host processes (web + headless) share one state file such as
-// sessions.json. The old writer used a deterministic "<file>.tmp", so two
-// processes writing at the same time could interleave into the same temp file
-// and then race the rename — corrupting the store or failing one writer with
-// ENOENT. A pid + monotonic sequence + random suffix makes every temp unique,
-// so concurrent writers never share one, while rename still gives atomic swap.
-import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+// Several DSH host processes (web + headless) share state and credential files.
+// A pid + monotonic sequence + random suffix makes every temp unique so
+// concurrent writers never share one, while rename gives an atomic swap.
+import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 let seq = 0
 
@@ -17,10 +15,11 @@ export function atomicTmpPath(file: string): string {
 }
 
 /** Write `data` to `file` atomically; on any failure remove the temp file. */
-export function writeFileAtomicSync(file: string, data: string): void {
+export function writeFileAtomicSync(file: string, data: string, mode = 0o600): void {
   const tmp = atomicTmpPath(file)
   try {
-    writeFileSync(tmp, data, 'utf8')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(tmp, data, { encoding: 'utf8', mode })
     renameSync(tmp, file)
   } catch (err) {
     try {
@@ -29,5 +28,15 @@ export function writeFileAtomicSync(file: string, data: string): void {
       /* best effort */
     }
     throw err
+  }
+}
+
+/** Best-effort boolean wrapper around `writeFileAtomicSync` (never throws). */
+export function tryWriteFileAtomic(file: string, data: string, mode = 0o600): boolean {
+  try {
+    writeFileAtomicSync(file, data, mode)
+    return true
+  } catch {
+    return false
   }
 }

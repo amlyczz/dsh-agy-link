@@ -63,15 +63,22 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 		const displayAlias = activeAcc ? (activeAcc.defaultAlias || legacyDefault
 			? activeAcc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(activeAcc) + 1 })
 			: activeAcc.alias) : '';
+		const gFrac = activeAcc?.quotas?.google?.remainingFraction;
+		const activePct = typeof gFrac === 'number' && Number.isFinite(gFrac)
+			? Math.max(0, Math.min(100, Math.round(gFrac * 100)))
+			: null;
 		// Only an ELIGIBLE account may be announced as "in use".
 		const activeEligible = activeAcc !== undefined && activeAcc.enabled && !activeAcc.authRequired;
-		const activeDetail = activeAcc !== undefined && activeEligible ? ` · ${t('status.inUse')}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}` : '';
+		const activeDetail = activeAcc !== undefined && activeEligible
+			? ` · ${t('status.inUse')}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}${activePct !== null ? ` · ${activePct}%` : ''}`
+			: '';
 		const badgeTitle = status === null
 			? t('header.badgeLoading')
 			: `${t('header.badgeTitle', { count: accounts.length })}${activeDetail}`;
 		const buttonLabel = status === null
 			? 'AGY'
 			: displayAlias ? `AGY · ${displayAlias}` : `AGY (${accounts.length})`;
+		const pctColor = activePct === null ? undefined : activePct <= 20 ? '#ef4444' : activePct <= 50 ? '#f59e0b' : '#10b981';
 
 		const badge = h(Button,
 			{
@@ -85,6 +92,9 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 			},
 			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color, flexShrink: 0 } }),
 			h('span', { className: 'agy-session-status-label' }, buttonLabel),
+			activePct !== null && activeEligible
+				? h('span', { className: 'agy-session-status-label', style: { color: pctColor, fontWeight: 700, fontSize: '10.5px' } }, `${activePct}%`)
+				: null,
 		);
 		const modalPortal = isPrimaryHost && isModalOpen ? portalToBody(h(ConsoleDialog, { t, SettingsSection })) : null;
 		if (!isUiVisible(status, 'showHeaderBadge')) {

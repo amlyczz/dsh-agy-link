@@ -16,10 +16,11 @@ export function handleConfig(deps: CommandDeps, ctx: CommandContext): CommandRes
   }
 
   if (sub === 'effort') {
-    if (!['low', 'medium', 'high', 'default'].includes(arg)) {
-      return err('usage: /agy effort <low|medium|high|default>')
+    if (!['low', 'medium', 'high', 'xhigh', 'default'].includes(arg)) {
+      return err('usage: /agy effort <low|medium|high|xhigh|default>')
     }
     deps.setOverride('defaultEffort', arg === 'default' ? '' : arg)
+    deps.notifyPicker?.()
     return ok('Default effort set to **' + (arg === 'default' ? 'model default' : arg) + '**.')
   }
 

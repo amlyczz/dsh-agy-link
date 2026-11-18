@@ -1,6 +1,6 @@
 import type { HostServices } from '../../../host/services.ts'
 import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
-import { QUOTA_REFRESH_DEDUP_MS } from '../../../common/timeouts.ts'
+import { QUOTA_REFRESH_DEDUP_MS, WARMUP_WRITE_TIMEOUT_MS, longRouteTimeout } from '../../../common/timeouts.ts'
 import type { WarmupResult } from '../../../host/warmup.ts'
 import { detectSystemProxy } from '../../../host/wincred.ts'
 import { openAccountTerminal } from '../../../host/runner.ts'
@@ -14,17 +14,31 @@ function handlePoolList(services: HostServices, req: unknown, res: unknown): voi
 }
 
 function handlePoolBeginAdd(services: HostServices, req: unknown, res: unknown): void {
-  const { getConfig, poolAuth } = services
+  const { getConfig, pool, poolAuth } = services
       runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
           return
         }
         const body = await readBody(req)
+        const accountId = typeof body.accountId === 'string' && body.accountId.trim() !== '' ? body.accountId.trim() : undefined
+        const cfgProxy = getConfig().proxyUrl.trim()
+        const bodyProxy = typeof body.proxyUrl === 'string' && body.proxyUrl.trim() !== '' ? body.proxyUrl.trim() : ''
+        if (accountId !== undefined) {
+          const acc = pool.getAccount(accountId)
+          if (!acc) {
+            sendJson(res as RawRes, 404, { ok: false, phase: 'failed', code: 'request_failed', error: 'account not found' })
+            return
+          }
+          const effectiveProxy = bodyProxy || acc.proxyUrl || cfgProxy || detectSystemProxy() || undefined
+          const st = acc.systemHome || acc.id === 'acc_primary'
+            ? await poolAuth.beginPrimary(effectiveProxy)
+            : await poolAuth.beginAccount(acc.id, effectiveProxy)
+          sendJson(res as RawRes, st.ok ? 200 : 500, st)
+          return
+        }
         const alias = typeof body.alias === 'string' ? body.alias : undefined
-        const proxyUrl = typeof body.proxyUrl === 'string' && body.proxyUrl.trim() !== ''
-          ? body.proxyUrl.trim()
-          : (getConfig().proxyUrl.trim() || detectSystemProxy() || undefined)
+        const proxyUrl = bodyProxy || cfgProxy || detectSystemProxy() || undefined
         const st = await poolAuth.begin(alias, proxyUrl)
         sendJson(res as RawRes, st.ok ? 200 : 500, st)
       })
@@ -171,11 +185,13 @@ function handlePoolPrimary(services: HostServices, req: unknown, res: unknown): 
         }
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
+        const prev = pool.getPoolData().primaryAccountId
         if (pool.setPrimaryAccount(id)) {
-          // Same contract as /pool/set-active: switching the primary changes
-          // the effective account and its model catalog / Argon visibility.
-          notifyPicker()
-          void catalog.forceRefreshAndNotify(id).catch(() => undefined)
+          const alreadyNotified = typeof pool.onAccountSwitch === 'function' && id !== prev
+          if (!alreadyNotified) {
+            notifyPicker()
+            void catalog.forceRefreshAndNotify(id).catch(() => undefined)
+          }
         }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })
@@ -298,11 +314,11 @@ function handlePoolWarmup(services: HostServices, req: unknown, res: unknown): v
         } catch (e) {
           sendJson(res as RawRes, 500, { error: String(e) })
         }
-      })
+      }, longRouteTimeout(WARMUP_WRITE_TIMEOUT_MS))
 }
 
 function handlePoolClearCooldown(services: HostServices, req: unknown, res: unknown): void {
-  const { pool } = services
+  const { pool, notifyPicker } = services
       runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -312,6 +328,7 @@ function handlePoolClearCooldown(services: HostServices, req: unknown, res: unkn
         const id = typeof body.id === 'string' ? body.id : undefined
         const family = typeof body.family === 'string' ? body.family : undefined
         pool.clearCooldown(id, family as never, true)
+        notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
       })
 }
@@ -325,13 +342,17 @@ function handlePoolSetActive(services: HostServices, req: unknown, res: unknown)
         }
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
+        const prev = pool.getActiveAccountId('google')
         const ok = id !== '' && pool.setActiveAccount(id)
         if (ok) {
-          notifyPicker()
-          if (typeof catalog.forceRefreshAndNotify === 'function') {
-            void catalog.forceRefreshAndNotify(id).catch(() => undefined)
-          } else if (typeof catalog.forceRefresh === 'function') {
-            void catalog.forceRefresh(id).catch(() => undefined)
+          const alreadyNotified = typeof pool.onAccountSwitch === 'function' && id !== prev
+          if (!alreadyNotified) {
+            notifyPicker()
+            if (typeof catalog.forceRefreshAndNotify === 'function') {
+              void catalog.forceRefreshAndNotify(id).catch(() => undefined)
+            } else if (typeof catalog.forceRefresh === 'function') {
+              void catalog.forceRefresh(id).catch(() => undefined)
+            }
           }
         }
         sendJson(res as RawRes, ok ? 200 : 400, { ok, pool: pool.getPoolData() })
@@ -347,15 +368,17 @@ function handlePoolReorder(services: HostServices, req: unknown, res: unknown): 
         }
         const body = await readBody(req)
         const ids = Array.isArray(body.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === 'string') : []
+        const prevActive = pool.getActiveAccountId('google')
         if (pool.reorderAccounts(ids)) {
-          // Reordering clears the sticky active pointers, so the effective
-          // account may change; refresh it and re-announce the model list.
           const activeId = pool.getActiveAccountId('google')
-          notifyPicker()
-          if (activeId && typeof catalog.forceRefreshAndNotify === 'function') {
-            void catalog.forceRefreshAndNotify(activeId).catch(() => undefined)
-          } else if (activeId && typeof catalog.forceRefresh === 'function') {
-            void catalog.forceRefresh(activeId).catch(() => undefined)
+          const alreadyNotified = typeof pool.onAccountSwitch === 'function' && Boolean(activeId && activeId !== prevActive)
+          if (!alreadyNotified) {
+            notifyPicker()
+            if (activeId && typeof catalog.forceRefreshAndNotify === 'function') {
+              void catalog.forceRefreshAndNotify(activeId).catch(() => undefined)
+            } else if (activeId && typeof catalog.forceRefresh === 'function') {
+              void catalog.forceRefresh(activeId).catch(() => undefined)
+            }
           }
         }
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })

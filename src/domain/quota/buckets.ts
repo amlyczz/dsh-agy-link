@@ -2,6 +2,13 @@
 // dedicated-Argon-group detection, orphaned-cooldown release, window matching
 // and the unmetered-5h placeholder check. No I/O, no service state.
 import type { FamilyQuotaInfo } from '../../common/pool-types.ts'
+export {
+  computeQuotaPacing,
+  FIVE_HOUR_WINDOW_MS,
+  WEEKLY_WINDOW_MS,
+  type QuotaPaceStatus,
+  type QuotaPacing,
+} from '../../common/quota-pacing.ts'
 
 /**
  * When the quota-summary endpoint transiently fails, per-model fallback

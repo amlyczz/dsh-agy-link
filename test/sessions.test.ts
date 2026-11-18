@@ -26,11 +26,12 @@ test('delete removes bindings', () => {
 })
 
 test('corrupted file recovers to empty instead of throwing', () => {
-  writeFileSync(file, '{not json', 'utf8')
-  const s = new SessionStore(file)
+  const corruptFile = join(dir, 'corrupt.json')
+  writeFileSync(corruptFile, '{not json', 'utf8')
+  const s = new SessionStore(corruptFile)
   assert.equal(Object.keys(s.all()).length, 0)
   s.set('s3', { conversationId: 'c3', lastMessageCount: 0, updatedAt: 1 })
-  assert.equal(new SessionStore(file).get('s3')?.conversationId, 'c3')
+  assert.equal(new SessionStore(corruptFile).get('s3')?.conversationId, 'c3')
 })
 
 test('all returns a readonly snapshot', () => {

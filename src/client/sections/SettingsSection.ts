@@ -133,7 +133,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 
 		if (status === null) {
 			return h('div', { style: { ...S.container!, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
-				h('span', { style: S.muted }, [Spinner(), t('status.loading')]),
+				h('span', { style: S.muted }, Spinner(), t('status.loading')),
 			);
 		}
 
@@ -154,7 +154,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				t, pool, accounts, loadingAction,
 				proxyInputs, setProxyInputs, editingProxyId, setEditingProxyId,
 				expandedModels, toggleExpand, optimisticActiveId,
-				handlers: accountActions,
+				handlers: { ...accountActions, beginReauth: auth.handleBeginReauth },
 			}),
 			renderRuntimeConfig(t, status, pool, catalogModels, hiddenModelSet, loadingAction, {
 				setCfg: config.setCfg,
@@ -185,19 +185,19 @@ function renderHeader(
 				variant: 'primary', size: 'sm', className: 'agy-btn',
 				style: { gap: '4px', height: '24px', padding: '2px 8px', fontSize: '11.5px' },
 				onClick: actions.onAdd,
-			}, [uiIcon('plus', 12, '#ffffff'), ` ${t('account.add')}`]) : null,
+			}, uiIcon('plus', 12, '#ffffff'), ` ${t('account.add')}`) : null,
 			h(Button, {
 				variant: 'default', size: 'sm', className: 'agy-btn',
 				style: { gap: '4px', height: '24px', padding: '2px 8px', fontSize: '11.5px' },
 				disabled: isBusy,
 				onClick: actions.onWarmupAll,
-			}, loadingAction === 'warmup:all' ? [Spinner(), t('header.warmingUp')] : [uiIcon('flame', 12, '#f97316'), ` ${t('header.warmup')}`]),
+			}, ...(loadingAction === 'warmup:all' ? [Spinner(), t('header.warmingUp')] : [uiIcon('flame', 12, '#f97316'), ` ${t('header.warmup')}`])),
 			h(Button, {
 				variant: 'default', size: 'sm', className: 'agy-btn',
 				style: { gap: '4px', height: '24px', padding: '2px 8px', fontSize: '11.5px' },
 				disabled: isBusy,
 				onClick: actions.onRefreshAll,
-			}, loadingAction === 'refresh:all' ? [Spinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`]),
+			}, ...(loadingAction === 'refresh:all' ? [Spinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`])),
 		),
 	);
 }
@@ -239,7 +239,7 @@ function renderTokenImportForm(
 				style: { gap: '4px' },
 				disabled: isBusy || !auth.tokenInput.trim(),
 				onClick: () => void auth.handleImportToken(),
-			}, loadingAction === 'pool:importToken' ? [Spinner(), t('auth.importingToken')] : [uiIcon('arrowDown', 12, '#ffffff'), ` ${t('auth.importToken')}`]),
+			}, ...(loadingAction === 'pool:importToken' ? [Spinner(), t('auth.importingToken')] : [uiIcon('arrowDown', 12, '#ffffff'), ` ${t('auth.importToken')}`])),
 			h(Button, {
 				variant: 'default', className: 'agy-btn',
 				onClick: () => void auth.handleCancelAddAccount(),
@@ -279,7 +279,7 @@ function renderBrowserOAuthForm(
 				style: { gap: '4px' },
 				disabled: isBusy,
 				onClick: () => void auth.handleBeginAddAccount(),
-			}, loadingAction === 'pool:beginAdd' ? [Spinner(), t('auth.openingBrowser')] : [uiIcon('externalLink', 12, '#ffffff'), ` ${t('auth.openBrowser')}`]),
+			}, ...(loadingAction === 'pool:beginAdd' ? [Spinner(), t('auth.openingBrowser')] : [uiIcon('externalLink', 12, '#ffffff'), ` ${t('auth.openBrowser')}`])),
 			h(Button, {
 				variant: 'default', className: 'agy-btn',
 				onClick: () => void auth.handleCancelAddAccount(),
@@ -326,7 +326,7 @@ function renderWaitingCodeForm(
 				style: { gap: '4px' },
 				disabled: isBusy || !auth.authCodeInput.trim(),
 				onClick: () => void auth.handleCompleteAddAccount(),
-			}, loadingAction === 'pool:completeAdd' ? [Spinner(), t('auth.activating')] : [uiIcon('check', 12, '#ffffff'), ` ${t('auth.activate')}`]),
+			}, ...(loadingAction === 'pool:completeAdd' ? [Spinner(), t('auth.activating')] : [uiIcon('check', 12, '#ffffff'), ` ${t('auth.activate')}`])),
 			h(Button, {
 				variant: 'default', className: 'agy-btn',
 				onClick: () => void auth.handleCancelAddAccount(),

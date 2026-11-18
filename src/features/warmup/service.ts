@@ -1,227 +1,185 @@
-// WarmupService: Smart 7-day weekly quota reset warmup and manual account pre-warming.
+// WarmupService: Smart 7-day weekly quota reset warmup via official `agy` CLI.
 //
-// Background:
-// Google Antigravity (and underlying Google Cloud Code PA) manages accounts with two
-// rolling windows: a 5-hour rolling limit and a 7-day weekly quota limit. Upstream,
-// an account's 7-day reset timer starts ONLY once an API request is made for that
-// weekly cycle. If an account sits idle at 100% quota, its 7-day window does not begin
-// counting down.
-//
-// By sending a tiny, single-token probe when:
-//   1. The weekly quota is full (remainingFraction >= 0.999) and the reset instant
-//      has passed (now >= resetTime - 60s); OR
-//   2. Cold-start: weeklyResetTime is uninitialized (e.g. Gemini weekly bucket not
-//      yet activated this week),
-// the upstream backend registers activity, advances the 7-day timer, and activates
-// the new cycle with zero excess token consumption.
-//
-// Cooldown rules (aligned with Antigravity-Manager):
-//   * Weekly reset: 6-day cooldown per cycle (${email}:${family}:weekly:${resetTs|'initial'})
-//   * Manual trigger: 4-hour cooldown per model (${email}:${model}:100)
-//   * Safe interval: 1500ms sequential throttle between probes to prevent WAF / 403 rate limits.
-import { randomBytes, randomUUID } from 'node:crypto'
+// RISK-CONTROL INVARIANT (First Priority — Anti-Ban):
+// Warmup probes NEVER make direct Node.js (`undici`) HTTP calls to Google's
+// internal inference endpoints, NEVER spoof headers, and NEVER send chimeric
+// metadata. Every probe executes through the official `agy` Go binary in
+// read-only `--mode plan` with genuine Go TLS fingerprints and isolated account
+// environments (including Windows `acquireCredentialSlot` protection).
 import { shouldPollAccount, type ManagedAccount } from '../../common/pool-types.ts'
 import type { PluginConfig } from '../../common/types.ts'
-import { agyFetch } from '../../host/net.ts'
-import { AGY_ENDPOINTS } from '../../host/oauth.ts'
+import { acquireCredentialSlot } from '../../host/credential-slot.ts'
+import { StreamJsonParser } from '../../host/parser.ts'
 import type { AccountPoolManager } from '../../host/pool.ts'
-import { QuotaService, agyUserAgent } from '../../host/quota.ts'
+import type { QuotaService } from '../../host/quota.ts'
+import { ensureIsolatedKeychain, probeProcess, resolveAgyBin } from '../../host/runner.ts'
+import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { WarmupHistoryStore } from './history.ts'
 import {
   FAILURE_BACKOFF_MS,
   FOUR_HOURS_MS,
-  LOAD_PROJECT_ENDPOINTS,
-  extractWarmupProjectId,
   describeWarmupError,
   planWarmupTargets,
   skippedWarmupResult,
-  toCanonicalWarmupModel,
+  toCliWarmupModel,
   warmupDelayMs,
   type WarmupResult,
   type WarmupTarget,
 } from './policy.ts'
+
+export interface CliProbeOutcome {
+  code: number | null
+  stdout: string
+  stderr: string
+  durationMs: number
+}
+
+export interface WarmupCliDeps {
+  bin?: () => string | null
+  runCliProbe?: (account: ManagedAccount, model: string) => Promise<CliProbeOutcome>
+}
 
 export class WarmupService {
   readonly history: WarmupHistoryStore
 
   constructor(
     private readonly pool: AccountPoolManager,
-    private readonly quota: QuotaService,
+    private readonly _quota?: QuotaService,
     private readonly globalProxy: () => string = () => '',
-    private readonly agyVersion: () => string | null = () => null,
+    private readonly _agyVersion: () => string | null = () => null,
     private readonly config: () => PluginConfig = () => ({} as PluginConfig),
     private readonly log: (msg: string) => void = () => undefined,
     historyStore?: WarmupHistoryStore,
-    /** Injectable network layer so terminal-error handling can be tested. */
-    private readonly fetchImpl: typeof agyFetch = agyFetch,
+    private readonly cliDeps: WarmupCliDeps = {},
   ) {
+    void this._quota
+    void this._agyVersion
     this.history = historyStore ?? new WarmupHistoryStore()
   }
 
-  private proxyFor(account: ManagedAccount): string | undefined {
-    return account.proxyUrl?.trim() || this.globalProxy() || undefined
+  private resolveBin(): string | null {
+    const injected = this.cliDeps.bin?.()
+    if (injected) return injected
+    return resolveAgyBin(this.config())
   }
 
-  /**
-   * Fetch cloudaicompanionProject via loadCodeAssist (official Antigravity project resolution).
-   */
-  async fetchProjectId(accessToken: string, proxyUrl?: string): Promise<string> {
-    const reqBody = JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } })
-    const userAgent = agyUserAgent(this.agyVersion())
-
-    for (const url of LOAD_PROJECT_ENDPOINTS) {
+  private async defaultRunCliProbe(account: ManagedAccount, model: string): Promise<CliProbeOutcome> {
+    const bin = this.resolveBin()
+    if (!bin) {
+      return { code: 127, stdout: '', stderr: 'agy binary not found', durationMs: 0 }
+    }
+    const cfg = this.config()
+    if (account.dir && !account.systemHome) {
+      ensureIsolatedKeychain(account.dir)
+    }
+    const start = Date.now()
+    let slotLease: Awaited<ReturnType<typeof acquireCredentialSlot>>
+    if (process.platform === 'win32' && process.env.NODE_TEST_CONTEXT === undefined) {
       try {
-        const res = await agyFetch(url, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'User-Agent': userAgent,
-            // The bootstrap endpoint validates this enum strictly; `ideType`
-            // alone is what the official clients send.
-            'Client-Metadata': '{"ideType":"ANTIGRAVITY"}',
-          },
-          body: reqBody,
-        }, proxyUrl)
-
-        if (res.ok) {
-          const projectId = extractWarmupProjectId(await res.json())
-          if (projectId !== '') return projectId
+        slotLease = await acquireCredentialSlot(account, this.pool, {
+          baseDir: this.pool.dir,
+          proxyUrl: account.proxyUrl?.trim() || this.globalProxy() || undefined,
+          dispatchTimeoutMs: 10_000,
+          parallel: cfg.parallelSameAccount !== false,
+          log: this.log,
+        })
+      } catch (e) {
+        return {
+          code: 1,
+          stdout: '',
+          stderr: `credential slot busy or unavailable: ${String(e)}`,
+          durationMs: Date.now() - start,
         }
-      } catch {
-        // try next endpoint
       }
     }
-    // No project resolved: the caller must skip the probe. Never borrow
-    // another account's project id (that yields a 403 from the backend).
-    return ''
-  }
-
-  /**
-   * Send a minimal probe to upstream v1internal:streamGenerateContent (fallback: generateContent).
-   */
-  async warmupModelDirectly(
-    account: ManagedAccount,
-    modelName: string,
-  ): Promise<{ ok: boolean; status?: number; error?: string; durationMs: number }> {
-    const start = Date.now()
-    const accessToken = await this.quota.getValidAccessToken(account)
-    if (!accessToken) {
-      return { ok: false, error: 'Could not obtain valid access token', durationMs: Date.now() - start }
-    }
-
-    const proxy = this.proxyFor(account)
-    const projectId = await this.fetchProjectId(accessToken, proxy)
-    if (projectId === '') {
+    try {
+      const cliModel = toCliWarmupModel(model)
+      const args = [
+        '--output-format', 'stream-json',
+        '--print-timeout', '1m',
+        '--mode', 'plan',
+        '--model', cliModel,
+      ]
+      if (cliModel.startsWith('gemini-') || cliModel.startsWith('claude-sonnet-5-5') || cliModel.startsWith('claude-opus-5-5')) {
+        args.push('--effort', 'low')
+      }
+      args.push('-p', 'hi')
+      const env = buildAgyEnv({
+        account,
+        cfg: {
+          ...cfg,
+          proxyUrl: cfg.proxyUrl || this.globalProxy() || '',
+        },
+        telemetryFlags: Boolean(cfg.disableTelemetry),
+      })
+      const out = await probeProcess(bin, args, 45_000, undefined, env, cfg.suppressAgyAutoUpdate)
       return {
-        ok: false,
-        error: 'Could not resolve cloudaicompanionProject (loadCodeAssist failed); refusing to probe a foreign project',
+        code: out.code,
+        stdout: out.stdout,
+        stderr: out.stderrTail,
         durationMs: Date.now() - start,
       }
-    }
-    const mappedModel = toCanonicalWarmupModel(modelName)
-    const isClaude = mappedModel.toLowerCase().includes('claude')
-    const sessionId = `warmup_${Date.now()}_${randomBytes(4).toString('hex')}`
-
-    const reqBody = JSON.stringify({
-      ...(projectId !== '' ? { project: projectId } : {}),
-      model: mappedModel,
-      requestId: `agent/${randomUUID()}`,
-      request: {
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: isClaude ? 'ping' : 'Say hi' }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0,
-          maxOutputTokens: 1,
-          ...(isClaude ? {} : { responseModalities: ['TEXT'] }),
-        },
-        sessionId,
-      },
-    })
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      'User-Agent': agyUserAgent(this.agyVersion()),
-      'Client-Metadata': '{"ideType":"ANTIGRAVITY"}',
-    }
-    if (isClaude) {
-      headers['anthropic-beta'] = 'claude-code-20250219'
-    }
-
-    const endpoints = AGY_ENDPOINTS
-    const attempts = [
-      { method: 'streamGenerateContent', query: '?alt=sse' },
-      { method: 'generateContent', query: '' },
-    ]
-
-    let lastStatus = 0
-    let lastError = ''
-
-    for (const attempt of attempts) {
-      for (const ep of endpoints) {
-        try {
-          const targetUrl = `${ep}/v1internal:${attempt.method}${attempt.query}`
-          const res = await this.fetchImpl(targetUrl, {
-            method: 'POST',
-            headers,
-            body: reqBody,
-          }, proxy)
-
-          lastStatus = res.status
-          if (res.ok) {
-            const bodyText = await res.text().catch(() => '')
-            if (
-              bodyText.includes('no longer available') ||
-              bodyText.includes('is not available') ||
-              bodyText.includes('is retired')
-            ) {
-              return {
-                ok: false,
-                status: res.status,
-                error: `Model is retired upstream: ${mappedModel}`,
-                durationMs: Date.now() - start,
-              }
-            }
-            return { ok: true, status: res.status, durationMs: Date.now() - start }
-          }
-
-          const errBody = await res.text().catch(() => '')
-          if (errBody.toLowerCase().includes('validation_required')) {
-            return {
-              ok: false,
-              status: res.status,
-              error: 'Account requires browser validation (VALIDATION_REQUIRED)',
-              durationMs: Date.now() - start,
-            }
-          }
-
-          const described = describeWarmupError(res.status, errBody)
-          lastError = described.error
-          // On auth denial 401/403, don't spam sibling endpoints. A terminal
-          // ban is not a transient failure: quarantine the account so the
-          // 5-minute scheduler stops probing it (and surface the appeal URL).
-          if (res.status === 401 || res.status === 403) {
-            if (described.terminal) {
-              this.pool.markAuthRequired(account.id, described.error)
-              this.log(`[agy-link] warmup: ${account.alias || account.id} is terminal: ${described.error}`)
-            }
-            return { ok: false, status: res.status, error: described.error, durationMs: Date.now() - start }
-          }
-        } catch (err) {
-          lastError = String(err)
-        }
+    } finally {
+      try {
+        slotLease?.release()
+      } catch {
+        // best-effort
       }
     }
-
-    return { ok: false, status: lastStatus, error: lastError, durationMs: Date.now() - start }
   }
 
-  /** Explicit single-model request (manual trigger). */
+  /**
+   * Probe one model via the official `agy` CLI and classify terminal ToS /
+   * validation responses safely without false `authRequired` flags.
+   */
+  async probeModel(
+    account: ManagedAccount,
+    modelName: string,
+  ): Promise<{ ok: boolean; status?: number; error?: string; durationMs: number; terminal?: boolean }> {
+    const cliModel = toCliWarmupModel(modelName)
+    const runner = this.cliDeps.runCliProbe ?? ((acc, m) => this.defaultRunCliProbe(acc, m))
+    let raw: CliProbeOutcome
+    try {
+      raw = await runner(account, cliModel)
+    } catch (err) {
+      return { ok: false, error: String(err), durationMs: 0 }
+    }
+
+    const parser = new StreamJsonParser()
+    let responseText = ''
+    for (const ev of [...parser.feed(raw.stdout + '\n'), ...parser.flush()]) {
+      if (ev.kind === 'step' && ev.stepKind === 'text' && ev.text) responseText += ev.text + '\n'
+      if (ev.kind === 'result' && ev.response) responseText += ev.response
+    }
+
+    const combinedText = [parser.stats.lastResultError ?? '', raw.stderr, responseText, raw.stdout].filter(Boolean).join('\n')
+    const described = describeWarmupError(raw.code ?? 0, combinedText)
+    if (described.terminal) {
+      this.pool.markAuthRequired(account.id, described.error)
+      this.log(`[agy-link] warmup: ${account.alias || account.id} hit terminal ToS restriction: ${described.error}`)
+      return { ok: false, status: 403, error: described.error, durationMs: raw.durationMs, terminal: true }
+    }
+
+    if (/VALIDATION_REQUIRED|verify your account/i.test(combinedText)) {
+      return { ok: false, status: 403, error: described.error, durationMs: raw.durationMs }
+    }
+
+    if (/no longer available|is not available|is retired/i.test(combinedText)) {
+      return { ok: false, error: `Model is retired upstream: ${cliModel}`, durationMs: raw.durationMs }
+    }
+
+    if (raw.code === 0 && !parser.stats.lastResultError) {
+      return { ok: true, status: 200, durationMs: raw.durationMs }
+    }
+
+    return {
+      ok: false,
+      error: (parser.stats.lastResultError || raw.stderr || 'agy warmup probe failed').trim().slice(0, 1000),
+      durationMs: raw.durationMs,
+    }
+  }
+
+  /** Explicit single-model request (manual trigger). Never marks authRequired on non-terminal errors. */
   private async warmupExplicitModel(
     account: ManagedAccount,
     model: string,
@@ -238,13 +196,12 @@ export class WarmupService {
       return skippedWarmupResult(account, model, 'Recent warmup attempt failed; retrying after backoff')
     }
 
-    this.log(`[Warmup] pinging ${model} for account ${account.id}...`)
-    const res = await this.warmupModelDirectly(account, model)
+    this.log(`[Warmup] probing ${model} via agy CLI for account ${account.id}...`)
+    const res = await this.probeModel(account, model)
     if (res.ok) {
       this.history.record(manualKey, now)
     } else {
       this.history.record(manualFailureKey, now)
-      if (res.status === 401) this.pool.markAuthRequired(account.id, 'Warmup probe rejected with HTTP 401')
     }
     return {
       accountId: account.id,
@@ -255,6 +212,7 @@ export class WarmupService {
       status: res.status,
       error: res.error,
       durationMs: res.durationMs,
+      ...(res.terminal ? { terminal: true } : {}),
     }
   }
 
@@ -269,14 +227,13 @@ export class WarmupService {
 
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i]!
-      this.log(`[Warmup] weekly warmup for ${target.model} @ ${account.id} (${target.family})...`)
-      const res = await this.warmupModelDirectly(account, target.model)
+      this.log(`[Warmup] weekly CLI warmup for ${target.model} @ ${account.id} (${target.family})...`)
+      const res = await this.probeModel(account, target.model)
       if (res.ok) {
         this.history.record(target.historyKey, now)
         this.history.record(`${identity}:${target.model}:100`, now)
       } else {
         this.history.record(target.failureKey, now)
-        if (res.status === 401) this.pool.markAuthRequired(account.id, 'Warmup probe rejected with HTTP 401')
       }
       results.push({
         accountId: account.id,
@@ -287,8 +244,9 @@ export class WarmupService {
         status: res.status,
         error: res.error,
         durationMs: res.durationMs,
+        ...(res.terminal ? { terminal: true } : {}),
       })
-
+      if (res.terminal) break
       if (i < targets.length - 1) {
         await new Promise((r) => setTimeout(r, warmupDelayMs()))
       }
@@ -297,37 +255,24 @@ export class WarmupService {
     return results
   }
 
-  /**
-   * Warm up one account.
-   * If options.model is specified, warms up that model directly.
-   * Otherwise screens quota families for eligible weekly reset windows or cold-starts.
-   */
   async warmupAccount(
     account: ManagedAccount,
     options: { force?: boolean; model?: string } = {},
   ): Promise<WarmupResult[]> {
     const now = Date.now()
-
     if (!account.enabled) {
       return [skippedWarmupResult(account, options.model ?? 'default', 'Account is disabled')]
     }
-
     if (account.authRequired) {
       return [skippedWarmupResult(account, options.model ?? 'default', 'Account requires authentication')]
     }
-
-    // Scheduled runs must never probe an account that is already rate-limited
-    // or auth-quarantined; a manual/forced click may still override.
     if (!options.force && !shouldPollAccount(account)) {
       return [skippedWarmupResult(account, options.model ?? 'default', 'Account is in cooldown or auth quarantine')]
     }
-
-    // 1. Explicit single model requested
     if (options.model) {
       return [await this.warmupExplicitModel(account, options.model, options.force === true, now)]
     }
 
-    // 2. Scan weekly quota groups for reset triggers
     const plan = planWarmupTargets({
       account,
       force: options.force === true,
@@ -342,7 +287,8 @@ export class WarmupService {
   }
 
   /**
-   * Warm up all accounts sequentially.
+   * Warm up all eligible accounts sequentially, halting immediately if any
+   * account hits a terminal `TOS_VIOLATION` (ban-sweep circuit breaker).
    */
   async warmupAllAccounts(options: { force?: boolean } = {}): Promise<WarmupResult[]> {
     const accounts = this.pool.getAccounts().filter((a) =>
@@ -354,7 +300,10 @@ export class WarmupService {
       const acc = accounts[i]!
       const res = await this.warmupAccount(acc, options)
       allResults.push(...res)
-
+      if (res.some((r) => r.terminal === true)) {
+        this.log('[agy-link] warmup: terminal TOS_VIOLATION detected — halting remaining pool warmup as sweep protection')
+        break
+      }
       if (i < accounts.length - 1) {
         await new Promise((r) => setTimeout(r, warmupDelayMs()))
       }
@@ -363,14 +312,8 @@ export class WarmupService {
     return allResults
   }
 
-  /**
-   * Scheduled periodic run: checks weekly quotas and triggers reset activation when due.
-   */
   async runScheduledWarmup(): Promise<WarmupResult[]> {
-    const cfg = this.config()
-    if (!cfg.autoWarmup) {
-      return []
-    }
+    if (!this.config().autoWarmup) return []
     return this.warmupAllAccounts({ force: false })
   }
 }

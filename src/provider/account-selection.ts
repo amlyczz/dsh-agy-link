@@ -30,7 +30,7 @@ export interface AccountSelectionResult {
   activeModel: string
 }
 
-/** Session affinity: reuse the account this session last ran on, if eligible. */
+/** Session affinity: reuse the account this session last ran on, if eligible and not superseded by a manual switch. */
 function stickyAccount(
   deps: AccountSelectionDeps,
   family: ModelFamily,
@@ -39,11 +39,15 @@ function stickyAccount(
 ): ManagedAccount | undefined {
   const pool = deps.pool
   if (pool === undefined || sessionKey === '') return undefined
+  const manualPinAt = pool.getPoolData().manualPinAt ?? 0
   const prefix = `${sessionKey}:`
   let mostRecent: ManagedAccount | undefined
   let latestUpdated = -1
   for (const [k, b] of Object.entries(deps.store.all())) {
     if (!k.startsWith(prefix) || b.updatedAt <= latestUpdated) continue
+    // If the user explicitly switched/reordered accounts in the UI or CLI after
+    // this binding was written, honor the user's explicit choice immediately.
+    if (manualPinAt > 0 && b.updatedAt < manualPinAt) continue
     const boundAcc = pool.getAccount(k.slice(prefix.length))
     if (boundAcc !== undefined) {
       mostRecent = boundAcc
@@ -156,7 +160,13 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
     account = pool.selectAccount(family, activeModel) ?? undefined
   }
   if (account !== undefined && pool !== undefined && pool.getPoolData().lastActiveAccountId !== account.id) {
-    pool.setActiveAccount(account.id, family)
+    // Record in-use account without stamping manualPinAt or overwriting global
+    // family pins from an older session's sticky affinity.
+    if (typeof pool.markAccountActive === 'function') {
+      pool.markAccountActive(account.id)
+    } else {
+      pool.setActiveAccount(account.id, family)
+    }
   }
 
   if (account === undefined && pool !== undefined && pool.getAccounts().length > 0) {

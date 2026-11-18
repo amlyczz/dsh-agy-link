@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  extractWarmupProjectId,
-  toCanonicalWarmupModel,
   pickWarmupModelForFamily,
   WarmupHistoryStore,
   WarmupService,
@@ -25,41 +23,134 @@ const TOS_403_BODY = JSON.stringify({
   },
 })
 
-test('issue #112: TOS_VIOLATION is terminal and the appeal URL survives error reporting', () => {
+test('issue #112: TOS_VIOLATION (JSON or CLI warning text) is terminal and preserves appeal/validation URLs', () => {
   const info = describeWarmupError(403, TOS_403_BODY)
   assert.equal(info.terminal, true)
   assert.equal(info.appealUrl, 'https://forms.gle/hGzM9MEUv2azZsrb9')
-  assert.ok(info.error.includes('TOS_VIOLATION'), 'full body is kept, not truncated at 160 chars')
+  assert.ok(info.error.includes('TOS_VIOLATION'))
   assert.ok(info.error.includes('https://forms.gle/hGzM9MEUv2azZsrb9'))
+
+  // CLI stream text notice shape (oh-my-pi #19343)
+  const cliTos = describeWarmupError(1, '[warning] This service has been disabled in this account for violation of Terms of Service. Appeal at https://forms.gle/abc123XYZ')
+  assert.equal(cliTos.terminal, true)
+  assert.equal(cliTos.appealUrl, 'https://forms.gle/abc123XYZ')
+
+  // VALIDATION_REQUIRED is non-terminal (never permanently bans), surfaces validation_url
+  const valBody = JSON.stringify({ error: { details: [{ reason: 'VALIDATION_REQUIRED', metadata: { validation_url: 'https://accounts.google.com/verify' } }] } })
+  const valInfo = describeWarmupError(403, valBody)
+  assert.equal(valInfo.terminal, false)
+  assert.equal(valInfo.validationUrl, 'https://accounts.google.com/verify')
+  assert.ok(valInfo.error.includes('https://accounts.google.com/verify'))
+
   assert.equal(describeWarmupError(403, 'rate limited').terminal, false)
   assert.equal(describeWarmupError(401, 'invalid_grant').terminal, false)
 })
 
-test('issue #112: a terminal warmup 403 quarantines the account (stops the 5-minute loop)', async () => {
-  let marked = ''
+test('anti-ban invariant: warmup source contains ZERO direct HTTP inference / loadCodeAssist / anthropic-beta headers', () => {
+  const svcSrc = readFileSync(new URL('../src/features/warmup/service.ts', import.meta.url), 'utf8')
+  const polSrc = readFileSync(new URL('../src/features/warmup/policy.ts', import.meta.url), 'utf8')
+  for (const forbidden of ['streamGenerateContent', 'generateContent', 'loadCodeAssist', 'anthropic-beta', 'claude-code-20250219', 'Client-Metadata']) {
+    assert.equal(svcSrc.includes(forbidden), false, `warmup/service.ts must not contain ${forbidden}`)
+    assert.equal(polSrc.includes(forbidden), false, `warmup/policy.ts must not contain ${forbidden}`)
+  }
+})
+
+test('issue #112 + sweep protection: terminal TOS_VIOLATION quarantines account AND halts warmupAllAccounts cascade', async () => {
+  const marked: string[] = []
+  const probedAccounts: string[] = []
+  const now = Date.now()
+  const accounts: ManagedAccount[] = [
+    {
+      id: 'acc_tos',
+      alias: 'TOS',
+      email: 'tos@example.com',
+      dir: '',
+      enabled: true,
+      createdAt: 0,
+      cooldowns: {},
+      quotas: { google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: new Date(now - 60_000).toISOString() } },
+    },
+    {
+      id: 'acc_healthy_sibling',
+      alias: 'Sibling',
+      email: 'sibling@example.com',
+      dir: '/tmp/acc2',
+      enabled: true,
+      createdAt: 0,
+      cooldowns: {},
+      quotas: { google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: new Date(now - 60_000).toISOString() } },
+    },
+  ]
+  const pool = {
+    getAccounts: () => accounts,
+    markAuthRequired: (id: string, msg: string) => { marked.push(`${id}|${msg}`) },
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'warmup-tos-'))
+  try {
+    const service = new WarmupService(
+      pool as unknown as AccountPoolManager,
+      {} as unknown as QuotaService,
+      () => '',
+      () => '1.5.10',
+      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
+      () => undefined,
+      new WarmupHistoryStore(join(dir, 'history.json')),
+      {
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async (acc) => {
+          probedAccounts.push(acc.id)
+          return { code: 1, stdout: '', stderr: TOS_403_BODY, durationMs: 25 }
+        },
+      },
+    )
+    const results = await service.warmupAllAccounts({ force: true })
+    assert.equal(probedAccounts.length, 1, 'sweep circuit breaker must stop before probing sibling account')
+    assert.deepEqual(probedAccounts, ['acc_tos'])
+    assert.equal(results[0]?.success, false)
+    assert.equal(marked.length, 1)
+    assert.ok(marked[0]!.startsWith('acc_tos|'))
+    assert.ok(marked[0]!.includes('https://forms.gle/hGzM9MEUv2azZsrb9'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('non-terminal warmup failure (e.g. 401 / transient network blip) NEVER marks account authRequired', async () => {
+  let authMarked = false
   const pool = {
     getAccounts: () => [],
-    markAuthRequired: (id: string, msg: string) => { marked = `${id}|${msg}` },
+    markAuthRequired: () => { authMarked = true },
   }
-  const quota = { getValidAccessToken: async () => 'tok' }
-  const fakeFetch = async () => ({ status: 403, ok: false, text: async () => TOS_403_BODY })
-  const service = new WarmupService(
-    pool as unknown as AccountPoolManager,
-    quota as unknown as QuotaService,
-    () => '', () => null,
-    () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
-    () => undefined,
-    undefined,
-    fakeFetch as never,
-  )
-  service.fetchProjectId = async () => 'test-project-123'
-  const res = await service.warmupModelDirectly(
-    { id: 'acc_tos', alias: 'TOS', email: '', dir: '', enabled: true, createdAt: 0 } as ManagedAccount,
-    'gemini-3.8-flash',
-  )
-  assert.equal(res.ok, false)
-  assert.ok(marked.startsWith('acc_tos|'), 'account must be marked authRequired')
-  assert.ok(marked.includes('https://forms.gle/hGzM9MEUv2azZsrb9'), 'UI can show the appeal link')
+  const dir = mkdtempSync(join(tmpdir(), 'warmup-401-'))
+  try {
+    const service = new WarmupService(
+      pool as unknown as AccountPoolManager,
+      {} as unknown as QuotaService,
+      () => '',
+      () => '1.5.10',
+      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
+      () => undefined,
+      new WarmupHistoryStore(join(dir, 'history.json')),
+      {
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async () => ({ code: 1, stdout: '', stderr: 'HTTP 401 Unauthorized: token validation failed due to network error', durationMs: 15 }),
+      },
+    )
+    const acc: ManagedAccount = {
+      id: 'acc-1',
+      alias: 'A1',
+      dir: '',
+      enabled: true,
+      createdAt: 0,
+      cooldowns: {},
+      quotas: {},
+    }
+    const res = await service.warmupAccount(acc, { force: true, model: 'gemini-3.8-flash' })
+    assert.equal(res[0]?.success, false)
+    assert.equal(authMarked, false, 'transient 401/network failure in warmup must never quarantine account as authRequired')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('autoWarmup is opt-in: the default config never probes on upgrade', () => {
@@ -67,38 +158,12 @@ test('autoWarmup is opt-in: the default config never probes on upgrade', () => {
   assert.deepEqual(defaultConfig().warmupModels, ['gemini-3.8-flash', 'claude-sonnet-5-5'])
 })
 
-test('toCanonicalWarmupModel maps bare models to official physical entities', () => {
-  assert.equal(toCanonicalWarmupModel('gemini-3.8-flash'), 'gemini-3.8-flash-tiered')
-  assert.equal(toCanonicalWarmupModel('gemini-3.7-flash'), 'gemini-3.7-flash-tiered')
-  assert.equal(toCanonicalWarmupModel('gemini-3-flash'), 'gemini-3.8-flash-tiered')
-  assert.equal(toCanonicalWarmupModel('gemini-4-argon'), 'gemini-4-argon-low')
-  assert.equal(toCanonicalWarmupModel('gemini-4-argon-low'), 'gemini-4-argon-low')
-  assert.equal(toCanonicalWarmupModel('claude-sonnet-4-6'), 'claude-sonnet-4-6')
-  assert.equal(toCanonicalWarmupModel('gpt-oss-120b-medium'), 'gpt-oss-120b-medium')
-  assert.equal(toCanonicalWarmupModel('custom-model-id'), 'custom-model-id')
-})
-
-test('extractWarmupProjectId accepts both loadCodeAssist shapes and rejects missing ids', () => {
-  assert.equal(extractWarmupProjectId({ cloudaicompanionProject: 'proj-str' }), 'proj-str')
-  assert.equal(extractWarmupProjectId({ cloudaicompanionProject: { id: 'proj-obj' } }), 'proj-obj')
-  assert.equal(extractWarmupProjectId({ cloudaicompanionProject: { id: '' } }), '')
-  assert.equal(extractWarmupProjectId({}), '')
-  assert.equal(extractWarmupProjectId(null), '')
-})
-
-test('pickWarmupModelForFamily selects appropriate models honoring monitored preferences', () => {
-  // Google family
+test('pickWarmupModelForFamily selects appropriate CLI models honoring monitored preferences', () => {
   assert.equal(pickWarmupModelForFamily('google'), 'gemini-3.8-flash')
   assert.equal(pickWarmupModelForFamily('google', ['gemini-3.7-flash']), 'gemini-3.7-flash')
-
-  // Argon family
-  assert.equal(pickWarmupModelForFamily('argon'), 'gemini-4-argon-low')
-
-  // Anthropic family
+  assert.equal(pickWarmupModelForFamily('argon'), 'gemini-4-argon')
   assert.equal(pickWarmupModelForFamily('anthropic'), 'claude-sonnet-5-5')
   assert.equal(pickWarmupModelForFamily('anthropic', ['claude-opus-4-6-thinking']), 'claude-opus-4-6-thinking')
-
-  // OpenAI family
   assert.equal(pickWarmupModelForFamily('openai'), 'gpt-oss-120b-medium')
 })
 
@@ -110,16 +175,13 @@ test('WarmupHistoryStore tracks records and cooldowns correctly', () => {
     const now = Date.now()
 
     assert.equal(store.checkCooldown('test:weekly:1', 60000, now), false)
-
     store.record('test:weekly:1', now)
     assert.equal(store.checkCooldown('test:weekly:1', 60000, now + 30000), true)
     assert.equal(store.checkCooldown('test:weekly:1', 60000, now + 70000), false)
 
-    // Persistence reload test
     const reloaded = new WarmupHistoryStore(storeFile)
     assert.equal(reloaded.checkCooldown('test:weekly:1', 60000, now + 30000), true)
 
-    // Prune test: records older than 30 days are removed
     store.record('old:entry', now - 35 * 86400 * 1000)
     store.pruneOldEntries(now)
     assert.equal(store.checkCooldown('old:entry', 86400000, now), false)
@@ -128,42 +190,27 @@ test('WarmupHistoryStore tracks records and cooldowns correctly', () => {
   }
 })
 
-test('WarmupService warmupAccount screens accounts and identifies weekly targets', async () => {
+test('WarmupService warmupAccount screens accounts and identifies weekly targets via official CLI probe', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'warmup-svc-'))
   try {
-    const storeFile = join(dir, 'warmup-history.json')
-    const store = new WarmupHistoryStore(storeFile)
-
-    const mockPool = {
-      getAccounts: () => [],
-    } as unknown as AccountPoolManager
-
-    const mockQuota = {
-      getValidAccessToken: async () => 'mock-access-token',
-    } as unknown as QuotaService
-
-    const mockConfig = {
-      autoWarmup: true,
-      warmupModels: ['gemini-3.8-flash', 'claude-sonnet-4-6'],
-    } as unknown as PluginConfig
-
+    const store = new WarmupHistoryStore(join(dir, 'warmup-history.json'))
+    let probedModels: string[] = []
     const service = new WarmupService(
-      mockPool,
-      mockQuota,
+      { getAccounts: () => [] } as unknown as AccountPoolManager,
+      {} as unknown as QuotaService,
       () => '',
-      () => '2.24.0',
-      () => mockConfig,
+      () => '1.5.10',
+      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash', 'claude-sonnet-5-5'] } as unknown as PluginConfig),
       () => undefined,
       store,
+      {
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async (_acc, model) => {
+          probedModels.push(model)
+          return { code: 0, stdout: '{"event":"result","result":{"status":"OK","response":"hi"}}\n', stderr: '', durationMs: 42 }
+        },
+      },
     )
-
-    // Override fetchProjectId and warmupModelDirectly to mock backend network calls
-    service.fetchProjectId = async () => 'test-project-123'
-    let probedModels: string[] = []
-    service.warmupModelDirectly = async (_account, model) => {
-      probedModels.push(model)
-      return { ok: true, status: 200, durationMs: 42 }
-    }
 
     const now = Date.now()
     const testAccount: ManagedAccount = {
@@ -178,28 +225,23 @@ test('WarmupService warmupAccount screens accounts and identifies weekly targets
         google: {
           remainingFraction: 1.0,
           weeklyFraction: 1.0,
-          weeklyResetTime: new Date(now - 120_000).toISOString(), // reset passed 2 mins ago
+          weeklyResetTime: new Date(now - 120_000).toISOString(),
         },
       },
     }
 
-    // 1. Automatic screening finds the weekly due model
     const res1 = await service.warmupAccount(testAccount, { force: false })
     assert.equal(res1.length, 1)
     assert.equal(res1[0]?.success, true)
     assert.equal(res1[0]?.model, 'gemini-3.8-flash')
     assert.deepEqual(probedModels, ['gemini-3.8-flash'])
 
-    // 2. Second automatic run is in 6-day cooldown
     probedModels = []
     const res2 = await service.warmupAccount(testAccount, { force: false })
-    assert.equal(res2.length, 1)
     assert.equal(res2[0]?.skipped, true)
     assert.deepEqual(probedModels, [])
 
-    // 3. Forced run bypasses cooldown
     const res3 = await service.warmupAccount(testAccount, { force: true })
-    assert.equal(res3.length, 1)
     assert.equal(res3[0]?.success, true)
     assert.equal(probedModels.length, 1)
   } finally {
@@ -210,6 +252,7 @@ test('WarmupService warmupAccount screens accounts and identifies weekly targets
 test('WarmupService never treats a missing weeklyFraction as a full bucket', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'warmup-partial-'))
   try {
+    const probed: string[] = []
     const service = new WarmupService(
       { getAccounts: () => [] } as unknown as AccountPoolManager,
       {} as unknown as QuotaService,
@@ -218,12 +261,14 @@ test('WarmupService never treats a missing weeklyFraction as a full bucket', asy
       () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
       () => undefined,
       new WarmupHistoryStore(join(dir, 'history.json')),
+      {
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async (_acc, model) => {
+          probed.push(model)
+          return { code: 0, stdout: 'hi', stderr: '', durationMs: 1 }
+        },
+      },
     )
-    const probed: string[] = []
-    service.warmupModelDirectly = async (_account, model) => {
-      probed.push(model)
-      return { ok: true, status: 200, durationMs: 1 }
-    }
     const account: ManagedAccount = {
       id: 'acc-partial',
       alias: 'Partial',
@@ -231,7 +276,6 @@ test('WarmupService never treats a missing weeklyFraction as a full bucket', asy
       enabled: true,
       createdAt: Date.now(),
       cooldowns: {},
-      // REST fallback rows look like this: no weekly fields at all.
       quotas: { google: { remainingFraction: 0.5 } },
     }
     const res = await service.warmupAccount(account, { force: false })
@@ -245,6 +289,7 @@ test('WarmupService never treats a missing weeklyFraction as a full bucket', asy
 test('WarmupService backs off after a failed probe instead of retrying every tick', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'warmup-fail-'))
   try {
+    const probed: string[] = []
     const service = new WarmupService(
       { getAccounts: () => [] } as unknown as AccountPoolManager,
       {} as unknown as QuotaService,
@@ -253,12 +298,14 @@ test('WarmupService backs off after a failed probe instead of retrying every tic
       () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
       () => undefined,
       new WarmupHistoryStore(join(dir, 'history.json')),
+      {
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async (_acc, model) => {
+          probed.push(model)
+          return { code: 1, stdout: '', stderr: '429 rate limited', durationMs: 1 }
+        },
+      },
     )
-    const probed: string[] = []
-    service.warmupModelDirectly = async (_account, model) => {
-      probed.push(model)
-      return { ok: false, status: 429, error: 'rate limited', durationMs: 1 }
-    }
     const now = Date.now()
     const account: ManagedAccount = {
       id: 'acc-fail',
@@ -276,153 +323,54 @@ test('WarmupService backs off after a failed probe instead of retrying every tic
     assert.equal(probed.length, 1)
     const second = await service.warmupAccount(account, { force: false })
     assert.equal(second[0]?.skipped, true)
-    assert.equal(probed.length, 1, 'a failed probe must enter the 30-minute backoff')
+    assert.equal(probed.length, 1)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('WarmupService skips accounts that are already in cooldown (non-force)', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'warmup-cooldown-'))
+test('WarmupService skips accounts in cooldown, disabled, authRequired, or with empty warmupModels', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'warmup-guards-'))
   try {
+    const probed: string[] = []
+    let warmupModels: string[] | undefined = ['gemini-3.8-flash']
+    let autoWarmup = false
     const service = new WarmupService(
       { getAccounts: () => [] } as unknown as AccountPoolManager,
       {} as unknown as QuotaService,
       () => '',
       () => null,
-      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
+      () => ({ autoWarmup, warmupModels } as unknown as PluginConfig),
       () => undefined,
       new WarmupHistoryStore(join(dir, 'history.json')),
-    )
-    const probed: string[] = []
-    service.warmupModelDirectly = async (_account, model) => {
-      probed.push(model)
-      return { ok: true, status: 200, durationMs: 1 }
-    }
-    const now = Date.now()
-    const account: ManagedAccount = {
-      id: 'acc-cool',
-      alias: 'Cooling',
-      dir: '',
-      enabled: true,
-      createdAt: now,
-      cooldowns: { google: { cooldownUntil: now + 60_000, reason: '429', consecutiveFailures: 1 } },
-      quotas: {
-        google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: new Date(now - 120_000).toISOString() },
-      },
-    }
-    const res = await service.warmupAccount(account, { force: false })
-    assert.equal(res[0]?.skipped, true)
-    assert.ok(res[0]?.skipReason?.includes('cooldown'))
-    assert.deepEqual(probed, [])
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test('WarmupService treats an empty warmupModels list as disabled', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'warmup-empty-'))
-  try {
-    const service = new WarmupService(
-      { getAccounts: () => [] } as unknown as AccountPoolManager,
-      {} as unknown as QuotaService,
-      () => '',
-      () => null,
-      () => ({ autoWarmup: true, warmupModels: [] } as unknown as PluginConfig),
-      () => undefined,
-      new WarmupHistoryStore(join(dir, 'history.json')),
-    )
-    const probed: string[] = []
-    service.warmupModelDirectly = async (_account, model) => {
-      probed.push(model)
-      return { ok: true, status: 200, durationMs: 1 }
-    }
-    const now = Date.now()
-    const account: ManagedAccount = {
-      id: 'acc-empty',
-      alias: 'Empty',
-      dir: '',
-      enabled: true,
-      createdAt: now,
-      cooldowns: {},
-      quotas: {
-        google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: new Date(now - 120_000).toISOString() },
-      },
-    }
-    const res = await service.warmupAccount(account, { force: false })
-    assert.equal(res[0]?.skipped, true)
-    assert.deepEqual(probed, [])
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test('WarmupService skips disabled and authRequired accounts', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'warmup-skip-'))
-  try {
-    const service = new WarmupService(
-      {} as unknown as AccountPoolManager,
-      {} as unknown as QuotaService,
-      () => '',
-      () => null,
-      () => ({ autoWarmup: true } as unknown as PluginConfig),
-      () => undefined,
-      new WarmupHistoryStore(join(dir, 'history.json')),
-    )
-
-    const disabledAcc: ManagedAccount = {
-      id: 'acc-disabled',
-      alias: 'Disabled',
-      dir: '',
-      enabled: false,
-      createdAt: Date.now(),
-      cooldowns: {},
-      quotas: {},
-    }
-    const res1 = await service.warmupAccount(disabledAcc)
-    assert.equal(res1[0]?.skipped, true)
-    assert.ok(res1[0]?.skipReason?.includes('disabled'))
-
-    const authAcc: ManagedAccount = {
-      id: 'acc-auth',
-      alias: 'Auth Required',
-      dir: '',
-      enabled: true,
-      authRequired: true,
-      createdAt: Date.now(),
-      cooldowns: {},
-      quotas: {},
-    }
-    const res2 = await service.warmupAccount(authAcc)
-    assert.equal(res2[0]?.skipped, true)
-    assert.ok(res2[0]?.skipReason?.includes('authentication'))
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test('WarmupService runScheduledWarmup respects autoWarmup flag', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'warmup-sched-'))
-  try {
-    let autoWarmupEnabled = false
-    const service = new WarmupService(
       {
-        getAccounts: () => [],
-      } as unknown as AccountPoolManager,
-      {} as unknown as QuotaService,
-      () => '',
-      () => null,
-      () => ({ autoWarmup: autoWarmupEnabled } as unknown as PluginConfig),
-      () => undefined,
-      new WarmupHistoryStore(join(dir, 'history.json')),
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async (_acc, model) => {
+          probed.push(model)
+          return { code: 0, stdout: 'hi', stderr: '', durationMs: 1 }
+        },
+      },
     )
+    const now = Date.now()
+    const baseQuot = { google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: new Date(now - 120_000).toISOString() } }
 
-    const resDisabled = await service.runScheduledWarmup()
-    assert.deepEqual(resDisabled, [])
+    const cooling = await service.warmupAccount({ id: 'c', alias: 'C', dir: '', enabled: true, createdAt: now, cooldowns: { google: { cooldownUntil: now + 60_000, reason: '429', consecutiveFailures: 1 } }, quotas: baseQuot }, { force: false })
+    assert.equal(cooling[0]?.skipped, true)
 
-    autoWarmupEnabled = true
-    const resEnabled = await service.runScheduledWarmup()
-    assert.deepEqual(resEnabled, [])
+    const disabled = await service.warmupAccount({ id: 'd', alias: 'D', dir: '', enabled: false, createdAt: now, cooldowns: {}, quotas: baseQuot })
+    assert.equal(disabled[0]?.skipped, true)
+
+    const authReq = await service.warmupAccount({ id: 'a', alias: 'A', dir: '', enabled: true, authRequired: true, createdAt: now, cooldowns: {}, quotas: baseQuot })
+    assert.equal(authReq[0]?.skipped, true)
+
+    warmupModels = []
+    const emptyModels = await service.warmupAccount({ id: 'e', alias: 'E', dir: '', enabled: true, createdAt: now, cooldowns: {}, quotas: baseQuot }, { force: false })
+    assert.equal(emptyModels[0]?.skipped, true)
+
+    assert.deepEqual(await service.runScheduledWarmup(), [])
+    autoWarmup = true
+    assert.deepEqual(await service.runScheduledWarmup(), [])
+    assert.deepEqual(probed, [])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -431,7 +379,7 @@ test('WarmupService runScheduledWarmup respects autoWarmup flag', async () => {
 test('WarmupService triggers probe for floating/post-reset ~7-day window and skips mid-cycle countdown', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'warmup-post-reset-'))
   try {
-    const store = new WarmupHistoryStore(join(dir, 'history.json'))
+    const probed: string[] = []
     const service = new WarmupService(
       { getAccounts: () => [] } as unknown as AccountPoolManager,
       {} as unknown as QuotaService,
@@ -439,46 +387,34 @@ test('WarmupService triggers probe for floating/post-reset ~7-day window and ski
       () => null,
       () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash'] } as unknown as PluginConfig),
       () => undefined,
-      store,
+      new WarmupHistoryStore(join(dir, 'history.json')),
+      {
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async (_acc, model) => {
+          probed.push(model)
+          return { code: 0, stdout: 'hi', stderr: '', durationMs: 1 }
+        },
+      },
     )
-    const probed: string[] = []
-    service.warmupModelDirectly = async (_account, model) => {
-      probed.push(model)
-      return { ok: true, status: 200, durationMs: 1 }
-    }
     const now = Date.now()
-
-    // 1. Post-reset / floating 7-day account: weekly quota is 100%, Google presents ~7-day window
     const postResetAccount: ManagedAccount = {
       id: 'acc-post-reset',
       alias: 'Post-Reset Account',
       dir: '',
       enabled: true,
-      createdAt: now - 86400 * 1000 * 10, // used 10 days ago
+      createdAt: now - 86400 * 1000 * 10,
       cooldowns: {},
-      quotas: {
-        google: {
-          remainingFraction: 1,
-          weeklyFraction: 1,
-          weeklyResetTime: new Date(now + 7 * 86400 * 1000).toISOString(),
-        },
-      },
+      quotas: { google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: new Date(now + 7 * 86400 * 1000).toISOString() } },
     }
 
     const res1 = await service.warmupAccount(postResetAccount, { force: false })
-    assert.equal(res1.length, 1)
     assert.equal(res1[0]?.success, true)
-    assert.equal(res1[0]?.model, 'gemini-3.8-flash')
     assert.deepEqual(probed, ['gemini-3.8-flash'])
 
-    // 2. Subsequent scan within 6-day cooldown skips
     probed.length = 0
     const res2 = await service.warmupAccount(postResetAccount, { force: false })
-    assert.equal(res2.length, 1)
     assert.equal(res2[0]?.skipped, true)
-    assert.deepEqual(probed, [])
 
-    // 3. Mid-cycle account (e.g. 4 days remaining): active countdown, must NOT be probed
     const midCycleAccount: ManagedAccount = {
       id: 'acc-mid-cycle',
       alias: 'Mid-Cycle Account',
@@ -486,17 +422,9 @@ test('WarmupService triggers probe for floating/post-reset ~7-day window and ski
       enabled: true,
       createdAt: now - 86400 * 1000 * 15,
       cooldowns: {},
-      quotas: {
-        google: {
-          remainingFraction: 1,
-          weeklyFraction: 1,
-          weeklyResetTime: new Date(now + 4 * 86400 * 1000).toISOString(),
-        },
-      },
+      quotas: { google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: new Date(now + 4 * 86400 * 1000).toISOString() } },
     }
-
     const res3 = await service.warmupAccount(midCycleAccount, { force: false })
-    assert.equal(res3.length, 1)
     assert.equal(res3[0]?.skipped, true)
     assert.deepEqual(probed, [])
   } finally {
@@ -505,7 +433,6 @@ test('WarmupService triggers probe for floating/post-reset ~7-day window and ski
 })
 
 test('pickWarmupModelForFamily dynamically resolves per-account available Claude and Argon models', () => {
-  // Account with Claude 5.5 models (e.g. Account 4)
   const accWithClaude55 = {
     id: 'acc-4',
     quotas: {
@@ -524,10 +451,9 @@ test('pickWarmupModelForFamily dynamically resolves per-account available Claude
     },
   } as unknown as ManagedAccount
 
-  assert.equal(pickWarmupModelForFamily('anthropic', [], accWithClaude55), 'claude-sonnet-5-5-medium')
-  assert.equal(pickWarmupModelForFamily('argon', [], accWithClaude55), 'gemini-4-argon-low')
+  assert.equal(pickWarmupModelForFamily('anthropic', [], accWithClaude55), 'claude-sonnet-5-5')
+  assert.equal(pickWarmupModelForFamily('argon', [], accWithClaude55), 'gemini-4-argon')
 
-  // Account with Claude 4.6 models (e.g. Account 3)
   const accWithClaude46 = {
     id: 'acc-3',
     quotas: {

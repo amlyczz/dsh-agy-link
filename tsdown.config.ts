@@ -21,11 +21,6 @@ export default defineConfig([
     clean: true,
     fixedExtension: false,
     external: hostExternals,
-    onSuccess: () => {
-      const src = join(import.meta.dirname, "assets");
-      const dst = join(import.meta.dirname, "dist/assets");
-      cpSync(src, dst, { recursive: true });
-    },
   },
   {
     // Standalone zero-dep stdio MCP server shipped as a plain asset; agy
@@ -42,9 +37,6 @@ export default defineConfig([
     outputOptions: { entryFileNames: "bridge.mjs" },
     onSuccess: () => {
       cpSync(join(import.meta.dirname, "src/host/bridge.mjs"), join(import.meta.dirname, "dist/bridge.mjs"));
-      try {
-        cpSync(join(import.meta.dirname, "assets/mermaid.min.js"), join(import.meta.dirname, "dist/mermaid.min.js"));
-      } catch {}
     },
   },
   {

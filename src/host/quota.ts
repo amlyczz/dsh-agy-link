@@ -14,6 +14,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
+  isTerminalAuthError,
   needsAuthReverify,
   shouldPollAccount,
   type FamilyQuotaInfo,
@@ -142,17 +143,19 @@ export class QuotaService {
       bin?: () => string | null
       preemptAutoUpdate?: () => boolean
       viaCli?: () => boolean
+      forceStaggerMs?: () => number
     } = {},
   ) {}
 
   /** Endpoint preference + protected endpoint fetchers as injected seams. */
-  private httpDeps(): QuotaHttpDeps {
+  private httpDeps(accountScope?: string): QuotaHttpDeps {
     return {
       agyVersion: () => this.agyVersion(),
+      ...(accountScope ? { accountScope } : {}),
       getPreferredEndpointIndex: () => this.preferredEndpointIndex,
       setPreferredEndpointIndex: (index) => { this.preferredEndpointIndex = index },
-      fetchSummaryEndpoint: (endpoint, accessToken, proxyUrl) => this.fetchSummaryEndpoint(endpoint, accessToken, proxyUrl),
-      fetchUserQuotaEndpoint: (endpoint, accessToken, proxyUrl) => this.fetchUserQuotaEndpoint(endpoint, accessToken, proxyUrl),
+      fetchSummaryEndpoint: (endpoint, accessToken, proxyUrl, scope) => this.fetchSummaryEndpoint(endpoint, accessToken, proxyUrl, scope),
+      fetchUserQuotaEndpoint: (endpoint, accessToken, proxyUrl, scope) => this.fetchUserQuotaEndpoint(endpoint, accessToken, proxyUrl, scope),
     }
   }
 
@@ -329,38 +332,38 @@ export class QuotaService {
   /**
    * Query live user info (email) from Google OAuth userinfo endpoint.
    */
-  async fetchUserInfo(accessToken: string, proxyUrl?: string): Promise<{ email?: string; name?: string } | null> {
-    return fetchUserInfoImpl(accessToken, proxyUrl)
+  async fetchUserInfo(accessToken: string, proxyUrl?: string, accountScope?: string): Promise<{ email?: string; name?: string } | null> {
+    return fetchUserInfoImpl(accessToken, proxyUrl, accountScope)
   }
 
-  protected async fetchSummaryEndpoint(endpoint: string, accessToken: string, proxyUrl?: string): Promise<Response> {
-    return requestQuotaSummaryEndpoint(endpoint, accessToken, proxyUrl, this.agyVersion())
+  protected async fetchSummaryEndpoint(endpoint: string, accessToken: string, proxyUrl?: string, accountScope?: string): Promise<Response> {
+    return requestQuotaSummaryEndpoint(endpoint, accessToken, proxyUrl, this.agyVersion(), accountScope)
   }
 
   /**
    * Fetch official multi-bucket quota summary (both weekly and 5h limit windows)
    * via v1internal:retrieveUserQuotaSummary.
    */
-  async fetchQuotaSummary(accessToken: string, proxyUrl?: string): Promise<QuotaSummaryResponse | null> {
-    return fetchQuotaSummaryImpl(this.httpDeps(), accessToken, proxyUrl)
+  async fetchQuotaSummary(accessToken: string, proxyUrl?: string, accountScope?: string): Promise<QuotaSummaryResponse | null> {
+    return fetchQuotaSummaryImpl(this.httpDeps(accountScope), accessToken, proxyUrl)
   }
 
-  protected async fetchUserQuotaEndpoint(endpoint: string, accessToken: string, proxyUrl?: string): Promise<Response> {
-    return requestUserQuotaEndpoint(endpoint, accessToken, proxyUrl, this.agyVersion())
+  protected async fetchUserQuotaEndpoint(endpoint: string, accessToken: string, proxyUrl?: string, accountScope?: string): Promise<Response> {
+    return requestUserQuotaEndpoint(endpoint, accessToken, proxyUrl, this.agyVersion(), accountScope)
   }
 
   /**
    * Fetch per-model live user quota via v1internal:retrieveUserQuota.
    */
-  async fetchUserQuota(accessToken: string, proxyUrl?: string): Promise<UserQuotaResponse | null> {
-    return fetchUserQuotaImpl(this.httpDeps(), accessToken, proxyUrl)
+  async fetchUserQuota(accessToken: string, proxyUrl?: string, accountScope?: string): Promise<UserQuotaResponse | null> {
+    return fetchUserQuotaImpl(this.httpDeps(accountScope), accessToken, proxyUrl)
   }
 
   /**
    * Fetch available models and model-level quotas via v1internal:fetchAvailableModels.
    */
-  async fetchAvailableModels(accessToken: string, proxyUrl?: string): Promise<DiscoveredModelsResponse | null> {
-    return fetchAvailableModelsImpl(this.httpDeps(), accessToken, proxyUrl)
+  async fetchAvailableModels(accessToken: string, proxyUrl?: string, accountScope?: string): Promise<DiscoveredModelsResponse | null> {
+    return fetchAvailableModelsImpl(this.httpDeps(accountScope), accessToken, proxyUrl)
   }
 
   /**
@@ -378,10 +381,10 @@ export class QuotaService {
       readCliUsageFamilies: (a) => this.readCliUsageFamilies(a),
       getValidAccessToken: (a) => this.getValidAccessToken(a),
       proxyFor: (a) => this.proxyFor(a),
-      fetchUserInfo: (token, proxyUrl) => this.fetchUserInfo(token, proxyUrl),
-      fetchQuotaSummary: (token, proxyUrl) => this.fetchQuotaSummary(token, proxyUrl),
-      fetchAvailableModels: (token, proxyUrl) => this.fetchAvailableModels(token, proxyUrl),
-      fetchUserQuota: (token, proxyUrl) => this.fetchUserQuota(token, proxyUrl),
+      fetchUserInfo: (token, proxyUrl) => this.fetchUserInfo(token, proxyUrl, account.id),
+      fetchQuotaSummary: (token, proxyUrl) => this.fetchQuotaSummary(token, proxyUrl, account.id),
+      fetchAvailableModels: (token, proxyUrl) => this.fetchAvailableModels(token, proxyUrl, account.id),
+      fetchUserQuota: (token, proxyUrl) => this.fetchUserQuota(token, proxyUrl, account.id),
       getTokenFilePath: (a) => this.getTokenFilePath(a),
       detectEmailFromLogs: (home) => detectEmailFromAgyLogs(home),
       readPrimaryCredential: (baseDir) => readPrimaryCredential(baseDir),
@@ -453,12 +456,44 @@ export class QuotaService {
       }
       return
     }
+    // Even on manual force refresh, never touch disabled or terminally TOS-banned
+    // accounts: knocking on a banned account from the same proxy egress risks
+    // correlating sibling accounts.
+    accounts = accounts.filter((acc) => acc.enabled && !isTerminalAuthError(acc.authError))
+    const nextForceGapMs = (): number =>
+      this.cliDeps.forceStaggerMs?.() ??
+      (process.env.NODE_TEST_CONTEXT !== undefined ? 0 : 400 + Math.floor(Math.random() * 450))
+
     if (process.platform === 'win32') {
-      for (const acc of accounts) {
-        await this.refreshAccountQuota(acc, force).catch(() => null)
+      for (let i = 0; i < accounts.length; i++) {
+        await this.refreshAccountQuota(accounts[i]!, force).catch(() => null)
+        if (i < accounts.length - 1) {
+          const gap = nextForceGapMs()
+          if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap))
+        }
       }
       return
     }
-    await Promise.allSettled(accounts.map((acc) => this.refreshAccountQuota(acc, force)))
+    // Group by effective proxy egress: distinct proxies run concurrently, while
+    // accounts sharing the SAME egress serialize with organic jitter so one IP
+    // never fires simultaneous multi-account OAuth/CloudCode bursts.
+    const byEgress = new Map<string, ManagedAccount[]>()
+    for (const acc of accounts) {
+      const egress = this.proxyFor(acc) || '__direct__'
+      const group = byEgress.get(egress) ?? []
+      group.push(acc)
+      byEgress.set(egress, group)
+    }
+    await Promise.allSettled(
+      [...byEgress.values()].map(async (group) => {
+        for (let i = 0; i < group.length; i++) {
+          await this.refreshAccountQuota(group[i]!, force).catch(() => null)
+          if (i < group.length - 1) {
+            const gap = nextForceGapMs()
+            if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap))
+          }
+        }
+      }),
+    )
   }
 }

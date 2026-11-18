@@ -56,7 +56,7 @@ export async function handleAuth(deps: CommandDeps, ctx: CommandContext): Promis
     if (!flow) return err('auth flow not available')
     const st = await flow.submitCode(arg)
     if (st.ok) {
-      deps.store().clear()
+      deps.notifyPicker?.()
       return ok('Logged in to Antigravity.')
     }
     return err(`login failed (${st.code ?? 'request_failed'})`)
@@ -88,7 +88,7 @@ export async function handleAuth(deps: CommandDeps, ctx: CommandContext): Promis
 
     const res = await flow.importRefreshToken(tokenStr, alias, deps.cfg().proxyUrl || undefined)
     if (res.ok) {
-      deps.store().clear()
+      deps.notifyPicker?.()
       const acc = res.account
       const label = acc ? (acc.alias || acc.email || acc.id) : (res.email || 'account')
       return ok(`成功导入凭据 (${label})${res.isNew ? '，已加入账号池' : '，已更新已有账号凭据'}。\nSuccessfully imported token for ${label} (${res.isNew ? 'added to pool' : 'updated existing'}).`)

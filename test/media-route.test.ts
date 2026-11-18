@@ -255,7 +255,59 @@ test('media-route: handleOpenFile validates path and returns JSON', () => {
   writeFileSync(testDoc, '# Report');
 
   try {
-    // 404 for missing file
+    // 405 on GET (prevents markdown image RCE ![x](/plugins/agy-link/open?path=...))
+    let getMethodStatus = 0;
+    const res405 = {
+      writeHead(s: number) { getMethodStatus = s; },
+      end() {},
+    };
+    handleOpenFile(
+      { method: 'GET', url: '/plugins/agy-link/open?path=' + encodeURIComponent(testDoc) },
+      res405 as never,
+      { workspaceRoots: [root] },
+    );
+    assert.equal(getMethodStatus, 405, 'GET must be rejected with 405 to prevent markdown image launch');
+
+    // 403 on cross-origin browser requests and no wildcard CORS
+    let corsStatus = 0;
+    let corsHeaders: Record<string, unknown> = {};
+    const resCors = {
+      writeHead(s: number, h: Record<string, unknown>) { corsStatus = s; corsHeaders = h ?? {}; },
+      end() {},
+    };
+    handleOpenFile(
+      { method: 'POST', headers: { origin: 'https://evil.example' }, url: '/plugins/agy-link/open?path=' + encodeURIComponent(testDoc) },
+      resCors as never,
+      { workspaceRoots: [root] },
+    );
+    assert.equal(corsStatus, 403, 'cross-origin open requests must be denied');
+    assert.equal(corsHeaders['Access-Control-Allow-Origin'], undefined, 'must never emit wildcard CORS');
+
+    // 403 when file is outside workspaceRoots
+    const outsideDir = mkdtempSync(join(tmpdir(), 'agy-open-outside-'));
+    const outsideFile = join(outsideDir, 'outside.png');
+    writeFileSync(outsideFile, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    try {
+      let outOpenStatus = 0;
+      handleOpenFile(
+        { method: 'POST', url: '/plugins/agy-link/open?path=' + encodeURIComponent(outsideFile) },
+        { writeHead(s: number) { outOpenStatus = s; }, end() {} } as never,
+        { workspaceRoots: [root] },
+      );
+      assert.equal(outOpenStatus, 403, 'opening file outside allowed workspaceRoots must be denied');
+
+      let outMediaStatus = 0;
+      handleMediaRequest(
+        { url: '/plugins/agy-link/media?path=' + encodeURIComponent(outsideFile) },
+        { writeHead(s: number) { outMediaStatus = s; }, end() {} } as never,
+        { workspaceRoots: [root] },
+      );
+      assert.equal(outMediaStatus, 403, 'reading media outside allowed workspaceRoots must be denied');
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+
+    // 404 for missing file on POST
     let notFoundStatus = 0;
     let notFoundBody = '';
     const res404 = {
@@ -263,20 +315,20 @@ test('media-route: handleOpenFile validates path and returns JSON', () => {
       end(b?: unknown) { notFoundBody = String(b ?? ''); },
     };
     handleOpenFile(
-      { url: '/plugins/agy-link/open?path=' + encodeURIComponent('missing_file_xyz.md') },
+      { method: 'POST', url: '/plugins/agy-link/open?path=' + encodeURIComponent('missing_file_xyz.md') },
       res404 as never,
       { workspaceRoots: [root] },
     );
     assert.equal(notFoundStatus, 404);
     assert.ok(notFoundBody.includes('file not found'));
 
-    // Missing path query parameter
+    // Missing path query parameter on POST
     let badStatus = 0;
     const resBad = {
       writeHead(s: number) { badStatus = s; },
       end() {},
     };
-    handleOpenFile({ url: '/plugins/agy-link/open' }, resBad as never);
+    handleOpenFile({ method: 'POST', url: '/plugins/agy-link/open' }, resBad as never);
     assert.equal(badStatus, 400);
 
     // executeOpenInSystem reveal test

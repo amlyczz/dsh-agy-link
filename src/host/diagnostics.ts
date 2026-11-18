@@ -44,7 +44,8 @@ export function redactProxyUrl(url: string): string {
 export function redactLine(line: string): string {
   let out = line
   out = out.replace(/https:\/\/accounts\.google\.com\/\S+/g, '<auth-url-redacted>')
-  out = out.replace(/\b[0-9]{4,}\//g, '4/<code-redacted>')
+  // Google authorization codes look like "4/0Af..." or "4/1Af..." (single leading 4/).
+  out = out.replace(/\b4\/[0-9A-Za-z._-]{16,}/g, '4/<code-redacted>')
   out = out.replace(/ya29\.[A-Za-z0-9._-]+/g, '<oauth-token-redacted>')
   out = out.replace(/Bearer\s+\S+/gi, 'Bearer <redacted>')
   // Google OAuth refresh tokens ("1//0…") and AIza API keys did not match any

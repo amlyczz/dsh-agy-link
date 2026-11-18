@@ -10,7 +10,9 @@
  * disproved.
  */
 export function isAuthoritativeAuthError(message: string): boolean {
-  return /invalid_grant|invalid_client|revoked|disabled|unauthorized_client/i.test(message)
+  return /\b(?:invalid_grant|invalid_client|unauthorized_client|token_revoked|account_disabled|user_disabled|TOS_VIOLATION|revoked)\b|token has been expired or revoked|violation of Terms of Service/i.test(
+    message,
+  )
 }
 
 /**
@@ -25,7 +27,7 @@ export function isAuthoritativeAuthError(message: string): boolean {
  * (observed live: 2026-10-10 14:17, session-c65a826e turn 22).
  */
 export function looksLikeNetworkError(message: string): boolean {
-  return /dial tcp|fetch failed|econn(?:refused|reset|aborted)|enotfound|ehostunreach|enetunreach|socket hang up|getaddrinfo|bad gateway|service unavailable|unexpected eof|\beof\b|tls handshake timeout|i\/o timeout|network (?:error|is unreachable)|no route to host|connection reset|context deadline exceeded|temporary failure in name resolution|proxyconnect|token validation failed|validate (?:the )?token|silent auth failed/i.test(
+  return /dial tcp|fetch failed|econn(?:refused|reset|aborted)|enotfound|ehostunreach|enetunreach|socket hang up|getaddrinfo|bad gateway|gateway time-?out|\b50[24]\b|\b52[0-4]\b|service unavailable|unexpected eof|\beof\b|tls handshake timeout|tls:\s*(?:handshake failure|bad record mac|alert)|http2:\s*client connection lost|\b(?:GOAWAY|REFUSED_STREAM)\b|broken pipe|\bepipe\b|connection timed out|socks connect|i\/o timeout|network (?:error|is unreachable)|no route to host|connection reset|context deadline exceeded|temporary failure in name resolution|proxyconnect|token validation failed|validate (?:the )?token|silent auth failed/i.test(
     message,
   )
 }

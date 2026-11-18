@@ -246,3 +246,32 @@ test('importRefreshToken rejects empty/invalid input or failed token exchange', 
   assert.equal(failed.ok, false)
   assert.ok(failed.error?.includes('invalid_grant'))
 })
+
+test('beginPrimary completion clears authRequired and cooldowns on primary account and invokes onUpdate', async () => {
+  const { pool, quota } = fixture()
+  quota.refreshAccountQuota = async () => null
+  const primary = pool.getAccounts()[0]!
+  pool.markAuthRequired(primary.id, 'TOS_VIOLATION: previous ban')
+  pool.recordFailure(primary.id, 'google', '429 rate limit')
+  assert.equal(pool.getAccount(primary.id)?.authRequired, true)
+
+  let updated = 0
+  const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    openBrowser: async () => true,
+    exchangeCode: async () => ({ access_token: 'primary_acc', refresh_token: '1//primary_rt' }),
+    fetchUserEmail: async () => 'primary@example.com',
+    onUpdate: () => { updated++ },
+  })
+  // Override dir on active flow via beginAccount-safe temp home so real ~ is untouched:
+  const tempHome = mkdtempSync(join(tmpdir(), 'agy-primary-home-'))
+  const started = await flow.beginPrimary()
+  assert.equal(started.ok, true)
+  ;(flow as any).flow.dir = tempHome
+
+  const done = await flow.submitCode('4/1AfPrimaryValidCode')
+  assert.equal(done.ok, true)
+  assert.equal(done.code, 'primary_activated')
+  assert.equal(pool.getAccount(primary.id)?.authRequired, undefined, 'primary login must clear authRequired')
+  assert.equal(Object.keys(pool.getAccount(primary.id)?.cooldowns ?? {}).length, 0, 'primary login must clear cooldowns')
+  assert.ok(updated >= 1, 'primary login must notify listeners (model picker / UI)')
+})

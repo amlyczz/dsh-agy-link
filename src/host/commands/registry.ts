@@ -20,6 +20,7 @@ export const COMMAND_REGISTRY: readonly CommandEntry[] = [
   {
     subs: [
       'pool', 'accounts',
+      'use', 'set-active',
       'enable-account', 'disable-account', 'add-account',
       'refresh-quota', 'clear-cooldown', 'remove-account',
     ],

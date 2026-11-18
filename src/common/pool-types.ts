@@ -273,7 +273,7 @@ export const AUTH_REVERIFY_DELAY_MS = 10 * 60_000
  */
 /** A terminal account ban (Google TOS_VIOLATION) is not a transient auth error. */
 export function isTerminalAuthError(message?: string): boolean {
-  return typeof message === 'string' && /TOS_VIOLATION/i.test(message)
+  return typeof message === 'string' && /\bTOS_VIOLATION\b|violation of Terms of Service/i.test(message)
 }
 
 export function needsAuthReverify(account: ManagedAccount, now = Date.now()): boolean {
@@ -317,6 +317,8 @@ export interface AccountPoolData {
    * are not running anything (that badge showed two accounts at once).
    */
   lastActiveAccountId?: string
+  /** Timestamp of the most recent explicit user account switch/pin (overrides older session stickiness) */
+  manualPinAt?: number
   /** Authoritative currently active account ID computed by the pool scheduler */
   activeAccountId?: string
   /** Detected system-wide or plugin-configured default proxy URL */

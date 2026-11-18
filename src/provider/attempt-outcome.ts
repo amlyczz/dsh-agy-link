@@ -12,11 +12,12 @@ import {
   looksLikeAuthFailure,
   looksLikeAuthVerificationJitter,
   looksLikeRateLimit,
+  looksLikeTosViolation,
   networkRetryDelayMs,
   type AgyEvent,
   type PluginConfig,
 } from '../common/types.ts'
-import { readAgyRunLogText } from '../host/agy-log.ts'
+import { readAgyRunLogText, type AgyLogSnapshot } from '../host/agy-log.ts'
 import type { RunRecording } from '../host/recording.ts'
 import type { StreamJsonParser } from '../host/parser.ts'
 import type { RunningProcess } from '../host/runner.ts'
@@ -202,7 +203,13 @@ export async function* dispatchCredentialSlot(
         release?.()
         release = null
         if (e instanceof SlotUnavailableError && currentAccount && deps.pool) {
-          deps.pool.markAuthRequired(currentAccount.id, e.message)
+          // Only quarantine currentAccount when the credential error belongs to
+          // currentAccount itself; never mark a healthy secondary account as
+          // authRequired when primary verification timed out on Windows!
+          const isPrimaryAccount = Boolean(currentAccount.systemHome) || !currentAccount.dir
+          if (e.target !== 'primary' || isPrimaryAccount) {
+            deps.pool.markAuthRequired(currentAccount.id, e.message)
+          }
           const next = attempt < maxDispatchAttempts ? deps.pool.selectAccount(input.family, input.activeModel) : undefined
           if (next && next.id !== currentAccount.id) {
             deps.log?.(`slot unavailable on ${currentAccount.id}: ${e.message} — failed over to ${next.id}`)
@@ -266,19 +273,32 @@ function classifyRun(input: {
   parser: StreamJsonParser
   rec: RunRecording
   runLogHome: string
-  runLogsBefore: ReadonlySet<string>
+  runLogsBefore: AgyLogSnapshot
 }): { failure: AttemptFailure | null; rawErrText: string; runLogText: string; silentTimeout: boolean } {
   const { cfg, outcome, parser, rec, runLogHome, runLogsBefore } = input
   // A result envelope the mapper will finish on: ok, or an error that still
-  // carries a usable response. Anything else leaves the live span un-finished,
-  // so the failure below reaches it through the recording.
+  // carries a usable response (unless the text is a terminal TOS_VIOLATION
+  // suspension with 0 tokens, which must enter classifyFailure to quarantine).
   const r = rec.getResultEvent()
-  const consumable = r !== null && (r.ok || r.response !== '')
+  const u = rec.lastUsage ?? rec.finalUsage({})
+  const zeroUsageTos =
+    r !== null
+    && (u?.input_tokens ?? 0) === 0
+    && (u?.output_tokens ?? 0) === 0
+    && looksLikeTosViolation(r.response)
+  const errorResponseTos = r !== null && !r.ok && looksLikeTosViolation(r.response)
+  const consumable = r !== null && (r.ok || r.response !== '') && !zeroUsageTos && !errorResponseTos
   // Error classification scans ONLY stderr and the result envelope's error
-  // field. stdout is model prose + event JSON: a run whose streamed text merely
-  // MENTIONED "rate limit"/"quota" (or contained a hash with "429") used to be
-  // misclassified as a quota failure.
-  const rawErrText = [outcome.stderrTail, parser.stats.lastResultError].filter(Boolean).join(' ')
+  // field (plus non-consumable error responses). stdout is model prose + event
+  // JSON: a run whose streamed text merely MENTIONED "rate limit"/"quota" (or
+  // contained a hash with "429") used to be misclassified as a quota failure.
+  const rawErrText = [
+    outcome.stderrTail,
+    parser.stats.lastResultError,
+    !consumable && r && (!r.ok || zeroUsageTos) ? r.response : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   const isRateLimit = looksLikeRateLimit(rawErrText)
   const runLogText = readAgyRunLogText(runLogHome, runLogsBefore)
   const keyringJitter = looksLikeAuthVerificationJitter(runLogText)

@@ -9,9 +9,11 @@
 // unchanged.
 import {
   accountHasArgon,
+  type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
 } from '../../common/pool-types.ts'
+import { computeQuotaPacing, FIVE_HOUR_WINDOW_MS, WEEKLY_WINDOW_MS } from '../../common/quota-pacing.ts'
 
 /**
  * Proactive rotation thresholds: an account at or below these remaining
@@ -100,7 +102,7 @@ export function explainIneligibility(
   if (family === 'argon' && !accountHasArgon(acc, pool)) return 'unsupported'
   // "This model is not in the account's catalog" is NOT the same diagnosis as
   // "the account has no access to this family / plan" (issues #120, #122).
-  if (model && pool && typeof (pool as any).isModelSupported === 'function' && !(pool as any).isModelSupported(acc, model)) {
+  if (model && pool?.isModelSupported && !pool.isModelSupported(acc, model)) {
     return 'model-unsupported'
   }
   const cd = acc.cooldowns?.[family]
@@ -122,12 +124,19 @@ export function isAccountEligible(
   return explainIneligibility(acc, family, now, pool, model) === null
 }
 
+function effectiveFamilyQuota(acc: ManagedAccount, family: ModelFamily): FamilyQuotaInfo | undefined {
+  return acc.quotas?.[family] ?? (family === 'argon' ? acc.quotas?.google : undefined)
+}
+
+/** Reset timestamps within 5m belong to the same reset cohort (avoids 1-60s clock jitter). */
+const RESET_COHORT_TOLERANCE_MS = 5 * 60_000
+
 /**
  * Next moment this account's quota state refreshes for one family: the
  * sooner of the 5h window reset and the weekly cap reset. NaN when unknown.
  */
 export function nextQuotaResetAt(acc: ManagedAccount, family: ModelFamily): number {
-  const q = acc.quotas?.[family]
+  const q = effectiveFamilyQuota(acc, family)
   const stamps = [q?.resetTime, q?.weeklyResetTime]
     .filter((v): v is string => typeof v === 'string' && v !== '')
     .map((v) => Date.parse(v))
@@ -150,14 +159,25 @@ export function cyclicDistance(
   return (idx - start + total) % total
 }
 
+function candidateSurplusScore(q: FamilyQuotaInfo | undefined, now: number): number | null {
+  if (!q) return null
+  const scores: number[] = []
+  if (typeof q.weeklyFraction === 'number') {
+    scores.push(computeQuotaPacing(q.weeklyFraction, q.weeklyResetTime, WEEKLY_WINDOW_MS, now).surplus)
+  }
+  if (typeof q.remainingFraction === 'number') {
+    scores.push(computeQuotaPacing(q.remainingFraction, q.resetTime, FIVE_HOUR_WINDOW_MS, now).surplus)
+  }
+  return scores.length > 0 ? Math.min(...scores) : null
+}
+
 /**
- * "Use it or lose it" rotation order.
- * Priority 1: Weekly quota expiring soonest (least remaining time until weeklyResetTime).
- * Priority 2: 5-hour quota expiring soonest (least remaining time until resetTime).
- * Priority 3: Cyclic distance from `fromId` (or pool order).
- *
- * `accounts` is the pool order used for cycle distance; `now` is threaded in so
- * callers keep the exact clock snapshot they passed to the eligibility check.
+ * "Use it or lose it" rotation order with cohort burn-rate surplus tie-breaking.
+ * Priority 1: Weekly quota expiring soonest (>5m difference).
+ * Priority 2: 5-hour quota expiring soonest (>5m difference).
+ * Priority 3: Within the same reset cohort, fewest consecutive failures, then
+ *             highest quota pacing surplus (>5% difference).
+ * Priority 4: Cyclic distance from `fromId` (or pool order).
  */
 export function orderByExpiry(
   accounts: readonly ManagedAccount[],
@@ -168,7 +188,7 @@ export function orderByExpiry(
 ): ManagedAccount[] {
   return candidates
     .map((acc, index) => {
-      const q = acc.quotas?.[family]
+      const q = effectiveFamilyQuota(acc, family)
       const weeklyMs = q?.weeklyResetTime ? Date.parse(q.weeklyResetTime) : Number.NaN
       const fiveHourMs = q?.resetTime ? Date.parse(q.resetTime) : Number.NaN
       const weeklyRemaining = !Number.isNaN(weeklyMs) ? Math.max(0, weeklyMs - now) : Number.POSITIVE_INFINITY
@@ -180,28 +200,38 @@ export function orderByExpiry(
         fiveHourRemaining,
         weeklyKnown: Number.isFinite(weeklyRemaining),
         fiveHourKnown: Number.isFinite(fiveHourRemaining),
+        failures: acc.cooldowns?.[family]?.consecutiveFailures ?? 0,
+        surplus: candidateSurplusScore(q, now),
       }
     })
     .sort((a, b) => {
-      // Priority 1: Weekly quota reset time (least remaining time until reset first)
+      // Priority 1: Weekly quota reset time (outside cohort jitter tolerance)
       if (a.weeklyKnown && b.weeklyKnown) {
-        if (a.weeklyRemaining !== b.weeklyRemaining) {
+        if (Math.abs(a.weeklyRemaining - b.weeklyRemaining) > RESET_COHORT_TOLERANCE_MS) {
           return a.weeklyRemaining - b.weeklyRemaining
         }
       } else if (a.weeklyKnown !== b.weeklyKnown) {
         return a.weeklyKnown ? -1 : 1
       }
 
-      // Priority 2: 5-hour quota reset time (least remaining time until reset first)
+      // Priority 2: 5-hour quota reset time (outside cohort jitter tolerance)
       if (a.fiveHourKnown && b.fiveHourKnown) {
-        if (a.fiveHourRemaining !== b.fiveHourRemaining) {
+        if (Math.abs(a.fiveHourRemaining - b.fiveHourRemaining) > RESET_COHORT_TOLERANCE_MS) {
           return a.fiveHourRemaining - b.fiveHourRemaining
         }
       } else if (a.fiveHourKnown !== b.fiveHourKnown) {
         return a.fiveHourKnown ? -1 : 1
       }
 
-      // Priority 3: Fallback to cyclic distance / pool order
+      // Priority 3: Same reset cohort -> prefer healthier account & higher burn-rate surplus
+      if (a.failures !== b.failures) {
+        return a.failures - b.failures
+      }
+      if (a.surplus !== null && b.surplus !== null && Math.abs(b.surplus - a.surplus) > 0.05) {
+        return b.surplus - a.surplus
+      }
+
+      // Priority 4: Fallback to cyclic distance / pool order
       const da = cyclicDistance(accounts, fromId, a.acc.id)
       const db = cyclicDistance(accounts, fromId, b.acc.id)
       return da !== db ? da - db : a.index - b.index

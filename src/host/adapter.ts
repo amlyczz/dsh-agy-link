@@ -14,6 +14,7 @@ import { purposePolicy } from '../provider/purpose-policy.ts'
 import { driveSpan as driveSpanImpl } from '../provider/span.ts'
 import { EffortPolicy } from '../provider/effort-policy.ts'
 import { FailoverBudget } from '../provider/failover-budget.ts'
+import { SpawnLimiter } from '../provider/spawn-limiter.ts'
 import { listAvailableModels, resolveModelInfo, type ModelResolutionDeps } from '../provider/model-resolution.ts'
 import { providerRetryPolicyFor, streamWithEffortRetry } from '../provider/retry-policy.ts'
 import { deliverContext } from '../provider/context-delivery.ts'
@@ -57,14 +58,11 @@ export class AgyAdapter extends LlmAdapter {
   /** accountId -> timestamp of last spawn for spacing throttling */
   private readonly lastAccountSpawnTime = new Map<string, number>()
   private readonly minSpawnIntervalMs = 500
-  /** Global sliding window timestamps for batch rate-limiting protection */
-  private readonly requestTimestamps: number[] = []
+  private readonly spawnLimiter = new SpawnLimiter()
 
   constructor(private readonly deps: AgyAdapterDeps) {
     super()
-    if (deps.pool && deps.catalog && typeof (deps.pool as any).setCatalog === 'function') {
-      (deps.pool as any).setCatalog(deps.catalog)
-    }
+    deps.pool?.setCatalog?.(deps.catalog)
     this.effortPolicy = new EffortPolicy(
       () => this.deps.effortUnsupported?.(),
       this.deps.log,
@@ -89,6 +87,10 @@ export class AgyAdapter extends LlmAdapter {
 
   private warnOnce(key: string, msg: string): void {
     if (this.warnedKeys.has(key)) return
+    if (this.warnedKeys.size >= 512) {
+      const oldest = this.warnedKeys.values().next().value
+      if (oldest !== undefined) this.warnedKeys.delete(oldest)
+    }
     this.warnedKeys.add(key)
     this.deps.log?.('WARNING: ' + msg)
   }
@@ -325,32 +327,23 @@ export class AgyAdapter extends LlmAdapter {
     // ---- prompt assembly (ADR-7) is handled by buildPromptPlan below ----
     const messages = options.messages
 
-    // Sliding-window rate limit protection per minute (for overnight batch / /goal stability)
+    // Sliding-window TAT rate limit protection per minute (zero thundering herd)
     if (!isAux && cfg.rateLimitPerMinute > 0) {
-      const now = Date.now()
-      const windowStart = now - 60_000
-      while (this.requestTimestamps.length > 0 && this.requestTimestamps[0]! < windowStart) {
-        this.requestTimestamps.shift()
+      const { delayMs, slotAt } = this.spawnLimiter.reserveRateLimitSlot(cfg.rateLimitPerMinute)
+      if (delayMs > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            options.signal?.removeEventListener('abort', onAbort)
+            resolve()
+          }, delayMs)
+          const onAbort = () => {
+            clearTimeout(timer)
+            this.spawnLimiter.cancelRateLimitSlot(slotAt)
+            reject(new LlmError('aborted during rate-limit spacing', Err.AGY_ERROR))
+          }
+          options.signal?.addEventListener('abort', onAbort, { once: true })
+        })
       }
-      if (this.requestTimestamps.length >= cfg.rateLimitPerMinute) {
-        const delayMs = this.requestTimestamps[0]! + 60_000 - now
-        if (delayMs > 0) {
-          // Abort-aware: a Stop during the rate-limit sleep must end the turn,
-          // not silently finish the sleep and spawn anyway.
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => {
-              options.signal?.removeEventListener('abort', onAbort)
-              resolve()
-            }, delayMs)
-            const onAbort = () => {
-              clearTimeout(timer)
-              reject(new LlmError('aborted during rate-limit spacing', Err.AGY_ERROR))
-            }
-            options.signal?.addEventListener('abort', onAbort, { once: true })
-          })
-        }
-      }
-      this.requestTimestamps.push(Date.now())
     }
 
     const selection = await selectSessionAccount({
@@ -567,6 +560,7 @@ export class AgyAdapter extends LlmAdapter {
       sharesSingleEgress: () => this.sharesSingleEgress(),
       lastAccountSpawnTime: this.lastAccountSpawnTime,
       minSpawnIntervalMs: this.minSpawnIntervalMs,
+      spawnLimiter: this.spawnLimiter,
     }
     const attemptInput: AttemptInput = {
       cfg,

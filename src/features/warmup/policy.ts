@@ -1,24 +1,23 @@
-// Warmup policy: canonical model mapping, per-family model selection, project-id
-// extraction, timing constants and the pure "which weekly windows are due"
-// planner. No I/O and no service state.
+// Warmup policy: CLI model normalization, per-family model selection, timing
+// constants and the pure "which weekly windows are due" planner.
+// Zero direct HTTP endpoints or spoofed headers — probes run exclusively via
+// the official `agy` CLI binary.
 import type { FamilyQuotaInfo, ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
 import { PREFERRED_CLAUDE, PREFERRED_GEMINI_FLASH, PREFERRED_OPENAI } from '../../common/model-lineup.ts'
 
-/** Canonical model route resolution for upstream Google Cloud Code PA endpoints. */
-export function toCanonicalWarmupModel(model: string): string {
+/** Normalize a configured or quota-reported model ID into a clean `agy --model` CLI slug. */
+export function toCliWarmupModel(model: string): string {
   const clean = model.trim().toLowerCase()
-  // Bare Gemini flash slugs must be mapped to the physical upstream entity
-  // (`*-tiered`) to avoid 404 "Requested entity was not found"
-  // (Antigravity-Manager #3715). `gemini-3-flash` is the legacy alias of 3.8.
-  if (clean === 'gemini-3-flash') return 'gemini-3.8-flash-tiered'
-  if (/^gemini-3\.\d+-flash$/.test(clean)) return clean + '-tiered'
-  if (clean === 'gemini-4-argon' || clean === 'argon') {
-    return 'gemini-4-argon-low'
-  }
+  if (clean === 'gemini-3-flash' || clean === 'gemini-3.8-flash-tiered') return 'gemini-3.8-flash'
+  const tieredFlash = clean.match(/^(gemini-3\.\d+-flash)-tiered$/)
+  if (tieredFlash?.[1]) return tieredFlash[1]
+  if (clean === 'argon' || clean.startsWith('gemini-4-argon-')) return 'gemini-4-argon'
+  const claude55 = clean.match(/^(claude-(?:sonnet|opus)-5-5)-(?:low|medium|high)$/)
+  if (claude55?.[1]) return claude55[1]
   return model.trim()
 }
 
-/** Select target model for a given family honoring user monitored_models preferences. */
+/** Select target CLI model for a given family honoring user monitored_models preferences. */
 export function pickWarmupModelForFamily(
   family: ModelFamily,
   monitoredModels: readonly string[] = [],
@@ -26,52 +25,32 @@ export function pickWarmupModelForFamily(
 ): string {
   if (family === 'argon') {
     if (account?.quotas?.argon?.models?.length) {
-      const m = account.quotas.argon.models.find((x) => x.modelId.includes('argon-low'))
-        ?? account.quotas.argon.models.find((x) => x.modelId.includes('argon'))
-      if (m) return m.modelId
+      const m = account.quotas.argon.models.find((x) => x.modelId.includes('argon'))
+      if (m) return toCliWarmupModel(m.modelId)
     }
-    return 'gemini-4-argon-low'
+    return 'gemini-4-argon'
   }
   if (family === 'anthropic') {
     const accountModels = account?.quotas?.anthropic?.models?.map((m) => m.modelId) ?? []
     if (accountModels.length > 0) {
       const preferred = monitoredModels.find((m) => accountModels.includes(m))
-      if (preferred) return preferred
+      if (preferred) return toCliWarmupModel(preferred)
 
-      const sonnet = accountModels.find((m) => m.includes('sonnet') && (m.includes('low') || m.includes('medium')))
-        ?? accountModels.find((m) => m.includes('sonnet'))
-      if (sonnet) return sonnet
+      const sonnet = accountModels.find((m) => m.includes('sonnet'))
+      if (sonnet) return toCliWarmupModel(sonnet)
 
       const anyClaude = accountModels.find((m) => m.toLowerCase().includes('claude'))
-      if (anyClaude) return anyClaude
+      if (anyClaude) return toCliWarmupModel(anyClaude)
     }
     const found = monitoredModels.find((m) => m.toLowerCase().includes('claude'))
-    // 4.6 is retired upstream (agy 1.5.3 lists 5.5 only); legacy accounts pick
-    // 4.6 from their own quota models above, so this fallback tracks current.
-    return found ?? PREFERRED_CLAUDE
+    return toCliWarmupModel(found ?? PREFERRED_CLAUDE)
   }
   if (family === 'openai') {
     const found = monitoredModels.find((m) => m.toLowerCase().includes('gpt'))
-    return found ?? PREFERRED_OPENAI
+    return toCliWarmupModel(found ?? PREFERRED_OPENAI)
   }
-  // google / default
   const found = monitoredModels.find((m) => m.toLowerCase().includes('gemini') && !m.toLowerCase().includes('argon'))
-  return found ?? PREFERRED_GEMINI_FLASH
-}
-
-/**
- * `loadCodeAssist` returns `cloudaicompanionProject` either as a bare string or
- * as an object `{ id }` (the official clients and this repo's own OAuth fixture
- * both show the object form). Normalize both; an unresolved project must stay
- * empty instead of falling back to a shared project id — the backend rejects
- * foreign project ids with 403 "Caller does not have required permission".
- */
-export function extractWarmupProjectId(data: unknown): string {
-  const project = (data as { cloudaicompanionProject?: unknown } | null | undefined)?.cloudaicompanionProject
-  if (typeof project === 'string' && project.trim() !== '') return project.trim()
-  const id = (project as { id?: unknown } | null | undefined)?.id
-  if (typeof id === 'string' && id.trim() !== '') return id.trim()
-  return ''
+  return toCliWarmupModel(found ?? PREFERRED_GEMINI_FLASH)
 }
 
 export interface WarmupResult {
@@ -85,6 +64,7 @@ export interface WarmupResult {
   durationMs: number
   skipped?: boolean
   skipReason?: string
+  terminal?: boolean
 }
 
 export const SIX_DAYS_MS = 6 * 24 * 3600 * 1000
@@ -92,22 +72,15 @@ export const FOUR_HOURS_MS = 4 * 3600 * 1000
 export const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000
 /**
  * A failed probe (429/403/network) must not be retried by the 5-minute
- * scheduler; otherwise one restricted account turns into an endless WAF
- * hammer. Back off for 30 minutes before the next scheduled attempt.
+ * scheduler; otherwise one restricted account turns into an endless hammer.
+ * Back off for 30 minutes before the next scheduled attempt.
  */
 export const FAILURE_BACKOFF_MS = 30 * 60 * 1000
 
-/** 1.5–3s randomized gap: a metronomic interval is itself a WAF signal. */
+/** 1.5–3s randomized gap: a metronomic interval is itself a risk-control signal. */
 export function warmupDelayMs(): number {
   return 1500 + Math.floor(Math.random() * 1500)
 }
-
-/** Project ID resolver endpoints */
-export const LOAD_PROJECT_ENDPOINTS = [
-  'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
-  'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist',
-  'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
-]
 
 /** One family/model the service should probe this run. */
 export interface WarmupTarget {
@@ -140,11 +113,6 @@ export function skippedWarmupResult(
   }
 }
 
-/**
- * Decide whether one family's weekly window is due for a warmup probe. Kept
- * separate from `planWarmupTargets` to stay under the function budget while
- * preserving the original cooldown/backoff decision order.
- */
 function warmupDue(params: {
   quota: FamilyQuotaInfo
   force: boolean
@@ -160,17 +128,12 @@ function warmupDue(params: {
     shouldWarm = true
   } else if (!hasRecentWarmup) {
     if (!quota.weeklyResetTime) {
-      // Cold start: weekly reset time uninitialized
       shouldWarm = true
     } else {
       const resetTs = Date.parse(quota.weeklyResetTime)
       if (isNaN(resetTs)) {
         shouldWarm = true
       } else {
-        // Either:
-        // 1. Time has reached/passed the scheduled reset instant (with 60s buffer)
-        // 2. Or Google has already reset the window upstream and is presenting a
-        //    floating / fresh ~7-day window (resetTs - now >= 6 days) waiting for activity
         const remainingMs = resetTs - now
         if (now >= resetTs - 60_000 || remainingMs >= SIX_DAYS_MS) {
           shouldWarm = true
@@ -215,10 +178,6 @@ export function planWarmupTargets(params: {
     const familyCooldown = account.cooldowns?.[fam]
     if (!force && familyCooldown && familyCooldown.cooldownUntil > now) continue
 
-    // Never guess: a partially hydrated quota row (REST fallback rows carry
-    // only remainingFraction/resetTime) has weeklyFraction === undefined and
-    // is NOT evidence that the weekly bucket is full. Treating it as 1.0
-    // made every such refresh look like a cold start and fired probes.
     const weeklyFrac = q.weeklyFraction
     if (weeklyFrac === undefined || weeklyFrac < 0.999) continue
 
@@ -230,7 +189,6 @@ export function planWarmupTargets(params: {
     }
   }
 
-  // Fallback if no weekly targets hit but user forced a warmup
   if (targets.length === 0 && force) {
     const fallbackModel = pickWarmupModelForFamily('google', monitored, account)
     targets.push({
@@ -252,21 +210,36 @@ export interface WarmupErrorInfo {
   /** Terminal account state (e.g. a TOS ban): quarantine, do not keep probing. */
   terminal: boolean
   appealUrl?: string
+  validationUrl?: string
 }
 
 /**
- * Keep the upstream error readable instead of slicing it to 160 characters.
- * A `TOS_VIOLATION` 403 is a terminal ban: the 5-minute scheduler must stop
- * hammering that account, and the appeal URL must reach the UI (issue #112).
+ * Classify upstream CLI / JSON errors without truncating critical URLs.
+ * Detects both JSON `TOS_VIOLATION` envelopes and CLI warning text
+ * (`This service has been disabled in this account for violation of Terms of Service`),
+ * as well as temporary `VALIDATION_REQUIRED` challenges.
  */
 export function describeWarmupError(status: number, body: string): WarmupErrorInfo {
   const detail = body.trim().slice(0, 2000)
-  const appealUrl = /"appeal_url"\s*:\s*"([^"]+)"/.exec(body)?.[1]
-  const terminal = /TOS_VIOLATION/i.test(body)
-  const suffix = appealUrl ? ` Appeal: ${appealUrl}` : ''
+  const appealUrl =
+    /"appeal_url"\s*:\s*"([^"]+)"/.exec(body)?.[1] ??
+    /(https:\/\/forms\.gle\/[A-Za-z0-9_-]+)/.exec(body)?.[1]
+  const validationUrl =
+    /"validation_url"\s*:\s*"([^"]+)"/.exec(body)?.[1] ??
+    /(https:\/\/accounts\.google\.com\/[^\s"')]+)/.exec(body)?.[1]
+  const terminal =
+    /TOS_VIOLATION|violation of Terms of Service|service has been disabled in this account/i.test(body)
+  const isValidation = !terminal && /VALIDATION_REQUIRED|verify your account/i.test(body)
+  const suffix = appealUrl
+    ? ` Appeal: ${appealUrl}`
+    : isValidation && validationUrl
+      ? ` Verify: ${validationUrl}`
+      : ''
+  const prefix = status >= 100 ? `HTTP ${status}: ` : ''
   return {
-    error: `HTTP ${status}: ${detail}${suffix}`,
+    error: `${prefix}${detail}${suffix}`.trim(),
     terminal,
     ...(appealUrl ? { appealUrl } : {}),
+    ...(validationUrl ? { validationUrl } : {}),
   }
 }

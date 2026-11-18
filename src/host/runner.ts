@@ -56,17 +56,23 @@ export {
  * xfce4-terminal, alacritty, xterm across distributions).
  * Safe, non-blocking and non-throwing.
  */
+function shSingleQuote(val: string): string {
+  return `'${val.replace(/'/g, `'\\''`)}'`
+}
+
 export function openAccountTerminal(
   accDir: string,
   platform: NodeJS.Platform = process.platform,
   run: (file: string, args: readonly string[], opts?: { windowsHide?: boolean }) => void = (file, args, opts) =>
     execFile(file, [...args], { windowsHide: opts?.windowsHide }, () => {}),
 ): boolean {
-  if (!accDir) return false
+  if (!accDir || /[\r\n\0]/.test(accDir)) return false
 
   if (platform === 'darwin') {
     ensureIsolatedKeychain(accDir, platform)
-    const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "export HOME='${accDir}'; agy"`
+    const shellCmd = `export HOME=${shSingleQuote(accDir)}; agy`
+    const escapedApple = shellCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "${escapedApple}"`
     try {
       run('osascript', ['-e', script])
       return true
@@ -76,6 +82,7 @@ export function openAccountTerminal(
   }
 
   if (platform === 'win32') {
+    if (accDir.includes('"')) return false
     try {
       run('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `set "HOME=${accDir}" && set "USERPROFILE=${accDir}" && agy`], { windowsHide: true })
       return true
@@ -84,25 +91,40 @@ export function openAccountTerminal(
     }
   }
 
-  // Linux: Try candidate terminal emulators across distros (FreeDesktop, Debian, GNOME, KDE, XFCE, etc.)
-  const cmd = `export HOME='${accDir}'; agy; exec bash`
+  const cmd = `export HOME=${shSingleQuote(accDir)}; agy; exec bash`
   const candidates: Array<{ bin: string; args: string[] }> = [
     { bin: 'xdg-terminal-exec', args: ['bash', '-c', cmd] },
-    { bin: 'x-terminal-emulator', args: ['-e', `sh -c "export HOME='${accDir}'; agy; exec sh"`] },
+    { bin: 'x-terminal-emulator', args: ['-e', 'sh', '-c', `export HOME=${shSingleQuote(accDir)}; agy; exec sh`] },
     { bin: 'gnome-terminal', args: ['--', 'bash', '-c', cmd] },
     { bin: 'konsole', args: ['-e', 'bash', '-c', cmd] },
-    { bin: 'xfce4-terminal', args: ['-e', `bash -c "${cmd}"`] },
+    { bin: 'xfce4-terminal', args: ['-x', 'bash', '-c', cmd] },
     { bin: 'alacritty', args: ['-e', 'bash', '-c', cmd] },
     { bin: 'xterm', args: ['-e', 'bash', '-c', cmd] },
   ]
 
-  for (const c of candidates) {
-    try {
-      run(c.bin, c.args)
-      return true
-    } catch {
-      continue
+  // If caller injected a custom test runner, keep synchronous candidate check;
+  // otherwise walk candidates asynchronously on ENOENT so missing xdg-terminal-exec falls back cleanly.
+  if (run !== undefined && run.toString() !== ((file: string, args: readonly string[], opts?: { windowsHide?: boolean }) => execFile(file, [...args], { windowsHide: opts?.windowsHide }, () => {})).toString()) {
+    for (const c of candidates) {
+      try {
+        run(c.bin, c.args)
+        return true
+      } catch {
+        continue
+      }
     }
+    return false
   }
-  return false
+  const tryAt = (idx: number): void => {
+    const c = candidates[idx]
+    if (!c) return
+    const child = execFile(c.bin, c.args, (err) => {
+      if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        tryAt(idx + 1)
+      }
+    })
+    child.unref?.()
+  }
+  tryAt(0)
+  return true
 }

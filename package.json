@@ -28,7 +28,7 @@
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./assets/icon.svg",
-    "./icon.svg": "./icon.svg"
+    "./icon.svg": "./assets/icon.svg"
   },
   "dependencies": {
     "qrcode": "^1.5.4"
@@ -92,7 +92,6 @@
     "dist",
     "assets",
     "locale",
-    "icon.svg",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",

@@ -125,9 +125,7 @@ const IMAGE_CSS = `
   position: fixed;
   inset: 0;
   z-index: 999999;
-  background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.78) 0%, rgba(6, 8, 15, 0.94) 100%);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  background: rgba(6, 8, 15, 0.94);
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
@@ -149,9 +147,7 @@ const IMAGE_CSS = `
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  background: rgba(20, 24, 38, 0.85);
-  backdrop-filter: blur(28px) saturate(190%);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  background: rgba(20, 24, 38, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 9999px;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
@@ -258,9 +254,8 @@ const IMAGE_CSS = `
   left: 50%;
   transform: translateX(-50%);
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
-  background: rgba(15, 23, 42, 0.6);
-  backdrop-filter: blur(12px);
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(15, 23, 42, 0.9);
   padding: 4px 14px;
   border-radius: 9999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -285,10 +280,8 @@ const IMAGE_CSS = `
   bottom: 32px;
   left: 50%;
   transform: translateX(-50%) translateY(16px);
-  background: rgba(20, 24, 38, 0.92);
+  background: rgba(20, 24, 38, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
   color: #f8fafc;
   padding: 8px 18px;
   border-radius: 9999px;

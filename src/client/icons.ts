@@ -48,12 +48,14 @@ export const FAMILY_BRAND: Record<'google' | 'argon' | 'anthropic' | 'openai', B
 	openai: 'openai',
 };
 
+let agyIconSeq = 0;
+
 /**
  * Antigravity logo mark: 3D orbit sphere with specular highlight, luminous front/back rings
  * and twin satellite nodes matching the official assets/icon.svg.
  */
 export function agyIcon(size = 16): unknown {
-	const uid = 'agy-logo';
+	const uid = 'agy-logo-' + (++agyIconSeq);
 	return h('svg', {
 		viewBox: '0 0 36 36',
 		width: size,

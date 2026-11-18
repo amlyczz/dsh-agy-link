@@ -102,7 +102,7 @@ export function staggerJitterMs(baseMs = 2000, maxJitterMs = 1500): number {
  */
 export const AGY_UA_MIN_VERSION = '1.3.0'
 /** Used when the installed agy version is unknown or older than AGY_UA_MIN_VERSION. */
-const AGY_UA_FALLBACK_VERSION = '1.4.5'
+const AGY_UA_FALLBACK_VERSION = '1.5.10'
 
 function semverAtLeast(candidate: string | null | undefined, floor: string): boolean {
   if (!candidate) return false

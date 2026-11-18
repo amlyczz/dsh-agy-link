@@ -36,9 +36,7 @@ Deliberate v1 boundaries and upstream-behavior notes.
     the hand-off logs when it fires so that case is visible instead of silent.
   - `SlotUnavailableError` aborts a run instead of letting it silently spend
     the wrong account when the primary cannot be verified.
-  - Remaining boundary: the mutex is **per process**, so two DSH hosts (web +
-    headless) running agy at the same moment can still interleave slot writes;
-    avoid driving two hosts at once.
+  - Cross-process coordination uses an atomic lockfile (`acquireCrossProcessSlotLock`) alongside the in-process mutex so concurrent local hosts (`dsh web` + `dsh-agy-image` CLI) serialize slot transitions cleanly.
 
 ## Credential injection: what agy actually supports (verified 2026-10-17)
 

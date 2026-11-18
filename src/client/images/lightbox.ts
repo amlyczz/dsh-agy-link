@@ -3,6 +3,7 @@ import { injectStyles } from './styles.ts';
 import { isVideoFile, openInSystem } from './media.ts';
 
 let lightboxOverlay: HTMLElement | null = null;
+let activeLightboxCleanup: (() => void) | null = null;
 let currentLightboxImg: HTMLImageElement | null = null;
 let lightboxScale = 1.0;
 let lightboxTranslateX = 0;
@@ -18,7 +19,10 @@ export function showToast(message: string, duration = 2200): void {
 
   const toast = document.createElement('div');
   toast.className = 'agy-toast';
-  toast.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>${message}</span>`;
+  toast.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  const label = document.createElement('span');
+  label.textContent = message;
+  toast.appendChild(label);
   document.body.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add('show'));
   setTimeout(() => {
@@ -171,6 +175,8 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
   injectStyles();
 
   if (lightboxOverlay) {
+    activeLightboxCleanup?.();
+    activeLightboxCleanup = null;
     lightboxOverlay.remove();
     lightboxOverlay = null;
   }
@@ -207,10 +213,14 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
     imgWrap.style.transform = `translate(${lightboxTranslateX}px, ${lightboxTranslateY}px) scale(${lightboxScale})`;
   };
 
-  const closeLightbox = () => {
+  const cleanupListeners = () => {
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('mousemove', onMouseMove);
     window.removeEventListener('mouseup', onMouseUp);
+  };
+  const closeLightbox = () => {
+    cleanupListeners();
+    if (activeLightboxCleanup === cleanupListeners) activeLightboxCleanup = null;
     overlay.classList.remove('open');
     setTimeout(() => {
       overlay.remove();
@@ -337,6 +347,7 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
 
   window.addEventListener('mousemove', onMouseMove);
   window.addEventListener('mouseup', onMouseUp);
+  activeLightboxCleanup = cleanupListeners;
 
   if (!isVideo) {
     body.onwheel = (e) => {

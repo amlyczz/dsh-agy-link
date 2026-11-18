@@ -61,3 +61,13 @@ test('timedSignal actually aborts after its deadline', async () => {
 test('status timeout is shorter than a write timeout', () => {
   assert.ok(STATUS_TIMEOUT_MS < WRITE_TIMEOUT_MS)
 })
+
+import { readFileSync } from 'node:fs'
+import { WARMUP_WRITE_TIMEOUT_MS, longRouteTimeout, ROUTE_TIMEOUT_MS } from '../src/common/timeouts.ts'
+
+test('warmup timeout budget exceeds general route timeout and translate-state attaches timedSignal', () => {
+  assert.ok(WARMUP_WRITE_TIMEOUT_MS > ROUTE_TIMEOUT_MS)
+  assert.ok(longRouteTimeout(WARMUP_WRITE_TIMEOUT_MS) > WARMUP_WRITE_TIMEOUT_MS)
+  const tslSrc = readFileSync(new URL('../src/client/translate-state.ts', import.meta.url), 'utf8')
+  assert.ok(tslSrc.includes('timedSignal'), 'translate-state.ts must attach timedSignal to client fetches')
+})

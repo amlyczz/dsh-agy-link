@@ -3,15 +3,17 @@
 // commands are unchanged; the pool/credential seams are injected so
 // QuotaService's overridable methods remain the real boundary.
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { writeFileAtomicSync } from '../../common/atomic-write.ts'
 import type { ManagedAccount } from '../../common/pool-types.ts'
 import { shouldMarkAuthRequired } from '../../common/types.ts'
 import { normalizeStoredToken, type StoredToken } from '../../domain/quota/identity.ts'
-import { refreshTokens } from '../../host/oauth.ts'
+import { formatLocalIso, refreshTokens } from '../../host/oauth.ts'
 import { readWindowsCredentialRaw } from '../../host/wincred.ts'
 import { readAccountCredential, saveCredentialBackup } from '../../domain/credentials/backup.ts'
+import { unwrapGoKeyringPayload } from '../../runtime/agy/keychain.ts'
 
 /** Durable primary credential record (mirrors credential-slot.PrimaryCredential). */
 export interface PrimaryCredentialLike {
@@ -60,14 +62,9 @@ export interface QuotaTokenDeps {
  * Parse a go-keyring payload (optionally "go-keyring-base64:" prefixed) into
  * a normalized StoredToken. Shared by the macOS and Linux keyring readers.
  */
-function parseGoKeyringPayload(raw: string): StoredToken | null {
-  let jsonStr = raw
-  if (raw.startsWith('go-keyring-base64:')) {
-    const b64 = raw.slice('go-keyring-base64:'.length)
-    jsonStr = Buffer.from(b64, 'base64').toString('utf8')
-  }
+export function parseGoKeyringPayload(raw: string): StoredToken | null {
   try {
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>
+    const parsed = JSON.parse(unwrapGoKeyringPayload(raw)) as Record<string, unknown>
     const tok = normalizeStoredToken(parsed)
     return tok && (tok.accessToken || tok.refreshToken) ? tok : null
   } catch {
@@ -332,7 +329,7 @@ export function persistRefreshedToken(
       tokens.refresh_token ??
       (typeof source.refresh_token === 'string' ? source.refresh_token : undefined) ??
       (typeof source.refreshToken === 'string' ? source.refreshToken : undefined)
-    const expiryIso = tokens.expiryMs ? new Date(tokens.expiryMs).toISOString() : undefined
+    const expiryIso = tokens.expiryMs ? formatLocalIso(tokens.expiryMs) : undefined
     const doc = {
       token: {
         access_token: tokens.access_token,
@@ -342,9 +339,13 @@ export function persistRefreshedToken(
       },
       auth_method: typeof existing.auth_method === 'string' ? existing.auth_method : 'consumer',
     }
-    // Keep their shape-preserving write, but hold main's 0600 hardening.
     const raw = JSON.stringify(doc)
-    writeFileSync(file, raw, { encoding: 'utf8', mode: 0o600 })
+    writeFileAtomicSync(file, raw, 0o600)
+    try {
+      chmodSync(file, 0o600)
+    } catch {
+      // Windows: mode bits unsupported — best effort
+    }
     if (account.dir && !account.systemHome) {
       saveCredentialBackup(file, raw)
     }
@@ -439,7 +440,7 @@ async function getValidAccessTokenUncached(deps: QuotaTokenDeps, account: Manage
   // Expired or missing access token — refresh if we have a refresh_token
   if (tok.refreshToken) {
     try {
-      const refreshed = await refreshTokens(tok.refreshToken, deps.proxyFor(account))
+      const refreshed = await refreshTokens(tok.refreshToken, deps.proxyFor(account), account.id)
       if (!isCurrentAccountGrant(deps, account, tok.refreshToken)) return null
       if (refreshed?.access_token) {
         deps.persistRefreshedToken(
@@ -466,8 +467,16 @@ async function getValidAccessTokenUncached(deps: QuotaTokenDeps, account: Manage
       if (shouldMarkAuthRequired(undefined, errMsg)) {
         deps.pool.markAuthRequired(account.id, errMsg)
       }
+      // Never return an access token that is provably already past its expiry
+      // when refresh failed (doing so guaranteed a bogus downstream 401).
+      if (typeof tok.expiryMs === 'number' && tok.expiryMs <= Date.now()) {
+        return null
+      }
     }
   }
 
+  if (tok.refreshToken && typeof tok.expiryMs === 'number' && tok.expiryMs <= Date.now()) {
+    return null
+  }
   return tok.accessToken || null
 }

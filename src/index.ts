@@ -22,6 +22,8 @@ import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeP
 import { sweepDir } from './host/media.ts'
 import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type ToolsServiceLike } from './host/mcp-bridge.ts'
 import { runBootHygiene } from './host/boot-hygiene.ts'
+import { closeProxyAgents } from './host/net.ts'
+import { setRuntimeAgyVersion } from './host/oauth.ts'
 import { createHostServices } from './host/services.ts'
 import { registerRoutes, type WebServerLike } from './transport/http/router.ts'
 
@@ -40,6 +42,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // Boot-time pool/store hygiene: stale staging logs, keychains, credential slot.
   runBootHygiene(services)
 
+  // Track version probe completion so the 5s boot quota refresh never races
+  // `agy --version` (preventing fallback UA version skew on the first poll).
+  let versionProbePromise: Promise<void> | null = null
+
   // ---- dormant detection + background probes ----
   // Defer version/catalog spawns so plugin load does not immediately create
   // agy child processes (Windows conhost flash, issue #23). Catalog refresh
@@ -57,19 +63,25 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         log('dormant: agy binary not found')
         return
       }
-      try {
-        const v = await probeProcess(currentBin, ['--version'], 10_000, undefined, undefined, getConfig().suppressAgyAutoUpdate)
-        services.status.version = parseVersion(v.stdout)
-        if (services.status.version && compareVersions(services.status.version, MIN_AGY_VERSION) < 0) {
-          services.status.dormantReason = 'agy ' + services.status.version + ' is older than ' + MIN_AGY_VERSION + ' — run: agy update'
-          log('dormant: ' + services.status.dormantReason)
-          return
+      versionProbePromise = (async () => {
+        try {
+          const v = await probeProcess(currentBin, ['--version'], 10_000, undefined, undefined, getConfig().suppressAgyAutoUpdate)
+          services.status.version = parseVersion(v.stdout)
+          setRuntimeAgyVersion(services.status.version)
+          catalog.syncAgyVersion(services.status.version)
+          if (services.status.version && compareVersions(services.status.version, MIN_AGY_VERSION) < 0) {
+            services.status.dormantReason = 'agy ' + services.status.version + ' is older than ' + MIN_AGY_VERSION + ' — run: agy update'
+            log('dormant: ' + services.status.dormantReason)
+            return
+          }
+          services.status.dormantReason = null
+          log('agy detected: ' + (services.status.version ?? 'unknown version'))
+        } catch {
+          log('version probe failed — continuing with fallback catalog')
         }
-        services.status.dormantReason = null
-        log('agy detected: ' + (services.status.version ?? 'unknown version'))
-      } catch {
-        log('version probe failed — continuing with fallback catalog')
-      }
+      })()
+      await versionProbePromise
+      if (services.status.dormantReason !== null) return
       const poolData = services.pool.getPoolData()
       const activeId = services.pool.getActiveAccountId('google') ?? poolData.lastActiveAccountId ?? poolData.primaryAccountId
       await catalog.refreshIfNeeded(activeId).catch(() => undefined)
@@ -84,20 +96,37 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // honours its TTL, so this costs at most one `agy models` spawn per window
   // and cannot feed back into a listing loop.
   const catalogPollTimer = setInterval(() => {
-    void catalog.refreshIfNeeded().catch(() => undefined)
+    const activeId = services.pool.getActiveAccountId('google')
+    void catalog.refreshIfNeeded(activeId).catch(() => undefined)
   }, 30 * 60_000)
   catalogPollTimer.unref?.()
   ctx.effect(() => () => clearInterval(catalogPollTimer))
 
-  // ---- llm registration (dormant-safe) ----
-  if (getConfig().enabled) {
-    try {
-      ctx.llm.registerAdapter([PROVIDER_ID], adapter)
-      log('registered provider route: ' + PROVIDER_ID)
-    } catch (e) {
-      log('adapter registration failed: ' + String(e))
+  // ---- llm registration (dormant-safe + runtime toggleable) ----
+  let adapterHandle: { replace?: (providers: string[]) => void; dispose?: () => void } | null = null
+  const syncAdapterRegistration = (): void => {
+    const want = getConfig().enabled
+    if (want) {
+      if (adapterHandle === null) {
+        try {
+          adapterHandle = (ctx.llm.registerAdapter([PROVIDER_ID], adapter) as unknown as typeof adapterHandle) ?? {}
+          log('registered provider route: ' + PROVIDER_ID)
+        } catch (e) {
+          log('adapter registration failed: ' + String(e))
+        }
+      } else if (typeof adapterHandle.replace === 'function') {
+        adapterHandle.replace([PROVIDER_ID])
+      }
+    } else if (adapterHandle !== null) {
+      if (typeof adapterHandle.replace === 'function') {
+        adapterHandle.replace([])
+      } else if (typeof adapterHandle.dispose === 'function') {
+        adapterHandle.dispose()
+        adapterHandle = null
+      }
     }
   }
+  syncAdapterRegistration()
   // NOTE: no registerConfigurableProviders call. This plugin configures
   // through its own cordis entry (enabled/agyBin/mode/...), not the llm
   // settings directory; registering here would put an unconfigured
@@ -117,7 +146,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       quota: () => quota,
       lastRun: () => services.lastRun,
       setOverride,
-      sessions: () => (ctx.get('sessions') as any) ?? (ctx as any).sessions,
+      notifyPicker,
+      sessions: () => sessionsSvc(),
       runDoctor: async () => {
         return writeDoctorReport({
           cfg: getConfig,
@@ -197,6 +227,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
         defineAgyAskTool({
           cfg: getConfig,
           bin,
+          pool: () => pool,
+          acquire: (sig) => services.semaphore.acquire(sig),
+          log,
           catalog: () => catalog.get(),
           effortUnsupported: () => readEffortUnsupported(),
           onEffortUnsupported: (model) => rememberEffortUnsupported(model),
@@ -259,8 +292,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   services.onConfigWritten = (key, value) => {
     void key
     void value
+    syncAdapterRegistration()
     syncAskTool()
     syncMirrorTool()
+    syncMcpBridge()
   }
 
   // ---- HTTP surface for the client half ----
@@ -292,14 +327,19 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // no Keychain prompts), then one HTTPS call per account per poll interval
   // (default 15 min, configurable; clamped to at least 60s). Restricted
   // accounts (cooldown / auth-quarantined) are skipped by refreshAllQuotas.
+  // Background quota refresh: 5s boot pass awaits `versionProbePromise` if in
+  // flight so User-Agent carries the detected agy version from the first poll.
   ctx.effect(() => {
     if (!getConfig().enabled) return () => undefined
     const refresh = (): void => {
-      const prevArgon = pool.getAccounts().map((a) => Boolean(a.quotas?.argon)).join(',')
-      void quota.refreshAllQuotas().then(() => {
+      if (!getConfig().enabled) return
+      void (async () => {
+        if (versionProbePromise) await versionProbePromise.catch(() => undefined)
+        const prevArgon = pool.getAccounts().map((a) => Boolean(a.quotas?.argon)).join(',')
+        await quota.refreshAllQuotas()
         const nextArgon = pool.getAccounts().map((a) => Boolean(a.quotas?.argon)).join(',')
         if (prevArgon !== nextArgon) notifyPicker()
-      }).catch(() => undefined)
+      })().catch(() => undefined)
     }
     const boot = setTimeout(refresh, 5_000)
     boot.unref?.()
@@ -337,10 +377,12 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // The bridge restore hooks are shared with the pool routes through
   // services.bridgeState (created in services.ts).
   let bridgeDisposed = false
+  let bridgeStarting = false
   const syncMcpBridge = (): void => {
     const cfg = getConfig()
     const want = cfg.mcpBridge && cfg.enabled
-    if (want && bridgeState.bridge === null) {
+    if (want && bridgeState.bridge === null && !bridgeStarting) {
+      bridgeStarting = true
       void (async () => {
         try {
           // fileURLToPath resolves file:/// URLs correctly on Windows
@@ -392,6 +434,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           bridgeState.bridge = null
           bridgeState.restores = []
           log('mcp bridge failed to start: ' + String(e))
+        } finally {
+          bridgeStarting = false
         }
       })()
     } else if (!want && bridgeState.bridge !== null) {
@@ -412,6 +456,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
       for (const undo of bridgeState.restores) undo()
       void bridgeState.bridge?.close()
+      void closeProxyAgents()
     }
   })
 }

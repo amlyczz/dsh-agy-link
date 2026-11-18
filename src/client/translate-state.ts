@@ -7,15 +7,20 @@
 // instead of stranding a spinner on the unmounted one.
 
 import { h, useEffect, useState, win, base, currentSessionId, type ClientContextLike } from './translate-context.ts'
+import { timedSignal, STATUS_TIMEOUT_MS } from './api.ts'
 import { isUiVisible, useAgyStatus } from './status.ts'
 import { geminiMark } from './translate-card.ts'
 
+const TRANSLATE_REQUEST_TIMEOUT_MS = 180_000
+
 async function postTranslate(body: Record<string, unknown>): Promise<{ ok?: boolean; text?: string; error?: string; code?: string; model?: string; effort?: string } | null> {
 	try {
+		const signal = timedSignal(TRANSLATE_REQUEST_TIMEOUT_MS)
 		const res = await win.fetch?.(base + '/plugins/agy-link/translate', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
+			...(signal !== undefined ? { signal } : {}),
 		})
 		if (!res) return null
 		const payload = (await res.json()) as Record<string, unknown>
@@ -29,7 +34,8 @@ async function postTranslate(body: Record<string, unknown>): Promise<{ ok?: bool
 async function getMessageState(sessionId: string, messageId: string): Promise<{ state?: string } | null> {
 	try {
 		const url = base + '/plugins/agy-link/translate/state?session=' + encodeURIComponent(sessionId) + '&message=' + encodeURIComponent(messageId)
-		const res = await win.fetch?.(url)
+		const signal = timedSignal(STATUS_TIMEOUT_MS)
+		const res = await win.fetch?.(url, signal !== undefined ? { signal } : undefined)
 		if (!res) return null
 		return (await res.json()) as { state?: string }
 	} catch {

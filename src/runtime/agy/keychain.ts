@@ -3,10 +3,64 @@
 // MOVED VERBATIM from src/host/runner.ts (Phase 5h). Platform branches, the
 // `security` command lines and the terminal-emulator candidate order are
 // unchanged.
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+
+const GO_KEYRING_PREFIX = 'go-keyring-base64:'
+
+/**
+ * Unwrap a `go-keyring` payload (`go-keyring-base64:<b64>` or raw JSON string)
+ * into UTF-8 JSON text. Shared by macOS/Linux/Windows keyring readers and
+ * boot-time recovery.
+ */
+export function unwrapGoKeyringPayload(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith(GO_KEYRING_PREFIX)) {
+    return Buffer.from(trimmed.slice(GO_KEYRING_PREFIX.length), 'base64').toString('utf8')
+  }
+  return trimmed
+}
+
+/**
+ * Best-effort update of the system keyring (`service=gemini`, `account=antigravity`)
+ * on macOS / Linux after an explicit primary login or primary token import, so a
+ * stale revoked Keychain entry cannot shadow the newly written credential file.
+ * Never runs under `node:test`.
+ */
+export function writeSystemKeyringRaw(rawJson: string, userHome: string = homedir()): boolean {
+  if (process.env.NODE_TEST_CONTEXT !== undefined) return false
+  const encoded = GO_KEYRING_PREFIX + Buffer.from(rawJson, 'utf8').toString('base64')
+  if (process.platform === 'darwin') {
+    try {
+      const candidates = [
+        join(userHome, 'Library', 'Keychains', 'login.keychain-db'),
+        join(userHome, 'Library', 'Keychains', 'login.keychain'),
+      ]
+      const targetKc = candidates.find((p) => existsSync(p))
+      const args = ['add-generic-password', '-U', '-s', 'gemini', '-a', 'antigravity', '-w', encoded]
+      if (targetKc) args.push(targetKc)
+      execFileSync('security', args, { stdio: 'ignore', timeout: 5_000 })
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (process.platform === 'linux') {
+    try {
+      const res = spawnSync(
+        'secret-tool',
+        ['store', '--label=gemini', 'service', 'gemini', 'username', 'antigravity'],
+        { input: encoded, encoding: 'utf8', stdio: ['pipe', 'ignore', 'ignore'], timeout: 5_000 },
+      )
+      return res.status === 0
+    } catch {
+      return false
+    }
+  }
+  return false
+}
 
 /**
  * macOS: an isolated HOME has no login keychain, so the first keyring write
@@ -62,7 +116,12 @@ export function purgeStaleIsolatedKeychain(
     // Attempt silent settings update without prompt
     run('security', ['set-keychain-settings', kc], env)
     return false // healthy and accessible, not stale
-  } catch {
+  } catch (err) {
+    // Never delete a healthy keychain when `security` merely timed out under CPU/IO load.
+    const e = err as { code?: string; killed?: boolean; signal?: string } | null
+    if (e?.code === 'ETIMEDOUT' || e?.killed === true || e?.signal === 'SIGTERM' || /timed?\s*out/i.test(String(err))) {
+      return false
+    }
     // Failed to update settings — locked with unknown passphrase or corrupted
     try {
       run('security', ['delete-keychain', kc], env)

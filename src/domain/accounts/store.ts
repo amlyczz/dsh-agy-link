@@ -10,6 +10,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   defaultPoolData,
+  isTerminalAuthError,
   type AccountPoolData,
   type ManagedAccount,
   type ModelFamily,
@@ -138,11 +139,64 @@ export class PoolStore {
     try {
       if (existsSync(this.file)) {
         const onDisk = JSON.parse(readFileSync(this.file, 'utf8')) as AccountPoolData
+        const base = this.persistedJson
+          ? (JSON.parse(this.persistedJson) as AccountPoolData)
+          : null
+        const baseMap = new Map((base?.accounts ?? []).map((a) => [a.id, a]))
         if (onDisk && Array.isArray(onDisk.accounts)) {
+          const onDiskMap = new Map(
+            onDisk.accounts
+              .filter((a): a is ManagedAccount => Boolean(a && typeof a === 'object' && a.id !== undefined))
+              .map((a) => [a.id, a]),
+          )
+          // 3-way merge for shared accounts so concurrent CLI/web processes do
+          // not erase each other's fresh quota polls, 429 cooldowns, or
+          // terminal TOS quarantines (while honoring intentional local clears).
+          let accountMerged = false
+          const now = Date.now()
+          const nextAccounts = data.accounts.map((ourAcc) => {
+            const diskAcc = onDiskMap.get(ourAcc.id)
+            if (!diskAcc || !this.knownIds.has(ourAcc.id)) return ourAcc
+            const baseAcc = baseMap.get(ourAcc.id)
+            let nextQuot = ourAcc.quotas
+            for (const [fam, dq] of Object.entries(diskAcc.quotas ?? {}) as [ModelFamily, ManagedAccount['quotas'][ModelFamily]][]) {
+              if (!dq) continue
+              const oq = ourAcc.quotas?.[fam]
+              const bq = baseAcc?.quotas?.[fam]
+              if ((dq.updatedAt ?? 0) > (oq?.updatedAt ?? 0) && (dq.updatedAt ?? 0) > (bq?.updatedAt ?? 0)) {
+                nextQuot = { ...nextQuot, [fam]: dq }
+                accountMerged = true
+              }
+            }
+            let nextCd = ourAcc.cooldowns
+            for (const [fam, dcd] of Object.entries(diskAcc.cooldowns ?? {}) as [ModelFamily, ManagedAccount['cooldowns'][ModelFamily]][]) {
+              if (!dcd || dcd.cooldownUntil <= now) continue
+              const ocd = ourAcc.cooldowns?.[fam]
+              const bcd = baseAcc?.cooldowns?.[fam]
+              if (dcd.cooldownUntil > (ocd?.cooldownUntil ?? 0) && dcd.cooldownUntil !== (bcd?.cooldownUntil ?? 0)) {
+                nextCd = { ...nextCd, [fam]: dcd }
+                accountMerged = true
+              }
+            }
+            const diskTos = Boolean(diskAcc.authRequired && isTerminalAuthError(diskAcc.authError))
+            const baseTos = Boolean(baseAcc?.authRequired && isTerminalAuthError(baseAcc.authError))
+            const adoptTos = diskTos && !baseTos && !ourAcc.authRequired
+            if (nextQuot === ourAcc.quotas && nextCd === ourAcc.cooldowns && !adoptTos) return ourAcc
+            accountMerged = true
+            // Mutate in place as well so callers holding `data` see the merged state immediately.
+            ourAcc.quotas = nextQuot
+            ourAcc.cooldowns = nextCd
+            if (adoptTos) {
+              ourAcc.authRequired = true
+              ourAcc.authError = diskAcc.authError
+              ourAcc.authMarkedAt = diskAcc.authMarkedAt
+            }
+            return ourAcc
+          })
           const ours = new Set(data.accounts.map((a) => a.id))
           const foreign = onDisk.accounts.filter((a) => a && typeof a === 'object' && a.id !== undefined && !ours.has(a.id) && !this.knownIds.has(a.id))
-          if (foreign.length > 0) {
-            merged = { ...data, accounts: [...data.accounts, ...foreign] }
+          if (foreign.length > 0 || accountMerged) {
+            merged = { ...data, accounts: [...nextAccounts, ...foreign] }
             for (const acc of foreign) this.knownIds.add(acc.id as string)
           }
         }

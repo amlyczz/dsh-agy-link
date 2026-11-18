@@ -2,15 +2,21 @@
 // final response text (streamed text steps, else the result envelope), and
 // surface the conversation id so the caller can continue later.
 import { looksLikeAuthFailure, type PluginConfig } from '../common/types.ts'
+import { modelFamilyOf, type ManagedAccount } from '../common/pool-types.ts'
+import type { AccountPoolManager } from './pool.ts'
+import { acquireCredentialSlot } from './credential-slot.ts'
+import { detectSystemProxy } from './wincred.ts'
 import { StreamJsonParser } from './parser.ts'
 import { startAgyProcess, buildStreamInputLine, shouldUsePromptStdin, stripNulBytes } from './runner.ts'
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 /** Per-file inline cap; larger files are truncated. */
 const INLINE_MAX_BYTES = 256 * 1024
+
+const SENSITIVE_INLINE_RE = /(?:^|[/\\])(?:\.env(?:\.[^/\\]+)?|antigravity-oauth-token|\.primary-credential\.json|id_rsa|id_ed25519)(?:$|[/\\])/i
 
 /** Truncate a buffer to <= max bytes without splitting a UTF-8 code point. */
 function truncateUtf8(buf: Buffer, max: number): Buffer {
@@ -18,7 +24,6 @@ function truncateUtf8(buf: Buffer, max: number): Buffer {
   let end = max
   let i = end - 1
   let back = 0
-  // Walk back over continuation bytes (10xxxxxx) to the start of this char.
   while (i >= 0 && (buf[i]! & 0xc0) === 0x80 && back < 3) {
     i--
     back++
@@ -26,7 +31,7 @@ function truncateUtf8(buf: Buffer, max: number): Buffer {
   if (i >= 0) {
     const lead = buf[i]!
     const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1
-    if (i + need > end) end = i // the char starting at i does not fully fit
+    if (i + need > end) end = i
   }
   return buf.subarray(0, end)
 }
@@ -44,9 +49,9 @@ function looksTextual(head: string): boolean {
 }
 
 /**
- * Inline text files into the prompt (v0.2): each readable textual file
- * becomes a fenced section. Paths resolve against the oneshot cwd;
- * absolute paths pass through.
+ * Inline text files into the prompt (v0.2): each readable textual file inside
+ * `cwd` becomes a fenced section. Paths escaping `cwd` (via `..`, symlinks, or
+ * outside absolute paths) or naming sensitive credential files are refused.
  */
 export async function inlineFiles(
   prompt: string,
@@ -54,25 +59,32 @@ export async function inlineFiles(
   cwd: string,
 ): Promise<string> {
   if (paths.length === 0) return prompt
+  const rootReal = await realpath(resolve(cwd)).catch(() => resolve(cwd))
   const sections: string[] = []
   for (const raw of paths) {
-    const p = isAbsolute(raw) ? raw : resolve(cwd, raw)
+    const candidate = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw)
     let note = ''
     let body = ''
     try {
-      const buf = await readFile(p)
-      if (!looksTextual(buf.subarray(0, Math.min(buf.length, 4096)).toString('utf8'))) {
-        note = '(skipped: binary file - reference it by path and let agy read it with its own tools)'
-      } else if (buf.byteLength > INLINE_MAX_BYTES) {
-        note = '(truncated to the first ' + INLINE_MAX_BYTES + ' bytes)'
-        body = truncateUtf8(buf, INLINE_MAX_BYTES).toString('utf8')
+      const targetReal = await realpath(candidate)
+      const rel = relative(rootReal, targetReal)
+      if (rel.startsWith('..') || isAbsolute(rel) || SENSITIVE_INLINE_RE.test(targetReal)) {
+        note = '(skipped: outside workspace boundary - ' + raw + ')'
       } else {
-        body = buf.toString('utf8')
+        const buf = await readFile(targetReal)
+        if (!looksTextual(buf.subarray(0, Math.min(buf.length, 4096)).toString('utf8'))) {
+          note = '(skipped: binary file - reference it by path and let agy read it with its own tools)'
+        } else if (buf.byteLength > INLINE_MAX_BYTES) {
+          note = '(truncated to the first ' + INLINE_MAX_BYTES + ' bytes)'
+          body = truncateUtf8(buf, INLINE_MAX_BYTES).toString('utf8')
+        } else {
+          body = buf.toString('utf8')
+        }
       }
     } catch {
       note = '(skipped: unreadable - ' + raw + ')'
     }
-    sections.push('--- file: ' + p + ' ' + note + ' ---' + '\n' + body)
+    sections.push('--- file: ' + candidate + ' ' + note + ' ---' + '\n' + body)
   }
   return prompt + '\n\n' + sections.join('\n\n')
 }
@@ -97,13 +109,10 @@ export interface OneShotResult {
 export interface OneShotDeps {
   cfg: () => PluginConfig
   bin: () => string | null
-  /**
-   * Models agy already refused `--effort` for (issue #67). The one-shot path
-   * (`agy_ask`) spawns agy directly, so it must honour the same learned list the
-   * adapter does — otherwise a level the model rejects fails that tool too.
-   */
+  pool?: () => AccountPoolManager | undefined
+  acquire?: (signal?: AbortSignal) => Promise<() => void>
+  log?: (msg: string) => void
   effortUnsupported?: () => readonly string[]
-  /** Persist a freshly refused model and let the picker re-read capabilities. */
   onEffortUnsupported?: (model: string) => void
 }
 
@@ -116,9 +125,7 @@ export async function runAgyOnce(
     mode?: string
     timeoutMs?: number
     signal?: AbortSignal
-    /** Workspace-relative or absolute text files to inline into the prompt. */
     readPaths?: readonly string[]
-    /** JSON schema enforcing the final result (--json-schema). */
     schema?: unknown
   },
 ): Promise<OneShotResult> {
@@ -139,75 +146,109 @@ export async function runAgyOnce(
   if (req.readPaths && req.readPaths.length > 0) {
     prompt = await inlineFiles(prompt, req.readPaths, cfg.workspaceRoot !== '' ? cfg.workspaceRoot : process.cwd())
   }
-  // Inlined files can be binary; NUL bytes are illegal in argv/stdin payloads
-  // and make spawn() throw ERR_INVALID_ARG_VALUE (see runner.stripNulBytes).
   prompt = stripNulBytes(prompt)
+
+  const pool = deps.pool?.()
+  const family = modelFamilyOf(req.model || cfg.defaultModel || 'gemini')
+  const account: ManagedAccount | undefined = pool?.selectAccount(family, req.model) ?? undefined
+
   let cleanup: (() => Promise<void>) | null = null
-  if (req.schema !== undefined && req.schema !== null) {
-    const sa = await schemaArgs(req.schema)
-    args.push(...sa.args)
-    cleanup = sa.cleanup
-  }
-  args.push('-p', prompt)
-  // Long prompts exceed Windows CreateProcess argv limits (issue #14/#11).
-  let stdinPayload: string | undefined
-  if (shouldUsePromptStdin(args)) {
-    args.splice(args.length - 2, 2) // drop '-p', prompt
-    args.push('--input-format', 'stream-json')
-    stdinPayload = buildStreamInputLine(prompt)
-  }
-  const parser = new StreamJsonParser()
-  const textParts: string[] = []
-  let resultText = ''
-  let conversationId: string | null = null
-  const proc = startAgyProcess({
-    bin,
-    args,
-    cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
-    timeoutMs,
-    signal: req.signal,
-    // GUI hosts have no shell proxy env, so agy_ask would otherwise run without
-    // the configured/detected proxy while chat and /tsl work (issue #94).
-    env: buildAgyEnv({ cfg }),
-    stdinPayload,
-    preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
-    onLine: (line) => {
-      for (const ev of parser.feed(line + '\n')) {
-        if (ev.kind === 'init' && ev.conversationId) conversationId = ev.conversationId
-        if (ev.kind === 'step' && ev.stepKind === 'text' && ev.text !== '') textParts.push(ev.text)
-        if (ev.kind === 'result') {
-          if (ev.conversationId !== '') conversationId = ev.conversationId
-          resultText = ev.response
-        }
-      }
-    },
-  })
-  const outcome = await proc.outcome
-  if (cleanup) void cleanup().catch(() => {})
-  for (const ev of parser.flush()) {
-    if (ev.kind === 'result') {
-      if (ev.conversationId !== '') conversationId = ev.conversationId
-      resultText = ev.response
+  let releaseSem: (() => void) | undefined
+  let slotLease: { release(): void } | undefined
+  try {
+    if (req.schema !== undefined && req.schema !== null) {
+      const sa = await schemaArgs(req.schema)
+      args.push(...sa.args)
+      cleanup = sa.cleanup
     }
+    args.push('-p', prompt)
+    let stdinPayload: string | undefined
+    if (shouldUsePromptStdin(args)) {
+      args.splice(args.length - 2, 2)
+      args.push('--input-format', 'stream-json')
+      stdinPayload = buildStreamInputLine(prompt)
+    }
+
+    if (deps.acquire) {
+      releaseSem = await deps.acquire(req.signal)
+    }
+    if (process.platform === 'win32' && process.env.NODE_TEST_CONTEXT === undefined && pool && account) {
+      slotLease = await acquireCredentialSlot(account, pool, {
+        baseDir: pool.dir,
+        proxyUrl: account.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined,
+        log: deps.log,
+        signal: req.signal,
+        dispatchTimeoutMs: cfg.dispatchTimeoutMinutes > 0 ? cfg.dispatchTimeoutMinutes * 60_000 : 60_000,
+        parallel: cfg.parallelSameAccount,
+      })
+    }
+
+    const parser = new StreamJsonParser()
+    let streamedText = ''
+    let prevWasStepText = false
+    let resultText = ''
+    let conversationId: string | null = null
+    const appendTextEv = (text: string, fragment?: boolean) => {
+      if (text === '') return
+      if (fragment) {
+        streamedText += text
+        prevWasStepText = false
+      } else {
+        if (streamedText !== '' && prevWasStepText && !streamedText.endsWith('\n')) {
+          streamedText += '\n'
+        }
+        streamedText += text
+        prevWasStepText = true
+      }
+    }
+    const proc = startAgyProcess({
+      bin,
+      args,
+      cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
+      timeoutMs,
+      signal: req.signal,
+      env: buildAgyEnv({ ...(account ? { account } : {}), cfg }),
+      stdinPayload,
+      preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
+      onLine: (line) => {
+        for (const ev of parser.feed(line + '\n')) {
+          if (ev.kind === 'init' && ev.conversationId) conversationId = ev.conversationId
+          if (ev.kind === 'step' && ev.stepKind === 'text') appendTextEv(ev.text, ev.fragment)
+          if (ev.kind === 'result') {
+            if (ev.conversationId !== '') conversationId = ev.conversationId
+            resultText = ev.response
+          }
+        }
+      },
+    })
+    const outcome = await proc.outcome
+    for (const ev of parser.flush()) {
+      if (ev.kind === 'step' && ev.stepKind === 'text') appendTextEv(ev.text, ev.fragment)
+      if (ev.kind === 'result') {
+        if (ev.conversationId !== '') conversationId = ev.conversationId
+        resultText = ev.response
+      }
+    }
+    if (outcome.aborted) {
+      return { ok: false, text: '', conversationId, error: 'aborted', durationMs: outcome.durationMs }
+    }
+    if (outcome.timedOut) {
+      return { ok: false, text: '', conversationId, error: 'timed out after ' + timeoutMs + 'ms', durationMs: outcome.durationMs }
+    }
+    const joined = streamedText.trim()
+    const text = joined !== '' ? joined : resultText
+    if (text === '' && (looksLikeAuthFailure(outcome.stderrTail) || parser.stats.sawAuthFailure)) {
+      return { ok: false, text: '', conversationId, error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs }
+    }
+    if (outcome.code !== 0 && text === '') {
+      const envelopeError = parser.stats.lastResultError ?? ''
+      const detail = envelopeError !== '' ? envelopeError : outcome.stderrTail.slice(-300)
+      return { ok: false, text: '', conversationId, error: 'agy exited with code ' + outcome.code + ': ' + detail, durationMs: outcome.durationMs }
+    }
+    return { ok: text !== '', text: text === '' ? '(no output)' : text, conversationId, durationMs: outcome.durationMs }
+  } finally {
+    slotLease?.release()
+    releaseSem?.()
+    if (cleanup) void cleanup().catch(() => {})
   }
-  if (outcome.aborted) {
-    return { ok: false, text: '', conversationId, error: 'aborted', durationMs: outcome.durationMs }
-  }
-  if (outcome.timedOut) {
-    return { ok: false, text: '', conversationId, error: 'timed out after ' + timeoutMs + 'ms', durationMs: outcome.durationMs }
-  }
-  const joined = textParts.join('\n').trim()
-  const text = joined !== '' ? joined : resultText
-  if (text === '' && (looksLikeAuthFailure(outcome.stderrTail) || parser.stats.sawAuthFailure)) {
-    return { ok: false, text: '', conversationId, error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs }
-  }
-  if (outcome.code !== 0 && text === '') {
-    // Prefer the result envelope's own error over a bare "exited 1": agy reports
-    // causes like `invalid model selection (… --effort …)` ONLY there (issue #67),
-    // and a caller cannot learn from a message that hides them.
-    const envelopeError = parser.stats.lastResultError ?? ''
-    const detail = envelopeError !== '' ? envelopeError : outcome.stderrTail.slice(-300)
-    return { ok: false, text: '', conversationId, error: 'agy exited with code ' + outcome.code + ': ' + detail, durationMs: outcome.durationMs }
-  }
-  return { ok: text !== '', text: text === '' ? '(no output)' : text, conversationId, durationMs: outcome.durationMs }
 }

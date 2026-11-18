@@ -323,6 +323,8 @@ export class EventMapper {
         const isCompleted =
           ev.state === 'DONE' ||
           ev.state === 'ERROR' ||
+          ev.state === 'CANCELED' ||
+          ev.state === 'CANCELLED' ||
           ev.state === 'RUNNING' ||
           (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
         if (!isCompleted) {

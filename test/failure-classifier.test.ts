@@ -61,3 +61,18 @@ test('eligibility loses to transport evidence (TLS timeout is not a region refus
   const f = classifyFailure(c({ consumable: false, transportFailure: true, rawErrText: 'Eligibility check failed: TLS handshake timeout' }))!
   assert.equal(f.code, Err.NETWORK)
 })
+
+test('TOS_VIOLATION classifies as terminal non-rotatable AGY_ERROR preserving appeal URL (anti-ban-sweep)', () => {
+  const tosText = 'PERMISSION_DENIED: TOS_VIOLATION — violation of Terms of Service. Appeal at https://support.google.com/legal/contact/tos'
+  const f = classifyFailure(c({ consumable: false, rawErrText: tosText }, { code: 1, stderrTail: tosText }))!
+  assert.equal(f.code, Err.AGY_ERROR)
+  assert.match(f.message, /TOS_VIOLATION/)
+  assert.match(f.message, /https:\/\/support\.google\.com\/legal\/contact\/tos/)
+})
+
+test('headless permission denial (#121) includes actionable permissionMode guidance', () => {
+  const denial = 'Tool execution denied: approval required in non-interactive print mode'
+  const f = classifyFailure(c({ consumable: false, rawErrText: denial }, { code: 1, stderrTail: denial }))!
+  assert.equal(f.code, Err.AGY_ERROR)
+  assert.match(f.message, /permissionMode|\/agy/i)
+})

@@ -700,4 +700,96 @@ test('issue #106: a successful first discovery still announces exactly once', as
   assert.ok(h.reads() <= 2, 'one announcement must not snowball')
 })
 
+test('concurrent refreshIfNeeded for different accounts runs per-account instead of dropping the second', async () => {
+  const seen: string[] = []
+  const catalog = new ModelCatalog(
+    async (_signal, accountId) => {
+      seen.push(accountId ?? 'default')
+      await new Promise((r) => setTimeout(r, 30))
+      if (accountId === 'acc_pro') {
+        return { stdout: 'gemini-4-argon\tGemini 4 Argon\ngemini-3.8-flash\tGemini 3.8 Flash', stderr: '' }
+      }
+      return { stdout: 'gemini-3.8-flash\tGemini 3.8 Flash', stderr: '' }
+    },
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+  )
+
+  await Promise.all([
+    catalog.refreshIfNeeded('acc_free'),
+    catalog.refreshIfNeeded('acc_pro'),
+  ])
+  assert.equal(catalog.hasAccountCatalog('acc_free'), true)
+  assert.equal(catalog.hasAccountCatalog('acc_pro'), true, 'acc_pro refresh must not be dropped behind acc_free')
+  assert.ok(catalog.get('acc_pro').models.some((m) => m.id === 'gemini-4-argon'))
+})
+
+test('ModelCatalog.refresh detects effort and label changes on identical model ids', async () => {
+  let step = 0
+  let updates = 0
+  const catalog = new ModelCatalog(
+    async () => {
+      step++
+      if (step === 1) {
+        return { stdout: 'gemini-4-hydrogen-low\tGemini 4 Hydrogen (Low)\ngemini-4-hydrogen-high\tGemini 4 Hydrogen (High)', stderr: '' }
+      }
+      return {
+        stdout: 'gemini-4-hydrogen-low\tGemini 4 Hydrogen (Low)\ngemini-4-hydrogen-high\tGemini 4 Hydrogen (High)\ngemini-4-hydrogen-xhigh\tGemini 4 Hydrogen (Extra)',
+        stderr: '',
+      }
+    },
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+    () => { updates++ },
+  )
+
+  await catalog.forceRefresh('acc_1')
+  assert.equal(updates, 1)
+  await catalog.forceRefresh('acc_1')
+  assert.equal(updates, 2, 'adding xhigh effort must announce a catalog update')
+})
+
+test('ModelCatalog.refresh rejects unauthenticated fallback stdout when stderr reports signed-out (#122)', async () => {
+  let updates = 0
+  const catalog = new ModelCatalog(
+    async () => ({
+      stdout: 'claude-sonnet-4-6\tClaude Sonnet 4.6\nclaude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)',
+      stderr: 'Warning: not logged in — showing static fallback models. Run agy login.',
+    }),
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+    () => { updates++ },
+  )
+
+  await catalog.forceRefresh('acc_signed_out')
+  assert.equal(catalog.hasAccountCatalog('acc_signed_out'), false, 'signed-out fallback must never poison discovered cache')
+  assert.equal(updates, 0)
+})
+
+test('getModelsForAccount surfaces Argon at t=0ms when switching from Free current catalog to Pro account', async () => {
+  const catalog = new ModelCatalog(
+    async () => ({ stdout: 'gemini-3.8-flash\tGemini 3.8 Flash\nclaude-sonnet-5-5\tClaude Sonnet 5.5', stderr: '' }),
+    DEFAULT_FALLBACK_MODELS,
+    300_000,
+  )
+  // Boot discovered from Free primary account (no Argon in this.current)
+  await catalog.forceRefresh()
+  assert.equal(catalog.get().models.some((m) => isArgonModel(m.id)), false)
+
+  // User switches to Pro secondary account whose quota already proves Argon access,
+  // BEFORE `agy models` finishes for acc_pro:
+  const proAcc = {
+    id: 'acc_pro_unprobed',
+    alias: 'Pro',
+    dir: '/tmp/pro',
+    enabled: true,
+    createdAt: Date.now(),
+    cooldowns: {},
+    quotas: { argon: { weeklyFraction: 0.9 } },
+  } as any
+
+  const modelsAtT0 = catalog.getModelsForAccount(proAcc, null)
+  assert.ok(modelsAtT0.some((m) => isArgonModel(m.id)), 'Argon must appear immediately at t=0ms on switch to Pro account')
+})
+
 

@@ -23,8 +23,8 @@ export const base = win.location?.origin ?? '';
 
 const PLUGIN_BASE = '/plugins/agy-link';
 
-export { WRITE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from '../common/timeouts.ts'
-import { WRITE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from '../common/timeouts.ts'
+export { WRITE_TIMEOUT_MS, WARMUP_WRITE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from '../common/timeouts.ts'
+import { WRITE_TIMEOUT_MS, WARMUP_WRITE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from '../common/timeouts.ts'
 
 /** One AbortSignal.timeout helper, shared by writes and the status poll. */
 export function timedSignal(ms: number): unknown | undefined {
@@ -34,14 +34,14 @@ export function timedSignal(ms: number): unknown | undefined {
 	return undefined;
 }
 
-export async function postJson(path: string, body: Record<string, unknown>): Promise<any> {
+export async function postJson(path: string, body: Record<string, unknown>, timeoutMs = WRITE_TIMEOUT_MS): Promise<any> {
 	try {
 		const init: Record<string, unknown> = {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
 		};
-		const signal = timedSignal(WRITE_TIMEOUT_MS);
+		const signal = timedSignal(timeoutMs);
 		if (signal !== undefined) init.signal = signal;
 		const res = await win.fetch?.(base + path, init);
 		if (!res) return null;
@@ -75,8 +75,8 @@ export async function getJson<T = any>(path: string): Promise<T | null> {
 }
 
 /** Small typed endpoint helper for the account-pool actions. */
-export function postPool(action: string, body: Record<string, unknown> = {}): Promise<any> {
-	return postJson(`${PLUGIN_BASE}/pool/${action}`, body);
+export function postPool(action: string, body: Record<string, unknown> = {}, timeoutMs?: number): Promise<any> {
+	return postJson(`${PLUGIN_BASE}/pool/${action}`, body, timeoutMs ?? (action === 'warmup' ? WARMUP_WRITE_TIMEOUT_MS : WRITE_TIMEOUT_MS));
 }
 
 /** The shared config-write helper (same /config endpoint the toggles use). */

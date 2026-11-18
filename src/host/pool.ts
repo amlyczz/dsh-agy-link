@@ -5,8 +5,6 @@
 // domain/accounts/selection.ts, and CRUD/admin scheduling in
 // domain/accounts/admin.ts. This class owns the in-memory cache and delegates,
 // keeping every public method signature unchanged.
-import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { join } from 'node:path'
 import { homedir } from 'node:os'
 import {
   accountHasArgon,
@@ -19,15 +17,13 @@ import {
 } from '../common/pool-types.ts'
 import { defaultPoolDir } from '../domain/accounts/paths.ts'
 import { PoolAdmin } from '../domain/accounts/admin.ts'
+import { earliestAvailableCountdown, earliestResetCountdown, sweepOldAgyLogs } from '../domain/accounts/countdown.ts'
 import { PoolStore } from '../domain/accounts/store.ts'
 import {
   LOW_QUOTA_5H,
   LOW_QUOTA_WEEKLY,
-  cyclicDistance,
   explainIneligibility,
   isAccountEligible,
-  isQuotaBenched,
-  nextQuotaResetAt,
   orderByExpiry,
   type AccountIneligibilityReason,
 } from '../domain/accounts/selection.ts'
@@ -56,13 +52,19 @@ export class AccountPoolManager {
    */
   private readonly authStrikes = new Map<string, number>()
   private readonly unsupportedModels = new Map<string, Set<string>>()
-  private catalog?: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }
+  private catalog?: {
+    get(accountId?: string): { models?: readonly { id: string }[]; source?: string }
+    getAccountCatalog?(accountId?: string): { models?: readonly { id: string }[]; source?: string } | undefined
+  }
   /** True when load() had to fall back to pool.json.last-good (observable for diagnostics). */
   recoveredFromLastGood = false
   /** Callback fired whenever the active/primary account changes. */
   onAccountSwitch?: (accountId: string, family?: ModelFamily) => void
 
-  setCatalog(catalog: { get(accountId?: string): { models?: readonly { id: string }[]; source?: string } }): void {
+  setCatalog(catalog: {
+    get(accountId?: string): { models?: readonly { id: string }[]; source?: string }
+    getAccountCatalog?(accountId?: string): { models?: readonly { id: string }[]; source?: string } | undefined
+  }): void {
     this.catalog = catalog
   }
 
@@ -91,12 +93,20 @@ export class AccountPoolManager {
     })
   }
 
+  private catalogForAccount(accountId: string): { models?: readonly { id: string }[]; source?: string } | undefined {
+    if (!this.catalog) return undefined
+    if (typeof this.catalog.getAccountCatalog === 'function') {
+      return this.catalog.getAccountCatalog(accountId)
+    }
+    return this.catalog.get(accountId)
+  }
+
   /** Determine whether a managed account supports a specific model. */
   isModelSupported(acc: ManagedAccount, model: string): boolean {
     if (this.unsupportedModels.get(acc.id)?.has(baseModelSlug(model))) {
       return false
     }
-    const cat = this.catalog?.get(acc.id)
+    const cat = this.catalogForAccount(acc.id)
     return accountSupportsModel(acc, model, this, cat)
   }
 
@@ -160,43 +170,7 @@ export class AccountPoolManager {
    * as well as the primary system ~/.gemini/antigravity-cli/log directory.
    */
   sweepOldLogs(maxDays = 7): number {
-    const maxAgeMs = Math.max(1, maxDays) * 86_400_000
-    const now = Date.now()
-    let removed = 0
-
-    const targetLogDirs = [
-      join(homedir(), '.gemini', 'antigravity-cli', 'log'),
-    ]
-
-    for (const acc of this.data.accounts) {
-      if (acc.dir) {
-        targetLogDirs.push(join(acc.dir, '.gemini', 'antigravity-cli', 'log'))
-      }
-    }
-
-    for (const logDir of targetLogDirs) {
-      if (!existsSync(logDir)) continue
-      try {
-        const files = readdirSync(logDir)
-        for (const f of files) {
-          if (!f.startsWith('cli-') || !f.endsWith('.log')) continue
-          const fp = join(logDir, f)
-          try {
-            const st = statSync(fp)
-            if (now - st.mtimeMs > maxAgeMs) {
-              rmSync(fp, { force: true })
-              removed++
-            }
-          } catch {
-            // Ignore file error
-          }
-        }
-      } catch {
-        // Ignore dir error
-      }
-    }
-
-    return removed
+    return sweepOldAgyLogs(this.data.accounts, homedir(), maxDays)
   }
 
   /** Create a new isolated account slot and prepare its filesystem home. */
@@ -205,7 +179,13 @@ export class AccountPoolManager {
   }
 
   deleteAccount(id: string): boolean {
-    return this.admin.deleteAccount(id)
+    const wasActive = this.data.activeAccountIds?.google === id || this.data.lastActiveAccountId === id
+    const ok = this.admin.deleteAccount(id)
+    if (ok && wasActive) {
+      const next = this.data.accounts.find((a) => a.enabled && !a.authRequired)?.id
+      if (next) this.onAccountSwitch?.(next)
+    }
+    return ok
   }
 
   setAccountProxy(id: string, proxyUrl?: string): boolean {
@@ -217,7 +197,13 @@ export class AccountPoolManager {
   }
 
   setAccountEnabled(id: string, enabled: boolean): boolean {
-    return this.admin.setAccountEnabled(id, enabled)
+    const wasActive = this.data.activeAccountIds?.google === id || this.data.lastActiveAccountId === id
+    const ok = this.admin.setAccountEnabled(id, enabled)
+    if (ok && (!enabled ? wasActive : !this.data.lastActiveAccountId)) {
+      const next = this.data.accounts.find((a) => a.enabled && !a.authRequired)?.id
+      if (next) this.onAccountSwitch?.(next)
+    }
+    return ok
   }
 
   /**
@@ -298,28 +284,13 @@ export class AccountPoolManager {
     this.admin.setMode(mode)
   }
 
-  /**
-   * True when a family's cached quota snapshot benches the account.
-   *
-   * A user-visible `clearCooldown(..., includeQuotaBench = true)` records the
-   * `updatedAt` of the snapshot it overrode; the gate stays off only while the
-   * cached row is no newer than that stamp, so a fresh poll always re-arms it.
-   */
-  private isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
-    return isQuotaBenched(acc, family, now)
-  }
-
   /** Determine whether a managed account has confirmed access to Gemini 4 Argon. */
   accountHasArgon(acc: ManagedAccount): boolean {
-    return accountHasArgon(acc, this)
+    return accountHasArgon(acc, this, this.catalogForAccount(acc.id))
   }
 
   /**
    * Why this account cannot serve `family` right now, or null when it can.
-   *
-   * Exists so callers can report the ACTUAL blocker: quota rotation used to be
-   * folded into "in cooldown", which pointed users at `/agy clear-cooldown` for
-   * a state that command did not touch.
    */
   explainIneligibility(
     acc: ManagedAccount,
@@ -345,25 +316,6 @@ export class AccountPoolManager {
     return this.admin.getActiveAccountId(family, model)
   }
 
-  /**
-   * Next moment this account's quota state refreshes for one family: the
-   * sooner of the 5h window reset and the weekly cap reset. NaN when unknown.
-   */
-  private nextQuotaResetAt(acc: ManagedAccount, family: ModelFamily): number {
-    return nextQuotaResetAt(acc, family)
-  }
-
-  /** Cyclic distance from `fromId` (0 = itself), so ties keep pool order. */
-  private cyclicDistance(fromId: string | undefined, id: string): number {
-    return cyclicDistance(this.data.accounts, fromId, id)
-  }
-
-  /**
-   * "Use it or lose it" rotation order.
-   * Priority 1: Weekly quota expiring soonest (least remaining time until weeklyResetTime).
-   * Priority 2: 5-hour quota expiring soonest (least remaining time until resetTime).
-   * Priority 3: Cyclic distance from `fromId` (or pool order).
-   */
   private orderByExpiry(
     candidates: readonly ManagedAccount[],
     family: ModelFamily,
@@ -409,6 +361,10 @@ export class AccountPoolManager {
         if (!gateCleared && (this.data.activeAccountIds?.[famKey] === id || this.data.lastActiveAccountId === id)) {
           this.advanceAccount(id, famKey)
         }
+        // Folded/shared Argon pool rides the Gemini bucket when no dedicated argon row exists.
+        if (!gateCleared && famKey === 'google' && !acc.quotas?.argon && this.data.activeAccountIds?.argon === id) {
+          this.advanceAccount(id, 'argon')
+        }
       }
     }
 
@@ -431,7 +387,12 @@ export class AccountPoolManager {
 
   /** Records a rate-limit / 429 error and sets cooldown for the requested model family. */
   recordFailure(id: string, family: ModelFamily, reason: string, serverResetTime?: string): void {
+    const prev = this.data.activeAccountIds?.[family] ?? this.data.lastActiveAccountId
     this.admin.recordFailure(id, family, reason, serverResetTime)
+    const next = this.data.activeAccountIds?.[family] ?? this.data.lastActiveAccountId
+    if (next && next !== prev) {
+      this.onAccountSwitch?.(next, family)
+    }
   }
 
   /** Records a successful run, clearing failure counter and authRequired flag for the family. */
@@ -558,16 +519,7 @@ export class AccountPoolManager {
 
   /** Get countdown in milliseconds until the earliest account in cooldown resets. */
   getEarliestResetCountdown(family: ModelFamily): number | null {
-    const now = Date.now()
-    let earliest: number | null = null
-    for (const acc of this.data.accounts) {
-      if (!acc.enabled) continue
-      const cd = acc.cooldowns?.[family]
-      if (cd && cd.cooldownUntil > now && (earliest === null || cd.cooldownUntil < earliest)) {
-        earliest = cd.cooldownUntil
-      }
-    }
-    return earliest !== null ? Math.max(0, earliest - now) : null
+    return earliestResetCountdown(this.data.accounts, family)
   }
 
   /**
@@ -575,26 +527,6 @@ export class AccountPoolManager {
    * of a cooldown expiry and a quota-window reset.
    */
   getEarliestAvailableCountdown(family: ModelFamily): number | null {
-    const now = Date.now()
-    let earliest: number | null = null
-    const bump = (at: number | null): void => {
-      if (at === null || Number.isNaN(at) || at <= now) return
-      if (earliest === null || at < earliest) earliest = at
-    }
-    for (const acc of this.data.accounts) {
-      if (!acc.enabled || acc.authRequired) continue
-      const cd = acc.cooldowns?.[family]
-      if (cd && cd.cooldownUntil > now) bump(cd.cooldownUntil)
-      const quota = acc.quotas?.[family]
-      if (quota === undefined) continue
-      const clearedAt = acc.quotaGateClearedAt?.[family]
-      if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) continue
-      const drained5h = typeof quota.remainingFraction === 'number' && quota.remainingFraction <= LOW_QUOTA_5H
-        && typeof quota.resetTime === 'string' && Date.parse(quota.resetTime) > now
-      const drainedWeekly = typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= LOW_QUOTA_WEEKLY
-        && typeof quota.weeklyResetTime === 'string' && Date.parse(quota.weeklyResetTime) > now
-      if (drained5h || drainedWeekly) bump(this.nextQuotaResetAt(acc, family))
-    }
-    return earliest !== null ? Math.max(0, (earliest as number) - now) : null
+    return earliestAvailableCountdown(this.data.accounts, family)
   }
 }

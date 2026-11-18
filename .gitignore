@@ -4,8 +4,9 @@ dist/
 .env
 .DS_Store
 *.log
-.spec/
 research/
+.worktrees/
+.agents/
 
 # agy credential dirs (never commit)
 .gemini/

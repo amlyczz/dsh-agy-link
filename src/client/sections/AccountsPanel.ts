@@ -17,6 +17,7 @@ import { formatQuotaWindow, renderFamilyQuotaBar } from './QuotaPanel.ts';
 export interface AccountsPanelHandlers {
 	moveAccount: (accId: string, delta: number) => Promise<void>;
 	setActiveAccount: (id: string) => Promise<void>;
+	beginReauth?: (acc: ManagedAccount) => Promise<void>;
 	removeAccount: (id: string, alias: string) => Promise<void>;
 	toggleAccountEnabled: (acc: ManagedAccount) => Promise<void>;
 	refreshQuota: (id?: string) => Promise<void>;
@@ -129,11 +130,11 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 					uiIcon(isExpanded ? 'chevronUp' : 'chevronDown', 10),
 					h('span', null, isExpanded ? t('account.collapseOthers') : t('account.expandOthers')),
 				),
-				isExpanded ? [
+				isExpanded ? h('div', { key: 'expanded-details' },
 					renderQuotaBar('Claude', 'anthropic', acc),
 					renderQuotaBar('GPT-OSS', 'openai', acc),
 					allChildModels.length > 0 ? renderChildModels(t, allChildModels) : null,
-				] : null,
+				) : null,
 			),
 			hasCooldown ? renderCooldownBanner(t, acc, loadingAction, accountActionBusy, handlers) : null,
 			isEditingProxy ? renderProxyEditor(t, acc, pool, proxyInputs, setProxyInputs, setEditingProxyId, loadingAction, accountActionBusy, handlers) : null,
@@ -158,8 +159,18 @@ interface CardHeaderCtx {
 	setEditingProxyId: (id: string | null) => void;
 }
 
+function extractActionUrl(text?: string): string | undefined {
+	if (!text) return undefined;
+	const m = text.match(/https:\/\/[^\s)\]>.,;"']+/);
+	return m ? m[0] : undefined;
+}
+
 function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown[] {
 	const { isAuthRequired, hasCooldown, isInUse, pool } = ctx;
+	const isTos = isAuthRequired && /\bTOS_VIOLATION\b|violation of Terms of Service/i.test(acc.authError ?? '');
+	const isValidation = isAuthRequired && !isTos && /\bVALIDATION_REQUIRED\b/i.test(acc.authError ?? '');
+	const authLabel = isTos ? t('status.tosBanned') : isValidation ? t('status.validationRequired') : t('status.authRequired');
+	const actionUrl = isAuthRequired ? extractActionUrl(acc.authError) : undefined;
 	return [
 		acc.email ? h('span', {
 			style: {
@@ -204,7 +215,9 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 				title: effectiveProxy,
 			}, uiIcon('globe', 10, 'var(--agy-badge-proxy-text)'), t('status.proxy')) : null;
 		})(),
-		isAuthRequired ? h('span', {
+		isAuthRequired ? h(actionUrl ? 'a' : 'span', {
+			...(actionUrl ? { href: actionUrl, target: '_blank', rel: 'noopener noreferrer' } : {}),
+			title: acc.authError || authLabel,
 			style: {
 				...S.badgeTag!,
 				background: 'var(--agy-badge-email-bg)',
@@ -216,8 +229,9 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 				fontWeight: 700,
 				whiteSpace: 'nowrap',
 				flexShrink: 0,
+				textDecoration: actionUrl ? 'underline' : 'none',
 			},
-		}, uiIcon('alert', 10, '#ef4444'), t('status.authRequired')) : null,
+		}, uiIcon('alert', 10, '#ef4444'), authLabel) : null,
 		hasCooldown ? h('span', {
 			style: {
 				...S.badgeTag!,
@@ -231,7 +245,7 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 				whiteSpace: 'nowrap',
 				flexShrink: 0,
 			},
-		}, uiIcon('alert', 10, '#f59e0b'), '冷却中') : null,
+		}, uiIcon('alert', 10, '#f59e0b'), t('status.cooldown')) : null,
 		!acc.enabled ? h('span', {
 			style: {
 				...S.badgeTag!,
@@ -314,7 +328,7 @@ function renderMetaRow(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): 
 			minWidth: 0,
 			paddingLeft: '1px',
 		},
-	}, badges);
+	}, ...badges);
 }
 
 function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
@@ -369,36 +383,43 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 			title: acc.enabled ? t('account.disableTitle') : t('account.enableTitle'),
 			disabled: accountActionBusy(acc, 'enable'),
 			onClick: () => void handlers.toggleAccountEnabled(acc),
-		}, loadingAction === `enable:${acc.id}`
+		}, ...(loadingAction === `enable:${acc.id}`
 			? [Spinner(), acc.enabled ? t('account.disable') : t('account.enable')]
-			: [uiIcon('power', 10, acc.enabled ? 'var(--agy-text-secondary)' : '#ffffff'), ` ${acc.enabled ? t('account.disable') : t('account.enable')}`]),
+			: [uiIcon('power', 10, acc.enabled ? 'var(--agy-text-secondary)' : '#ffffff'), ` ${acc.enabled ? t('account.disable') : t('account.enable')}`])),
 		h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px', justifyContent: 'center' },
 			title: t('account.syncTitle'),
 			disabled: accountActionBusy(acc, 'refresh'),
 			onClick: () => void handlers.refreshQuota(acc.id),
-		}, loadingAction === `refresh:${acc.id}` ? [Spinner(), t('account.syncing')] : [uiIcon('refresh', 10), ` ${t('account.sync')}`]),
+		}, ...(loadingAction === `refresh:${acc.id}` ? [Spinner(), t('account.syncing')] : [uiIcon('refresh', 10), ` ${t('account.sync')}`])),
+		acc.authRequired && handlers.beginReauth ? h(Button, {
+			variant: 'primary', size: 'sm', className: 'agy-btn',
+			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
+			title: t('account.reauthTitle'),
+			disabled: accountActionBusy(acc, 'reauth'),
+			onClick: () => void handlers.beginReauth!(acc),
+		}, ...(loadingAction === `reauth:${acc.id}` ? [Spinner(), t('account.reauthing')] : [uiIcon('externalLink', 10, '#ffffff'), ` ${t('account.reauth')}`])) : null,
 		acc.enabled && !acc.authRequired ? h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px', justifyContent: 'center' },
 			title: t('account.warmupTitle'),
 			disabled: accountActionBusy(acc, 'warmup'),
 			onClick: () => void handlers.warmupAccount(acc.id),
-		}, loadingAction === `warmup:${acc.id}` ? [Spinner(), t('account.warmingUp')] : [uiIcon('flame', 10, '#f97316'), ` ${t('account.warmup')}`]) : null,
-		acc.enabled && !isInUse ? h(Button, {
+		}, ...(loadingAction === `warmup:${acc.id}` ? [Spinner(), t('account.warmingUp')] : [uiIcon('flame', 10, '#f97316'), ` ${t('account.warmup')}`])) : null,
+		acc.enabled && !acc.authRequired && !isInUse ? h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			title: t('account.setActive'),
 			disabled: accountActionBusy(acc, 'active'),
 			onClick: () => void handlers.setActiveAccount(acc.id),
-		}, loadingAction === `active:${acc.id}` ? [Spinner(), t('account.settingActive')] : [uiIcon('zap', 10), ` ${t('account.setActive')}`]) : null,
+		}, ...(loadingAction === `active:${acc.id}` ? [Spinner(), t('account.settingActive')] : [uiIcon('zap', 10), ` ${t('account.setActive')}`])) : null,
 		h(Button, {
 			variant: isEditingProxy ? 'primary' : 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			disabled: accountActionBusy(acc, 'proxy'),
 			onClick: () => setEditingProxyId(isEditingProxy ? null : acc.id),
-		}, [uiIcon('globe', 10), ` ${t('proxy.button')}`]),
+		}, uiIcon('globe', 10), ` ${t('proxy.button')}`),
 		(showRemove ? h(Button, {
 			variant: 'danger', size: 'sm', className: 'agy-btn',
 			style: { padding: '1px 6px', fontSize: '11px', height: '22px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
@@ -467,7 +488,7 @@ function renderCooldownBanner(
 			style: { color: 'var(--agy-warn-btn-text)', borderColor: 'var(--agy-warn-btn-border)', background: 'var(--agy-warn-btn-bg)', gap: '4px' },
 			disabled: accountActionBusy(acc, 'clearCooldown'),
 			onClick: () => void handlers.clearCooldown(acc.id),
-		}, loadingAction === `clearCooldown:${acc.id}` ? [Spinner(), ''] : [uiIcon('zap', 11, 'var(--agy-warn-btn-text)'), ` ${t('account.clearCooldown')}`]),
+		}, ...(loadingAction === `clearCooldown:${acc.id}` ? [Spinner(), ''] : [uiIcon('zap', 11, 'var(--agy-warn-btn-text)'), ` ${t('account.clearCooldown')}`])),
 	);
 }
 
@@ -504,7 +525,7 @@ function renderProxyEditor(
 				variant: 'primary', className: 'agy-btn',
 				disabled: accountActionBusy(acc, 'proxy'),
 				onClick: () => void handlers.saveProxy(acc.id),
-			}, loadingAction === `proxy:${acc.id}` ? [Spinner(), t('proxy.save')] : t('proxy.save')),
+			}, ...(loadingAction === `proxy:${acc.id}` ? [Spinner(), t('proxy.save')] : [t('proxy.save')])),
 			h(Button, {
 				variant: 'default', className: 'agy-btn',
 				onClick: () => setEditingProxyId(null),

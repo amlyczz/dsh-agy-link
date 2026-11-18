@@ -5,5 +5,5 @@ export {
   updateCredentialBackup,
   withCredentialFileLock,
   readAccountCredential,
-  extractRefreshToken,
 } from '../domain/credentials/backup.ts'
+export { extractRefreshToken } from '../domain/credentials/docs.ts'

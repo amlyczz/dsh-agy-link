@@ -208,11 +208,19 @@ export async function refreshAccountQuotaPipeline(
     deps.pool.resetAccountIdentity(account.id, email)
   }
 
-  const [summary, discovered, userQuota] = await Promise.all([
+  // Minimize upstream REST calls (anti-ban): fetch summary + model list first,
+  // and only query legacy per-model retrieveUserQuota when fetchAvailableModels
+  // returned no per-model quota entries (preserving issue #48 fallback).
+  const [summary, discovered] = await Promise.all([
     deps.fetchQuotaSummary(accessToken, deps.proxyFor(account)),
     deps.fetchAvailableModels(accessToken, deps.proxyFor(account)),
-    deps.fetchUserQuota(accessToken, deps.proxyFor(account)).catch(() => null),
   ])
+  const hasModelQuotas = Boolean(
+    discovered?.models && Object.values(discovered.models).some((m) => m?.quotaInfo !== undefined),
+  )
+  const userQuota = !hasModelQuotas
+    ? await deps.fetchUserQuota(accessToken, deps.proxyFor(account)).catch(() => null)
+    : null
 
   // Query the userinfo endpoint ONLY when the email is still unknown.
   // Account switching on systemHome accounts is already caught locally by

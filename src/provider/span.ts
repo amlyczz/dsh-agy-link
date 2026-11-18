@@ -12,7 +12,7 @@ import type { CompactionNotice } from '../common/compaction.ts'
 import type { RunRecording, RunRegistry } from '../host/recording.ts'
 import { EventMapper } from '../host/mapper.ts'
 import { readFullToolArgs, readStepThoughts } from '../host/agy-db.ts'
-import { getGitHeadContent, unwrapMcpTool } from '../host/mirror-tool.ts'
+import { getGitHeadContentAsync, unwrapMcpTool } from '../host/mirror-tool.ts'
 import type { GoalContext } from '../host/dsh-goal.ts'
 
 /** What the span driver needs from the adapter (nothing more). */
@@ -65,6 +65,9 @@ function brief(s: string): string {
  * `step_update`). Used to look the step's full args/thoughts up in agy's DB.
  */
 function activeConversationId(rec: RunRecording, ev: AgyEvent): string | null {
+  if ('conversationId' in ev && typeof ev.conversationId === 'string' && ev.conversationId !== '') {
+    return rec.conversationId ?? ev.conversationId
+  }
   const rawObj = 'raw' in ev && ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : null
   const stepUpdate = rawObj?.step_update && typeof rawObj.step_update === 'object' ? (rawObj.step_update as Record<string, unknown>) : null
   return (
@@ -177,7 +180,7 @@ async function resolveEventToolArgs(
     const currentArgs = unwrapped.input
     const targetFile = (currentArgs.TargetFile ?? currentArgs.target_file ?? currentArgs.path ?? currentArgs.AbsolutePath) as string | undefined
     if (targetFile && typeof targetFile === 'string' && !currentArgs.oldText && !currentArgs.old_string && !currentArgs.TargetContent) {
-      const head = getGitHeadContent(targetFile)
+      const head = await getGitHeadContentAsync(targetFile)
       if (head !== null) {
         const updated = { ...currentArgs, old_string: head }
         resolved.set(i, updated)

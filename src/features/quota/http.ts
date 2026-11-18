@@ -8,9 +8,9 @@ import type {
   UserQuotaResponse,
 } from '../../domain/quota/parse.ts'
 import { agyFetch } from '../../host/net.ts'
-import { AGY_ENDPOINTS } from '../../host/oauth.ts'
+import { AGY_ENDPOINTS, fetchUserInfo as fetchOAuthUserInfo, OAUTH_USERINFO_URL } from '../../host/oauth.ts'
 
-export const OAUTH_USERINFO_URL = 'https://www.googleapis.com/oauth2/v1/userinfo'
+export { OAUTH_USERINFO_URL }
 
 /**
  * I/O seams the endpoint loops need. `fetchSummaryEndpoint` /
@@ -20,10 +20,11 @@ export const OAUTH_USERINFO_URL = 'https://www.googleapis.com/oauth2/v1/userinfo
  */
 export interface QuotaHttpDeps {
   agyVersion(): string | null
+  accountScope?: string
   getPreferredEndpointIndex(): number
   setPreferredEndpointIndex(index: number): void
-  fetchSummaryEndpoint(endpoint: string, accessToken: string, proxyUrl?: string): Promise<Response>
-  fetchUserQuotaEndpoint(endpoint: string, accessToken: string, proxyUrl?: string): Promise<Response>
+  fetchSummaryEndpoint(endpoint: string, accessToken: string, proxyUrl?: string, accountScope?: string): Promise<Response>
+  fetchUserQuotaEndpoint(endpoint: string, accessToken: string, proxyUrl?: string, accountScope?: string): Promise<Response>
 }
 
 /** Re-order endpoints so the preferred/working endpoint is tried first. */
@@ -39,18 +40,12 @@ function orderedEndpoints(preferredIndex: number): string[] {
 /**
  * Query live user info (email) from Google OAuth userinfo endpoint.
  */
-export async function fetchUserInfo(accessToken: string, proxyUrl?: string): Promise<{ email?: string; name?: string } | null> {
-  try {
-    const res = await agyFetch(OAUTH_USERINFO_URL, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }, proxyUrl)
-    if (res.ok) {
-      return (await res.json()) as { email?: string; name?: string }
-    }
-  } catch {
-    // Ignore userinfo fetch errors
-  }
-  return null
+export async function fetchUserInfo(
+  accessToken: string,
+  proxyUrl?: string,
+  accountScope?: string,
+): Promise<{ email?: string; name?: string } | null> {
+  return fetchOAuthUserInfo(accessToken, proxyUrl, accountScope)
 }
 
 /** POST /v1internal:retrieveUserQuotaSummary for one endpoint. */
@@ -59,6 +54,7 @@ export function requestQuotaSummaryEndpoint(
   accessToken: string,
   proxyUrl: string | undefined,
   agyVersion: string | null,
+  accountScope?: string,
 ): Promise<Response> {
   return agyFetch(`${endpoint}/v1internal:retrieveUserQuotaSummary`, {
     method: 'POST',
@@ -68,7 +64,7 @@ export function requestQuotaSummaryEndpoint(
       'User-Agent': agyUserAgent(agyVersion),
     },
     body: JSON.stringify({}),
-  }, proxyUrl)
+  }, proxyUrl, accountScope)
 }
 
 /**
@@ -85,7 +81,7 @@ export async function fetchQuotaSummary(
   for (let i = 0; i < endpoints.length; i++) {
     const endpoint = endpoints[i]!
     try {
-      const res = await deps.fetchSummaryEndpoint(endpoint, accessToken, proxyUrl)
+      const res = await deps.fetchSummaryEndpoint(endpoint, accessToken, proxyUrl, deps.accountScope)
       if (res.ok) {
         const summary = (await res.json()) as QuotaSummaryResponse
         // Validate whether the summary contains the primary Gemini models group.
@@ -134,6 +130,7 @@ export function requestUserQuotaEndpoint(
   accessToken: string,
   proxyUrl: string | undefined,
   agyVersion: string | null,
+  accountScope?: string,
 ): Promise<Response> {
   return agyFetch(`${endpoint}/v1internal:retrieveUserQuota`, {
     method: 'POST',
@@ -143,7 +140,7 @@ export function requestUserQuotaEndpoint(
       'User-Agent': agyUserAgent(agyVersion),
     },
     body: JSON.stringify({}),
-  }, proxyUrl)
+  }, proxyUrl, accountScope)
 }
 
 /**
@@ -158,7 +155,7 @@ export async function fetchUserQuota(
   for (let i = 0; i < endpoints.length; i++) {
     const endpoint = endpoints[i]!
     try {
-      const res = await deps.fetchUserQuotaEndpoint(endpoint, accessToken, proxyUrl)
+      const res = await deps.fetchUserQuotaEndpoint(endpoint, accessToken, proxyUrl, deps.accountScope)
       if (res.ok) {
         return (await res.json()) as UserQuotaResponse
       }
@@ -192,7 +189,7 @@ export async function fetchAvailableModels(
           'User-Agent': agyUserAgent(deps.agyVersion()),
         },
         body: JSON.stringify({}),
-      }, proxyUrl)
+      }, proxyUrl, deps.accountScope)
       if (res.ok) {
         if (AGY_ENDPOINTS.indexOf(endpoint) === 0) {
           deps.setPreferredEndpointIndex(0)

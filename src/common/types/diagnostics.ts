@@ -4,12 +4,45 @@
 
 // Auth-failure sniffing shared by the runner tail, parser output and the
 // result envelope (observed on agy 1.1.13: an authentication-required
-// banner plus result.error text).
+// banner plus result.error text). Lines attributed to third-party MCP
+// servers are stripped first so a misconfigured MCP plugin never flags the
+// user's Google account as signed out.
 export function looksLikeAuthFailure(text: string): boolean {
+  if (!text) return false
+  const nonMcpLines = text
+    .split(/\r?\n/)
+    .filter((line) => !/\bmcp\b.*(?:authentication (?:required|failed)|not signed in|please sign in)/i.test(line))
+    .join('\n')
   return /authentication required|authentication failed|please sign in|not signed in|timed out waiting for authentication/i.test(
+    nonMcpLines,
+  )
+}
+
+/** Terminal Google account suspension (TOS_VIOLATION). Must NEVER auto-rotate across sibling accounts. */
+export function looksLikeTosViolation(text?: string): boolean {
+  if (!text) return false
+  return /\bTOS_VIOLATION\b|violation of Terms of Service|This service has been disabled in this account/i.test(text)
+}
+
+/** Temporary Google account challenge (VALIDATION_REQUIRED) — recoverable via verification URL. */
+export function looksLikeValidationRequired(text?: string): boolean {
+  if (!text) return false
+  return /\bVALIDATION_REQUIRED\b|Verify your account to continue/i.test(text)
+}
+
+/**
+ * Headless print-mode permission refusal (issue #121): agy refuses interactive
+ * tool approval prompts when running under `-p` without `--dangerously-skip-permissions`.
+ */
+export function looksLikeHeadlessPermissionDenial(text?: string): boolean {
+  if (!text) return false
+  return /(?:approval|confirmation|review)\s+required\s+in\s+(?:non-interactive|print|headless)|cannot\s+(?:prompt|request)\s+(?:for\s+)?(?:permission|approval|review)\s+in\s+(?:print|non-interactive)|tool\s+execution\s+denied:\s*approval\s+required/i.test(
     text,
   )
 }
+
+export const HEADLESS_PERMISSION_ERROR_HINT =
+  'Antigravity refused an interactive permission prompt in headless print mode. Set permissionMode to "skip" (or run `/agy mode skip`) so unattended tool runs can proceed.'
 
 /**
  * Google-side account/region eligibility refusals (issue #32). agy exits 1

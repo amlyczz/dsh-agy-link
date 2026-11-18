@@ -2,6 +2,7 @@
 // form state, and the watcher that closes the form and toasts when the backend
 // reports the polled auth flow as done/failed.
 
+import type { ManagedAccount } from '../../common/pool-types.ts';
 import { en, type AgyLocaleKey } from '../locales.ts';
 import { postPool } from '../api.ts';
 import { useEffect, useRef, useState } from '../react.ts';
@@ -22,6 +23,7 @@ export interface AuthFlow {
 	setAddingAccount: (value: boolean) => void;
 	importMode: boolean;
 	setImportMode: (value: boolean) => void;
+	reauthAccountId: string | null;
 	aliasInput: string;
 	setAliasInput: (value: string) => void;
 	addProxyInput: string;
@@ -32,6 +34,7 @@ export interface AuthFlow {
 	setTokenInput: (value: string) => void;
 	safeMessage: (code?: string) => string;
 	handleBeginAddAccount: () => Promise<void>;
+	handleBeginReauth: (acc: ManagedAccount) => Promise<void>;
 	handleCompleteAddAccount: () => Promise<void>;
 	handleCancelAddAccount: () => Promise<void>;
 	handleImportToken: () => Promise<void>;
@@ -45,16 +48,36 @@ function toSafeMessage(t: Translator, code?: string): string {
 	return code && key in en ? t(key) : t('api.genericError');
 }
 
+async function startPoolBeginRequest(
+	payload: Record<string, unknown>,
+	actionKey: string,
+	deps: Pick<AuthFlowDeps, 'refresh' | 'showToast' | 'setLoadingAction' | 't'> & { flowStartedRef: { current: boolean } },
+): Promise<void> {
+	const { refresh, showToast, setLoadingAction, t, flowStartedRef } = deps;
+	setLoadingAction(actionKey);
+	const res = await postPool('begin-add', payload);
+	setLoadingAction(null);
+	if (res && res.ok) {
+		flowStartedRef.current = true;
+		await refresh();
+		showToast(res.browserOpened ? t('auth.browserOpened') : t('auth.browserManual'), res.browserOpened ? 'info' : 'warn');
+	} else {
+		showToast(res?.code ? toSafeMessage(t, res.code) : t('auth.startFailed'), 'error');
+	}
+}
+
 export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }: AuthFlowDeps): AuthFlow {
 	const [aliasInput, setAliasInput] = useState('');
 	const [addingAccount, setAddingAccount] = useState(false);
 	const [importMode, setImportMode] = useState(false);
+	const [reauthAccountId, setReauthAccountId] = useState<string | null>(null);
 	const [authCodeInput, setAuthCodeInput] = useState('');
 	const [addProxyInput, setAddProxyInput] = useState('');
 	const [tokenInput, setTokenInput] = useState('');
 	const flowStartedRef = useRef(false);
 
 	const safeMessage = (code?: string): string => toSafeMessage(t, code);
+	const beginDeps = { refresh, showToast, setLoadingAction, t, flowStartedRef };
 
 	const resetForm = () => {
 		setAuthCodeInput('');
@@ -62,6 +85,7 @@ export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }:
 		setAddProxyInput('');
 		setTokenInput('');
 		setImportMode(false);
+		setReauthAccountId(null);
 	};
 
 	useEffect(() => {
@@ -81,21 +105,26 @@ export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }:
 	}, [addingAccount, status?.poolAuth?.phase, status?.poolAuth?.code]);
 
 	const handleBeginAddAccount = async (): Promise<void> => {
-		setLoadingAction('pool:beginAdd');
 		const alias = aliasInput.trim();
 		const proxyUrl = addProxyInput.trim();
-		const res = await postPool('begin-add', {
+		await startPoolBeginRequest({
+			...(reauthAccountId ? { accountId: reauthAccountId } : {}),
 			...(alias ? { alias } : {}),
 			...(proxyUrl ? { proxyUrl } : {}),
-		});
-		setLoadingAction(null);
-		if (res && res.ok) {
-			flowStartedRef.current = true;
-			await refresh();
-			showToast(res.browserOpened ? t('auth.browserOpened') : t('auth.browserManual'), res.browserOpened ? 'info' : 'warn');
-		} else {
-			showToast(res?.code ? safeMessage(res.code) : t('auth.startFailed'), 'error');
-		}
+		}, 'pool:beginAdd', beginDeps);
+	};
+
+	const handleBeginReauth = async (acc: ManagedAccount): Promise<void> => {
+		setAddingAccount(true);
+		setImportMode(false);
+		setReauthAccountId(acc.id);
+		setAliasInput(acc.alias);
+		setAddProxyInput(acc.proxyUrl ?? '');
+		setAuthCodeInput('');
+		await startPoolBeginRequest({
+			accountId: acc.id,
+			...(acc.proxyUrl ? { proxyUrl: acc.proxyUrl } : {}),
+		}, `reauth:${acc.id}`, beginDeps);
 	};
 
 	const handleCompleteAddAccount = async (): Promise<void> => {
@@ -145,10 +174,10 @@ export function useAuthFlow({ status, refresh, showToast, setLoadingAction, t }:
 	const flowPhase = poolAuth?.phase ?? 'idle';
 
 	return {
-		addingAccount, setAddingAccount, importMode, setImportMode,
+		addingAccount, setAddingAccount, importMode, setImportMode, reauthAccountId,
 		aliasInput, setAliasInput, addProxyInput, setAddProxyInput,
 		authCodeInput, setAuthCodeInput, tokenInput, setTokenInput,
-		safeMessage, handleBeginAddAccount, handleCompleteAddAccount,
+		safeMessage, handleBeginAddAccount, handleBeginReauth, handleCompleteAddAccount,
 		handleCancelAddAccount, handleImportToken,
 		poolAuth, flowPhase, flowActive: flowPhase === 'waiting' || flowPhase === 'exchanging',
 	};

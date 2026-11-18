@@ -988,3 +988,52 @@ test('setActiveAccount clears activeAccountIds.argon when target account has no 
   const data = pool.getPoolData()
   assert.notEqual(data.activeAccountIds?.argon, accWithoutArgon.id)
 })
+
+test('recordFailure (429 auto-failover) fires pool.onAccountSwitch so model picker updates immediately', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-429-switch-'))
+  const pool = new AccountPoolManager(dir)
+  const primary = pool.getAccounts()[0]!
+  const secondary = pool.createAccountSlot('Backup Pro')
+  pool.setActiveAccount(primary.id, 'google')
+
+  const switched: string[] = []
+  pool.onAccountSwitch = (nextId) => { switched.push(nextId) }
+
+  pool.recordFailure(primary.id, 'google', 'RESOURCE_EXHAUSTED: code 429')
+  assert.deepEqual(switched, [secondary.id], '429 failover must notify onAccountSwitch')
+})
+
+test('manual setActiveAccount overrides stale session stickyAccount and never flips activeAccount back', async () => {
+  const { selectSessionAccount } = await import('../src/provider/account-selection.ts')
+  const { SessionStore } = await import('../src/host/sessions.ts')
+  const { defaultConfig } = await import('../src/common/types.ts')
+  const dir = mkdtempSync(join(tmpdir(), 'agy-manual-pin-'))
+  const pool = new AccountPoolManager(dir)
+  const acc1 = pool.getAccounts()[0]!
+  const acc2 = pool.createAccountSlot('Account 2')
+  pool.setActiveAccount(acc1.id, 'google')
+
+  const store = new SessionStore(join(dir, 'sessions.json'))
+  // Session s1 previously bound to acc1 5 seconds ago
+  store.set(`s1:${acc1.id}`, {
+    conversationId: 'conv-1',
+    lastMessageCount: 2,
+    updatedAt: Date.now() - 5_000,
+    model: 'gemini-3.8-flash',
+  })
+
+  // User explicitly clicks "设为当前使用" on acc2 in UI
+  pool.setActiveAccount(acc2.id, 'google')
+  assert.equal(pool.getActiveAccountId('google'), acc2.id)
+
+  const res = await selectSessionAccount({
+    deps: { pool, store },
+    cfg: { ...defaultConfig(), parallelSameAccount: false },
+    model: 'gemini-3.8-flash',
+    isAux: false,
+    sessionKey: 's1',
+  })
+
+  assert.equal(res.account?.id, acc2.id, 'manual account switch must override older session sticky binding')
+  assert.equal(pool.getActiveAccountId('google'), acc2.id, 'active account must remain acc2')
+})

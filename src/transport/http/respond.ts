@@ -1,6 +1,7 @@
 // Shared HTTP primitives for the plugin's /plugins/agy-link/* surface.
 // Moved verbatim out of apply(): the bounded strict-body reader, the JSON
 // writer and the small request accessors every route module needs.
+import { createHash } from 'node:crypto'
 import { readJsonBody } from '../../host/read-json-body.ts'
 import { ROUTE_TIMEOUT_MS } from '../../common/timeouts.ts'
 
@@ -38,6 +39,41 @@ export const sendJson = (res: RawRes, status: number, body: unknown): void => {
     // The socket may have been aborted by the client (or closed by the host
     // during shutdown). A late timeout/500 callback must never become an
     // uncaught exception and take the whole process down.
+  }
+}
+
+export const headerOf = (req: unknown, name: string): string => {
+  const headers = (req as { headers?: Record<string, unknown> } | null)?.headers
+  if (!headers || typeof headers !== 'object') return ''
+  const raw = headers[name.toLowerCase()] ?? headers[name]
+  if (typeof raw === 'string') return raw
+  if (Array.isArray(raw) && typeof raw[0] === 'string') return raw[0]
+  return ''
+}
+
+const stripWeak = (tag: string): string => tag.trim().replace(/^W\//i, '')
+
+export const sendJsonWithEtag = (req: unknown, res: RawRes, status: number, body: unknown): void => {
+  if (answered.has(res as object)) return
+  answered.add(res as object)
+  try {
+    const payload = JSON.stringify(body)
+    const etag = `W/"${createHash('sha1').update(payload).digest('base64url').slice(0, 16)}"`
+    const ifNoneMatch = headerOf(req, 'if-none-match')
+    const matched = ifNoneMatch !== '' && ifNoneMatch.split(',').some((t) => stripWeak(t) === stripWeak(etag) || t.trim() === '*')
+    if (matched && status === 200) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' })
+      res.end()
+      return
+    }
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      ETag: etag,
+      'Cache-Control': 'no-cache',
+    })
+    res.end(payload)
+  } catch {
+    // socket closed
   }
 }
 
