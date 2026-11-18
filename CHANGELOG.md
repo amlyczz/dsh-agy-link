@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.37 (2026-11-19)
+
+### English
+
+- **Test coverage hardening on the turn-ending and boot-hygiene paths (no behaviour change).** The branch gate sat at 80.16%, leaving almost no margin for the next change. Added edge-case coverage for the idle-grace reply recovery (torn JSON rows, non-object rows, a directory where the transcript should be, an empty file) and for boot credential hygiene (an isolated pool home with no token file is quarantined and logged; a home whose credential came back has the quarantine lifted; system-home and dir-less accounts are never touched). `boot-hygiene.ts` branch coverage 45.8% → 73.9% (lines 68% → 80%), `idle-grace-reply.ts` 96/71 → 100/88, and the suite is now 1167 tests with the branch gate at 80.25%.
+
+### 中文
+
+- **收尾路径与启动期凭据卫生的测试覆盖加固（无行为变化）。** 分支门禁此前仅 80.16%，几乎没给下一次改动留余量。为 idle 回收的答复恢复补了边界用例（截断的 JSON 行、非对象行、transcript 位置被目录占用、空文件），并为启动期凭据卫生补了三条（隔离账号缺 token 文件时被隔离并记录；凭据回填后解除隔离；system-home 与无 dir 账号绝不触碰）。`boot-hygiene.ts` 分支 45.8% → 73.9%（行 68% → 80%），`idle-grace-reply.ts` 96/71 → 100/88，全量 1167 项、分支门禁提升到 80.25%。
+
 ## 0.6.36 (2026-11-19)
 
 ### English

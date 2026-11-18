@@ -74,3 +74,44 @@ test('issue #127: the no-reply notice explains an unconfirmed turn without claim
   assert.match(IDLE_GRACE_NO_REPLY_NOTICE, /未确认|unconfirmed/)
   assert.match(IDLE_GRACE_NO_REPLY_NOTICE, /后台等待|Background wait/)
 })
+
+test('issue #128: malformed or non-object transcript rows are skipped, not fatal', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-128-junk-'))
+  try {
+    const dir = join(home, '.gemini', 'antigravity-cli', 'brain', CID, '.system_generated', 'logs')
+    mkdirSync(dir, { recursive: true })
+    // A torn JSON line (writer mid-append), a JSON scalar, JSON null, then the
+    // only usable answer: every unusable row must be ignored.
+    writeFileSync(join(dir, 'transcript.jsonl'), [
+      '{"step_index":0,"type":"USER_INPUT","content":"go"}',
+      '{"step_index":1,"type":"PLANNER_RESP',
+      '"a bare string"',
+      'null',
+      '{"step_index":2,"type":"PLANNER_RESPONSE","content":"  recovered  "}',
+    ].join('\n'))
+    assert.equal(recoverFinalReply(CID, home), '  recovered  ')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('issue #128: an unreadable transcript path degrades to an empty reply', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-128-dir-'))
+  try {
+    // A DIRECTORY where the log file belongs: existsSync passes, the read throws.
+    const dir = join(home, '.gemini', 'antigravity-cli', 'brain', CID, '.system_generated', 'logs', 'transcript.jsonl')
+    mkdirSync(dir, { recursive: true })
+    assert.equal(recoverFinalReply(CID, home), '')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('issue #128: an empty transcript file yields no reply', () => {
+  const f = transcript([])
+  try {
+    assert.equal(recoverFinalReply(CID, f.home), '')
+  } finally {
+    f.cleanup()
+  }
+})
