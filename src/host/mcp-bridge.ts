@@ -73,6 +73,13 @@ export interface ToolsServiceLike {
      */
     signal: AbortSignal
   }): Promise<unknown>
+  /**
+   * Runtime-reachable executor selection. `ToolsService.selectExecutor` is a
+   * TypeScript `private` method, so it is a normal property at runtime; it is
+   * only used to reach a PTC executor's staged pipeline (see
+   * `executeBridgedToolCall`). Absent on hosts that do not expose it.
+   */
+  selectExecutor?(scope?: unknown): unknown
 }
 
 /** MCP tool names are [a-zA-Z0-9_-]; DSH names may contain dots. */
@@ -138,6 +145,99 @@ function resultText(result: unknown): string {
  * (no `results` array) passes through untouched, so the same bridge serves both
  * API shapes.
  */
+/** One staged-dispatch pipeline as exposed by a PTC executor at runtime. */
+interface NestedPipeline {
+  prepare(input: Record<string, unknown>): Promise<{ kind: string; exec?: unknown; result?: unknown }>
+  dispatch(exec: unknown): Promise<{ kind: string; result?: unknown }>
+  complete(exec: unknown, outcome: unknown): Promise<unknown>
+}
+
+/**
+ * Execute one bridged tool call.
+ *
+ * DSH 0.2.2's batch entry (`ToolsService.execute`) builds every
+ * `ToolExecutionInput` itself and never copies `parent` (dsh-tools/src/batch.ts),
+ * so a bridged call is always model-direct and the PTC executor rejects every
+ * name but `run_code` — the AGY child sees "only run_code is callable
+ * directly". When the selected executor is a PTC executor its `pipeline` is
+ * reachable at runtime (a TypeScript `private` field, not `#private`), so drive
+ * the staged scheduler directly with a synthetic parent token — exactly what a
+ * nested call from inside a `run_code` program carries. Fall back to the batch
+ * entry when no pipeline is reachable (native executor, older or refactored
+ * host).
+ */
+async function executeBridgedToolCall(
+  svc: ToolsServiceLike,
+  agent: unknown,
+  name: string,
+  args: unknown,
+  callId: string,
+  signal: AbortSignal,
+): Promise<unknown> {
+  const nested = await tryNestedToolCall(svc, agent, name, args, callId, signal)
+  if (nested !== undefined) return nested
+  return svc.execute({
+    calls: [{
+      type: 'tool-call',
+      id: callId,
+      name,
+      // The batch API expects the raw model JSON text; it parses it and
+      // keeps malformed input for tool-owned diagnostics.
+      arguments: JSON.stringify(args ?? {}),
+    }],
+    signal,
+    ...(agent === undefined ? {} : { agent }),
+    // DSH 0.2.1 compatibility (ignored by 0.2.2+).
+    callId,
+    name,
+    arguments: args ?? {},
+    ...(svc.schemas(agent).some((tool) => tool.name === 'run_code') ? { parent: Symbol(callId) } : {}),
+  })
+}
+
+/** Staged dispatch through the executor's pipeline; undefined when not applicable. */
+async function tryNestedToolCall(
+  svc: ToolsServiceLike,
+  agent: unknown,
+  name: string,
+  args: unknown,
+  callId: string,
+  signal: AbortSignal,
+): Promise<unknown> {
+  let pipeline: NestedPipeline | undefined
+  try {
+    const executor = svc.selectExecutor?.(agent) as { pipeline?: NestedPipeline } | undefined
+    pipeline = executor?.pipeline
+  } catch {
+    return undefined
+  }
+  if (pipeline === undefined
+    || typeof pipeline.prepare !== 'function'
+    || typeof pipeline.dispatch !== 'function'
+    || typeof pipeline.complete !== 'function') return undefined
+  let prepared: { kind: string; exec?: unknown; result?: unknown }
+  try {
+    prepared = await pipeline.prepare({
+      callId,
+      name,
+      arguments: args ?? {},
+      signal,
+      ...(agent === undefined ? {} : { agent }),
+      // Any symbol works: the PTC gate only tests `parent !== undefined`.
+      parent: Symbol(callId),
+    })
+  } catch {
+    return undefined
+  }
+  if (prepared.exec === undefined) return undefined
+  if (prepared.kind === 'final-result') return prepared.result
+  const outcome = prepared.kind === 'dispatch'
+    ? await pipeline.dispatch(prepared.exec)
+    : prepared as { kind: string; result?: unknown }
+  if (outcome?.result === undefined) return undefined
+  return pipeline.complete(prepared.exec, outcome)
+}
+
 function settledToolResult(result: unknown, callId: string): unknown {
   const results = (result as { results?: unknown } | null | undefined)?.results
   if (!Array.isArray(results) || results.length === 0) return result
@@ -285,24 +385,7 @@ export function startMcpBridge(opts: {
           // pre-execute hook treats any parent as a PTC dispatch and then looks
           // for a session-log start that a native call does not have).
           const callId = 'agy-mcp-' + callSeq
-          const isPtc = svc.schemas(agent).some((tool) => tool.name === 'run_code')
-          const result = await svc.execute({
-            calls: [{
-              type: 'tool-call',
-              id: callId,
-              name: dshName,
-              // The batch API expects the raw model JSON text; it parses it and
-              // keeps malformed input for tool-owned diagnostics.
-              arguments: JSON.stringify(parsed.arguments ?? {}),
-            }],
-            signal: controller.signal,
-            ...(agent === undefined ? {} : { agent }),
-            // DSH 0.2.1 compatibility (ignored by 0.2.2+).
-            callId,
-            name: dshName,
-            arguments: parsed.arguments ?? {},
-            ...(isPtc ? { parent: Symbol(callId) } : {}),
-          })
+          const result = await executeBridgedToolCall(svc, agent, dshName, parsed.arguments ?? {}, callId, controller.signal)
           audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
           sendJson(res, 200, { ok: true, text: resultText(settledToolResult(result, callId)) })
         } catch (e) {
