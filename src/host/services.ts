@@ -336,12 +336,17 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   const activeCwds = (): string[] => {
     const list: string[] = []
     try {
-      const svc = sessionsSvc() as { values?: () => Iterable<{ header?: { cwd?: string } }> } | undefined
-      if (typeof svc?.values === 'function') {
-        for (const s of svc.values()) {
-          const cwd = s?.header?.cwd
-          if (cwd && !list.includes(cwd)) list.push(cwd)
-        }
+      // DSH's session store exposes `list()`; `values()` never existed on it, so
+      // asserting it here produced an always-empty whitelist and every open/media
+      // request for a session workspace was refused (issue #139). Keep `values()`
+      // as a fallback for hosts that only publish that shape.
+      const svc = sessionsSvc() as unknown as
+        | { list?: () => Iterable<SessionLike>; values?: () => Iterable<SessionLike> }
+        | undefined
+      const source = typeof svc?.list === 'function' ? svc.list() : typeof svc?.values === 'function' ? svc.values() : []
+      for (const s of source) {
+        const cwd = s?.header?.cwd
+        if (cwd && !list.includes(cwd)) list.push(cwd)
       }
     } catch {
       // ignore

@@ -2833,3 +2833,27 @@ test('purpose:image uses the verbatim bridge prompt, the configured mode and the
     process.env.FAKE_AGY_MODE = 'ok'
   }
 })
+
+test('issue #138: DSH context messages never make a tool continuation look like a user steer', () => {
+  const toolResult = (callId: string): Message =>
+    ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
+  const expected = { runId: 'run-1', eventIndex: 7 }
+  // DSH 0.2.2 producers each use their OWN kind: there is no catch-all "plugin".
+  const timeContext = { role: 'user', content: [], source: { kind: 'time-context', form: 'snapshot' } } as unknown as Message
+  const agentInstructions = { role: 'user', content: [{ type: 'text', text: 'Updated instructions from: AGENTS.md' }], source: { kind: 'agent-instructions', form: 'instructions' } } as unknown as Message
+  const memoryNotice = { role: 'user', content: [{ type: 'text', text: 'recalled memory' }], source: { kind: 'plugin:memory', form: 'notice' } } as unknown as Message
+
+  assert.deepEqual(detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7'), timeContext]), expected,
+    'a time-context snapshot must not break the continuation')
+  assert.deepEqual(detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7'), agentInstructions]), expected,
+    'an AGENTS.md refresh must not break the continuation')
+  assert.deepEqual(detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7'), memoryNotice]), expected,
+    'a plugin:<name> notice must not break the continuation')
+  assert.deepEqual(
+    detectContinuation([msg('user', 'q'), toolResult('agytc-run-1-7'), timeContext, agentInstructions, memoryNotice]),
+    expected,
+    'several context messages in a row still continue',
+  )
+  // A real typed message still ends the scan: it IS a new request.
+  assert.equal(detectContinuation([toolResult('agytc-run-1-7'), msg('user', '补充一点：先写草稿')]), null)
+})

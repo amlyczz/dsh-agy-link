@@ -113,3 +113,12 @@ Each invariant below is enforced in code AND covered by a regression test.
 - 所有平台分支统一走 `spawnDetachedOpener()`：在第一个 tick 之前挂上 `error` 监听再 `unref()`；同步抛错返回 `false`。
 - 已知取舍：异步启动失败在 headless 主机上表现为**静默无操作**（路由没有 logger 可回报）。若要给用户明确提示，需先让路由拿到 logger；届时补测试。
 - 测试：`test/media-route.test.ts` 注入假 `spawn`（emit ENOENT 不外泄、同步 throw 返回 false）。
+
+## 工作区白名单必须真的读到会话 cwd（issue #139）
+
+`/open` 与 `/media` 的路径白名单来自 `collectWorkspaceRoots()`，其中「活跃会话 cwd」这一项由 `activeCwds()` 提供。
+
+- DSH 的 session store 暴露 `list()` / `get(id)`，**没有 `values()`**。用 `typeof svc?.values === 'function'` 守卫一个不存在的 API，会让白名单永远为空——会话工作区内的文件全部 403（"path outside allowed workspace roots"）。
+- 现在 `activeCwds()` 优先 `list()`，回退 `values()`（兼容只提供后者的宿主），按出现顺序去重 cwd；服务缺失或抛错时降级为空数组，绝不抛给请求路径。
+- 新增会话服务方法时必须同步 `SessionsServiceLike` 的类型声明，不要用内联 `as { … }` 强转——类型检查是唯一能发现「调用了不存在的 API」的防线。
+- 锚点：`test/services.test.ts`（`list()` 路径、`values()` 回退、抛错降级）。

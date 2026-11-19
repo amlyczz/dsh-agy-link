@@ -4,7 +4,7 @@
 // from the adapter because tests and the host import it from there.
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { parseMirrorCallId } from '../host/recording.ts'
-import { isToolResultMessage, type ForeignSource, type UnknownBlock } from './prompt-text.ts'
+import { isSyntheticHarnessMessage, isToolResultMessage, type ForeignSource, type UnknownBlock } from './prompt-text.ts'
 
 /**
  * Correlation id of a tool-result message. Accepts `message.toolCallId`
@@ -35,16 +35,20 @@ export function toolCallIdOf(m: Message): string | null {
  * digest-only prompt (issues #34 / #35).
  */
 export function detectContinuation(messages: readonly Message[]): { runId: string; eventIndex: number } | null {
-  // DSH may append plugin-owned snapshots after it stores a tool result.
-  // Extend PR #15's backward scan using DSH's explicit snapshot form.
-  // Other plugin forms can carry new instructions and must not be skipped.
-  // A human message, another provider's tool result, or any unknown
-  // boundary must stop the scan: continuing past one could replay a run for
-  // the wrong request instead of spawning the requested turn.
+  // DSH appends context messages after it stores a tool result. Each producer
+  // uses its OWN kind (`time-context`, `agent-instructions`, `plugin:<name>`)
+  // and form, so matching only `plugin`+`snapshot` left every other one looking
+  // like a human steer: the adapter aborted the live agy run and told the model
+  // not to continue (issue #138). Skip anything the harness itself injected —
+  // the same predicate the prompt builder uses — and stop at everything else.
+  // A human message, another provider's tool result, or any unknown boundary
+  // must still stop the scan: continuing past one could replay a run for the
+  // wrong request instead of spawning the requested turn.
   let i = messages.length - 1
   while (i >= 0) {
-    const snapshot = messages[i] as unknown as { source?: { kind?: string; form?: string } }
-    if (snapshot.source?.kind !== 'plugin' || snapshot.source.form !== 'snapshot') break
+    const candidate = messages[i] as unknown as { role?: string }
+    if (candidate.role !== 'user') break
+    if (!isSyntheticHarnessMessage(messages[i] as Message)) break
     i--
   }
   const last = messages[i]

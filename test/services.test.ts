@@ -386,3 +386,35 @@ test('constructing does not spawn agy and stays inside the temp HOME', (t) => {
   assert.equal(existsSync(marker), false, 'agy was not spawned during construction or bin resolution')
   assert.deepEqual(services.bridgeState, { bridge: null, restores: [] })
 })
+
+test('issue #139: activeCwds reads the session store list() (DSH has no values())', (t) => {
+  sandbox(t)
+  // DSH's SessionStore exposes list()/get(id); `values()` never existed, so the
+  // old cast made this always empty and every workspace file was refused by
+  // /open and /media with "path outside allowed workspace roots".
+  const sessions = {
+    get: () => undefined,
+    list: () => [
+      { header: { cwd: 'C:\\work\\alpha' } },
+      { header: { cwd: 'C:\\work\\beta' } },
+      { header: { cwd: 'C:\\work\\alpha' } },
+      { header: {} },
+    ],
+  }
+  const services = createHostServices(asCtx({ get: (k: string) => (k === 'sessions' ? sessions : undefined) }), {})
+  assert.deepEqual(services.activeCwds(), ['C:\\work\\alpha', 'C:\\work\\beta'])
+})
+
+test('issue #139: activeCwds still works when a host only exposes values()', (t) => {
+  sandbox(t)
+  const sessions = { get: () => undefined, values: () => [{ header: { cwd: '/work/legacy' } }] }
+  const services = createHostServices(asCtx({ get: (k: string) => (k === 'sessions' ? sessions : undefined) }), {})
+  assert.deepEqual(services.activeCwds(), ['/work/legacy'])
+})
+
+test('issue #139: activeCwds degrades to empty when the sessions service is unusable', (t) => {
+  sandbox(t)
+  const throwing = { get: () => undefined, list: () => { throw new Error('boom') } }
+  const services = createHostServices(asCtx({ get: (k: string) => (k === 'sessions' ? throwing : undefined) }), {})
+  assert.deepEqual(services.activeCwds(), [])
+})

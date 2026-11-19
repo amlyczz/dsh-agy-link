@@ -30,3 +30,12 @@ createAttemptRecorder(deps, cfg, account, initialConversationId)   src/provider/
 
 - `test/subagent-tracker.test.ts`：新子代理从头完整读取、续接已有会话（含 `setConversationId()` 延迟传入 `cid`）不重放旧 `SUBAGENT_STATE_ALIVE` 且追加新行实时产出、初始即终止不误报启动、状态由 ALIVE 转为 KILLED 及时停止通知、`transcript.jsonl` `status: ERROR` 显式上报、`stop()` 后不泄漏事件。
 - `test/mapper.test.ts`：`CANCELED` 工具步骤转化为错误并正常切出卡片。
+
+## 续接扫描与 DSH 上下文消息（`src/provider/continuation.ts`, issue #138）
+
+DSH 会在工具结果之后追加**宿主生成**的上下文消息。各生产者的 `source.kind` 是它自己的名字（`time-context`、`agent-instructions`、`skill-catalog`、`runtime-context`、`model-selection`、`plugin:<name>` …），`form` 可为 `snapshot` / `instructions` / `notice` / `catalog` / `recall`——**dsh-llm 没有统一的 `plugin` kind**。
+
+- `detectContinuation()` 的跳过条件必须复用 `isSyntheticHarnessMessage()`，不能只匹配 `plugin` + `snapshot`：否则 `time-context`（工具步骤间隔 >10 分钟）、`agent-instructions`（AGENTS.md 被改写）、`plugin:<name>`（记忆类插件）都会被当成用户插话，导致**中止正在运行的 agy run** 并注入「不要继续」。
+- 边界仍必须严格：真实用户文本（无 `source` 或 `kind === 'user'`）、其他 provider 的工具结果、以及任何未知形态都会**终止**扫描——跨过它们去重放会为错误的请求续接旧 run。
+- 既有约定保持不变：`kind: 'plugin'` 且 `form` 为 `instructions` / `notice` / `relay` / `recall` 的**带文本**消息仍视为携带新指令，不跳过。
+- 锚点：`test/adapter.test.ts` 的 `detectContinuation permits only trailing plugin snapshots…`（旧约定）与 `issue #138: DSH context messages never make a tool continuation look like a user steer`（新增三类上下文）。

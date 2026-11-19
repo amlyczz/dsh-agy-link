@@ -106,10 +106,14 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
       kind === 'system-reminder' ||
       kind === 'dsh-session-title-llm' ||
       kind === 'tool-goal' ||
+      kind === 'agent-instructions' ||
       kind === 'synthetic'
     ) {
       return true
     }
+    // Each DSH context producer names its own kind (`plugin:memory`,
+    // `plugin:recall`, …) — dsh-llm has no shared catch-all `plugin` kind.
+    if (kind.startsWith('plugin:')) return true
     if (kind === 'plugin' && (src as { form?: string }).form === 'snapshot') {
       return true
     }

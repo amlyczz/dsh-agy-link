@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.43 (2026-11-20)
+
+### English
+
+- **Fix(host): workspace files no longer 403 on every `/open` and `/media` request (fixes #139).** `activeCwds()` asserted a `values()` method on DSH's session service and guarded it with `typeof … === 'function'`; the real store exposes `list()`/`get(id)`, so the guard was always false and the function always returned `[]`. Every session workspace therefore fell outside the allowed roots and any file link inside it was refused with "path outside allowed workspace roots". It now reads `list()` (falling back to `values()` for hosts that publish that shape) and de-duplicates cwds; a throwing/unusable service still degrades to empty.
+- **Fix(adapter): a DSH context message no longer looks like a user steer (fixes #138).** `detectContinuation()` only skipped trailing `source.kind === 'plugin' && form === 'snapshot'`, but DSH 0.2.2 producers each use their own kind (`time-context`, `agent-instructions`, `plugin:<name>` — dsh-llm has no catch-all `plugin` kind). Any of them after a tool result made the adapter treat the continuation as a fresh user request: it aborted the live agy run, injected "the previous turn was interrupted … respond only to the newest request", and the in-progress work was dropped. The scan now skips exactly what `isSyntheticHarnessMessage()` classifies as harness-injected (that predicate gained `agent-instructions` and the `plugin:<name>` family), while a real typed message — and any unknown boundary — still ends the scan as before.
+
+### 中文
+
+- **修复(host)：工作区文件不再在每次 `/open` 与 `/media` 请求上 403（修复 #139）。** `activeCwds()` 对 DSH 会话服务断言了 `values()` 并用 `typeof … === 'function'` 守卫；而真实的 store 只暴露 `list()` / `get(id)`，于是守卫恒为 false、函数永远返回 `[]`。所有会话工作区因此落在白名单之外，工作区内的文件链接一律被拒并报 "path outside allowed workspace roots"。现在读取 `list()`（对只提供 `values()` 的宿主回退），并去重 cwd；抛错时仍降级为空。
+- **修复(adapter)：DSH 的上下文消息不再被误判为用户插话（修复 #138）。** `detectContinuation()` 原先只跳过末尾 `source.kind === 'plugin' && form === 'snapshot'`，但 DSH 0.2.2 的各个生产者各有自己的 kind（`time-context`、`agent-instructions`、`plugin:<name>`——dsh-llm 并没有统一的 `plugin` kind）。工具结果之后只要出现其中之一，适配器就会把续接当成新的用户请求：中止正在运行的 agy run、注入「上一轮被中断…只回应最新请求」，进行中的工作被放弃。现在扫描只跳过 `isSyntheticHarnessMessage()` 认定为宿主注入的消息（该判定新增 `agent-instructions` 与 `plugin:<name>` 家族），真实用户文本与任何未知边界仍会像以前一样终止扫描。
+
 ## 0.6.42 (2026-11-20)
 
 ### English
