@@ -30,7 +30,14 @@ export function windowsQuote(arg: string): string {
 
 export const MIN_AGY_VERSION = '1.1.8'
 
-export function resolveAgyBin(cfg: PluginConfig): string | null {
+/**
+ * Every location the plugin probes for the agy executable.
+ *
+ * Kept separate from `resolveAgyBin` so a failed lookup can report WHERE it
+ * looked: a missing binary is otherwise indistinguishable from a broken PATH,
+ * and the user is left guessing which install layout they should match.
+ */
+export function agyBinCandidates(cfg: PluginConfig): string[] {
   const candidates: string[] = []
   if (cfg.agyBin !== '') candidates.push(cfg.agyBin)
   const pathEnv = process.env.PATH ?? ''
@@ -98,10 +105,40 @@ export function resolveAgyBin(cfg: PluginConfig): string | null {
     candidates.push(join(home, '.fnm', 'current', 'bin', 'agy'))
     candidates.push(join(home, 'Library', 'Application Support', 'fnm', 'current', 'bin', 'agy'))
   }
+  return candidates
+}
+
+/**
+ * The paths a failed lookup probed, plus how to point the plugin at a binary
+ * the user installed somewhere the probes do not cover.
+ *
+ * `agyBin` (plugin config) and `DSH_AGY_BIN` (environment) are the two
+ * documented overrides; the probe order is env > runtime override > config.
+ */
+export interface AgyBinDiagnostics {
+  /** Absolute paths probed, in probe order. */
+  probed: string[]
+  /** The configured `agyBin` value, when the user set one. */
+  configured: string
+  /** Per-platform hint listing where the official installer drops the binary. */
+  installHint: string
+}
+
+export function agyBinDiagnostics(cfg: PluginConfig): AgyBinDiagnostics {
+  return {
+    probed: agyBinCandidates(cfg),
+    configured: cfg.agyBin,
+    installHint: IS_WIN
+      ? 'the official installer defaults to ' + join(process.env.LOCALAPPDATA ?? '%LOCALAPPDATA%', 'agy', 'bin', 'agy.exe')
+      : 'the official installer defaults to ' + join(homedir(), '.local', 'bin', 'agy'),
+  }
+}
+
+export function resolveAgyBin(cfg: PluginConfig): string | null {
   // Prefer a real executable over a cmd shim: keep the first hit of each
   // PATH dir but rank .exe/extensionless before .cmd/.bat.
   const hits: string[] = []
-  for (const c of candidates) {
+  for (const c of agyBinCandidates(cfg)) {
     try {
       accessSync(c, constants.F_OK)
       hits.push(c)

@@ -6,6 +6,7 @@
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { AgyGenerateOptions, AgyTranslateSession } from '../common/protocol.ts'
 import { Err, type PermissionMode, type PluginConfig } from '../common/types.ts'
+import { agyBinDiagnostics } from '../runtime/agy/bin.ts'
 
 export type CallPurpose = 'chat' | 'compaction' | 'session-title' | 'translation' | 'image'
 
@@ -57,13 +58,34 @@ export function effectivePermissionMode(
   return dshPlanMode && !isAux ? 'plan' : configured
 }
 
+/**
+ * Message for a missing agy executable.
+ *
+ * A bare "not found on PATH" is unactionable: the user cannot tell whether the
+ * CLI is missing, installed outside the probed locations, or simply not on the
+ * PATH the GUI host inherited. The message therefore names the locations that
+ * were probed and both documented ways to point the plugin at a binary the
+ * probes do not cover.
+ */
+export function agyNotInstalledMessage(cfg: PluginConfig): string {
+  const diag = agyBinDiagnostics(cfg)
+  const lines = [
+    'agy binary not found — install it via https://antigravity.google/docs/cli/install',
+    'probed ' + diag.probed.length + ' location(s): ' + diag.probed.join(', '),
+  ]
+  if (diag.configured !== '') {
+    lines.push('configured agyBin (' + diag.configured + ') does not exist either')
+  }
+  lines.push(diag.installHint)
+  lines.push('if agy is installed elsewhere, set the plugin config agyBin to its absolute path, or the DSH_AGY_BIN environment variable')
+  lines.push('run /agy doctor for a full report')
+  return lines.join('\n')
+}
+
 export function resolveCallContext(input: CallContextInput): CallContext {
   const { options, cfg, bin } = input
   if (!bin) {
-    throw new LlmError(
-      'agy binary not found on PATH — install it via https://antigravity.google/docs/cli/install',
-      Err.AGY_NOT_INSTALLED,
-    )
+    throw new LlmError(agyNotInstalledMessage(cfg), Err.AGY_NOT_INSTALLED)
   }
 
   const isReview = typeof options.system === 'string' && options.system.includes('REVIEW_POLICY')

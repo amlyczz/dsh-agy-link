@@ -18,6 +18,8 @@ export {
   decodeConsoleLine,
 } from '../runtime/agy/console.ts'
 export {
+  agyBinCandidates,
+  agyBinDiagnostics,
   binCandidates,
   compareVersions,
   isCmdShim,
@@ -25,6 +27,7 @@ export {
   parseVersion,
   resolveAgyBin,
   windowsQuote,
+  type AgyBinDiagnostics,
 } from '../runtime/agy/bin.ts'
 export {
   isolatedHomeEnv,
