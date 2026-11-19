@@ -392,6 +392,33 @@ function writePrivateMcpFile(file: string, content: string): void {
   }
 }
 
+/**
+ * The `mcpServers` entry that points Antigravity at our stdio bridge.
+ *
+ * On the DSH desktop build `execPath` is the ELECTRON binary, so launching the
+ * bridge that way started a second Electron instance whose window stole focus
+ * every time a tool call spawned the server (issue #140). `ELECTRON_RUN_AS_NODE`
+ * makes that same binary behave as a plain Node process; a real `node` binary
+ * ignores it, so it is only added when the host actually is Electron.
+ */
+export function mcpServerEntry(
+  bridge: McpBridge,
+  execPath: string,
+  isElectron: boolean,
+): { type: 'stdio'; command: string; args: string[]; env: Record<string, string> } {
+  return {
+    type: 'stdio',
+    command: execPath,
+    args: [bridge.bridgeScript],
+    env: {
+      DSH_MCP_URL: bridge.url,
+      DSH_MCP_TOKEN: bridge.token,
+      DSH_MCP_PID: String(process.pid),
+      ...(isElectron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+    },
+  }
+}
+
 export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
   const key = mcpServerKey(bridge.port)
   let previous: string | null = null
@@ -423,16 +450,7 @@ export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
       delete servers[existingKey]
     }
   }
-  servers[key] = {
-    type: 'stdio',
-    command: process.execPath,
-    args: [bridge.bridgeScript],
-    env: {
-      DSH_MCP_URL: bridge.url,
-      DSH_MCP_TOKEN: bridge.token,
-      DSH_MCP_PID: String(process.pid),
-    },
-  }
+  servers[key] = mcpServerEntry(bridge, process.execPath, process.versions.electron !== undefined)
   root.mcpServers = servers
   let written = false
   let writtenBytes = ''

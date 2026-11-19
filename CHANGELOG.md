@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.44 (2026-11-20)
+
+### English
+
+- **Fix(mcp-bridge): enabling the MCP bridge on the desktop build no longer steals window focus (fixes #140).** The generated `mcp_config.json` entry used `command: process.execPath`, which on the DSH desktop build is the **Electron** binary — so every time Antigravity spawned our stdio bridge it started a second Electron instance, and that window pulled focus back to DSH on each tool call. When the host really is Electron, the entry now carries `ELECTRON_RUN_AS_NODE=1`, which makes the same binary run as a plain Node process; a normal Node host gets no extra variable. The entry is built by a new `mcpServerEntry()` so the behaviour is unit-testable without spawning anything.
+
+### 中文
+
+- **修复(mcp-bridge)：桌面端开启 MCP bridge 后不再抢走窗口焦点（修复 #140）。** 生成的 `mcp_config.json` 用 `command: process.execPath`，而在 DSH 桌面构建里那就是 **Electron** 可执行文件——于是 Antigravity 每次拉起我们的 stdio bridge 都会启动第二个 Electron 实例，其窗口在每次工具调用时把焦点抢回 DSH。现在检测到宿主确实是 Electron 时，条目会带上 `ELECTRON_RUN_AS_NODE=1`，让同一个二进制以纯 Node 模式运行；普通 Node 宿主不会多出这个变量。条目由新的 `mcpServerEntry()` 构建，因此无需真实 spawn 即可单元测试。
+
 ## 0.6.43 (2026-11-20)
 
 ### English

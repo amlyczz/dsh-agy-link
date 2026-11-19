@@ -122,3 +122,12 @@ Each invariant below is enforced in code AND covered by a regression test.
 - 现在 `activeCwds()` 优先 `list()`，回退 `values()`（兼容只提供后者的宿主），按出现顺序去重 cwd；服务缺失或抛错时降级为空数组，绝不抛给请求路径。
 - 新增会话服务方法时必须同步 `SessionsServiceLike` 的类型声明，不要用内联 `as { … }` 强转——类型检查是唯一能发现「调用了不存在的 API」的防线。
 - 锚点：`test/services.test.ts`（`list()` 路径、`values()` 回退、抛错降级）。
+
+## MCP bridge 启动命令在 Electron 宿主下必须是 Node 模式（issue #140）
+
+`writeMcpConfig()` 生成的 `mcpServers` 条目用 `process.execPath` 作为 `command`。桌面构建里那是 **Electron 二进制**：Antigravity 每次拉起 stdio bridge 都会新开一个 Electron 实例（窗口），把焦点从 Antigravity 抢回 DSH。
+
+- `mcpServerEntry(bridge, execPath, isElectron)` 是唯一条目构造点；`isElectron` 取自 `process.versions.electron !== undefined`。
+- Electron 宿主注入 `ELECTRON_RUN_AS_NODE=1`（同一二进制以纯 Node 运行，不建窗口）；普通 Node 宿主不加该变量（`node` 会忽略它，但少一个无意义的环境项更干净）。
+- 既有契约不变：`DSH_MCP_URL` / `DSH_MCP_TOKEN` / `DSH_MCP_PID` 仍在 `env` 里，`type: 'stdio'` 与 `args: [bridgeScript]` 不变。
+- 锚点：`test/issue140-mcp-electron-env.test.ts`（Electron / 普通 Node 两种宿主）。
