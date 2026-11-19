@@ -54,3 +54,14 @@ Google Cloud Code PA 使用 Proto3 JSON 序列化：当配额耗尽（`remaining
 - `test/quota.test.ts` / `test/domain-quota.test.ts`：CLI `/usage` 主账号放行、REST 按需降级、Proto3 零值省略解析为 `0%`、消费级单一端点。
 - `test/warmup.test.ts`：CLI 探针执行（零 `undici` 推理请求、零 `anthropic-beta` 伪造头）、`TOS_VIOLATION` 终态隔离与 `appeal_url` 保留、非终态错误不误标 `authRequired`。
 - `test/failure-classifier.test.ts` / `test/rate-limit-classify.test.ts`：CLI 文本 `TOS_VIOLATION` 识别与停止跨号连坐重试。
+
+## 独立 Argon 池的判据：组名或 bucket，绝不用 description（issue #130）
+
+agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**：
+`Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Gemini 3.8 Flash`。
+
+- 若把「description 含 argon」当作证据，共享 Gemini 池会被写进 `argon` 族：`google` 丢掉 weekly、面板出现假 `Argon` 行，且 `noteDedicatedGroup('argon')` 会污染选号与 `shouldReleaseOrphanedCooldown()`。
+- 判据只有两个：**组 `displayName` 含 argon**，或 **bucket 的 `bucketId`/`displayName` 含 argon**（如 `argon-weekly`）。`summaryHasArgonGroup()` 与 `ingestSummaryGroups()` 的 `isArgon` 都遵守此规则。
+- `description` 仍可参与**正向**家族归类（含 gemini → google），但不得用于判定「独立池」。
+- 「Argon 已并入 Gemini」的折叠场景（argon 组不存在）行为不变。
+- 测试：`test/domain-quota.test.ts`（description 枚举形态必须归 google 且保留 weekly；`Gemini 4 Argon` 组名与 `argon-weekly` bucket 仍识别）。

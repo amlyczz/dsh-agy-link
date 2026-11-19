@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.38 (2026-11-19)
+
+### English
+
+- **Fix(host): a missing OS opener no longer kills the DSH process (fixes #129, merges PR #132).** `executeOpenInSystem()` called `spawn('xdg-open', …)` with no `error` listener. A missing (ENOENT) or non-executable (EACCES) opener is reported **asynchronously**, so the surrounding try/catch never saw it and Node raised an `uncaughtException` — on a headless Linux host every "open in app" click exited the server (systemd restarted it four times). New `spawnDetachedOpener()` attaches the listener before the first tick on every platform branch, so a launch failure is contained instead of fatal; a synchronous throw still reports `{ ok: false, error }`. On headless hosts the click is now a silent no-op rather than a crash — an explicit "no desktop session" message would need a logger in the route, tracked but not bundled here.
+- **Fix(quota): a shared Gemini pool is no longer misfiled as a dedicated Argon pool (fixes #130, merges PR #131).** Since agy 1.5.12 the plain `Gemini Models` group describes itself as "Models within this group: Gemini 4 Neon, … Gemini 4 Argon, …", and both `summaryHasArgonGroup()` and the summary→family mapping treated any `description` containing "argon" as proof of a dedicated pool. The shared pool was then written to the `argon` family, `google` lost its weekly numbers, a phantom `Argon` row appeared, and `noteDedicatedGroup('argon')` skewed selection and cooldown release. Dedicated-pool detection now accepts only the **group display name** or a **bucket id/name** containing "argon"; description-only mentions are ignored, while real Argon groups (`Gemini 4 Argon`, `argon-weekly`) are still recognised and the folded-into-Gemini case is unchanged.
+
+### 中文
+
+- **修复(host)：缺失的系统打开器不再杀死 DSH 进程（修复 #129，合并 PR #132）。** `executeOpenInSystem()` 直接 `spawn('xdg-open', …)` 且没有 `error` 监听。可执行文件缺失（ENOENT）或不可执行（EACCES）是**异步**通过 `error` 事件上报的，外层 try/catch 捕获不到，Node 于是抛 `uncaughtException`——在 headless Linux 上每次点「打开」都会让服务退出（systemd 连着重启了四次）。新增 `spawnDetachedOpener()`，在所有平台分支的第一个 tick 之前挂好监听，启动失败被收敛而不是致命；同步抛错仍返回 `{ ok: false, error }`。headless 主机上现在表现为静默无操作而非崩溃；若要在 UI 上明确提示「没有桌面会话」，需要路由层具备 logger，已记录但不在本次捆绑。
+- **修复(额度)：共享 Gemini 池不再被误判为独立 Argon 池（修复 #130，合并 PR #131）。** agy 1.5.12 起普通 `Gemini Models` 组的 description 会枚举成员（「Models within this group: Gemini 4 Neon, … Gemini 4 Argon, …」），而 `summaryHasArgonGroup()` 与 summary→family 映射都把「description 含 argon」当作独立池证据。结果共享池被写进 `argon` 族、`google` 丢掉 weekly 数字、面板多出假的 `Argon` 行，`noteDedicatedGroup('argon')` 还会影响选号与 cooldown 释放。现在独立池只由**组 displayName** 或 **bucket id/name** 含 "argon" 认定；description-only 的提及被忽略，真实 Argon 组（`Gemini 4 Argon`、`argon-weekly`）仍能识别，「Argon 已并入 Gemini」的折叠场景行为不变。
+
 ## 0.6.37 (2026-11-19)
 
 ### English

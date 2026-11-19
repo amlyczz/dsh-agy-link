@@ -93,3 +93,12 @@ Each invariant below is enforced in code AND covered by a regression test.
 - `readVarint()` uses safe floating/integer arithmetic (`val += (byte & 0x7f) * 2 ** shift`)
   with `Number.isSafeInteger` and max-shift bounds (never 32-bit signed bitwise `<<`).
 - Length-delimited walkers validate `len >= 0 && len <= remainingBytes`. (test: `test/agy-db-extract.test.ts`)
+
+## 系统打开器不得终止宿主（`src/host/media-route.ts`, issue #129）
+
+`POST /plugins/agy-link/open` 只是便利功能，**任何失败都不得杀死 DSH 进程**。
+
+- `spawn()` 对缺失（ENOENT）/不可执行（EACCES）是**异步** `error` 事件上报，外层 `try/catch` 抓不到；没有监听就会变成 `uncaughtException`，宿主退出（headless Linux 无 `xdg-open` 时每点一次「打开」就崩一次）。
+- 所有平台分支统一走 `spawnDetachedOpener()`：在第一个 tick 之前挂上 `error` 监听再 `unref()`；同步抛错返回 `false`。
+- 已知取舍：异步启动失败在 headless 主机上表现为**静默无操作**（路由没有 logger 可回报）。若要给用户明确提示，需先让路由拿到 logger；届时补测试。
+- 测试：`test/media-route.test.ts` 注入假 `spawn`（emit ENOENT 不外泄、同步 throw 返回 false）。
