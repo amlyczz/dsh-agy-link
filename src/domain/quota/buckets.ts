@@ -43,7 +43,12 @@ export interface QuotaGroupShape {
  */
 export function summaryHasArgonGroup(groups: readonly QuotaGroupShape[]): boolean {
   return groups.some((group) => {
-    const fields: (string | undefined)[] = [group.displayName, group.description]
+    // A dedicated pool is proven by the GROUP NAME or by its bucket ids. The
+    // description is NOT evidence: agy 1.5.12 makes the plain `Gemini Models`
+    // group describe itself as "Models within this group: Gemini 4 Neon, Gemini
+    // 4 Carbon, Gemini 4 Argon, …", so matching it classified the shared Gemini
+    // pool as a dedicated Argon pool (2026-11-19).
+    const fields: (string | undefined)[] = [group.displayName]
     for (const bucket of group.buckets ?? []) fields.push(bucket.bucketId, bucket.displayName)
     return fields.some((value) => typeof value === 'string' && value.toLowerCase().includes('argon'))
   })

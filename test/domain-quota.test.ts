@@ -37,6 +37,7 @@ test('writeJsonAtomic refuses to publish an unparsable snapshot over a good file
 
 // ---- Risk Control & Proto3 Zero-Quota Regression Tests ----
 import { buildFamilyQuotas, buildModelsCatalog } from '../src/domain/quota/parse.ts'
+import { summaryHasArgonGroup } from '../src/domain/quota/buckets.ts'
 import { AGY_ENDPOINTS } from '../src/host/oauth.ts'
 
 test('risk-control: AGY_ENDPOINTS never includes enterprise cloudcode-pa.googleapis.com', () => {
@@ -91,4 +92,72 @@ test('proto3 zero-quota omission: omitted remainingFraction with resetTime norma
   assert.equal(familyQuotas.google?.remainingFraction, 0, 'omitted 5h remainingFraction with resetTime must be 0')
   assert.equal(familyQuotas.google?.models?.[0]?.remainingFraction, 0, 'exhausted model entry must not be dropped or treated as 100%')
   assert.equal(familyQuotas.anthropic?.remainingFraction, 0, 'omitted userQuota bucket remainingFraction with resetTime must be 0')
+})
+
+// ---- A shared pool that *mentions* Argon must not become a dedicated Argon pool ----
+
+test('group description listing "Gemini 4 Argon" does not make the shared Gemini pool an Argon pool', () => {
+  // agy 1.5.12 changed the plain `Gemini Models` group description to enumerate
+  // its members: "Models within this group: Gemini 4 Neon, Gemini 4 Carbon,
+  // Gemini 4 Argon, Gemini 4 Hydrogen, Gemini 3.8 Flash". Matching "argon" in
+  // the description therefore filed the SHARED pool under `argon` and left
+  // `google` without its weekly numbers (observed live 2026-11-19).
+  const now = Date.parse('2026-11-19T02:00:00Z')
+  const fiveHourReset = '2026-11-19T06:06:42Z'
+  const weeklyReset = '2026-11-25T02:36:02Z'
+
+  const { familyQuotas } = buildFamilyQuotas({
+    summary: {
+      groups: [
+        {
+          displayName: 'Gemini Models',
+          description:
+            'Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Gemini 3.8 Flash',
+          buckets: [
+            { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.83, resetTime: fiveHourReset },
+            { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.72, resetTime: weeklyReset },
+          ],
+        },
+      ],
+    },
+    modelsCatalog: {},
+    prevQuotas: {},
+    now,
+  })
+
+  assert.equal(familyQuotas.argon, undefined, 'the shared Gemini pool must not be filed as a dedicated Argon pool')
+  assert.equal(familyQuotas.google?.weeklyFraction, 0.72, 'the Gemini weekly bucket must survive on google')
+  assert.equal(familyQuotas.google?.remainingFraction, 0.83)
+  assert.equal(familyQuotas.google?.weeklyResetTime, weeklyReset)
+})
+
+test('a genuinely dedicated Argon group is still detected by its name or bucket id', () => {
+  // Name evidence ("Gemini 4 Argon").
+  assert.equal(
+    summaryHasArgonGroup([
+      { displayName: 'Gemini 4 Argon', buckets: [{ bucketId: 'argon-weekly' }] },
+    ]),
+    true,
+    'a group named after Argon is a dedicated pool',
+  )
+  // Bucket-id evidence, even when the display name is generic.
+  assert.equal(
+    summaryHasArgonGroup([
+      { displayName: 'Extra models', buckets: [{ bucketId: 'argon-weekly' }] },
+    ]),
+    true,
+    'an argon bucket id is a dedicated pool',
+  )
+  // Description-only mention is NOT evidence (agy >= 1.5.12 enumeration).
+  assert.equal(
+    summaryHasArgonGroup([
+      {
+        displayName: 'Gemini Models',
+        description: 'Models within this group: Gemini 4 Argon, Gemini 4 Carbon',
+        buckets: [{ bucketId: 'gemini-weekly' }],
+      },
+    ]),
+    false,
+    'a description that merely lists Argon must not mark a dedicated pool',
+  )
 })
