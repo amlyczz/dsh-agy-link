@@ -17,7 +17,10 @@ import {
 } from '../src/common/pool-types.ts'
 
 const DENIED = '{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}'
-const LICENCE = '{"error":{"code":403,"message":"You do not have a valid license of this product","status":"PERMISSION_DENIED"}}'
+// A licence refusal that does NOT carry the API-level PERMISSION_DENIED status.
+// The real body can carry both, which is exactly the case #142 caught: see the
+// dedicated test below.
+const LICENCE = '{"error":{"code":403,"message":"You do not have a valid license of this product"}}'
 
 test('issue #137: 403 PERMISSION_DENIED is a terminal summary refusal, not a generic http error', () => {
   const refusal = classifySummaryRefusal(403, DENIED)
@@ -27,7 +30,7 @@ test('issue #137: 403 PERMISSION_DENIED is a terminal summary refusal, not a gen
 })
 
 test('issue #137: a licence refusal keeps its own kind', () => {
-  assert.equal(classifySummaryRefusal(403, LICENCE).kind, 'no_license')
+  assert.equal(classifySummaryRefusal(403, LICENCE).kind, 'no_license', 'without PERMISSION_DENIED it stays a licence verdict')
   // A 403 without either signal stays generic: it may be transient.
   assert.equal(classifySummaryRefusal(403, '{"error":{"status":"UNKNOWN"}}').kind, 'http')
   assert.equal(classifySummaryRefusal(401, '').kind, 'auth')
@@ -66,4 +69,16 @@ test('issue #137: the free-tier suppression window tracks the weekly quota windo
   assert.equal(QUOTA_FREE_TIER_RETRY_MS, 7 * 24 * 3600_000, 'free tier re-probes after a week, not every 6h')
   assert.equal(QUOTA_LICENSE_RETRY_MS, 6 * 3600_000, 'an unlicensed account still recovers within hours of a new licence')
   assert.ok(QUOTA_FREE_TIER_RETRY_MS > QUOTA_LICENSE_RETRY_MS)
+})
+
+test('issue #142: a 403 carrying BOTH a licence phrase and PERMISSION_DENIED is the free tier', async () => {
+  // Reports disagree about the exact body: #137 saw only PERMISSION_DENIED,
+  // #142 saw both. Ordering the licence check first made the free-tier branch
+  // unreachable in the second case, so the account stayed on the 6h window.
+  // `status` is the more specific API-level verdict, so it must win.
+  const both = '{"error":{"code":403,"message":"You do not have a valid license of this product","status":"PERMISSION_DENIED"}}'
+  assert.equal(classifySummaryRefusal(403, both).kind, 'no_summary_access')
+  // A licence refusal WITHOUT that status keeps its own kind.
+  const licenceOnly = '{"error":{"code":403,"message":"You do not have a valid license of this product"}}'
+  assert.equal(classifySummaryRefusal(403, licenceOnly).kind, 'no_license')
 })

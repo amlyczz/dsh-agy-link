@@ -80,15 +80,31 @@ function sessionFileAddress(sessionId: string, filePath: string): string {
   return `dsh-resource://file/session/${encodeSegment(sessionId)}/${normalized.split('/').map(encodeSegment).join('/')}`
 }
 
-/** `file:///C:/x` | `file://C:/x` | `C:\x` → `C:/x`, dropping a `#L12` / `?v=1` suffix. */
-function normalizeLocalPath(raw: string): string {
+/**
+ * `file:///C:/x` | `file://C:/x` | `C:\x` → `C:/x`, dropping a `#L12` / `?v=1` suffix.
+ *
+ * Percent-decoding happens AFTER the `?#` split (so `%3F` in a name is not
+ * mistaken for a query) and before the separator normalization: an encoded href
+ * (`Bio%20Fuel%20Cell`, `%5C`) otherwise never matches the session cwd, and the
+ * address is then rebuilt with a second round of encoding (issue #141).
+ */
+export function normalizeLocalPath(raw: string): string {
   let p = raw.trim()
   if (p.startsWith('file://')) {
     p = p.slice(7)
     if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1)
   }
-  const [pathPart] = p.replace(/\\/g, '/').split(/[?#]/)
-  return (pathPart ?? '').replace(/^(?:\.\/)+/, '')
+  const [pathPart] = p.split(/[?#]/)
+  return decodePercent(pathPart ?? '').replace(/\\/g, '/').replace(/^(?:\.\/)+/, '')
+}
+
+/** Decode a percent-encoded path, keeping the raw text when it is malformed. */
+function decodePercent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
 }
 
 function sidebarRightOf(ctx: unknown): OpenableSidebar | undefined {
@@ -101,9 +117,19 @@ function sidebarRightOf(ctx: unknown): OpenableSidebar | undefined {
  * omit `ui-sidebar-documentpreview`; opening there would silently do nothing, so
  * the caller must fall back to the OS opener instead of reporting success.
  */
-function canPreviewFiles(ctx: unknown): boolean {
-  const tabs = service<{ get?: (id: string) => unknown }>(ctx, 'sidebarRightTabs')
-  return tabs?.get?.(DOCUMENT_PREVIEW_TAB) !== undefined && tabs?.get?.(DOCUMENT_PREVIEW_TAB) !== null
+export function canPreviewFiles(ctx: unknown): boolean {
+  // `get()` is keyed by tab KIND (e.g. 'text'), not by type id, so probing it
+  // with DOCUMENT_PREVIEW_TAB always returned undefined and every file link fell
+  // through to the OS opener (issue #141). Prefer `entries()`, which is keyed by
+  // id; fall back to asking for the 'text' kind and confirming the id, so a
+  // different text tab is never mistaken for the preview.
+  const tabs = service<{
+    entries?: () => readonly { id?: string }[]
+    get?: (kind: string) => { id?: string } | undefined
+  }>(ctx, 'sidebarRightTabs')
+  const registered = tabs?.entries?.()
+  if (Array.isArray(registered) && registered.some((entry) => entry?.id === DOCUMENT_PREVIEW_TAB)) return true
+  return tabs?.get?.('text')?.id === DOCUMENT_PREVIEW_TAB
 }
 
 function mountedSessionId(sidebarRight: SidebarRightLike): string {

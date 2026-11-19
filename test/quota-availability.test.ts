@@ -22,7 +22,7 @@ import { AccountPoolManager } from '../src/host/pool.ts'
 import { QuotaService } from '../src/host/quota.ts'
 import { AGY_ENDPOINTS } from '../src/host/oauth.ts'
 import { shouldPollAccount } from '../src/common/pool-types.ts'
-import { QUOTA_ENDPOINT_DOWN_MS, QUOTA_LICENSE_RETRY_MS } from '../src/common/timeouts.ts'
+import { QUOTA_ENDPOINT_DOWN_MS, QUOTA_FREE_TIER_RETRY_MS, QUOTA_LICENSE_RETRY_MS } from '../src/common/timeouts.ts'
 import {
   EndpointHealth,
   endpointHealthKey,
@@ -93,7 +93,7 @@ test('orderEndpointsByHealth: unhealthy endpoints move to the back, never droppe
   assert.deepEqual(orderEndpointsByHealth([first!, second!], 'summary', undefined), [first!, second!])
 })
 
-test('fetchQuotaSummary skips a down endpoint and reports a licence 403 as no_license', async () => {
+test('fetchQuotaSummary skips a down endpoint and reports a licence 403 by its API status', async () => {
   const [primaryEp, fallbackEp] = AGY_ENDPOINTS
   const calls: string[] = []
   const failures: Array<{ kind: string; status?: number } | null> = []
@@ -114,7 +114,10 @@ test('fetchQuotaSummary skips a down endpoint and reports a licence 403 as no_li
 
   assert.equal(out, null)
   assert.deepEqual(calls, [fallbackEp], 'the down endpoint must not be hit at all')
-  assert.deepEqual(failures.at(-1), { kind: 'no_license', status: 403, detail: 'PERMISSION_DENIED' })
+  // `status` is the structured verdict and wins over the message: a body can
+  // carry both a licence phrase and PERMISSION_DENIED (issue #142), and the
+  // free-tier branch must stay reachable in that case.
+  assert.deepEqual(failures.at(-1), { kind: 'no_summary_access', status: 403, detail: 'PERMISSION_DENIED' })
 
   // The sandbox endpoint answered (403), so it is alive — only the reset one is down.
   assert.equal(health.isDown(endpointHealthKey('summary', fallbackEp!)), false)
@@ -193,7 +196,7 @@ function makeIsolatedAccount(label: string): { pool: AccountPoolManager; dir: st
   return { pool, dir, id: acc.id }
 }
 
-test('a licence-refused summary records quotaUnavailable=no_license on the account', async () => {
+test('a PERMISSION_DENIED summary records quotaUnavailable=no_summary_access on the account', async () => {
   const { pool, dir, id } = makeIsolatedAccount('dao')
   try {
     const svc = new StubQuotaService(pool, () => new Response(LICENSE_403_BODY, { status: 403 }))
@@ -202,13 +205,14 @@ test('a licence-refused summary records quotaUnavailable=no_license on the accou
 
     assert.equal(out, null)
     const state = pool.getAccount(id)!.quotaUnavailable
-    assert.equal(state?.reason, 'no_license')
+    assert.equal(state?.reason, 'no_summary_access')
     assert.ok((state?.since ?? 0) >= before)
-    assert.ok((state?.retryAfter ?? 0) >= before + QUOTA_LICENSE_RETRY_MS, 'the retry window is armed')
+    assert.ok((state?.retryAfter ?? 0) >= before + QUOTA_FREE_TIER_RETRY_MS, 'the free-tier retry window is armed')
 
-    // A licence refusal is terminal-ish: the hourly sweep must stop knocking.
-    assert.equal(shouldPollAccount(pool.getAccount(id)!), false, 'no_license accounts leave the background sweep')
-    // ...but a manual click must still be allowed to prove a restored licence.
+    // The summary is refused, but the account still refreshes its model list,
+    // so it must NOT leave the poll entirely (issue #137 contract).
+    assert.equal(shouldPollAccount(pool.getAccount(id)!), true, 'a summary-refused account keeps polling')
+    // ...and the retry window expiring re-arms the summary probe itself.
     pool.getAccount(id)!.quotaUnavailable = { ...state!, retryAfter: 0 }
     assert.equal(shouldPollAccount(pool.getAccount(id)!), true, 'the retry window expiring re-arms polling')
   } finally {
@@ -244,12 +248,12 @@ test('an authoritative summary clears a previous quotaUnavailable state', async 
   }
 })
 
-test('background polls skip the summary request while a no_license account is in its retry window', async () => {
+test('background polls skip the summary request while a summary-refused account is in its retry window', async () => {
   const { pool, dir, id } = makeIsolatedAccount('suppressed')
   try {
     const first = new StubQuotaService(pool, () => new Response(LICENSE_403_BODY, { status: 403 }))
     await first.refreshAccountQuota(pool.getAccount(id)!, true)
-    assert.equal(pool.getAccount(id)!.quotaUnavailable?.reason, 'no_license')
+    assert.equal(pool.getAccount(id)!.quotaUnavailable?.reason, 'no_summary_access')
 
     const stampedSince = pool.getAccount(id)!.quotaUnavailable!.since
     await sleep(5)

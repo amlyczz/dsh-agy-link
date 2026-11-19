@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.45 (2026-11-20)
+
+### English
+
+- **Fix(quota): the free-tier verdict is decided by the API status, so the branch is no longer dead code (fixes #142).** The refusal classifier checked the `license` phrase before `PERMISSION_DENIED`, and a real 403 can carry **both** — so the free-tier branch added in v0.6.42 never ran and those accounts stayed on the 6h licence window instead of the 7-day free-tier one. `PERMISSION_DENIED` (the structured API-level detail) now wins, and a licence phrase **without** it still yields `no_license`, so both branches stay reachable and are pinned by tests.
+- **Fix(client): a file link actually opens in the right Sidebar preview (fixes #141).** `canPreviewFiles()` probed `sidebarRightTabs.get()` with the tab **type id**, but that method is keyed by tab **kind** (`'text'`), so the probe always returned `undefined` and every click fell through to the OS opener. It now looks the id up in `entries()` and falls back to `get('text')` while confirming the returned id, so an unrelated text tab is never mistaken for the preview. `normalizeLocalPath()` also percent-decodes now (after the `?#` split, before separator normalization), so an encoded href (`Bio%20Fuel%20Cell`, `%5C`) matches the session cwd instead of being re-encoded into a path that does not exist.
+- Two existing client tests encoded the *wrong* registry contract (mocking `get()` by id); they now mock the real one, which is what let this bug pass CI.
+
+### 中文
+
+- **修复(额度)：免费档判定改由 API 状态决定，分支不再不可达（修复 #142）。** 拒绝分类器先匹配 `license` 字样再匹配 `PERMISSION_DENIED`，而真实 403 **两者并存**——于是 v0.6.42 新增的免费档分支从未执行，这类账号仍停留在 6 小时许可窗口而非 7 天免费档窗口。现在结构化的 `PERMISSION_DENIED` 优先；**仅含** license 字样而无该状态时仍判 `no_license`，两个分支都保持可达并有测试锁定。
+- **修复(客户端)：文件链接终于进右侧边栏预览（修复 #141）。** `canPreviewFiles()` 用标签**类型 id** 去查 `sidebarRightTabs.get()`，但该方法以标签 **kind**（`'text'`）为键，探测恒为 `undefined`，每次点击都落到系统程序。现在先在 `entries()` 里按 id 查，回退到 `get('text')` 时再核对返回值的 id，避免把别的 text 标签误认成预览。`normalizeLocalPath()` 也补上百分号解码（在 `?#` 拆分之后、分隔符归一之前），因此被编码的 href（`Bio%20Fuel%20Cell`、`%5C`）能与会话 cwd 对上，而不是被二次编码成不存在的路径。
+- 两个既有客户端测试固化的正是**错误的**注册表契约（把 `get()` 当 id 查询用），现已改为真实契约——这正是该 bug 能通过 CI 的原因。
+
 ## 0.6.44 (2026-11-20)
 
 ### English

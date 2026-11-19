@@ -89,14 +89,17 @@ function networkFailureCode(error: unknown): string | undefined {
 export function classifySummaryRefusal(status: number, bodyText = ''): QuotaSummaryFailure {
   const detail = apiErrorStatus(bodyText)
   if (status === 401) return { kind: 'auth', status, ...(detail === undefined ? {} : { detail }) }
-  if (status === 403 && /licen[cs]e/i.test(bodyText)) {
-    return { kind: 'no_license', status, ...(detail === undefined ? {} : { detail }) }
-  }
-  // A free-tier account has no 5h summary window, so the endpoint answers
-  // `403 PERMISSION_DENIED` without any "licence" wording. Treating that as a
-  // generic http failure made the hourly poll retry it forever (#137).
+  // A free-tier account has no 5h summary window, so the endpoint refuses it.
+  // `status` (the API-level detail) is the more specific signal, so it is
+  // checked FIRST: a body can carry both PERMISSION_DENIED and a "licence"
+  // phrase, and ordering the licence regex first made this branch unreachable
+  // (#142) — the account then stayed on the 6h licence window instead of the
+  // free-tier one, and the poll kept hammering the refused endpoint.
   if (status === 403 && detail === 'PERMISSION_DENIED') {
     return { kind: 'no_summary_access', status, detail }
+  }
+  if (status === 403 && /licen[cs]e/i.test(bodyText)) {
+    return { kind: 'no_license', status, ...(detail === undefined ? {} : { detail }) }
   }
   return { kind: 'http', status, ...(detail === undefined ? {} : { detail }) }
 }

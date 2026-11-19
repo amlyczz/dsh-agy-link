@@ -873,8 +873,13 @@ test('openInRightSidebar: opens file in DSH native right sidebar with relativize
 			}),
 		},
 	};
+	// DSH's registry is keyed by tab KIND; `entries()` carries the type ids.
+	// The old mock keyed get() by id, which encoded the very bug issue #141
+	// reports — keeping it would let a regression pass.
+	const PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview';
 	const mockTabs = {
-		get: (id: string) => (id === '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' ? { id } : undefined),
+		entries: () => [{ id: 'browser' }, { id: PREVIEW }],
+		get: (kind: string) => (kind === 'text' ? { id: PREVIEW } : undefined),
 	};
 
 	setClientContext({ sidebarRight: mockSidebarRight, sessions: mockSessions, sidebarRightTabs: mockTabs });
@@ -943,7 +948,8 @@ test('file links scanner: clicking a local file link opens the native sidebar (n
 		sidebarRight: mockSidebarRight,
 		sessions: mockSessions,
 		sidebarRightTabs: {
-			get: (id: string) => (id === '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' ? { id } : undefined),
+			entries: () => [{ id: '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' }],
+			get: (kind: string) => (kind === 'text' ? { id: '@deepseek-ai/dsh-client-ui-sidebar-documentpreview' } : undefined),
 		},
 	});
 

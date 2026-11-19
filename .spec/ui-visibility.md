@@ -51,3 +51,13 @@
 - `test/http-contract.test.ts`：状态字段直出（含显式 `false`）、配置白名单放行。
 - `test/client-plugin-meta.test.ts` + `test/client-i18n.test.ts`：四语言字典
   键与占位符对齐。
+
+## 文件链接必须在右侧边栏预览而不是系统程序（issue #141）
+
+`openInRightSidebar()` 只在「宿主确实注册了文档预览标签」时才走侧边栏，否则回退系统程序。这个判断必须按 DSH 的真实契约做：
+
+- `sidebarRightTabs.get()` 以标签 **kind**（`'text'`）为键，**不是**类型 id；用 `@deepseek-ai/dsh-client-ui-sidebar-documentpreview` 去 `get()` 永远是 `undefined`，于是所有点击都落到系统程序。
+- 正确顺序：先在 `entries()` 里按 `id` 查；没有 `entries()` 时回退 `get('text')`，**并核对其返回的 `id`**，避免把别的 text 标签当成预览。
+- `normalizeLocalPath()` 必须**先**拆掉 `?#` 后缀再 `decodeURIComponent`（否则名字里的 `%3F` 会被当作查询串），解码失败保留原值；随后统一 `\` → `/`。否则被编码的 href 与会话 cwd 对不上，地址还会被二次编码。
+- 客户端测试的 mock 必须模拟真实契约（`get(kind)` + `entries()` 带 id）。用 id 键 mock `get()` 会让这段 bug 通过 CI。
+- 锚点：`test/issue141-sidebar-preview.test.ts`、`test/client-dom.test.ts`。

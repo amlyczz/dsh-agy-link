@@ -91,6 +91,8 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 | `no_license` | 403 且正文含 license | **整个账号**退出后台轮询 | 6h（新许可随时可能到达） |
 | `no_summary_access` | 403 且 `status = PERMISSION_DENIED`（免费账号无 5h 窗口） | **仅汇总请求**；`fetchAvailableModels` / 用户额度照常 | 7 天（对齐周配额周期） |
 
+**判定顺序不可颠倒（#142）**：真实 403 正文可能**同时**含 `license` 字样与 `PERMISSION_DENIED`。`status` 是结构化的 API 级结论，必须优先于 message 文本匹配；若先匹配 license 正则，免费档分支就变成死码。仅含 license 字样而无该 status 时仍判 `no_license`——两个分支都要有测试保证可达。
+
 - `quotaSummarySuppressed(account)` 对两类都返回 true（都意味着「先别打那个端点」）。
 - `accountPollSuppressed(account)` 只对 `no_license` 返回 true；`shouldPollAccount()` 用它决定账号是否完全退出轮询——免费账号**必须继续轮询**，否则模型列表会被冻结。
 - 手动刷新（`force`）绕过压制，用户升级后可立即恢复。
