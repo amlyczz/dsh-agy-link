@@ -82,11 +82,22 @@ Each invariant below is enforced in code AND covered by a regression test.
   and dropped as a `garbage` event, so a runaway stream cannot grow memory without
   bound. (test: `test/parser.test.ts`)
 
-## Plan mode is read-only at the agy layer (issue #113)
+## Plan mode is read-only at the agy layer (issues #113, #136)
 
 - `effectivePermissionMode(configured, dshPlanMode, isAux)` forces `plan` (`--mode plan`)
   whenever `dshPlanMode && !isAux`, preventing `--dangerously-skip-permissions` from
   writing files during a read-only planning turn. (tests: `test/call-context.test.ts`, `test/adapter.test.ts`)
+- **Plan mode is a CURRENT-TURN fact, never history.** `isPlanMode(messages)` may only
+  read the last message, and only when its role is `user`/`system`; scanning history
+  matched tool output and previously-finished planning turns that merely mention the
+  phrase, which forced `--mode plan` on ordinary turns (with `permissionMode: skip`
+  every tool was denied and the turn broke — issue #136).
+- **The presence of `exit_plan_mode` in `options.tools` is NOT evidence of plan mode**:
+  current DSH ships that tool in standard mode too. It only gates the synthetic-exit
+  path, never the permission downgrade on its own.
+- **A rejected exit_plan_mode is decisive**: if the trailing message contains
+  `exit_plan_mode is only available in plan mode`, the session is not planning — this
+  is the self-correction that stops a false positive from locking a session forever.
 
 ## agy protobuf step parser (`src/runtime/agy/db/extract.ts`, issue #116)
 

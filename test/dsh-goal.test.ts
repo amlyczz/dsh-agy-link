@@ -496,3 +496,33 @@ test('buildGoalCompleteToolCallBlock mints unique tool_call ids for repeated emi
   assert.ok(firstId.startsWith('agytc-bridge-goal-'), 'continuation detection relies on the prefix')
   assert.equal(JSON.parse(first.block.arguments).action, 'complete')
 })
+
+// ---- issue #136: plan mode must come from the CURRENT turn, not from history ----
+import { isPlanMode as isPlanMode136 } from '../src/host/dsh-goal.ts'
+
+test('issue #136: a historical "You are in plan mode" inside tool output does not lock the session', () => {
+  const messages: Message[] = [
+    { role: 'user', content: 'read that file' } as unknown as Message,
+    // A tool result quoting source code / logs that mention the phrase.
+    { role: 'tool', toolCallId: 't1', content: 'const x = "You are in plan mode. Stay in plan mode"' } as unknown as Message,
+    { role: 'assistant', content: 'here it is' } as unknown as Message,
+    { role: 'user', content: 'now run the tests' } as unknown as Message,
+  ]
+  assert.equal(isPlanMode136(messages), false, 'history text must not prove plan mode')
+})
+
+test('issue #136: the current turn\'s plan instruction still counts', () => {
+  const messages: Message[] = [
+    { role: 'user', content: 'older turn' } as unknown as Message,
+    { role: 'user', content: 'You are in plan mode. Stay in plan mode until exit_plan_mode succeeds.' } as unknown as Message,
+  ]
+  assert.equal(isPlanMode136(messages), true)
+})
+
+test('issue #136: DSH rejecting our synthesized exit_plan_mode is decisive evidence against plan mode', () => {
+  const messages: Message[] = [
+    { role: 'user', content: 'You are in plan mode.' } as unknown as Message,
+    { role: 'tool', toolCallId: 't2', content: 'Error: exit_plan_mode is only available in plan mode' } as unknown as Message,
+  ]
+  assert.equal(isPlanMode136(messages), false, 'a rejected exit_plan_mode means the session is not planning')
+})

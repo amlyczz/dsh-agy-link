@@ -1573,6 +1573,30 @@ test('issue #113: DSH plan mode overrides a statically configured skip permissio
   assert.ok(idx !== -1 && argv[idx + 1] === 'plan', 'agy must run read-only in --mode plan')
 })
 
+test('issue #136: a historical plan-mode mention does not downgrade skip permissions', async () => {
+  // A tool result quoting source code that mentions plan mode used to make
+  // isPlanMode() true forever, forcing `--mode plan` on ordinary turns: every
+  // tool was then denied and the synthesized exit_plan_mode was rejected.
+  const { adapter } = makeAdapter({ permissionMode: 'skip' })
+  process.env.FAKE_AGY_MODE = 'ok'
+  const argsFile = join(workDir, 'args-historical-plan.json')
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+
+  await collect(adapter.stream(opts(
+    [
+      msg('user', 'read that file'),
+      { role: 'tool', toolCallId: 't1', content: 'const s = "You are in plan mode. Stay in plan mode"' } as never,
+      msg('assistant', 'here it is'),
+      msg('user', 'now run the tests'),
+    ],
+    { sessionId: 'sess-hist-plan' as never, tools: [{ name: 'exit_plan_mode' }] as never },
+  )))
+
+  const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+  assert.ok(argv.includes('--dangerously-skip-permissions'), 'skip must survive a historical mention')
+  assert.equal(argv.includes('--mode'), false, 'no plan-mode flag on an ordinary turn')
+})
+
 test('session-title calls forward the system prompt and never force plan mode', async () => {
   const { adapter } = makeAdapter({ forwardSystemPrompt: false, permissionMode: 'skip' })
   process.env.FAKE_AGY_MODE = 'ok'

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.41 (2026-11-19)
+
+### English
+
+- **Fix(regression from v0.6.27): plan mode is decided from the current turn, not from history (fixes #136).** `isPlanMode()` scanned **every** message backwards, so once a session's history contained `"You are in plan mode"` — in source code the user read, in tool output, or in a planning turn that had already exited — every later turn was forced to `--mode plan`. With `permissionMode: skip` that flipped the run back to `request-review`, denied every `run_command` / outside-workspace `read_file`, and ended with DSH rejecting the synthesized `exit_plan_mode` (`only available in plan mode`); the session was unrecoverable without starting a new one. `isPlanMode()` now reads **only the last message**, and only when it is a `user`/`system` turn. Two further guards: the presence of `exit_plan_mode` in the tool list is no longer treated as proof of plan mode (current DSH ships it in standard mode too), and a `exit_plan_mode is only available in plan mode` rejection is decisive evidence that the session is NOT planning, so a false positive can self-correct instead of locking the session. Regression tests cover history-in-tool-output, a genuine current-turn instruction, and the rejection signal, plus an adapter-level check that `--dangerously-skip-permissions` survives a historical mention.
+
+### 中文
+
+- **修复(v0.6.27 引入的回归)：plan 模式只看当前轮，不再扫历史（修复 #136）。** `isPlanMode()` 原先**从后往前扫描全部消息**，只要会话历史里出现过 `"You are in plan mode"`——用户读过的源码、工具输出、或一次已经退出的规划轮——之后每一轮都会被强制 `--mode plan`。在 `permissionMode: skip` 下，这会退回 `request-review`、拒绝所有 `run_command` 与工作区外 `read_file`，并在回合结束时报 `exit_plan_mode is only available in plan mode`；会话无法恢复，只能新开。现在 `isPlanMode()` **只读最后一条消息**，且要求其角色为 `user`/`system`。另加两道保险：工具列表里出现 `exit_plan_mode` 不再被当作 plan 模式的证据（当前 DSH 标准模式也会下发该工具）；出现 `exit_plan_mode is only available in plan mode` 的拒绝即判定为非 plan，使误判能自我纠正而不是永久锁死。回归测试覆盖「历史工具输出误命中」「当前轮真实指令」「拒绝信号」三种情形，并补一条 adapter 级验证：历史提及不得抹掉 `--dangerously-skip-permissions`。
+
 ## 0.6.40 (2026-11-19)
 
 ### English

@@ -191,13 +191,19 @@ export function resolveGoalContext(
  * DSH plan-mode injects "You are in plan mode" into the runtime context prompt.
  */
 export function isPlanMode(messages: readonly Message[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]
-    if (!m) continue
-    const text = extractText(m)
-    if (text.includes('You are in plan mode')) return true
-  }
-  return false
+  const last = messages[messages.length - 1]
+  if (!last) return false
+  const text = extractText(last)
+  // DSH rejecting a synthesized exit_plan_mode is DECISIVE: whatever the history
+  // says, this session is not planning. Without this, a false positive could
+  // never self-correct and the session stayed read-only forever (issue #136).
+  if (/exit_plan_mode is only available in plan mode/i.test(text)) return false
+  // Only the CURRENT turn's instruction can prove plan mode. Scanning the whole
+  // history matched source code, tool output and completed planning turns that
+  // merely mention the phrase, which forced `--mode plan` on ordinary turns
+  // (#136 — with permissionMode=skip that denied every tool and broke the turn).
+  if (last.role !== 'user' && last.role !== 'system') return false
+  return text.includes('You are in plan mode')
 }
 
 /**
