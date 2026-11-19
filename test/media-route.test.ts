@@ -6,10 +6,12 @@ import {
   handleAssetRequest,
   handleOpenFile,
   executeOpenInSystem,
+  spawnDetachedOpener,
 } from '../src/host/media-route.ts';
 import { existsSync, writeFileSync, mkdirSync, rmSync, symlinkSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { EventEmitter } from 'node:events';
 
 test('media-route: resolveLocalMediaPath handles Windows paths, file://, and relative paths', () => {
   const isWin = process.platform === 'win32';
@@ -337,4 +339,40 @@ test('media-route: handleOpenFile validates path and returns JSON', () => {
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
   }
+});
+
+// ---- Opener launch failures must never escalate to an uncaughtException ----
+
+test('media-route: a missing OS opener is contained instead of killing the host', () => {
+  // Live incident (2026-11-16 / 2026-11-18): `spawn('xdg-open', ...)` on a
+  // headless Linux host reports ENOENT asynchronously. The old code attached no
+  // 'error' listener, so Node raised an uncaughtException, dsh exited with code 1
+  // and systemd restarted the whole server — four times, once per UI click.
+  let child: (EventEmitter & { unref: () => void }) | undefined;
+  const fakeSpawn = ((command: string, args: readonly string[]) => {
+    assert.equal(command, 'xdg-open');
+    assert.deepEqual([...args], ['/tmp/agent-artifact.md']);
+    child = Object.assign(new EventEmitter(), { unref: () => {} });
+    return child;
+  }) as unknown as Parameters<typeof spawnDetachedOpener>[2];
+
+  assert.equal(
+    spawnDetachedOpener('xdg-open', ['/tmp/agent-artifact.md'], fakeSpawn),
+    true,
+    'a started child is reported as launched',
+  );
+  assert.ok(child, 'the injected spawn must have been called');
+
+  // Emitting the launch error must be swallowed by the helper's listener. An
+  // unhandled 'error' event would throw here and, in production, kill the host.
+  assert.doesNotThrow(() => {
+    child!.emit('error', Object.assign(new Error('spawn xdg-open ENOENT'), { code: 'ENOENT' }));
+  });
+});
+
+test('media-route: a synchronously throwing spawn reports false instead of escaping', () => {
+  const throwingSpawn = (() => {
+    throw new Error('spawn blocked');
+  }) as unknown as Parameters<typeof spawnDetachedOpener>[2];
+  assert.equal(spawnDetachedOpener('xdg-open', ['/tmp/x'], throwingSpawn), false);
 });

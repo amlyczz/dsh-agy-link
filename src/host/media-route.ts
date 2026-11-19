@@ -337,17 +337,53 @@ export function handleMediaRequest(
   }
 }
 
+/**
+ * Launch one detached OS opener without letting a launch failure kill the host.
+ *
+ * `spawn()` reports a missing (ENOENT) or non-executable (EACCES) target
+ * asynchronously as an `error` event, so a surrounding try/catch never sees it:
+ * with no listener Node raises an `uncaughtException` and the whole dsh process
+ * exits. On a headless Linux host every "open in app" click therefore killed the
+ * server (systemd then restarted it), because `xdg-open` is not installed.
+ *
+ * The listener is the entire point of this helper: it turns a launch failure
+ * into a silent no-op instead of a process-killing exception. A synchronous
+ * throw still reports `false` so callers can answer with an error.
+ *
+ * @param command executable path or PATH name.
+ * @param args argv (never a shell string).
+ * @param spawnImpl injection seam for tests.
+ * @returns true when the child was started, false when spawn threw synchronously.
+ */
+export function spawnDetachedOpener(
+  command: string,
+  args: readonly string[],
+  spawnImpl: typeof spawn = spawn,
+): boolean {
+  try {
+    const child = spawnImpl(command, [...args], { detached: true, stdio: 'ignore' });
+    // Must be attached before the first tick: the error is emitted asynchronously.
+    child.on('error', () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function executeOpenInSystem(targetPath: string, reveal = false): { ok: boolean; error?: string } {
   try {
     if (process.platform === 'darwin') {
-      const child = spawn('open', reveal ? ['-R', targetPath] : [targetPath], { detached: true, stdio: 'ignore' });
-      child.unref();
+      if (!spawnDetachedOpener('open', reveal ? ['-R', targetPath] : [targetPath])) {
+        return { ok: false, error: 'failed to launch the system opener' };
+      }
       return { ok: true };
     }
     if (process.platform === 'win32') {
       if (reveal) {
-        const child = spawn('explorer.exe', [`/select,${targetPath}`], { detached: true, stdio: 'ignore' });
-        child.unref();
+        if (!spawnDetachedOpener('explorer.exe', [`/select,${targetPath}`])) {
+          return { ok: false, error: 'failed to launch explorer.exe' };
+        }
         return { ok: true };
       }
 
@@ -371,25 +407,17 @@ export function executeOpenInSystem(targetPath: string, reveal = false): { ok: b
 
       const ext = extname(targetPath).toLowerCase();
       if (['.md', '.txt', '.json', '.jsonl', '.yaml', '.yml', '.ts', '.js', '.py', '.gd', '.log'].includes(ext)) {
-        try {
-          const child = spawn('notepad.exe', [targetPath], { detached: true, stdio: 'ignore' });
-          child.unref();
-          return { ok: true };
-        } catch {
-          // ignore
-        }
+        if (spawnDetachedOpener('notepad.exe', [targetPath])) return { ok: true };
       }
 
-      try {
-        const child = spawn('explorer.exe', [`/select,${targetPath}`], { detached: true, stdio: 'ignore' });
-        child.unref();
-        return { ok: true };
-      } catch (err) {
-        return { ok: false, error: String(err) };
+      if (!spawnDetachedOpener('explorer.exe', [`/select,${targetPath}`])) {
+        return { ok: false, error: 'failed to launch explorer.exe' };
       }
+      return { ok: true };
     }
-    const child = spawn('xdg-open', [targetPath], { detached: true, stdio: 'ignore' });
-    child.unref();
+    if (!spawnDetachedOpener('xdg-open', [targetPath])) {
+      return { ok: false, error: 'failed to launch xdg-open' };
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err) };
