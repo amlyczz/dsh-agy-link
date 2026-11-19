@@ -43,7 +43,15 @@ export interface ToolsServiceLike {
    * `scope` is a DSH Agent. Passing it matters for PTC detection: a native
    * scope has no `run_code` tool, while a PTC scope exposes it.
    */
-  schemas(scope?: unknown): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+  schemas(scope?: unknown, toolSet?: unknown): Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+  /**
+   * Resolve the caller's conditional tool set. DSH's `executable(name, scope,
+   * toolSet)` returns undefined for EVERY tool that declares `when` as long as
+   * `toolSet` is undefined, so a bridged call that never resolves one sees
+   * "unknown tool" for the whole conditional surface (team_task_*, and anything
+   * else gated by `when`) even when the caller agent resolved fine.
+   */
+  resolve?(context: { agent: unknown; signal: AbortSignal }): Promise<{ dispose(): void } | undefined>
   /**
    * DSH 0.2.2+ settles a whole *batch* (`{ calls, signal, agent }`); 0.2.1 took
    * a single call (`{ callId, name, arguments, ... }`). The bridge sends a
@@ -60,6 +68,8 @@ export interface ToolsServiceLike {
     name?: string
     arguments?: unknown
     agent?: unknown
+    /** Resolved conditional tool set (see `resolve`). */
+    toolSet?: unknown
     /**
      * DSH 0.2.1 PTC nested-dispatch token (#66). 0.2.2 gates PTC on the
      * execution source instead, so native calls never set it; a PTC scope keeps
@@ -173,8 +183,9 @@ async function executeBridgedToolCall(
   args: unknown,
   callId: string,
   signal: AbortSignal,
+  toolSet?: unknown,
 ): Promise<unknown> {
-  const nested = await tryNestedToolCall(svc, agent, name, args, callId, signal)
+  const nested = await tryNestedToolCall(svc, agent, name, args, callId, signal, toolSet)
   if (nested !== undefined) return nested
   return svc.execute({
     calls: [{
@@ -187,11 +198,12 @@ async function executeBridgedToolCall(
     }],
     signal,
     ...(agent === undefined ? {} : { agent }),
+    ...(toolSet === undefined ? {} : { toolSet }),
     // DSH 0.2.1 compatibility (ignored by 0.2.2+).
     callId,
     name,
     arguments: args ?? {},
-    ...(svc.schemas(agent).some((tool) => tool.name === 'run_code') ? { parent: Symbol(callId) } : {}),
+    ...(svc.schemas(agent, toolSet).some((tool) => tool.name === 'run_code') ? { parent: Symbol(callId) } : {}),
   })
 }
 
@@ -203,6 +215,7 @@ async function tryNestedToolCall(
   args: unknown,
   callId: string,
   signal: AbortSignal,
+  toolSet?: unknown,
 ): Promise<unknown> {
   let pipeline: NestedPipeline | undefined
   try {
@@ -223,6 +236,7 @@ async function tryNestedToolCall(
       arguments: args ?? {},
       signal,
       ...(agent === undefined ? {} : { agent }),
+      ...(toolSet === undefined ? {} : { toolSet }),
       // Any symbol works: the PTC gate only tests `parent !== undefined`.
       parent: Symbol(callId),
     })
@@ -279,7 +293,31 @@ export function startMcpBridge(opts: {
         const allow = opts.allowlist().split(',').map((s) => s.trim()).filter(Boolean)
         const allowSet = new Set(allow)
         const used = new Set<string>()
-        const tools = svc.schemas()
+        // List the caller's own surface: without scope and toolSet the list is
+        // missing every `when`-gated tool, so an agy child never learns that
+        // team_task_* / other conditional tools exist.
+        const listHeader = String(req.headers['x-dsh-session'] ?? '')
+        const listResolve = async (id: string): Promise<unknown> =>
+          id === '' ? undefined : await Promise.resolve(opts.resolveAgent?.(id))
+        let listAgent = await listResolve(listHeader)
+        if (listAgent === undefined && listHeader !== '' && !listHeader.startsWith('session-')) {
+          listAgent = await listResolve('session-' + listHeader)
+        }
+        let listToolSet: { dispose(): void } | undefined
+        if (listAgent !== undefined && typeof svc.resolve === 'function') {
+          try {
+            listToolSet = await svc.resolve({ agent: listAgent, signal: new AbortController().signal })
+          } catch {
+            listToolSet = undefined
+          }
+        }
+        let schemas: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+        try {
+          schemas = svc.schemas(listAgent, listToolSet)
+        } finally {
+          try { listToolSet?.dispose() } catch { /* listing must survive disposal */ }
+        }
+        const tools = schemas
           .filter((t) => allow.length === 0 || allowSet.has(t.name))
           // internal transports / loopback-only helpers are not bridgeable
           .filter((t) => !INTERNAL_TOOL_NAMES.has(t.name))
@@ -385,7 +423,24 @@ export function startMcpBridge(opts: {
           // pre-execute hook treats any parent as a PTC dispatch and then looks
           // for a session-log start that a native call does not have).
           const callId = 'agy-mcp-' + callSeq
-          const result = await executeBridgedToolCall(svc, agent, dshName, parsed.arguments ?? {}, callId, controller.signal)
+          // Conditional tools (`when`) are invisible while `toolSet` is
+          // undefined: DSH's `executable(name, scope, toolSet)` short-circuits to
+          // undefined for every `when` tool, which surfaces as "unknown tool".
+          // Resolve the caller's set and hand it to both dispatch paths.
+          let toolSet: { dispose(): void } | undefined
+          if (agent !== undefined && typeof svc.resolve === 'function') {
+            try {
+              toolSet = await svc.resolve({ agent, signal: controller.signal })
+            } catch {
+              toolSet = undefined
+            }
+          }
+          let result: unknown
+          try {
+            result = await executeBridgedToolCall(svc, agent, dshName, parsed.arguments ?? {}, callId, controller.signal, toolSet)
+          } finally {
+            try { toolSet?.dispose() } catch { /* disposal must never mask a result */ }
+          }
           audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
           sendJson(res, 200, { ok: true, text: resultText(settledToolResult(result, callId)) })
         } catch (e) {
