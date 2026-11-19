@@ -153,8 +153,14 @@ function ingestSummaryGroups(
     // separate weekly bucket, but its display name still contains "gemini"
     // ("Gemini 4 Argon"). Detect argon BEFORE the generic gemini gate or
     // the group folds into — and overwrites — the plain Gemini family.
+    //
+    // Only the GROUP NAME and the BUCKET ids may prove a dedicated pool. The
+    // description must not: since agy 1.5.12 the plain `Gemini Models` group
+    // enumerates its members ("Models within this group: Gemini 4 Neon, Gemini 4
+    // Carbon, Gemini 4 Argon, …"), so a description match filed the SHARED pool
+    // under `argon` and left `google` without its weekly numbers (2026-11-19).
     const hasArgonBucket = Array.isArray(group.buckets) && group.buckets.some((b) => (b.bucketId || '').toLowerCase().includes('argon') || (b.displayName || '').toLowerCase().includes('argon'))
-    const isArgon = dName.includes('argon') || desc.includes('argon') || hasArgonBucket
+    const isArgon = dName.includes('argon') || hasArgonBucket
     const isGoogle = !isArgon && (dName.includes('gemini') || desc.includes('gemini'))
     const is3P = dName.includes('claude') || dName.includes('gpt') || desc.includes('claude') || desc.includes('gpt')
 
