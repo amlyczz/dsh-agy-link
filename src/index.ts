@@ -19,6 +19,7 @@ import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess } from './host/runner.ts'
+import { agyNotInstalledMessage } from './provider/call-context.ts'
 import { sweepDir } from './host/media.ts'
 import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type ToolsServiceLike } from './host/mcp-bridge.ts'
 import { runBootHygiene } from './host/boot-hygiene.ts'
@@ -59,7 +60,10 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       }
       const currentBin = bin()
       if (!currentBin) {
-        services.status.dormantReason = 'agy binary not found — install via https://antigravity.google/docs/cli/install'
+        // Same actionable wording as the turn-level error: the badge shows this
+        // string, so it must say where we looked and how to point us at a
+        // binary installed outside the probed locations.
+        services.status.dormantReason = agyNotInstalledMessage(getConfig())
         log('dormant: agy binary not found')
         return
       }

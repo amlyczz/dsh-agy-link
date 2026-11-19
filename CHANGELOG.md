@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.39 (2026-11-19)
+
+### English
+
+- **Improve(host): a missing `agy` binary now explains where the plugin looked and how to point it at one (addresses #123).** The `AGY_NOT_INSTALLED` error said only "agy binary not found on PATH — install it via …", which reads as "not installed" and leaves the commonest case unactionable: the CLI *is* installed, but the DSH desktop host (launched from the GUI) inherits a different `PATH` than the user's terminal, so the executable sits in none of the probed locations. `agyBinCandidates()` now returns the probe list instead of only its result, and `agyNotInstalledMessage()` folds it into the error text together with the per-platform install hint and **both** documented overrides — the plugin config `agyBin` and the `DSH_AGY_BIN` environment variable — plus a pointer to `/agy doctor`. A configured-but-missing `agyBin` is called out explicitly instead of silently falling through to the scan. The same wording now backs the dormant badge in the header, and `/agy doctor` lists every probed path under an `agy lookup` section, so a support report carries the evidence without the user having to reconstruct it by hand.
+
+### 中文
+
+- **改进(host)：缺失 `agy` 二进制时，错误信息会说明探过哪些路径以及如何手动指定（回应 #123）。** `AGY_NOT_INSTALLED` 原本只说「agy binary not found on PATH — install it via …」，读起来像「没装」，于是最常见的那种情况无从下手：CLI 其实**装了**，但 DSH 桌面版从 GUI 启动，继承到的 `PATH` 与用户终端不同，可执行文件不落在任何一个探测位置里。`agyBinCandidates()` 现在返回探测清单而非仅有结果，`agyNotInstalledMessage()` 把清单、按平台的安装位置提示、以及**两种**已文档化的覆盖方式（插件配置 `agyBin` 与环境变量 `DSH_AGY_BIN`）一并写进错误文本，并指向 `/agy doctor`。若配置了 `agyBin` 但该路径不存在，现在会明确指出，而不是静默回落到扫描。头部 dormant 徽标改用同一套措辞；`/agy doctor` 报告新增 `agy lookup` 段落逐条列出探测路径，让支持请求自带证据，不必由用户手工拼凑。
+
 ## 0.6.38 (2026-11-19)
 
 ### English
