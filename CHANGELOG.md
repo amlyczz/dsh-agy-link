@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.42 (2026-11-20)
+
+### English
+
+- **Fix(quota): a free-tier account's refused summary is suppressed instead of retried every hour (fixes #137).** A Google account without a paid Antigravity subscription has no 5h window, so `retrieveUserQuotaSummary` answers `403 PERMISSION_DENIED` — without any "licence" wording. `classifySummaryRefusal()` therefore classified it as a generic `http` failure, `quotaUnavailable` recorded it as `partial`/`unreachable`, and `quotaSummarySuppressed()` only honours `no_license`: the hourly background poll kept repeating the same 403 forever. There is now a distinct **`no_summary_access`** verdict (403 + `PERMISSION_DENIED`), recorded with a **7-day** retry window aligned to the weekly quota cycle (an unlicensed account keeps its 6h window, since a fresh licence can arrive at any time).
+- **The two kinds of suppression are now separate**, which matters because they have different scope: `quotaSummarySuppressed()` skips only the summary call (the pipeline still refreshes `fetchAvailableModels` / user quota), while the new `accountPollSuppressed()` decides whether an account leaves the background poll entirely — and only a licence-less account does. Folding the free-tier case into `no_license` would have frozen its model list, so it keeps polling and merely stops hammering the refused endpoint. The console now says "free-tier account · weekly quota only" instead of a generic refresh failure (four locales).
+
+### 中文
+
+- **修复(额度)：免费账号被拒绝的汇总请求改为压制，而不再每小时重试（修复 #137）。** 未购买 Antigravity 付费订阅的 Google 账号没有 5 小时窗口，`retrieveUserQuotaSummary` 直接返回 `403 PERMISSION_DENIED`——正文不含任何 `licence` 字样。因此 `classifySummaryRefusal()` 把它归为通用 `http` 失败，`quotaUnavailable` 记成 `partial`/`unreachable`，而 `quotaSummarySuppressed()` 只认 `no_license`：后台每小时轮询就一直重复同一个 403。现在新增独立的 **`no_summary_access`** 判定（403 + `PERMISSION_DENIED`），并按**7 天**（对齐周配额周期）压制；无许可账号仍保持 6 小时窗口，以便新许可随时恢复。
+- **两类压制现在拆开**，因为作用域不同：`quotaSummarySuppressed()` 只跳过汇总请求（管道仍刷新 `fetchAvailableModels` / 用户额度），新增的 `accountPollSuppressed()` 才决定账号是否完全退出后台轮询——只有「无许可」账号如此。若把免费账号并进 `no_license`，会连带冻结它的模型列表，所以它继续参与轮询、只是不再打那个必然被拒的端点。控制台文案改为「免费账号 · 仅限周配额」，不再是通用的刷新失败（四语言）。
+
 ## 0.6.41 (2026-11-19)
 
 ### English

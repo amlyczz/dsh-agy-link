@@ -81,3 +81,18 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - `description` 仍可参与**正向**家族归类（含 gemini → google），但不得用于判定「独立池」。
 - 「Argon 已并入 Gemini」的折叠场景（argon 组不存在）行为不变。
 - 测试：`test/domain-quota.test.ts`（description 枚举形态必须归 google 且保留 weekly；`Gemini 4 Argon` 组名与 `argon-weekly` bucket 仍识别）。
+
+## 额度汇总被拒绝的两类终态（issue #137）
+
+`retrieveUserQuotaSummary` 可能对账号给出**终态**拒绝，且作用域不同，必须分开：
+
+| 判定 | 触发 | 压制对象 | 周期 |
+| --- | --- | --- | --- |
+| `no_license` | 403 且正文含 license | **整个账号**退出后台轮询 | 6h（新许可随时可能到达） |
+| `no_summary_access` | 403 且 `status = PERMISSION_DENIED`（免费账号无 5h 窗口） | **仅汇总请求**；`fetchAvailableModels` / 用户额度照常 | 7 天（对齐周配额周期） |
+
+- `quotaSummarySuppressed(account)` 对两类都返回 true（都意味着「先别打那个端点」）。
+- `accountPollSuppressed(account)` 只对 `no_license` 返回 true；`shouldPollAccount()` 用它决定账号是否完全退出轮询——免费账号**必须继续轮询**，否则模型列表会被冻结。
+- 手动刷新（`force`）绕过压制，用户升级后可立即恢复。
+- UI 对 `no_summary_access` 显示「免费账号 · 仅限周配额」，不显示通用失败（四语言 locale）。
+- 锚点：`test/issue137-free-tier-summary.test.ts`（分类、两类压制边界、轮询不变式、周期常量）。

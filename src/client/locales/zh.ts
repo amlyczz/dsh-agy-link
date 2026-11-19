@@ -26,6 +26,7 @@ export const zh = {
   'quota.refreshInProgress': '该账号正在刷新中，请稍候',
   'quota.unavailableTitle': '配额刷新失败',
   'quota.unavailable.no_license': '此账号无有效许可（接口 403）',
+  'quota.unavailable.no_summary_access': '免费账号 · 仅限周配额（汇总接口被拒绝）',
   'quota.unavailable.auth': '登录凭据已失效（401）',
   'quota.unavailable.unreachable': '配额接口不可达',
   'quota.unavailable.partial': '只取到模型级数据，5 小时/周额度未更新',

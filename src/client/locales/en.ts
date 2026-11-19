@@ -26,6 +26,7 @@ export const en: AgyDictionary = {
   'quota.refreshInProgress': 'A refresh is already running for this account',
   'quota.unavailableTitle': 'Quota refresh failed',
   'quota.unavailable.no_license': 'this account has no valid license (HTTP 403)',
+  'quota.unavailable.no_summary_access': 'free-tier account · weekly quota only (the summary endpoint is refused)',
   'quota.unavailable.auth': 'the login credential is no longer valid (401)',
   'quota.unavailable.unreachable': 'the quota endpoints are unreachable',
   'quota.unavailable.partial': 'only per-model data arrived; 5-hour/weekly figures are stale',

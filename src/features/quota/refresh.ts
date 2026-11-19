@@ -12,7 +12,7 @@ import type {
   QuotaUnavailableState,
 } from '../../common/pool-types.ts'
 import { quotaSummarySuppressed } from '../../common/pool-types.ts'
-import { QUOTA_LICENSE_RETRY_MS } from '../../common/timeouts.ts'
+import { QUOTA_FREE_TIER_RETRY_MS, QUOTA_LICENSE_RETRY_MS } from '../../common/timeouts.ts'
 import { shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../../domain/quota/buckets.ts'
 import type { QuotaSummaryFailure } from './http.ts'
 import {
@@ -78,6 +78,7 @@ export interface QuotaRefreshDeps {
 function unavailableReason(failure: QuotaSummaryFailure | null, hasModelData: boolean): QuotaUnavailableReason {
   if (failure === null) return hasModelData ? 'partial' : 'unreachable'
   if (failure.kind === 'no_license') return 'no_license'
+  if (failure.kind === 'no_summary_access') return 'no_summary_access'
   if (failure.kind === 'auth') return 'auth'
   if (failure.kind === 'network') return 'unreachable'
   return hasModelData ? 'partial' : 'unreachable'
@@ -282,10 +283,13 @@ export async function refreshAccountQuotaPipeline(
       const failure = deps.summaryFailure?.() ?? null
       const reason = unavailableReason(failure, Object.keys(modelsCatalog).length > 0)
       const previous = account.quotaUnavailable
+      // A free-tier refusal tracks the weekly window; an unlicensed account is
+      // re-probed sooner because a fresh licence can arrive at any time.
+      const retryMs = reason === 'no_summary_access' ? QUOTA_FREE_TIER_RETRY_MS : QUOTA_LICENSE_RETRY_MS
       deps.pool.noteQuotaUnavailable(account.id, {
         reason,
         since: previous?.reason === reason ? previous.since : now,
-        retryAfter: now + QUOTA_LICENSE_RETRY_MS,
+        retryAfter: now + retryMs,
         ...(failure?.detail === undefined ? {} : { detail: failure.detail }),
       })
     }

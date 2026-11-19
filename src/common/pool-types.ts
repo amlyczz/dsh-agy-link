@@ -130,7 +130,17 @@ export interface ManagedAccount {
  * `unreachable` — every endpoint failed at the network layer.
  * `partial` — the summary was missing but per-model fallback data arrived.
  */
-export type QuotaUnavailableReason = 'no_license' | 'auth' | 'unreachable' | 'partial'
+export type QuotaUnavailableReason =
+  | 'no_license'
+  /**
+   * The summary endpoint refuses this account outright (free tier: 403
+   * PERMISSION_DENIED). Terminal for the SUMMARY call only — the account still
+   * serves models, so it stays in the poll (issue #137).
+   */
+  | 'no_summary_access'
+  | 'auth'
+  | 'unreachable'
+  | 'partial'
 
 export interface QuotaUnavailableState {
   reason: QuotaUnavailableReason
@@ -151,6 +161,22 @@ export interface QuotaUnavailableState {
  * be retried normally.
  */
 export function quotaSummarySuppressed(account: ManagedAccount, now = Date.now()): boolean {
+  const state = account.quotaUnavailable
+  if (state === undefined) return false
+  // Both terminal kinds mean "do not call retrieveUserQuotaSummary again yet".
+  // They differ in scope, not in whether the summary is worth retrying.
+  if (state.reason !== 'no_license' && state.reason !== 'no_summary_access') return false
+  return state.retryAfter > now
+}
+
+/**
+ * Whether the account should leave the background poll ENTIRELY.
+ *
+ * Only a licence-less account qualifies: it can produce no quota data at all.
+ * A free-tier account whose SUMMARY is refused still refreshes its model list
+ * and user quota, so skipping it would freeze the picker (issue #137).
+ */
+export function accountPollSuppressed(account: ManagedAccount, now = Date.now()): boolean {
   const state = account.quotaUnavailable
   if (state === undefined) return false
   if (state.reason !== 'no_license') return false
@@ -288,8 +314,9 @@ export function shouldPollAccount(account: ManagedAccount): boolean {
   if (account.authRequired) return false
   const now = Date.now()
   // An account whose summary endpoint refuses it as unlicensed cannot produce
-  // quota data; probing it every hour only repeats the refusal.
-  if (quotaSummarySuppressed(account, now)) return false
+  // quota data; probing it every hour only repeats the refusal. A free-tier
+  // account is only summary-refused and keeps polling (#137).
+  if (accountPollSuppressed(account, now)) return false
   for (const cd of Object.values(account.cooldowns ?? {})) {
     if (cd && cd.cooldownUntil > now) return false
   }

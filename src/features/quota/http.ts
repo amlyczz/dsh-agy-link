@@ -25,7 +25,12 @@ export { OAUTH_USERINFO_URL }
  * message body, which can contain account identifiers.
  */
 export interface QuotaSummaryFailure {
-  kind: 'no_license' | 'auth' | 'http' | 'network'
+  /**
+   * `no_summary_access` — the backend refuses the SUMMARY endpoint for this
+   * account (free tier: `403 PERMISSION_DENIED`). Terminal for the summary call
+   * only; the account can still serve models, so it keeps polling (#137).
+   */
+  kind: 'no_license' | 'no_summary_access' | 'auth' | 'http' | 'network'
   status?: number
   detail?: string
 }
@@ -86,6 +91,12 @@ export function classifySummaryRefusal(status: number, bodyText = ''): QuotaSumm
   if (status === 401) return { kind: 'auth', status, ...(detail === undefined ? {} : { detail }) }
   if (status === 403 && /licen[cs]e/i.test(bodyText)) {
     return { kind: 'no_license', status, ...(detail === undefined ? {} : { detail }) }
+  }
+  // A free-tier account has no 5h summary window, so the endpoint answers
+  // `403 PERMISSION_DENIED` without any "licence" wording. Treating that as a
+  // generic http failure made the hourly poll retry it forever (#137).
+  if (status === 403 && detail === 'PERMISSION_DENIED') {
+    return { kind: 'no_summary_access', status, detail }
   }
   return { kind: 'http', status, ...(detail === undefined ? {} : { detail }) }
 }

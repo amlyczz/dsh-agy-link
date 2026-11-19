@@ -59,6 +59,13 @@ export const QUOTA_ENDPOINT_DOWN_MS = 10 * 60_000
 export const QUOTA_LICENSE_RETRY_MS = 6 * 3600_000
 
 /**
+ * How long a free-tier account's refused summary call stays suppressed.
+ * Aligned with the weekly quota window: the verdict only changes when the
+ * account's entitlement does, which cannot happen within hours (#137).
+ */
+export const QUOTA_FREE_TIER_RETRY_MS = 7 * 24 * 3600_000
+
+/**
  * Same-egress parallelism for a user-initiated pool sweep. Antigravity's risk
  * control correlates accounts by source IP, so this stays deliberately small;
  * the scheduler still spaces every account start by the organic jitter, and the

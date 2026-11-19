@@ -26,6 +26,7 @@ export const ptBR: AgyDictionary = {
   'quota.refreshInProgress': 'Já existe uma atualização em andamento para esta conta',
   'quota.unavailableTitle': 'Falha ao atualizar a cota',
   'quota.unavailable.no_license': 'esta conta não tem uma licença válida (HTTP 403)',
+  'quota.unavailable.no_summary_access': 'conta gratuita · apenas cota semanal (o resumo é recusado)',
   'quota.unavailable.auth': 'a credencial de acesso não é mais válida (401)',
   'quota.unavailable.unreachable': 'não é possível alcançar os serviços de cota',
   'quota.unavailable.partial': 'só chegaram dados por modelo; os números de 5 h/semana estão desatualizados',

@@ -26,6 +26,7 @@ export const es: AgyDictionary = {
   'quota.refreshInProgress': 'Ya hay una actualización en curso para esta cuenta',
   'quota.unavailableTitle': 'No se pudo actualizar la cuota',
   'quota.unavailable.no_license': 'esta cuenta no tiene una licencia válida (HTTP 403)',
+  'quota.unavailable.no_summary_access': 'cuenta gratuita · solo cuota semanal (el resumen se rechaza)',
   'quota.unavailable.auth': 'la credencial de acceso ya no es válida (401)',
   'quota.unavailable.unreachable': 'no se puede alcanzar los servicios de cuota',
   'quota.unavailable.partial': 'solo llegaron datos por modelo; las cifras de 5 h/semana están desactualizadas',
