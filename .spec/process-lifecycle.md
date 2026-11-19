@@ -37,3 +37,12 @@
 - `test/issue128-idle-reply.test.ts`：transcript 答复恢复、带 `tool_calls` 与上一轮答复都不算、无答复时的提示文案。
 - `test/updater-preempt.test.ts`：隔离 HOME 下 `last_check.timestamp` 创建与刷新、`suppressAgyAutoUpdate: false` 不触碰文件。
 - `test/proxy-keychain.test.ts`：活动看门狗与事件循环阻塞宽限。
+
+## agy 可执行文件探测与诊断（`src/runtime/agy/bin.ts`, PR #133）
+
+spawn 之前必须先定位 `agy`。`resolveAgyBin()` 返回 `null` 时，**必须给出可操作信息**，否则「not found on PATH」会被误读成「没安装」。
+
+- `agyBinCandidates(cfg)` 是唯一的候选列表来源（配置 `agyBin` → `PATH` 各目录 → 平台默认安装位置）；`resolveAgyBin()` 只做「真实可执行优先于 cmd shim」的排序与存在性检查，签名与行为不变。
+- `agyBinDiagnostics(cfg)` 返回 `{ probed, configured, installHint }`；`agyNotInstalledMessage()` 据此生成错误文案，包含两种覆盖方式（`agyBin` 配置项、`DSH_AGY_BIN` 环境变量——后者在 `common/config.ts` 里映射进 `cfg.agyBin`）与 `/agy doctor` 指路。头部徽标与 doctor 报告复用同一信息。
+- 测试必须**注入 PATH**（`process.env.PATH` 临时替换）而不是假设宿主 PATH 的形态，否则在不同机器/CI 上会假失败。
+- 锚点：`test/agy-not-installed-diagnostics.test.ts`（候选顺序、PATH 探测、平台安装位置、`agyBin` 优先级、诊断载荷、错误文案、doctor 段落）。

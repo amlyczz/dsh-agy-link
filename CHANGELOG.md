@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.40 (2026-11-19)
+
+### English
+
+- **Improve(diagnostics): `AGY_NOT_INSTALLED` now says where agy was searched and how to point at it (merges PR #133).** The error used to read only "install it via …", which says "not installed" — but the more common case is the CLI being installed while a GUI-launched host inherits a different `PATH`. `resolveAgyBin()`'s probe list was computed and then discarded; it is now preserved. `agyBinCandidates()` splits the collection out, `agyBinDiagnostics()` adds the configured `agyBin` and the per-platform install hint, and `agyNotInstalledMessage()` reports the probed locations, both documented overrides (`agyBin` config / `DSH_AGY_BIN`) and a `/agy doctor` pointer. The header badge uses the same text, and `/agy doctor` lists every probed path under `agy lookup`. `resolveAgyBin()` keeps its signature and behaviour; 9 new tests. Thanks to @angel12538.
+- **Test:** the PATH-probe case now injects its own `PATH` instead of assuming the host has a `nodejs` directory, so it passes on any machine.
+
+### 中文
+
+- **改进(诊断)：`AGY_NOT_INSTALLED` 现在会说明搜索过哪些位置、以及如何指向二进制（合并 PR #133）。** 此前错误文案只有「install it via …」，读起来就是「没装」——但更常见的情况是 CLI 已安装，只是 GUI 启动的宿主继承了不同的 `PATH`。`resolveAgyBin()` 原本算完探测列表就丢弃，现在保留下来：`agyBinCandidates()` 拆出候选收集，`agyBinDiagnostics()` 补充已配置的 `agyBin` 与各平台安装提示，`agyNotInstalledMessage()` 输出探测位置、两种已文档化的覆盖方式（`agyBin` 配置 / `DSH_AGY_BIN`）以及 `/agy doctor` 指路。头部徽标复用同一文案，`/agy doctor` 在 `agy lookup` 段列出每个探测路径。`resolveAgyBin()` 签名与行为不变；新增 9 条测试。感谢 @angel12538。
+- **测试**：PATH 探测用例改为注入自定义 `PATH`，不再假设宿主存在 `nodejs` 目录，因此任何机器都能通过。
+
 ## 0.6.39 (2026-11-19)
 
 ### English

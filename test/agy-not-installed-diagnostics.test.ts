@@ -5,12 +5,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { agyBinCandidates, agyBinDiagnostics, resolveAgyBin } from '../src/runtime/agy/bin.ts'
 import { agyNotInstalledMessage, resolveCallContext } from '../src/provider/call-context.ts'
 import { writeDoctorReport } from '../src/host/diagnostics.ts'
 import { defaultConfig, type PluginConfig } from '../src/common/types.ts'
 import type { AgyGenerateOptions } from '../src/common/protocol.ts'
+
+const IS_WIN_TEST = process.platform === 'win32'
 
 function cfgWith(over: Partial<PluginConfig> = {}): PluginConfig {
   return { ...defaultConfig(), ...over }
@@ -22,13 +24,20 @@ test('agyBinCandidates includes the configured agyBin first', () => {
 })
 
 test('agyBinCandidates probes PATH entries with the per-platform extension', () => {
-  const candidates = agyBinCandidates(cfgWith())
-  const onPath = candidates.filter((c) => c.includes('nodejs'))
-  assert.ok(onPath.length > 0, 'the nodejs PATH entry must be probed')
-  if (process.platform === 'win32') {
-    assert.ok(onPath.some((c) => c.endsWith('agy.exe')), 'windows probes agy.exe')
-  } else {
-    assert.ok(onPath.some((c) => c.endsWith('agy')), 'posix probes the extensionless agy')
+  // Drive it through an injected PATH rather than assuming the host PATH looks
+  // a particular way: the rule under test is "every PATH dir is probed with the
+  // platform-specific binary name", not "this machine has a nodejs directory".
+  const dir = mkdtempSync(join(tmpdir(), 'agy-path-probe-'))
+  const saved = process.env.PATH
+  try {
+    process.env.PATH = [dir, '/tools'].join(delimiter)
+    const candidates = agyBinCandidates(cfgWith())
+    const expected = IS_WIN_TEST ? 'agy.exe' : 'agy'
+    assert.ok(candidates.includes(join(dir, expected)), `a PATH dir must be probed as ${expected}`)
+    assert.ok(candidates.includes(join('/tools', expected)), 'every PATH dir is probed, not just the first')
+  } finally {
+    process.env.PATH = saved
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 
