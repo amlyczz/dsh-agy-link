@@ -150,6 +150,13 @@ function quotaActions(
 				return;
 			}
 			await refresh();
+			// The host answers `alreadyRunning` when this key was still in flight.
+			// Saying "已开始刷新" then was a lie: the click did nothing for up to
+			// QUOTA_REFRESH_DEDUP_MS, which is why a slow pool looked stuck.
+			if (res?.alreadyRunning === true) {
+				showToast(t('quota.refreshInProgress'), 'info');
+				return;
+			}
 			// The host answers immediately and refreshes in the background; the
 			// 3s status poll delivers the new numbers. Saying "refreshed" here
 			// used to be a lie (and the old blocking request left the spinner

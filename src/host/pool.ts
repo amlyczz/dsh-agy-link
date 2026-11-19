@@ -13,6 +13,7 @@ import {
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
+  type QuotaUnavailableState,
 } from '../common/pool-types.ts'
 import { accountCanServeModel } from './model-support.ts'
 import { defaultPoolDir } from '../domain/accounts/paths.ts'
@@ -364,6 +365,28 @@ export class AccountPoolManager {
       }
     }
 
+    this.persist()
+  }
+
+  /**
+   * Record that the last refresh produced no authoritative snapshot.
+   *
+   * Kept on the account (not just in a log line) because the console has to be
+   * able to say WHY a row is frozen: a failed summary keeps the previous
+   * complete value by design, so the numbers alone can never show staleness.
+   */
+  noteQuotaUnavailable(id: string, state: QuotaUnavailableState): void {
+    const acc = this.getAccount(id)
+    if (!acc) return
+    acc.quotaUnavailable = state
+    this.persist()
+  }
+
+  /** Clear the marker once an authoritative snapshot arrives. */
+  clearQuotaUnavailable(id: string): void {
+    const acc = this.getAccount(id)
+    if (!acc?.quotaUnavailable) return
+    delete acc.quotaUnavailable
     this.persist()
   }
 

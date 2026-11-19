@@ -34,6 +34,8 @@ export interface StatusPayload {
 		message?: string;
 	};
 	pool?: AccountPoolData;
+	/** Account ids with a quota refresh in flight on the host (real progress). */
+	quotaRefreshing?: readonly string[];
 	poolAuth?: {
 		phase: 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed';
 		stagingId?: string;

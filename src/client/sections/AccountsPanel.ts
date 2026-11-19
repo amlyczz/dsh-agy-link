@@ -12,7 +12,7 @@ import { uiIcon } from '../icons.ts';
 import { Button } from '../ui/Button.ts';
 import { Spinner } from '../ui/Spinner.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
-import { formatQuotaWindow, renderFamilyQuotaBar } from './QuotaPanel.ts';
+import { formatQuotaWindow, renderFamilyQuotaBar, renderQuotaUnavailableNote } from './QuotaPanel.ts';
 
 export interface AccountsPanelHandlers {
 	moveAccount: (accId: string, delta: number) => Promise<void>;
@@ -31,6 +31,8 @@ export interface AccountsPanelProps {
 	pool: AccountPoolData | undefined;
 	accounts: ManagedAccount[];
 	loadingAction: string | null;
+	/** Account ids the HOST reports as refreshing right now (survives the click). */
+	quotaRefreshing?: readonly string[];
 	proxyInputs: Record<string, string>;
 	setProxyInputs: (next: Record<string, string>) => void;
 	editingProxyId: string | null;
@@ -43,7 +45,7 @@ export interface AccountsPanelProps {
 
 export function AccountsPanel(props: AccountsPanelProps): unknown {
 	const {
-		t, pool, accounts, loadingAction, proxyInputs, setProxyInputs,
+		t, pool, accounts, loadingAction, quotaRefreshing = [], proxyInputs, setProxyInputs,
 		editingProxyId, setEditingProxyId, expandedModels, toggleExpand,
 		optimisticActiveId, handlers,
 	} = props;
@@ -60,7 +62,9 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			label,
 			familyKey,
 			acc,
-			loadingAction === 'refresh:all' || loadingAction === `refresh:${acc.id}`,
+			loadingAction === 'refresh:all' ||
+				loadingAction === `refresh:${acc.id}` ||
+				quotaRefreshing.includes(acc.id),
 		);
 
 	// Authoritative active account: trust pool.activeAccountId computed by the
@@ -114,6 +118,8 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			}),
 			// Body: Always directly visible, showing quota
 			h('div', { key: 'agy-body', style: S.quotaBox },
+				// A frozen row must SAY it is frozen: the numbers are kept on purpose.
+				renderQuotaUnavailableNote(t, acc),
 				renderQuotaBar('Gemini', 'google', acc),
 				// Argon is gated on the data itself: free and legacy plans never see an empty panel.
 				acc.quotas.argon ? renderQuotaBar('Argon', 'argon', acc) : null,

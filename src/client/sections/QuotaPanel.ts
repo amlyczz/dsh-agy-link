@@ -7,7 +7,7 @@ import type { ManagedAccount } from '../../common/pool-types.ts';
 import { computeQuotaPacing } from '../../common/quota-pacing.ts';
 import type { AgyLocaleKey } from '../locales.ts';
 import { h } from '../react.ts';
-import { brandIcon, FAMILY_BRAND } from '../icons.ts';
+import { brandIcon, FAMILY_BRAND, uiIcon } from '../icons.ts';
 import { S } from '../styles.ts';
 
 /**
@@ -237,5 +237,56 @@ export function renderFamilyQuotaBar(
 		),
 		(familyKey !== 'argon' || has5h) ? renderLine(t, t('quota.fiveHour'), pct5h, c5h, note5h, FIVE_H_MS, info?.remainingFraction, info?.resetTime, isRefreshing) : null,
 		renderLine(t, t('quota.weekly'), pctWeekly, cWeekly, noteWeekly, SEVEN_D_MS, info?.weeklyFraction, info?.weeklyResetTime, isRefreshing),
+	);
+}
+
+/** Short absolute stamp for "this data is from …" notes (past tense). */
+function formatSnapshotStamp(ms: number): string {
+	const d = new Date(ms);
+	const hh = d.getHours().toString().padStart(2, '0');
+	const mm = d.getMinutes().toString().padStart(2, '0');
+	return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+}
+
+/**
+ * One-line "quota unavailable" note for an account whose last refresh produced
+ * no authoritative snapshot.
+ *
+ * WHY (live 2026-11-19): `buildFamilyQuotas` deliberately keeps the previous
+ * complete value when the summary failed — a partial fallback must never
+ * overwrite good data — so a refused account renders yesterday's percentages
+ * with nothing to say they are old. The user reported exactly that as "the
+ * second account is stuck". The numbers stay honest; the freshness does not
+ * get to hide.
+ */
+export function renderQuotaUnavailableNote(
+	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
+	acc: ManagedAccount,
+): unknown {
+	const state = acc.quotaUnavailable;
+	if (!state) return null;
+	const newest = Math.max(0, ...Object.values(acc.quotas).map((q) => q?.updatedAt ?? 0));
+	const reason = t(`quota.unavailable.${state.reason}` as AgyLocaleKey);
+	return h('div', {
+		key: 'agy-quota-unavailable',
+		style: {
+			display: 'flex',
+			alignItems: 'center',
+			gap: '5px',
+			margin: '2px 0 5px 0',
+			padding: '3px 7px',
+			borderRadius: '6px',
+			fontSize: '11px',
+			fontWeight: 600,
+			color: 'var(--agy-quota-med-text)',
+			background: 'var(--agy-quota-med-bg)',
+			border: '1px solid var(--agy-quota-med-border)',
+		},
+	},
+		uiIcon('alert', 10, 'var(--agy-quota-med-text)'),
+		h('span', null, `${t('quota.unavailableTitle')} · ${reason}`),
+		newest > 0
+			? h('span', { style: { fontWeight: 500, opacity: 0.85 } }, t('quota.unavailableSince', { time: formatSnapshotStamp(newest) }))
+			: null,
 	);
 }

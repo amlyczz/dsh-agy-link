@@ -1576,6 +1576,13 @@ test('authoritative REST summary cleans up stale Argon on free accounts but pres
     override async fetchAvailableModels() {
       return { models: {} } as never
     }
+    // Without this the empty model list sends the pipeline into the legacy
+    // retrieveUserQuota fallback, which used to reach the REAL endpoints with a
+    // fake token (2 x 10s timeout: 22s per run, and pointless Google traffic
+    // from a unit test).
+    protected override async fetchUserQuotaEndpoint(): Promise<Response> {
+      return new Response('{}', { status: 200 })
+    }
     override async fetchQuotaSummary(token: string) {
       if (token.includes('pro')) {
         return {

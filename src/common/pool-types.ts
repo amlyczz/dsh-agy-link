@@ -109,6 +109,52 @@ export interface ManagedAccount {
    * cleared, because its argon cooldowns come from real 429s.
    */
   dedicatedGroups?: ModelFamily[]
+  /**
+   * Why the last quota refresh produced no authoritative snapshot, and when it
+   * may be probed again.
+   *
+   * WHY: a failed refresh used to be invisible. `buildFamilyQuotas` keeps the
+   * previous complete snapshot when the summary is unavailable (correct — a
+   * partial fallback must never overwrite good data), so an account whose
+   * summary endpoint answers 403 "not a valid license" showed yesterday's
+   * percentages forever with no error anywhere (live 2026-11-19). Recording the
+   * reason lets the console say "quota unavailable" and lets the background
+   * sweep stop re-probing an account that cannot answer.
+   */
+  quotaUnavailable?: QuotaUnavailableState
+}
+
+/**
+ * `no_license` — the backend refused the summary as unlicensed (403).
+ * `auth` — the summary was refused as unauthenticated (401).
+ * `unreachable` — every endpoint failed at the network layer.
+ * `partial` — the summary was missing but per-model fallback data arrived.
+ */
+export type QuotaUnavailableReason = 'no_license' | 'auth' | 'unreachable' | 'partial'
+
+export interface QuotaUnavailableState {
+  reason: QuotaUnavailableReason
+  /** When this state was first observed (not re-stamped by skipped probes). */
+  since: number
+  /** Epoch ms after which an unattended probe may try again. */
+  retryAfter: number
+  /** Short, non-sensitive detail (HTTP status family / PERMISSION_DENIED…). */
+  detail?: string
+}
+
+/**
+ * True when the unattended quota probe must skip this account's summary call.
+ *
+ * Only a licence refusal suppresses: it is the one verdict the network cannot
+ * fix on its own, and re-probing it every hour is pure risk-control exposure.
+ * `auth` stays on the existing authRequired lifecycle, and network faults must
+ * be retried normally.
+ */
+export function quotaSummarySuppressed(account: ManagedAccount, now = Date.now()): boolean {
+  const state = account.quotaUnavailable
+  if (state === undefined) return false
+  if (state.reason !== 'no_license') return false
+  return state.retryAfter > now
 }
 
 /**
@@ -241,6 +287,9 @@ export function shouldPollAccount(account: ManagedAccount): boolean {
   if (!account.enabled) return false
   if (account.authRequired) return false
   const now = Date.now()
+  // An account whose summary endpoint refuses it as unlicensed cannot produce
+  // quota data; probing it every hour only repeats the refusal.
+  if (quotaSummarySuppressed(account, now)) return false
   for (const cd of Object.values(account.cooldowns ?? {})) {
     if (cd && cd.cooldownUntil > now) return false
   }

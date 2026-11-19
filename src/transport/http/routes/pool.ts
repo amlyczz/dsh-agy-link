@@ -229,7 +229,12 @@ function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unkno
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
         const key = id || '__all__'
-        if (!quotaRefreshInFlight.has(key)) {
+        // A click that lands while the SAME key is already refreshing must say
+        // so. It used to look identical to a fresh start ("已开始刷新") while
+        // doing nothing for up to QUOTA_REFRESH_DEDUP_MS — the "I clicked and
+        // nothing happened" report.
+        const alreadyRunning = quotaRefreshInFlight.has(key)
+        if (!alreadyRunning) {
           // The dedupe entry is owned by the REAL work, not by a short race:
           // a 30s race used to drop the entry while `agy /usage` was still
           // running, so the next click started a second overlapping pipeline.
@@ -264,7 +269,7 @@ function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unkno
         // Answer IMMEDIATELY. The console polls /status every 3s, so the new
         // quota numbers appear on their own — no HTTP request needs to stay
         // open for the whole network cascade.
-        sendJson(res as RawRes, 200, { ok: true, pending: true, pool: pool.getPoolData() })
+        sendJson(res as RawRes, 200, { ok: true, pending: true, alreadyRunning, pool: pool.getPoolData() })
       })
 }
 

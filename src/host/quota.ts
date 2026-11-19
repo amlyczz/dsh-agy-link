@@ -25,6 +25,7 @@ import type { AccountPoolManager } from './pool.ts'
 import { readPrimaryCredential, parseCredentialDoc, credentialFingerprint, writePrimaryCredential, credentialSlotMutex } from './credential-slot.ts'
 import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
 import { buildAgyEnvWithProxy, pickProxy } from '../runtime/net/account-env.ts'
+import { QUOTA_FORCE_CONCURRENCY } from '../common/timeouts.ts'
 
 import {
   sameCredentialGrant,
@@ -37,6 +38,8 @@ import {
   type UserQuotaResponse,
 } from '../domain/quota/parse.ts'
 import { refreshAccountQuotaPipeline, type QuotaRefreshDeps } from '../features/quota/refresh.ts'
+import { EndpointHealth } from '../features/quota/endpoint-health.ts'
+import { sweepAccountsByEgress } from '../features/quota/sweep.ts'
 import {
   fetchAvailableModels as fetchAvailableModelsImpl,
   fetchQuotaSummary as fetchQuotaSummaryImpl,
@@ -45,6 +48,7 @@ import {
   requestQuotaSummaryEndpoint,
   requestUserQuotaEndpoint,
   type QuotaHttpDeps,
+  type QuotaSummaryFailure,
 } from '../features/quota/http.ts'
 import {
   getStoredToken as getStoredTokenImpl,
@@ -121,6 +125,15 @@ export class QuotaService {
   private preferredEndpointIndex = 0
   /** accountId -> in-flight getValidAccessToken attempt (dedup). */
   private readonly tokenRefreshInFlight = new Map<string, Promise<string | null>>()
+  /**
+   * Recent per-endpoint failures: a quota call that just reset is tried LAST
+   * instead of first (see features/quota/endpoint-health.ts for the incident).
+   */
+  private readonly endpointHealth = new EndpointHealth()
+  /** accountId -> refusal behind the last empty summary (drives quotaUnavailable). */
+  private readonly summaryFailures = new Map<string, QuotaSummaryFailure | null>()
+  /** accountIds with a refresh in flight, so the console can show real progress. */
+  private readonly refreshingIds = new Set<string>()
 
   /**
    * @param globalProxy resolves the plugin-wide proxy URL; used when the
@@ -144,6 +157,8 @@ export class QuotaService {
       preemptAutoUpdate?: () => boolean
       viaCli?: () => boolean
       forceStaggerMs?: () => number
+      /** Same-egress parallelism for a manual sweep (default 2; tests use 1). */
+      forceConcurrency?: () => number
     } = {},
   ) {}
 
@@ -151,7 +166,15 @@ export class QuotaService {
   private httpDeps(accountScope?: string): QuotaHttpDeps {
     return {
       agyVersion: () => this.agyVersion(),
-      ...(accountScope ? { accountScope } : {}),
+      endpointHealth: this.endpointHealth,
+      ...(accountScope
+        ? {
+            accountScope,
+            onSummaryFailure: (failure: QuotaSummaryFailure | null) => {
+              this.summaryFailures.set(accountScope, failure)
+            },
+          }
+        : {}),
       getPreferredEndpointIndex: () => this.preferredEndpointIndex,
       setPreferredEndpointIndex: (index) => { this.preferredEndpointIndex = index },
       fetchSummaryEndpoint: (endpoint, accessToken, proxyUrl, scope) => this.fetchSummaryEndpoint(endpoint, accessToken, proxyUrl, scope),
@@ -375,6 +398,21 @@ export class QuotaService {
    * public signature and every override point stay unchanged.
    */
   async refreshAccountQuota(account: ManagedAccount, force = false): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
+    this.refreshingIds.add(account.id)
+    this.summaryFailures.delete(account.id)
+    try {
+      return await this.runQuotaPipeline(account, force)
+    } finally {
+      this.refreshingIds.delete(account.id)
+    }
+  }
+
+  /** Account ids with a quota refresh in flight (the console renders "同步中" from this). */
+  refreshingAccounts(): string[] {
+    return [...this.refreshingIds]
+  }
+
+  private async runQuotaPipeline(account: ManagedAccount, force: boolean): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
     const deps: QuotaRefreshDeps = {
       pool: this.pool,
       shouldUseCli: () => this.cliDeps.viaCli?.() !== false,
@@ -390,6 +428,7 @@ export class QuotaService {
       readPrimaryCredential: (baseDir) => readPrimaryCredential(baseDir),
       writePrimaryCredential: (cred, baseDir) => writePrimaryCredential(cred, baseDir),
       credentialFingerprint: (raw) => credentialFingerprint(raw),
+      summaryFailure: () => this.summaryFailures.get(account.id) ?? null,
     }
     return refreshAccountQuotaPipeline(deps, account, force)
   }
@@ -475,25 +514,19 @@ export class QuotaService {
       return
     }
     // Group by effective proxy egress: distinct proxies run concurrently, while
-    // accounts sharing the SAME egress serialize with organic jitter so one IP
-    // never fires simultaneous multi-account OAuth/CloudCode bursts.
-    const byEgress = new Map<string, ManagedAccount[]>()
-    for (const acc of accounts) {
-      const egress = this.proxyFor(acc) || '__direct__'
-      const group = byEgress.get(egress) ?? []
-      group.push(acc)
-      byEgress.set(egress, group)
-    }
-    await Promise.allSettled(
-      [...byEgress.values()].map(async (group) => {
-        for (let i = 0; i < group.length; i++) {
-          await this.refreshAccountQuota(group[i]!, force).catch(() => null)
-          if (i < group.length - 1) {
-            const gap = nextForceGapMs()
-            if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap))
-          }
-        }
-      }),
-    )
+    // accounts sharing the SAME egress stay bounded and keep an organic jitter
+    // between starts — one IP must never fire a simultaneous multi-account
+    // burst. A user-initiated sweep may overlap a COUPLE of accounts on one
+    // egress (see sweep.ts); waiting for every account's full cascade in turn
+    // made a five-account pool take ~55s (measured 2026-11-19).
+    const concurrency = Math.max(1, Math.floor(this.cliDeps.forceConcurrency?.() ?? QUOTA_FORCE_CONCURRENCY))
+    await sweepAccountsByEgress(accounts, {
+      egressOf: (acc) => this.proxyFor(acc) || '__direct__',
+      run: async (acc) => {
+        await this.refreshAccountQuota(acc, force).catch(() => null)
+      },
+      staggerMs: nextForceGapMs,
+      concurrency,
+    })
   }
 }

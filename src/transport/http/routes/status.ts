@@ -3,7 +3,7 @@ import { runRoute, sendJsonWithEtag, type RawRes, type RouteRegistrar } from '..
 import { sanitizeCatalogEntries } from '../../../host/models.ts'
 
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
-  const { getConfig, bin, store, pool, catalog, auth, poolAuth, adapter, translation, lastRun } = services
+  const { getConfig, bin, store, pool, quota, catalog, auth, poolAuth, adapter, translation, lastRun } = services
   const { version: versionCache, dormantReason } = services.status
       runRoute(res, async () => {
         const cfg = getConfig()
@@ -40,6 +40,10 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           auth: auth.status(),
           poolAuth: poolAuth.status(),
           pool: poolData,
+          // Real in-flight refreshes. The client used to derive "syncing" from
+          // its own click, which cleared the moment the route answered — so a
+          // ~55s serial cascade showed no progress at all.
+          quotaRefreshing: typeof quota?.refreshingAccounts === 'function' ? quota.refreshingAccounts() : [],
           catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
           // Dynamically reflects models supported by the currently active account (e.g. hides Argon when active lacks Argon)
           catalogModels: sanitizeCatalogEntries(supportedModels).entries,

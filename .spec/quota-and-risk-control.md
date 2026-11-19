@@ -18,7 +18,7 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
    - `agyFetch(url, init, proxyUrl, accountScope)` 按 `accountScope@@effectiveProxy` 隔离 Undici `ProxyAgent` / 连接池（上限 32 LRU，退出时统一关闭），确保共享同一代理出口的不同 Google 账号绝不复用同一条上游 Keep-Alive TCP/TLS 会话。
 4. **启动序列严格串行定锚与按出口错峰**：
    - 启动时先完成 `agy --version` 版本探测，填充真实版本号并同步给 OAuth 模块后，再允许后续 `QuotaService` 发起请求。
-   - 手动与 CLI 全池配额刷新（`refreshAllQuotas(true)`）同样跳过已停用（`!acc.enabled`）与 `TOS_VIOLATION` 终态封禁账号；按有效出口代理分组（不同代理组间并行，**同一代理/直连出口内的多账号强制串行并附加 `400~850ms` 随机抖动**），消除同 IP 瞬时多号关联爆发。
+   - 手动与 CLI 全池配额刷新（`refreshAllQuotas(true)`）同样跳过已停用（`!acc.enabled`）与 `TOS_VIOLATION` 终态封禁账号；按有效出口代理分组（不同代理组间并行）。**同一代理/直连出口内：后台自动轮询强制串行（并发 1），用户手动刷新允许有界并发 2（`QUOTA_FORCE_CONCURRENCY`），且每次账号 START 之间仍插入 `400~850ms` 随机抖动**——「串行到底」曾让 5 号同出口的池子点一次刷新耗掉约 55 秒（2026-11-19 实测），而并发上限 2 + 起点抖动既压掉大部分等待，又不产生同 IP 瞬时多号爆发。调度实现见 `src/features/quota/sweep.ts`（`sweepAccountsByEgress` / `runStaggered`），Windows 分支因凭据槽互斥保持完全串行。
    - `AgyAdapter` 请求频率与账号/出口启动间隔采用 **TAT（理论到达时间）** 同步预占算法，防止多并发会话在 `await` 后同时唤醒形成惊群，并在共享出口跨号切换时保持 `350~650ms` 最小安全间隔。
 
 ## 2. 配额采集：CLI 优先 + 按需最小化 REST 降级
@@ -26,7 +26,21 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
 1. **主账号 / 槽持有者优先走官方 `agy -p /usage`（零 Node REST 暴露）**：
    - `agy -p /usage --output-format stream-json` 由官方 Go 二进制发起，具备原生 TLS 指纹与官方 token 续期能力，且能返回 Pro/Ultra 专属 `Gemini 4 Argon` 独立分组。
    - `cliSlotHoldsAccount()` 通过比对系统钥匙串凭据与独立持久化的主凭据/磁盘凭据（`sameCredentialGrant`）严格验证槽归属（拒绝无独立锚点时的同义自证），验证通过即走 `agy -p /usage`。
-2. **REST 降级采用「按需补充，避免冗余三并发」**：
+2. **端点健康记忆（失败端点置后，绝不跳过探活）**：
+   - `AGY_ENDPOINTS` 的固定顺序让**每个账号的每次配额请求**都从同一个端点起步。实测 2026-11-19：`daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` 对本机所有账号稳定 `ECONNRESET`（5.3~8.4s），而 sandbox 端点正常，于是每个账号每轮都要先白等一次超时。
+   - `src/features/quota/endpoint-health.ts` 记录 **`操作|端点`** 维度的失败（TTL `QUOTA_ENDPOINT_DOWN_MS`=10 分钟，实例级、非模块全局），`orderEndpointsByHealth()` 把刚失败的端点排到最后；**全部端点都在冷却时按原顺序照常探测**，避免一次抖动把池子锁死。401/403 视为「端点活着、账号被拒」，不置为失败。
+   - 摘要调用额外回报失败原因（`onSummaryFailure`）：`no_license`（403 且响应体提到 license）/ `auth`（401）/ `network` / `http`，只保留 API 枚举（如 `PERMISSION_DENIED`），不带响应正文。
+
+3. **权威快照缺失必须显式化（禁止静默保留旧值当新值）**：
+   - `buildFamilyQuotas` 在摘要失败时**故意保留上一份完整数据**（部分回退数据不得覆盖好数据）。这条规则本身正确，但旧实现让「摘要拿不到」完全无声：账号卡片会永远显示前一天的百分比，用户只能看到「一直卡在那」。
+   - 现在摘要非权威时写入账号级 `quotaUnavailable = { reason, since, retryAfter, detail? }`，控制台据此渲染「配额刷新失败 · 原因 · 数据停留在 <时间>」；拿到权威摘要后立即清除（`clearQuotaUnavailable`）。
+   - 原因分类：`no_license` / `auth` / `unreachable`（网络层全失败）/ `partial`（只有模型级回退数据）。
+
+4. **无 license 账号的后台静默期**：
+   - `reason === 'no_license'` 且未过 `retryAfter`（`QUOTA_LICENSE_RETRY_MS`=6 小时）的账号：后台轮询（`shouldPollAccount`）直接跳过，且管线内的摘要请求短路（`quotaSummarySuppressed`），不再每小时撞两次注定失败的摘要端点。
+   - **用户手动点「同步」不受此限制**（`force=true` 必探），这样续费/恢复许可后点一下就能立刻恢复；探测成功即清标记。
+
+5. **REST 降级采用「按需补充，避免冗余三并发」**：
    - 先请求 `retrieveUserQuotaSummary` 与 `fetchAvailableModels`；仅当 `fetchAvailableModels` 未携带模型级 `quotaInfo` 时才回退请求 `retrieveUserQuota`（保留 issue #48 修正过期 5h 占位符能力的同时，消除稳态下每次轮询多余的第 3 个内部端点请求）。
    - 后台自动轮询严格跳过已禁用、冷却中、终态封禁账号（`shouldPollAccount`），账号间保持 `2000~3500ms` 随机抖动间隔（`staggerJitterMs`）。
 
@@ -54,6 +68,8 @@ Google Cloud Code PA 使用 Proto3 JSON 序列化：当配额耗尽（`remaining
 - `test/quota.test.ts` / `test/domain-quota.test.ts`：CLI `/usage` 主账号放行、REST 按需降级、Proto3 零值省略解析为 `0%`、消费级单一端点。
 - `test/warmup.test.ts`：CLI 探针执行（零 `undici` 推理请求、零 `anthropic-beta` 伪造头）、`TOS_VIOLATION` 终态隔离与 `appeal_url` 保留、非终态错误不误标 `authRequired`。
 - `test/failure-classifier.test.ts` / `test/rate-limit-classify.test.ts`：CLI 文本 `TOS_VIOLATION` 识别与停止跨号连坐重试。
+- `test/quota-availability.test.ts`：端点健康 TTL 与置后不丢弃、403 license 分类为 `no_license`、`quotaUnavailable` 写入/清除、`no_license` 后台摘要短路与手动强制探测、同出口有界并发 + 起点抖动、`refreshingAccounts()` 进度暴露。
+- `test/http-contract.test.ts`：`/pool/refresh-quota` 的 `alreadyRunning` 重复点击回报、`/status` 的 `quotaRefreshing` 透出。
 
 ## 独立 Argon 池的判据：组名或 bucket，绝不用 description（issue #130）
 

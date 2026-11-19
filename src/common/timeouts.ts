@@ -40,6 +40,33 @@ export function longRouteTimeout(jobTimeoutMs: number): number {
 export const QUOTA_REFRESH_DEDUP_MS = 90_000
 
 /**
+ * How long an endpoint that just failed keeps its "try me LAST" memory.
+ *
+ * Measured 2026-11-19: retrieveUserQuotaSummary on
+ * daily-cloudcode-pa.googleapis.com resets the connection after 5-8s for every
+ * account, while the sandbox endpoint answers. The endpoint list is walked from
+ * the same end on every refresh, so without this memory each account pays that
+ * timeout first — including the hourly background sweep. Short enough that a
+ * recovered endpoint returns on its own.
+ */
+export const QUOTA_ENDPOINT_DOWN_MS = 10 * 60_000
+
+/**
+ * How long a "no valid licence" verdict (403 from the quota summary) keeps the
+ * UNATTENDED probe away from that account. An explicit user refresh ignores it,
+ * so a restored licence is picked up the moment the user asks for it.
+ */
+export const QUOTA_LICENSE_RETRY_MS = 6 * 3600_000
+
+/**
+ * Same-egress parallelism for a user-initiated pool sweep. Antigravity's risk
+ * control correlates accounts by source IP, so this stays deliberately small;
+ * the scheduler still spaces every account start by the organic jitter, and the
+ * unattended sweep always uses 1.
+ */
+export const QUOTA_FORCE_CONCURRENCY = 2
+
+/**
  * Grace the idle watchdog grants before killing a quiet child. libuv runs the
  * timers phase BEFORE the poll phase: when the DSH host's event loop is blocked
  * (a large parse, many parallel workers), an expired watchdog can fire before

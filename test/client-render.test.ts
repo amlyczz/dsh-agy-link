@@ -55,6 +55,7 @@ import {
 	isMediaFile,
 	isLocalFilePath,
 } from '../src/client/images/media.ts';
+import { renderQuotaUnavailableNote } from '../src/client/sections/QuotaPanel.ts';
 
 const createElement = (React as { createElement: (type: unknown, props?: unknown) => unknown }).createElement;
 
@@ -730,3 +731,31 @@ test('run_code view: a valid mirror wrapper without a tool hint still renders th
 	assert.equal(html.includes('data-kind="code"'), false);
 });
 
+test('quota-unavailable note says WHY a frozen row is frozen', () => {
+	// Live 2026-11-19: an account whose summary endpoint answered 403 "not a
+	// valid license" kept rendering yesterday's percentages with no hint that
+	// they were old — reported as "the second account is just stuck".
+	const t = (key: string, vars?: Record<string, string | number>): string =>
+		vars?.time === undefined ? key : `${key}:${vars.time}`;
+	const account = {
+		id: 'dao',
+		alias: 'dao',
+		dir: '',
+		enabled: true,
+		createdAt: 0,
+		cooldowns: {},
+		quotas: { google: { remainingFraction: 0.27, updatedAt: Date.parse('2026-11-18T08:04:47Z') } },
+		quotaUnavailable: { reason: 'no_license', since: 1, retryAfter: 2 },
+	};
+
+	const html = renderToStaticMarkup(renderQuotaUnavailableNote(t as never, account as never) as never);
+	assert.match(html, /quota\.unavailableTitle/);
+	assert.match(html, /quota\.unavailable\.no_license/, 'the reason must be named, not just "failed"');
+	assert.match(html, /quota\.unavailableSince:\d+\/\d+ \d{2}:\d{2}/, 'and the snapshot age must be visible');
+
+	assert.equal(
+		renderQuotaUnavailableNote(t as never, { ...account, quotaUnavailable: undefined } as never),
+		null,
+		'a healthy account renders no note',
+	);
+});

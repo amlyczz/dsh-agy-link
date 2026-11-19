@@ -151,7 +151,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				),
 			),
 			h(AccountsPanel, {
-				t, pool, accounts, loadingAction,
+				t, pool, accounts, loadingAction, quotaRefreshing: status.quotaRefreshing ?? [],
 				proxyInputs, setProxyInputs, editingProxyId, setEditingProxyId,
 				expandedModels, toggleExpand, optimisticActiveId,
 				handlers: { ...accountActions, beginReauth: auth.handleBeginReauth },
