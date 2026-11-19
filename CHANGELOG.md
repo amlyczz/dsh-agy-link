@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.39 (2026-11-19)
+
+### English
+
+- **Fix(quota): a manual pool refresh no longer freezes one account for days or takes a minute (reported live: "the first one refreshed, the second is just stuck, and every refresh is far too slow").** Two independent causes, both fixed:
+  - **Stuck row.** An account whose `retrieveUserQuotaSummary` was refused (`403 You do not have a valid license of this product`, with `ECONNRESET` on the daily endpoint) produced no authoritative snapshot — and `buildFamilyQuotas` deliberately keeps the previous complete value, so the card kept rendering yesterday's percentages with **no error anywhere** (three `catch` layers swallowed it and the route had already answered `ok`). The pipeline now records `quotaUnavailable = { reason, since, retryAfter, detail }` on the account (`no_license` / `auth` / `unreachable` / `partial`), the console renders "Quota refresh failed · <reason> · figures last updated <time>", and an authoritative snapshot clears the marker. A `no_license` account also leaves the hourly background sweep for `QUOTA_LICENSE_RETRY_MS` (6h) and skips the doomed summary call entirely, while an explicit click still probes (so a renewed licence recovers immediately).
+  - **Slow.** `daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` resets the connection for every account on this machine (measured 5.3-8.4s) while the sandbox endpoint answers, and every quota call walked the fixed endpoint list from that dead end first — on every account, every refresh, including the background sweep. A per-operation endpoint health memory (`QUOTA_ENDPOINT_DOWN_MS` 10min) now tries recently-failed endpoints last (never skipping them; a total outage still probes), and a user-initiated sweep may run 2 same-egress accounts in parallel with the existing 400-850ms start jitter (`sweep.ts`); the unattended sweep stays strictly serial. One five-account pool that measured ~55s now finishes its per-account work in roughly the time of two cascades.
+- **Fix(ui): refresh progress is real, and a duplicate click says so.** `/status` now exposes `quotaRefreshing` (the host's in-flight account ids) and account cards render "syncing" from it instead of from the click that cleared the moment the route answered; `/pool/refresh-quota` returns `alreadyRunning: true` when the same key is still in flight, so the console says "a refresh is already running" instead of a false "started".
+
+### 中文
+
+- **修复(额度)：手动刷新账号池不再让某个号「永远卡住」，也不再慢到一分钟（现场反馈：第一个刷出来了、第二个一直卡着、每个都慢得离谱）。** 两个独立根因，都已修复：
+  - **卡住**。某账号的 `retrieveUserQuotaSummary` 被拒（`403 You do not have a valid license of this product`，daily 端点还 `ECONNRESET`），拿不到权威快照；而 `buildFamilyQuotas` 的设计是**保留上一份完整数据**（防止部分回退数据覆盖好数据），于是卡片一直渲染前一天的百分比，**任何地方都没有报错**（三层 `catch` 全吞、路由还提前回了 `ok`）。现在管线把 `quotaUnavailable = { reason, since, retryAfter, detail }` 写到账号上（`no_license` / `auth` / `unreachable` / `partial`），控制台渲染「配额刷新失败 · 原因 · 数据停留在 <时间>」，拿到权威快照即清除标记。`no_license` 账号同时退出每小时后台轮询 `QUOTA_LICENSE_RETRY_MS`（6 小时）并跳过注定失败的摘要请求；**用户手动点击仍然必探**（续费后可立即恢复）。
+  - **慢**。`daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` 对本机每个账号都重置连接（实测 5.3~8.4 秒），而 sandbox 端点正常，但每次配额调用都从这条死端点起步——每个账号、每次刷新、包括后台轮询。新增按「操作|端点」的失败记忆（`QUOTA_ENDPOINT_DOWN_MS` 10 分钟），把刚失败的端点排到最后（**绝不跳过**，全部失败时仍按原序探测）；用户手动全池刷新允许**同一出口内 2 个账号并发**并保留原有 `400~850ms` 起点抖动（`sweep.ts`），后台轮询仍严格串行。实测 5 号同出口的池子从约 55 秒降到约两个级联的时间。
+- **修复(UI)：刷新进度是真的，重复点击也有话讲。** `/status` 新增 `quotaRefreshing`（宿主在途的账号 id），账号卡据此渲染「同步中」，不再依赖「点击后立刻清空」的客户端状态；`/pool/refresh-quota` 在同 key 仍在途时返回 `alreadyRunning: true`，控制台提示「正在刷新中」而不是谎报「已开始刷新」。
+
 ## 0.6.38 (2026-11-19)
 
 ### English
