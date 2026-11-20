@@ -48,6 +48,8 @@ export interface StatusPayload {
 	catalog?: { source: string; count: number; lastError: string | null };
 	/** The catalog exactly as the host's model picker sees it (id, label, supported efforts). */
 	catalogModels?: ReadonlyArray<CatalogModelView>;
+	/** Per-account discovered catalog models, keyed by account id. */
+	accountModels?: Readonly<Record<string, ReadonlyArray<CatalogModelView>>>;
 	hiddenModels?: readonly string[];
 	autoWarmup?: boolean;
 	warmupModels?: readonly string[];

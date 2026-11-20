@@ -92,6 +92,24 @@ test('status route filters catalogModels based on the active account capabilitie
   const data2 = res2.json()
   const models2 = data2.catalogModels as Array<{ id: string }>
   assert.equal(models2.some((m) => m.id.includes('argon')), false, 'ele should NOT see argon in catalogModels')
+  assert.equal((data2.catalog as { count: number }).count, models2.length, 'catalog.count tracks active supported models count')
+
+  // 3. Per-account discovered catalogs stay isolated in status.accountModels (no cross-account bleed)
+  const accCatMap = (services.catalog as unknown as { accountCatalogs: Map<string, unknown> }).accountCatalogs
+  accCatMap.set(accWithArgon.id, {
+    source: 'discovered',
+    models: [
+      { id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['low', 'high'] },
+      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', efforts: ['low'] },
+    ],
+    discoveredAt: Date.now(),
+  })
+  const res3 = mockRes()
+  statusHandler({ method: 'GET' }, res3)
+  await new Promise((r) => setTimeout(r, 10))
+  const data3 = res3.json() as { accountModels: Record<string, Array<{ id: string }>> }
+  assert.deepEqual(data3.accountModels[accWithArgon.id]?.map((m) => m.id), ['gemini-4-argon', 'gemini-3.8-flash'])
+  assert.equal(data3.accountModels[accWithoutArgon.id], undefined, 'undiscovered sibling must not borrow another catalog')
 })
 
 test('POST /plugins/agy-link/pool/import imports refresh token via HTTP', async (t) => {

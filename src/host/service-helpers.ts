@@ -8,6 +8,7 @@ import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deep
 import { Err, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import type { ImageRefLike } from './media.ts'
 import type { TranslationRunnerRequest, TranslationRunnerResult } from '../features/translation/types.ts'
+import type { TranslationWorkerPool } from '../features/translation/worker.ts'
 
 /** Cross-session concurrency limiter (ADR-12). max() <= 0 means unlimited. */
 export class Semaphore {
@@ -199,7 +200,12 @@ export async function runTranslationStream(
   getConfig: () => PluginConfig,
   log: (msg: string) => void,
   req: TranslationRunnerRequest,
+  workerPool?: TranslationWorkerPool,
 ): Promise<TranslationRunnerResult> {
+  if (workerPool !== undefined) {
+    const fast = await workerPool.tryTranslate(req)
+    if (fast !== null) return fast
+  }
   const startedAt = Date.now()
   const controller = new AbortController()
   const timer = setTimeout(
@@ -220,7 +226,7 @@ export async function runTranslationStream(
       purpose: 'translation',
       signal,
       ...(getConfig().translateBindConversation && req.setup !== undefined
-        ? { agyTranslateSession: { setup: req.setup, text: req.prompt } }
+        ? { agyTranslateSession: { setup: req.setup, text: req.text ?? req.prompt } }
         : {}),
     } as unknown as GenerateOptions
     let text = ''

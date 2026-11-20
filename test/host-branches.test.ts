@@ -1344,3 +1344,50 @@ test('purgeStaleIsolatedKeychain: healthy keychain kept, throwing run purges it,
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('systemHome on darwin refuses creating stale disk file and aborts persist if Keychain switches mid-refresh', async () => {
+  const home = tempDir('hb-syshome-kc-')
+  const restoreHome = setSystemHome(home)
+  const restorePlat = setPlatform('darwin')
+  const origFetch = globalThis.fetch
+  try {
+    const acc = account('acc_sys', { dir: '', systemHome: true })
+    const file = quotaTokenFilePath(acc)
+    persistRefreshedToken(tokenDeps(), acc, { access_token: 'A1', refresh_token: 'R_OLD' }, 'R_OLD')
+    assert.equal(existsSync(file), false, 'darwin systemHome must not create new disk token file when none exists')
+
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ token: { access_token: 'OLD', refresh_token: 'R_OTHER' } }))
+    persistRefreshedToken(
+      tokenDeps({ parseCredentialDoc: () => ({ refreshToken: 'R_OTHER' }) }),
+      acc,
+      { access_token: 'A_STALE', refresh_token: 'R_OLD' },
+      'R_OLD',
+    )
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).token.access_token, 'OLD', 'mismatched refreshToken on disk prevents overwrite')
+
+    let kcToken = { accessToken: 'ya29.expired', refreshToken: 'R_OLD', expiryMs: Date.now() - 60_000 }
+    globalThis.fetch = (async () => {
+      // Simulate user switching account in Antigravity.app while OAuth refresh is in flight.
+      kcToken = { accessToken: 'ya29.new_acct', refreshToken: 'R_NEW', expiryMs: Date.now() + 3_600_000 }
+      return new Response(JSON.stringify({ access_token: 'A_FROM_OLD_GRANT', expires_in: 3600 }), { status: 200 })
+    }) as typeof fetch
+    let persisted = 0
+    const token = await getValidAccessToken(
+      tokenDeps({
+        getStoredToken: async () => ({ accessToken: 'ya29.expired', refreshToken: 'R_OLD', expiryMs: Date.now() - 60_000 }),
+        readSystemKeychainToken: async () => kcToken,
+        persistRefreshedToken: () => { persisted += 1 },
+      }),
+      acc,
+      new Map(),
+    )
+    assert.equal(token, null, 'must discard stale refresh when OS Keychain switched grant mid-flight')
+    assert.equal(persisted, 0)
+  } finally {
+    globalThis.fetch = origFetch
+    restorePlat()
+    restoreHome()
+    rmSync(home, { recursive: true, force: true })
+  }
+})

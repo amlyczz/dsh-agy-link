@@ -149,3 +149,25 @@ test('REGRESSION: the shell itself is locked while the console is open', () => {
 		'locking only [data-conversation-scroll] leaves a shell-level scroller free behind the overlay',
 	)
 })
+
+test('REGRESSION: scrolling menu/console has no GPU layer promotion traps on quota tracks or hover buttons', async () => {
+	const shimmerTrack = cssRule('.agy-shimmer-track')
+	assert.equal(/[^-]contain\s*:/.test(shimmerTrack), false, '.agy-shimmer-track must not use contain: paint inside scrolling menus')
+	assert.equal(/transform\s*:/.test(shimmerTrack), false, '.agy-shimmer-track must not force translateZ(0)')
+	const btnHover = cssRule('.agy-btn:hover:not(:disabled)')
+	assert.equal(/transform\s*:/.test(btnHover), false, '.agy-btn:hover must not promote layers mid-scroll')
+	assert.equal(/filter\s*:/.test(btnHover), false, '.agy-btn:hover must not apply filter mid-scroll')
+
+	const quotaPanelSrc = readFileSync(join(root, 'src/client/sections/QuotaPanel.ts'), 'utf8')
+	assert.match(quotaPanelSrc, /const isShimmer = isRefreshing\b/, 'static unreported bars must not shimmer infinitely')
+
+	const { acquireOverlaySuspend, isOverlaySuspended } = await import('../src/client/scroll-guard.ts')
+	assert.equal(isOverlaySuspended(), false)
+	const release1 = acquireOverlaySuspend()
+	const release2 = acquireOverlaySuspend()
+	assert.equal(isOverlaySuspended(), true)
+	release1()
+	assert.equal(isOverlaySuspended(), true, 'ref-counted until all mounted settings views unmount')
+	release2()
+	assert.equal(isOverlaySuspended(), false)
+})

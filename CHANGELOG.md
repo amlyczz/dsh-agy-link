@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.6.47 (2026-11-20)
+
+### English
+
+- **Perf(translation): warm persistent `agy` worker pool + `low` default effort + zero-enrichment aux path.**
+  - Added `TranslationWorkerPool` (`src/features/translation/worker.ts`) for POSIX hosts: keeps at most one warm `agy -p --output-format stream-json --input-format stream-json --mode plan` child (`cwd = tmpdir()`, no `--add-dir` / `--disable-slash-commands`) keyed by `${accountId}|${model}|${effort}`, with idle TTL (`5m`) and turn/char recycle (`8` turns / `32,000` chars). Subsequent translations skip the ~8–9s cold CLI startup and exit wait (~4–9s end-to-end vs ~20–40s before). Windows keeps `ctx.llm.stream` to preserve OS Credential Manager slot locking.
+  - Changed default `translateEffort` from `medium` to `low` (plain-language rewriting does not benefit from extended chain-of-thought latency) and updated the four locale hints accordingly.
+  - Auxiliary non-image runs (`isAux && !isImage`) now skip `SubagentTracker` and SQLite thought/tool-arg polling in `driveSpan`, and `startAttemptProcess` eagerly persists successful conversation bindings on `result` so rapid back-to-back bound calls never race child exit.
+- **Fix(accounts/models): zero-redundancy per-account model lists, orchestrator model eligibility, and authoritative catalog attribution.**
+  - Fixed false `lack model "gemini-pro-orchestrator-neon" in their catalog` rejections on Pro/Ultra accounts: Google's REST `fetchAvailableModels` breakdown never includes CLI-synthesized orchestrator slugs (`gemini-pro-orchestrator-neon`, `gemini-pro-orchestrator-g1-pro`), so whenever an account's per-account `agy models` cache was absent or stale, `accountSupportsModel` vetoed it. `accountSupportsModel` now recognizes backing quota evidence (`gemini-4-neon` for `gemini-pro-orchestrator-neon`, Argon access for `gemini-pro-orchestrator-g1-pro`) and `baseModelSlug` strips `-xhigh` and `-tiered-*` suffixes; global `ModelCatalog.refresh()` now also attributes its result to the exact `probedAccount.id` it ran under, and the issue-#125 self-heal `refreshQuota` also warms undiscovered accounts.
+  - Added `buildAccountModelRows()` (`src/common/account-models.ts`) and surfaced `status.accountModels` (keyed by account id) from each account's real `agy models` discovery; `status.catalog.count` now tracks the active account's actual supported model count.
+  - Account cards render the deduplicated per-account list (with effort tags when applicable) instead of raw 30+ row REST quota dumps, filtering `-sonar`/`-image` noise, folding `-tiered`/effort suffixes in fallback mode, and leaving unknown quota percentages blank instead of fabricating `100%`.
+  - `POST /plugins/agy-link/pool/refresh-quota` now passes `id` to `catalog.forceRefresh(id)` on single-account sync and triggers `catalog.warmAccounts()` on full sync.
+- **Fix(credentials): guard macOS/Linux `systemHome` against stale Keychain/disk clobbering and disabled-primary fallback.**
+  - When refreshing an OAuth token for `systemHome` (`acc_primary`) on macOS/Linux, `getValidAccessToken` re-verifies the live OS Keychain `refreshToken` before persisting and discards the response if the user switched accounts in `Antigravity.app` mid-flight; `persistRefreshedToken` also avoids creating a new disk token file under real `HOME` when none exists.
+  - Global `ModelCatalog` discovery now strictly skips disabled/unhealthy `lastActiveAccountId` and `primaryAccountId` entries and refuses to fall back to unisolated real `HOME` when all pool accounts are disabled.
+- **Fix(quota): distinguish `VALIDATION_REQUIRED` and `TOS_VIOLATION` from free-tier `403 PERMISSION_DENIED` refusals.**
+  - `classifySummaryRefusal()` now checks `TOS_VIOLATION` and `VALIDATION_REQUIRED` BEFORE the generic `403 PERMISSION_DENIED` free-tier branch, preventing Pro/Ultra accounts that require Google web verification from being mislabeled as "free-tier · weekly quota only". Extracts Google's `validation_url` into `quotaUnavailable.actionUrl` and renders a red warning banner with a direct "Verify now" link in the console (all 4 locales).
+- **Fix(adapter): eliminate `agy stream ended without a result event` crashes and dead 3x retry replays on idle-grace termination.**
+  - When `agy 1.5+` catches `SIGTERM` from the idle-grace reaper, it can emit a bare `{ ok: false, response: '' }` error result before exiting — which `EventMapper` ignores while `rec.hasResult` became `true`, skipping synthetic reply recovery and settling `failureInfo = null` (causing `agy stream ended without a result event` followed by 3 identical dead-recording replays). `handleAttemptOutcome` now checks for a *consumable* result (`ok || response !== ''`) before skipping recovery, and `AgyAdapter` forgets a settled recording lacking any consumable result past the cursor on retry instead of re-driving it.
+- **Fix(client): eliminate Antigravity console/menu scroll flicker.**
+  - Static unreported (`—`) quota bars no longer run infinite `.agy-shimmer-track` GPU animations (shimmer runs only during active refresh), removed `contain: paint` / `transform: translateZ(0)` / `isolation: isolate` from `.agy-shimmer-track` and `transform` / `filter` from `.agy-btn:hover` / `.agy-card-hover`, and added ref-counted `acquireOverlaySuspend()` while `SettingsSection` is mounted so scrolling inside DSH's native Settings -> Antigravity view suspends background conversation scanners.
+
+### 中文
+
+- **性能(翻译)：常驻热进程池 + 默认 `low` 思考档 + 辅助通道免 SQLite 轮询。**
+  - 在 macOS/Linux 新增常驻翻译进程池 `TranslationWorkerPool`（`src/features/translation/worker.ts`）：最多保留 1 个 `agy -p --output-format stream-json --input-format stream-json --mode plan`（`cwd = tmpdir()`，不传 `--add-dir` 与 `--disable-slash-commands`），按 `${accountId}|${model}|${effort}` 复用，空闲 `5m` 或累计 `8` 轮 / `32,000` 字符自动回收；后续翻译免除约 8–9 秒 CLI 冷启动与退出等待（端到端降至约 4–9 秒）。Windows 维持 `ctx.llm.stream` 以遵守系统凭据槽互斥锁。
+  - 默认 `translateEffort` 由 `medium` 调整为 `low`（口语化「译成人话」无需冗长思维链），同步更新四语言提示文案。
+  - 非生图辅助调用（`isAux && !isImage`）跳过 `SubagentTracker` 与 `driveSpan` 的 SQLite 思考/工具参数重试轮询，并在 `result` 成功事件到达时即刻落盘会话绑定，避免连续调用与子进程退出竞态。
+- **修复(账号/模型列表与选号)：单账号模型展示 0 冗余、修复编排模型误判不可用及全局发现目录归属。**
+  - 修复 Pro/Ultra 账号偶发误报 `lack model "gemini-pro-orchestrator-neon" in their catalog`：Google REST 配额接口（`fetchAvailableModels`）不会返回 CLI 虚拟编排模型（`gemini-pro-orchestrator-neon`、`gemini-pro-orchestrator-g1-pro`），导致账号尚未预热单账号 `agy models` 目录（如刚重启或刚加号）或缓存陈旧时被 `accountSupportsModel` 误拒。现支持分别通过 `gemini-4-neon` 配额与 Argon 权限证据识别编排模型，`baseModelSlug` 同步兼容 `-xhigh` 与 `-tiered-*` 后缀；全局 `ModelCatalog.refresh()` 成功时同步写入实际被探测的 `probedAccount.id` 账号目录，选号自愈 `refreshQuota` 亦补齐 `warmAccounts()`。
+  - 新增纯投影模块 `buildAccountModelRows()`（`src/common/account-models.ts`），并在 `/plugins/agy-link/status` 返回分账号发现目录 `accountModels`；`catalog.count` 同步对齐当前活跃账号真实可用模型数。
+  - 账号卡片展开列表不再直接平铺原始 REST 配额里的 30+ 冗余行，而是优先展示该账号自身 `agy models` 发现的去重模型与档位，回退时自动折叠 `-tiered`/档位后缀、过滤 `-sonar`/`-image` 内部项、按名称去重，且未知余量留空不伪造 `100%`。
+  - `POST /plugins/agy-link/pool/refresh-quota` 单账号刷新时显式传 `catalog.forceRefresh(id)`，全量刷新时同步触发 `catalog.warmAccounts()`。
+- **修复(凭据隔离)：加固 macOS/Linux `systemHome` 防切号踩踏与禁用主账号回退防护。**
+  - 非 Windows 下刷新 `systemHome`（`acc_primary`）OAuth token 落盘前，再次校验实时系统钥匙串 `refreshToken` 未切换；若刷新途中用户在 `Antigravity.app` 切号则丢弃旧响应，且当真实 `HOME` 下原本无磁盘 token 文件时不新建残片。
+  - `ModelCatalog` 全局发现回退严格跳过已停用或异常的 `lastActiveAccountId` / `primaryAccountId`，池内全部账号禁用时拒绝回退真实 `HOME` 触发无隔离探测。
+- **修复(额度提示)：区分 `VALIDATION_REQUIRED` / `TOS_VIOLATION` 与免费账号 `403 PERMISSION_DENIED`。**
+  - `classifySummaryRefusal()` 现优先识别 `TOS_VIOLATION` 与 `VALIDATION_REQUIRED`，不再把需要 Google 网页验证的 Pro/Ultra 账号误报为「免费账号 · 仅限周配额」；并从 403 响应提取 `validation_url` 存入 `quotaUnavailable.actionUrl`，在控制台以红色提示条直接给出「前往验证」链接（四语言）。
+- **修复(运行稳定性)：消除 `agy stream ended without a result event` 偶发失败与 3 次无效重放。**
+  - `agy 1.5+` 收到空闲收割 `SIGTERM` 时可能先吐出一个空的 `{ ok: false, response: '' }` 结果信封：`EventMapper` 会忽略该空错误，但原先 `rec.hasResult` 已为 `true` 导致跳过 SQLite 末条回复恢复并落入 `failureInfo = null`，进而触发 `agy stream ended without a result event` 且重试时 3 次重放同一条死记录。现改为判断是否存在可消费结果（`ok || response !== ''`），且续接命中无结果的已结束记录时主动忘记旧记录重新恢复。
+- **修复(客户端)：根治滚动 Antigravity 控制台/设置菜单闪屏。**
+  - 静态未上报（`—`）的配额条不再常驻无限 `.agy-shimmer-track` 动画（仅真正刷新中显示），移除 `.agy-shimmer-track` 的 `contain: paint` / `transform: translateZ(0)` / `isolation: isolate` 及 `.agy-btn:hover` / `.agy-card-hover` 的 `transform` / `filter` 合成层抖动，并为原生设置页挂载的 `SettingsSection` 增加引用计数 `acquireOverlaySuspend()` 暂停后台会话 DOM 扫描器。
+
 ## 0.6.46 (2026-11-20)
 
 ### English

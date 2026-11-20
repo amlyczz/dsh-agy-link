@@ -418,3 +418,34 @@ test('issue #139: activeCwds degrades to empty when the sessions service is unus
   const services = createHostServices(asCtx({ get: (k: string) => (k === 'sessions' ? throwing : undefined) }), {})
   assert.deepEqual(services.activeCwds(), [])
 })
+
+test('global ModelCatalog discovery skips disabled primaryAccountId and rejects when all accounts are disabled', async (t) => {
+  const root = sandbox(t)
+  const fakeBin = join(root, 'agy')
+  writeFileSync(fakeBin, [
+    '#!/bin/sh',
+    'echo "home=$HOME" >> "' + join(root, 'probe-homes.log') + '"',
+    'echo "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)"',
+    'echo "gemini-3.8-flash-high\tGemini 3.8 Flash (High)"',
+  ].join('\n'))
+  chmodSync(fakeBin, 0o755)
+  process.env.DSH_AGY_BIN = fakeBin
+
+  const services = createHostServices(asCtx({}), {})
+  const primary = services.pool.getAccounts().find((a) => a.systemHome)!
+  const secondary = services.pool.createAccountSlot('sec')
+  services.pool.setAccountEnabled(primary.id, false)
+
+  await services.catalog.forceRefresh()
+  const logged = readFileSync(join(root, 'probe-homes.log'), 'utf8').trim().split('\n')
+  assert.equal(logged.at(-1), `home=${secondary.dir}`, 'disabled primary must be skipped in favor of enabled secondary')
+  assert.equal(
+    services.catalog.getAccountCatalog(secondary.id)?.models.some((m) => m.id === 'gemini-3.8-flash'),
+    true,
+    'global discovery must also populate the probed account catalog so accountSupportsModel sees it immediately',
+  )
+
+  services.pool.setAccountEnabled(secondary.id, false)
+  await services.catalog.forceRefresh()
+  assert.match(services.catalog.get().lastError ?? '', /no enabled account available/)
+})

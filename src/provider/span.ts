@@ -201,6 +201,7 @@ export async function* driveSpan(
   supportsPlanExit?: boolean,
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
+  skipDbEnrichment = false,
 ): AsyncIterable<StreamChunk> {
   if (signal?.aborted) {
     rec.requestAbort?.()
@@ -218,7 +219,7 @@ export async function* driveSpan(
   deps.runs.remember(rec)
   deps.runs.pin(rec.runId)
   try {
-    yield* driveSpanBody(deps, rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice)
+    yield* driveSpanBody(deps, rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice, skipDbEnrichment)
   } finally {
     deps.runs.unpin(rec.runId)
     deps.runs.remember(rec)
@@ -237,6 +238,7 @@ export async function* driveSpanBody(
   supportsPlanExit?: boolean,
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
+  skipDbEnrichment = false,
 ): AsyncIterable<StreamChunk> {
   const queue = new ChunkQueue()
   let abortedLocally = false
@@ -277,11 +279,13 @@ export async function* driveSpanBody(
     try {
       for await (const ev of rec.eventsFrom(from)) {
         if (abortedLocally || signal?.aborted) break
-        await resolveEventThought(rec, ev, i, resolvedThoughts, pendingThoughtSteps)
-        if (pendingThoughtSteps.size > 0) {
-          await resolvePendingThoughts(rec, ev, resolvedThoughts, pendingThoughtSteps)
+        if (!skipDbEnrichment) {
+          await resolveEventThought(rec, ev, i, resolvedThoughts, pendingThoughtSteps)
+          if (pendingThoughtSteps.size > 0) {
+            await resolvePendingThoughts(rec, ev, resolvedThoughts, pendingThoughtSteps)
+          }
+          await resolveEventToolArgs(rec, ev, i, resolved)
         }
-        await resolveEventToolArgs(rec, ev, i, resolved)
         for (const ch of mapper.map(ev, i)) queue.push(ch)
         i++
         if (mapper.isFinished) {

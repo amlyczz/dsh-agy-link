@@ -26,6 +26,22 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
         } else {
           supportedModels = catalog.getModelsForAccount(activeAcc, pool)
         }
+        const sanitizedCatalogModels = sanitizeCatalogEntries(supportedModels).entries
+        const activeCat = (!cfg.poolWideCatalog && activeAcc && typeof catalog.getAccountCatalog === 'function')
+          ? (catalog.getAccountCatalog(activeAcc.id) ?? cat)
+          : cat
+        const catalogCount = typeof catalog.getModelsForAccount === 'function'
+          ? sanitizedCatalogModels.length
+          : activeCat.models.length
+        const accountModels: Record<string, Array<{ id: string; name: string; efforts: string[] }>> = {}
+        if (typeof catalog.getAccountCatalog === 'function') {
+          for (const acc of poolData?.accounts ?? []) {
+            const accCat = catalog.getAccountCatalog(acc.id)
+            if (accCat && accCat.source === 'discovered' && accCat.models.length > 0) {
+              accountModels[acc.id] = sanitizeCatalogEntries(accCat.models).entries
+            }
+          }
+        }
         sendJsonWithEtag(req, res as RawRes, 200, {
           plugin: 'dsh-agy-link',
           bin: bin(),
@@ -44,9 +60,10 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           // its own click, which cleared the moment the route answered — so a
           // ~55s serial cascade showed no progress at all.
           quotaRefreshing: typeof quota?.refreshingAccounts === 'function' ? quota.refreshingAccounts() : [],
-          catalog: { source: cat.source, count: cat.models.length, lastError: cat.lastError ?? null },
+          catalog: { source: activeCat.source, count: catalogCount, lastError: activeCat.lastError ?? cat.lastError ?? null },
           // Dynamically reflects models supported by the currently active account (e.g. hides Argon when active lacks Argon)
-          catalogModels: sanitizeCatalogEntries(supportedModels).entries,
+          catalogModels: sanitizedCatalogModels,
+          accountModels,
           hiddenModels: cfg.hiddenModels,
           autoWarmup: cfg.autoWarmup,
           warmupModels: cfg.warmupModels,

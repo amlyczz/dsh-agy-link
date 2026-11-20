@@ -126,7 +126,10 @@ const renderLine = (
 	rawReset?: string,
 	isRefreshing = false,
 ): unknown => {
-	const isShimmer = percent < 0 || isRefreshing;
+	// Only animate shimmer while an active quota refresh is running — never pin
+	// infinite animations on every static `—` (unreported) bar, which caused
+	// Chromium/Electron scroll flicker across multi-account lists.
+	const isShimmer = isRefreshing;
 	const { pacing, tooltipText, showTimeMarker, markerLeftPct } = describePacing(t, windowDurationMs, resetStr, rawFraction, rawReset);
 	return h('div', { className: 'agy-quota-line', style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '2px 0' } },
 		h('span', { style: { width: '64px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' } }, windowName),
@@ -267,24 +270,38 @@ export function renderQuotaUnavailableNote(
 	if (!state) return null;
 	const newest = Math.max(0, ...Object.values(acc.quotas).map((q) => q?.updatedAt ?? 0));
 	const reason = t(`quota.unavailable.${state.reason}` as AgyLocaleKey);
+	const isCritical = state.reason === 'validation_required' || state.reason === 'tos_violation';
+	const toneText = isCritical ? 'var(--agy-quota-low-text)' : 'var(--agy-quota-med-text)';
+	const toneBg = isCritical ? 'var(--agy-quota-low-bg)' : 'var(--agy-quota-med-bg)';
+	const toneBorder = isCritical ? 'var(--agy-quota-low-border)' : 'var(--agy-quota-med-border)';
+	const actionUrl = typeof state.actionUrl === 'string' && state.actionUrl.startsWith('https://') ? state.actionUrl : undefined;
 	return h('div', {
 		key: 'agy-quota-unavailable',
 		style: {
 			display: 'flex',
 			alignItems: 'center',
+			flexWrap: 'wrap',
 			gap: '5px',
 			margin: '2px 0 5px 0',
 			padding: '3px 7px',
 			borderRadius: '6px',
 			fontSize: '11px',
 			fontWeight: 600,
-			color: 'var(--agy-quota-med-text)',
-			background: 'var(--agy-quota-med-bg)',
-			border: '1px solid var(--agy-quota-med-border)',
+			color: toneText,
+			background: toneBg,
+			border: `1px solid ${toneBorder}`,
 		},
 	},
-		uiIcon('alert', 10, 'var(--agy-quota-med-text)'),
+		uiIcon('alert', 10, toneText),
 		h('span', null, `${t('quota.unavailableTitle')} · ${reason}`),
+		actionUrl
+			? h('a', {
+				href: actionUrl,
+				target: '_blank',
+				rel: 'noopener noreferrer',
+				style: { color: toneText, textDecoration: 'underline', fontWeight: 700 },
+			}, t('quota.verifyNow'))
+			: null,
 		newest > 0
 			? h('span', { style: { fontWeight: 500, opacity: 0.85 } }, t('quota.unavailableSince', { time: formatSnapshotStamp(newest) }))
 			: null,

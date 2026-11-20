@@ -8,7 +8,8 @@
 | --- | --- | --- |
 | 档位词表（level、显示名、后缀切分） | `src/common/reasoning.ts` | `models.ts` 折叠、`model-resolution.ts` 菜单、`config-options.ts` 下拉、`ask-tool.ts` |
 | 具体模型 id（默认选谁、离线阵容） | `src/common/model-lineup.ts` | `config.ts` 默认值、翻译/生图/预热/跨族兜底、`resolveModelSlug` |
-| 模型列表与真实档位 | `agy models`（及配额 `agentModelSorts` 辅助） | `listModels`、`/plugins/agy-link/status.catalogModels`、`/agy models` |
+| 模型列表与真实档位 | `agy models`（及配额 `agentModelSorts` 辅助） | `listModels`、`/plugins/agy-link/status.catalogModels`、`/plugins/agy-link/status.accountModels`、`/agy models` |
+| 单账号模型展示收敛（0 冗余） | `buildAccountModelRows()`（`src/common/account-models.ts`） | 账号卡片展开列表（优先该账号真实发现目录 `accountModels[acc.id]`，回退折叠 `-tiered`/档位后缀、过滤 `-sonar`/`-image`、按名称去重；未知余量不伪造 `100%`） |
 
 当前基准阵容（`agy >= 1.5.7`）：`gemini-4-argon`（low/medium/high）、`gemini-4-hydrogen`（low/medium/high/xhigh[Extra]）、`gemini-pro-orchestrator-g1-pro`、`gemini-3.8-flash`（low/medium/high）、`claude-opus-5-5`（low/medium/high）、`claude-sonnet-5-5`（low/medium/high）、`gpt-oss-120b-medium`。已下线型号（`gemini-4-carbon`、`claude-*-4-6*`）不进入默认兜底目录。
 
@@ -17,7 +18,8 @@
 `agy models` 在未登录或 `loadCodeAssist` 网络失败时，仍以 `exit 0` 输出内置旧版静态列表（含已下线的 `claude-sonnet-4-6` 与 `claude-opus-4-6-thinking`，且缺少 Gemini 4 系列），并在 stderr/log 打印 `Auth mode is unspecified` 或 `failed to get model config`。
 
 - `isUnauthenticatedModelsFallback(stdout, stderr)`（`src/domain/models/parse.ts`）识别此类伪发现结果，**严禁将其标为 `source: 'discovered'`**，而是记入 `lastError` 并保持 `'fallback'`，避免用假目录否决 Pro/Ultra 账号真实的 Gemini 4 Hydrogen / Argon 权限。
-- 当显式传入 `accountId` 探测单账号目录而该账号缺失、已停用或处于 `authRequired` 时，必须直接失败返回，**严禁回退借用主账号或当前活跃账号代探并将结果写入 `accountId`**。
+- 当显式传入 `accountId` 探测单账号目录而该账号缺失、已停用或处于 `authRequired` 时，必须直接失败返回，**严禁回退借用主账号或当前活跃账号代探并将结果写入 `accountId`**；`POST /plugins/agy-link/pool/refresh-quota` 单账号同步时显式传 `catalog.forceRefresh(id)`，全量同步与选号自愈（`refreshQuota`）同步触发 `catalog.warmAccounts()`；全局 `forceRefresh()` 发现成功时同步将结果归属写入实际被探测的 `probedAccount.id` 账号目录，防止全局目录已列出模型而该账号 `accountCatalogs` 仍为空。
+- **CLI 虚拟编排模型（`gemini-pro-orchestrator-neon` / `gemini-pro-orchestrator-g1-pro`）与 `-xhigh`/`-tiered-*` 后缀兼容**：Google REST 配额接口（`fetchAvailableModels`）只返回底层模型（`gemini-4-neon-*`、`gemini-4-argon-*`）而不包含 CLI 编排 slug；`accountSupportsModel()` 在单账号目录尚未预热或陈旧时，允许分别凭 `gemini-4-neon` 配额证据与 `accountHasArgon` 判定可用性，避免 Pro/Ultra 账号误报 `lack model "gemini-pro-orchestrator-neon"`。
 - **持久化磁盘缓存（`<stateDir>/model-catalog.json`）**：`ModelCatalog` 将已发现的全局与分账号目录连同 `agyVersion` 与 `discoveredAt` 原子落盘；宿主冷启动时 0ms 同步水合真实模型列表（若 `agy --version` 升级则自动失效重探），`warmAccounts()` 自动跳过仍在 `ttlMs` 有效期内的已缓存账号并在剩余未缓存探测间保持随机错峰抖动。
 - Windows 下对隔离辅账号执行 `agy models` 时必须受 `acquireCredentialSlot` 保护，防止读取到系统槽内主账号的模型清单张冠李戴（issue #108/#109）。
 

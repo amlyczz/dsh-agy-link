@@ -82,3 +82,40 @@ test('issue #142: a 403 carrying BOTH a licence phrase and PERMISSION_DENIED is 
   const licenceOnly = '{"error":{"code":403,"message":"You do not have a valid license of this product"}}'
   assert.equal(classifySummaryRefusal(403, licenceOnly).kind, 'no_license')
 })
+
+test('403 PERMISSION_DENIED with VALIDATION_REQUIRED or TOS_VIOLATION is never mislabeled as free tier', () => {
+  const validationBody = JSON.stringify({
+    error: {
+      code: 403,
+      message: 'Verify your account to continue.',
+      status: 'PERMISSION_DENIED',
+      details: [
+        {
+          reason: 'VALIDATION_REQUIRED',
+          metadata: {
+            validation_url: 'https://accounts.google.com/v3/signin/continue?plt=abc',
+            validation_error_message: 'Verify your account to continue.',
+          },
+        },
+      ],
+    },
+  })
+  const v = classifySummaryRefusal(403, validationBody)
+  assert.equal(v.kind, 'validation_required')
+  assert.equal(v.actionUrl, 'https://accounts.google.com/v3/signin/continue?plt=abc')
+
+  const tosBody = JSON.stringify({
+    error: {
+      code: 403,
+      message: 'This service has been disabled in this account. TOS_VIOLATION',
+      status: 'PERMISSION_DENIED',
+    },
+  })
+  assert.equal(classifySummaryRefusal(403, tosBody).kind, 'tos_violation')
+
+  const future = Date.now() + 60_000
+  const valAcc = acc({ quotaUnavailable: { reason: 'validation_required', since: 0, retryAfter: future } } as never)
+  assert.equal(quotaSummarySuppressed(valAcc), true)
+  assert.equal(accountPollSuppressed(valAcc), true)
+  assert.equal(shouldPollAccount(valAcc), false)
+})

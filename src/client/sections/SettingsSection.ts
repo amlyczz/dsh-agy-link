@@ -15,6 +15,7 @@ import { useAuthFlow } from '../hooks/useAuthFlow.ts';
 import { useConfig } from '../hooks/useConfig.ts';
 import { agyIcon, uiIcon } from '../icons.ts';
 import { h, useEffect, useRef, useState } from '../react.ts';
+import { acquireOverlaySuspend } from '../scroll-guard.ts';
 import { useAgyStatus } from '../status.ts';
 import { S } from '../styles.ts';
 import { Button } from '../ui/Button.ts';
@@ -92,6 +93,10 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
 		const [optimisticActiveId, setOptimisticActiveId] = useState<string | null>(null);
 
+		useEffect(() => {
+			return acquireOverlaySuspend();
+		}, []);
+
 		// Cooldown expiry and quota countdowns are Date.now()-derived while the
 		// payload itself does NOT change when they lapse — without a wall-clock
 		// tick the "cooldown" banner and the minutes-left froze forever.
@@ -151,7 +156,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				),
 			),
 			h(AccountsPanel, {
-				t, pool, accounts, loadingAction, quotaRefreshing: status.quotaRefreshing ?? [],
+				t, pool, accounts, accountModels: status.accountModels, loadingAction, quotaRefreshing: status.quotaRefreshing ?? [],
 				proxyInputs, setProxyInputs, editingProxyId, setEditingProxyId,
 				expandedModels, toggleExpand, optimisticActiveId,
 				handlers: { ...accountActions, beginReauth: auth.handleBeginReauth },

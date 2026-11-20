@@ -134,10 +134,15 @@ export type QuotaUnavailableReason =
   | 'no_license'
   /**
    * The summary endpoint refuses this account outright (free tier: 403
-   * PERMISSION_DENIED). Terminal for the SUMMARY call only — the account still
-   * serves models, so it stays in the poll (issue #137).
+   * PERMISSION_DENIED without VALIDATION_REQUIRED / TOS_VIOLATION). Terminal
+   * for the SUMMARY call only — the account still serves models, so it stays
+   * in the poll (issue #137).
    */
   | 'no_summary_access'
+  /** Google requires web verification (`403 PERMISSION_DENIED` + `VALIDATION_REQUIRED`). */
+  | 'validation_required'
+  /** Account suspended (`403 PERMISSION_DENIED` + `TOS_VIOLATION`). */
+  | 'tos_violation'
   | 'auth'
   | 'unreachable'
   | 'partial'
@@ -150,36 +155,44 @@ export interface QuotaUnavailableState {
   retryAfter: number
   /** Short, non-sensitive detail (HTTP status family / PERMISSION_DENIED…). */
   detail?: string
+  /** Optional safe HTTPS action URL (e.g. Google `validation_url` for account verification). */
+  actionUrl?: string
 }
 
 /**
  * True when the unattended quota probe must skip this account's summary call.
  *
- * Only a licence refusal suppresses: it is the one verdict the network cannot
- * fix on its own, and re-probing it every hour is pure risk-control exposure.
- * `auth` stays on the existing authRequired lifecycle, and network faults must
- * be retried normally.
+ * Only terminal account-level refusals suppress: retrying them every hour is
+ * pure risk-control exposure. `auth` stays on the existing authRequired
+ * lifecycle, and network faults must be retried normally.
  */
 export function quotaSummarySuppressed(account: ManagedAccount, now = Date.now()): boolean {
   const state = account.quotaUnavailable
   if (state === undefined) return false
-  // Both terminal kinds mean "do not call retrieveUserQuotaSummary again yet".
-  // They differ in scope, not in whether the summary is worth retrying.
-  if (state.reason !== 'no_license' && state.reason !== 'no_summary_access') return false
+  if (
+    state.reason !== 'no_license'
+    && state.reason !== 'no_summary_access'
+    && state.reason !== 'validation_required'
+    && state.reason !== 'tos_violation'
+  ) {
+    return false
+  }
   return state.retryAfter > now
 }
 
 /**
  * Whether the account should leave the background poll ENTIRELY.
  *
- * Only a licence-less account qualifies: it can produce no quota data at all.
- * A free-tier account whose SUMMARY is refused still refreshes its model list
- * and user quota, so skipping it would freeze the picker (issue #137).
+ * Unlicensed, verification-blocked, and suspended accounts cannot produce
+ * usable quota until the user intervenes. A free-tier account whose SUMMARY is
+ * refused still refreshes its model list and user quota (issue #137).
  */
 export function accountPollSuppressed(account: ManagedAccount, now = Date.now()): boolean {
   const state = account.quotaUnavailable
   if (state === undefined) return false
-  if (state.reason !== 'no_license') return false
+  if (state.reason !== 'no_license' && state.reason !== 'validation_required' && state.reason !== 'tos_violation') {
+    return false
+  }
   return state.retryAfter > now
 }
 
@@ -221,7 +234,7 @@ export function accountHasArgon(
   return false
 }
 
-const EFFORT_SUFFIX_RE = /-(?:low|medium|high|tiered|thinking)$/i
+const EFFORT_SUFFIX_RE = /-(?:tiered-)?(?:low|medium|high|xhigh|tiered|thinking)$/i
 
 /**
  * Return the un-tiered base model slug (e.g. claude-opus-4-6-thinking -> claude-opus-4-6,
@@ -244,6 +257,32 @@ export function modelMatches(requestedModel: string, candidateModelId: string): 
   const c = candidateModelId.trim().toLowerCase()
   if (r === c) return true
   return baseModelSlug(r) === baseModelSlug(c)
+}
+
+function quotaSupportsModel(
+  acc: ManagedAccount,
+  clean: string,
+  pool?: { hasDedicatedGroup?: (id: string, family: ModelFamily) => boolean } | null,
+  catalog?: { source?: string; models?: readonly { id: string }[] } | null,
+): boolean {
+  const familyQuotaModels = acc.quotas?.[modelFamilyOf(clean)]?.models
+  if (Array.isArray(familyQuotaModels) && familyQuotaModels.some((m) => modelMatches(clean, m.modelId))) {
+    return true
+  }
+  // CLI-synthesized orchestrator slugs (`gemini-pro-orchestrator-neon`,
+  // `gemini-pro-orchestrator-g1-pro`) never appear in Google's REST quota
+  // breakdown (`fetchAvailableModels`), which only returns their backing
+  // models (`gemini-4-neon-*`, Argon). Infer support from that backing
+  // evidence so Pro/Ultra accounts are never falsely rejected before per-account
+  // `agy models` discovery finishes or when a cached catalog predates a rollout.
+  const lower = clean.toLowerCase()
+  if (lower === 'gemini-pro-orchestrator-neon') {
+    return Array.isArray(familyQuotaModels) && familyQuotaModels.some((m) => modelMatches('gemini-4-neon', m.modelId))
+  }
+  if (lower === 'gemini-pro-orchestrator-g1-pro') {
+    return accountHasArgon(acc, pool, catalog)
+  }
+  return false
 }
 
 /**
@@ -272,8 +311,7 @@ export function accountSupportsModel(
   // evidence win over a negative catalog entry.
   if (catalog && catalog.source === 'discovered' && Array.isArray(catalog.models) && catalog.models.length > 0) {
     if (catalog.models.some((m) => modelMatches(clean, m.id))) return true
-    const familyQuotaModels = acc.quotas?.[modelFamilyOf(clean)]?.models
-    if (Array.isArray(familyQuotaModels) && familyQuotaModels.some((m) => modelMatches(clean, m.modelId))) return true
+    if (quotaSupportsModel(acc, clean, pool, catalog)) return true
     return false
   }
 
@@ -281,7 +319,7 @@ export function accountSupportsModel(
   const familyQuota = acc.quotas?.[family]
   if (familyQuota) {
     if (Array.isArray(familyQuota.models) && familyQuota.models.length > 0) {
-      return familyQuota.models.some((m) => modelMatches(clean, m.modelId))
+      return quotaSupportsModel(acc, clean, pool, catalog)
     }
     return true
   }

@@ -12,6 +12,7 @@ import type { ManagedAccount } from '../common/pool-types.ts'
 import { AgyAdapter } from './adapter.ts'
 import { AuthHelper } from './auth.ts'
 import { TranslationService, TRANSLATION_RECORD_TYPE, type TranslationRecord } from './translate.ts'
+import { TranslationWorkerPool } from '../features/translation/worker.ts'
 import { ModelCatalog } from './models.ts'
 import { RunRegistry } from './recording.ts'
 import { resolveAgyBin, probeProcess, isolatedHomeEnv } from './runner.ts'
@@ -171,10 +172,19 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
         }
         candidateAccount = targetAcc
       } else {
-        const activeId = pool.getActiveAccountId('google') ?? poolData.lastActiveAccountId ?? poolData.primaryAccountId
-        candidateAccount = (activeId ? pool.getAccount(activeId) : undefined)
-          ?? (poolData.primaryAccountId ? pool.getAccount(poolData.primaryAccountId) : undefined)
+        const pickEnabled = (id?: string): ManagedAccount | undefined => {
+          if (!id) return undefined
+          const acc = pool.getAccount(id)
+          return acc && acc.enabled && !acc.authRequired ? acc : undefined
+        }
+        candidateAccount =
+          pickEnabled(pool.getActiveAccountId('google'))
+          ?? pickEnabled(poolData.lastActiveAccountId)
+          ?? pickEnabled(poolData.primaryAccountId)
           ?? pool.getAccounts().find((a) => a.enabled && !a.authRequired)
+        if (!candidateAccount && pool.getAccounts().length > 0) {
+          throw new Error('no enabled account available for model discovery')
+        }
       }
 
       const probeModelsFor = async (acc: ManagedAccount | undefined) => {
@@ -199,6 +209,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
         }
       }
 
+      let probedAccount = candidateAccount
       let out = await probeModelsFor(candidateAccount)
       if (
         !accountId
@@ -210,13 +221,18 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
           const secondaryOut = await probeModelsFor(secondary)
           if (secondaryOut.code === 0 && secondaryOut.stdout.trim() !== '') {
             out = secondaryOut
+            probedAccount = secondary
           }
         }
       }
       if (out.code !== 0 && out.stdout.trim() === '') {
         throw new Error('agy models failed: ' + (out.stderrTail.trim() !== '' ? out.stderrTail.trim().slice(-200) : 'exit ' + String(out.code)))
       }
-      return { stdout: out.stdout, stderr: out.stderrTail }
+      return {
+        stdout: out.stdout,
+        stderr: out.stderrTail,
+        ...(probedAccount ? { accountId: probedAccount.id } : {}),
+      }
     },
     getConfig().fallbackModels,
     getConfig().modelsCacheTtlMs,
@@ -268,6 +284,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     refreshQuota: async () => {
       await quota.refreshAllQuotas(false).catch(() => undefined)
       await catalog.forceRefreshAndNotify().catch(() => undefined)
+      await catalog.warmAccounts(pool.getAccounts()).catch(() => undefined)
     },
     effortUnsupported: () => effortStore.read(),
     onEffortUnsupported: (model) => effortStore.remember(model),
@@ -279,6 +296,20 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     readImage: (ref) => readSessionImage(ctx, dshHome(), ref),
   })
 
+  const translationWorkers = new TranslationWorkerPool({
+    cfg: getConfig,
+    bin,
+    pool,
+    log,
+    isEffortUnsupported: (model) => effortStore.read().includes(model),
+    rememberEffortUnsupported: (model) => {
+      if (catalog.advertisedEfforts(model).length === 0) {
+        effortStore.remember(model)
+        notifyPicker()
+      }
+    },
+  })
+
   const translation = new TranslationService({
     cfg: getConfig,
     catalog: () => catalog.get(),
@@ -287,7 +318,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     sessionCwd: (id) => sessionWorkspace(id),
     sessionLogPath: (id) => findSessionLogFile(dshHome(), id),
     log,
-    run: (req) => runTranslationStream(ctx, getConfig, log, req),
+    run: (req) => runTranslationStream(ctx, getConfig, log, req, translationWorkers),
     appendRecord: async (sessionId, record: TranslationRecord) => {
       const session = sessionsSvc()?.get(sessionId)
       if (session === undefined) return null
@@ -356,7 +387,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
 
   return {
     getConfig, log, notifyPicker, bin, version, status, store, pool, quota, warmup, semaphore,
-    catalog, auth, poolAuth, runs, adapter, translation, setOverride,
+    catalog, auth, poolAuth, runs, adapter, translation, translationWorkers, setOverride,
     readEffortUnsupported: effortStore.read,
     rememberEffortUnsupported: effortStore.remember,
     sessionsSvc, sessionAuto,

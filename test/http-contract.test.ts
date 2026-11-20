@@ -891,7 +891,7 @@ test('/pool/refresh-quota refreshes one known account and tolerates unknown ids'
   const acc = { id: 'known' }
   const pool = poolDouble({ getAccount: (id: unknown) => (id === 'known' ? acc : undefined) })
   const quotaRefreshes: unknown[][] = []
-  let catalogRefreshes = 0
+  const catalogCalls: unknown[][] = []
   const s = setup({
     pool: pool.pool,
     quota: {
@@ -903,8 +903,8 @@ test('/pool/refresh-quota refreshes one known account and tolerates unknown ids'
     catalog: {
       get: () => ({ source: 'fallback', models: [], lastError: null }),
       getAllKnownModels: () => [],
-      forceRefresh: async () => {
-        catalogRefreshes++
+      forceRefresh: async (...args: unknown[]) => {
+        catalogCalls.push(args)
       },
     },
   })
@@ -916,7 +916,7 @@ test('/pool/refresh-quota refreshes one known account and tolerates unknown ids'
   const unknown = await invoke(s.route('/plugins/agy-link/pool/refresh-quota'), fakeReq('POST', '/', { id: 'ghost' }))
   assert.equal(unknown.status(), 200)
   assert.deepEqual(quotaRefreshes, [[acc, true]], 'unknown id refreshes nothing')
-  assert.equal(catalogRefreshes, 2)
+  assert.deepEqual(catalogCalls, [['known'], ['ghost']])
 })
 
 test('/pool/refresh-quota reports a duplicate click instead of silently doing nothing', async () => {

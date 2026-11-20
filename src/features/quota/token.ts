@@ -304,10 +304,21 @@ export function persistRefreshedToken(
   try {
     if (
       expectedRefreshToken &&
-      account.dir &&
-      !account.systemHome &&
       existsSync(file) &&
       deps.parseCredentialDoc(readFileSync(file, 'utf8'))?.refreshToken !== expectedRefreshToken
+    ) {
+      return
+    }
+    // On macOS/Linux, systemHome (real HOME) primary accounts authenticate via
+    // OS Keychain (`service=gemini, account=antigravity`), shared with
+    // Antigravity.app and user-shell `agy`. Never create a new stale disk token
+    // file under real HOME on background REST refresh when none exists yet
+    // (Windows still re-adopts `.primary-credential.json` below).
+    if (
+      process.platform !== 'win32' &&
+      (account.systemHome || !account.dir) &&
+      !existsSync(file) &&
+      expectedRefreshToken
     ) {
       return
     }
@@ -442,6 +453,12 @@ async function getValidAccessTokenUncached(deps: QuotaTokenDeps, account: Manage
     try {
       const refreshed = await refreshTokens(tok.refreshToken, deps.proxyFor(account), account.id)
       if (!isCurrentAccountGrant(deps, account, tok.refreshToken)) return null
+      if (process.platform !== 'win32' && (account.systemHome || !account.dir)) {
+        const liveKeychain = await deps.readSystemKeychainToken().catch(() => null)
+        if (liveKeychain?.refreshToken && liveKeychain.refreshToken !== tok.refreshToken) {
+          return null
+        }
+      }
       if (refreshed?.access_token) {
         deps.persistRefreshedToken(
           account,

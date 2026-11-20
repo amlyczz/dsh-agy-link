@@ -154,11 +154,11 @@ test('turnOfMessage maps a message id back to its turn', () => {
   assert.equal(turnOfMessage(log, 'nope'), null)
 })
 
-test('resolveTranslateTarget defaults to gemini-3.8-flash medium', () => {
+test('resolveTranslateTarget defaults to gemini-3.8-flash low', () => {
   const cfg = defaultConfig()
   const t = resolveTranslateTarget(cfg, catalog)
   assert.equal(t.model, 'gemini-3.8-flash')
-  assert.equal(t.effort, 'medium')
+  assert.equal(t.effort, 'low')
 })
 
 test('resolveTranslateTarget falls back to the newest flash when 3.8 is absent', () => {
@@ -355,7 +355,7 @@ test('translateTurn appends a durable record anchored at the final message', asy
   assert.equal(rec.anchorSeq, 103)
   assert.equal(rec.messageId, 'm-1-3')
   assert.equal(rec.model, 'gemini-3.8-flash')
-  assert.equal(rec.effort, 'medium')
+  assert.equal(rec.effort, 'low')
   assert.equal(rec.provider, 'antigravity')
   assert.equal(rec.text, '人话版')
 })

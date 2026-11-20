@@ -364,11 +364,15 @@ export async function handleAttemptOutcome(
   deps.clearInFlightPrompt(sessionKey, spawn.prompt)
   recorder.drain(input.agyOnEvent)
   const conversationId = recorder.conversationId()
-  if (!rec.hasResult && outcome.idleGraceTerminated) {
+  const existingRes = rec.getResultEvent()
+  const hasConsumableResult = existingRes !== null && (existingRes.ok || existingRes.response !== '')
+  if (!hasConsumableResult && outcome.idleGraceTerminated) {
     // The idle reaper can end a turn whose answer agy already wrote to its own
-    // transcript but had not flushed as a stdout step. Recovering it keeps the
-    // reply visible; leaving it empty made DSH show "completed" with no bubble
-    // at all (issues #127, #128).
+    // transcript (and agy 1.5+ may also emit a bare `{ ok: false, response: '' }`
+    // error envelope on SIGTERM, which EventMapper ignores). Checking
+    // `hasConsumableResult` instead of `rec.hasResult` ensures we still recover
+    // the reply and append a consumable result instead of failing with
+    // `agy stream ended without a result event` (issues #127, #128).
     const recovered = conversationId === null ? '' : recoverFinalReply(conversationId, rec.accountHome)
     const synthResult: AgyEvent = {
       kind: 'result',
@@ -444,7 +448,7 @@ export async function* runAgyAttempt(
   deps: AttemptDeps,
   input: AttemptInput,
 ): AsyncGenerator<StreamChunk, RunRecording, void> {
-  const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId)
+  const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId, !input.isAux)
   // Build the argv (and tail-trim an over-budget prompt) BEFORE waiting for
   // the slot, exactly as the former inline block did — the trim warning is
   // logged even when the dispatch later aborts.

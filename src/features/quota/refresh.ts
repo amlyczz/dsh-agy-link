@@ -77,6 +77,8 @@ export interface QuotaRefreshDeps {
 /** Map the HTTP verdict onto the account-level marker. */
 function unavailableReason(failure: QuotaSummaryFailure | null, hasModelData: boolean): QuotaUnavailableReason {
   if (failure === null) return hasModelData ? 'partial' : 'unreachable'
+  if (failure.kind === 'tos_violation') return 'tos_violation'
+  if (failure.kind === 'validation_required') return 'validation_required'
   if (failure.kind === 'no_license') return 'no_license'
   if (failure.kind === 'no_summary_access') return 'no_summary_access'
   if (failure.kind === 'auth') return 'auth'
@@ -275,13 +277,16 @@ export async function refreshAccountQuotaPipeline(
   // the previous complete value on a failed summary (a partial fallback must
   // never overwrite good data), so without this marker an account whose
   // summary is refused shows yesterday's percentages forever with no error.
+  let currentUnavailReason = account.quotaUnavailable?.reason
   if (!suppressSummary) {
     const summaryAuthoritative = (summary?.groups?.length ?? 0) > 0 || (summary?.buckets?.length ?? 0) > 0
     if (summaryAuthoritative) {
       deps.pool.clearQuotaUnavailable(account.id)
+      currentUnavailReason = undefined
     } else {
       const failure = deps.summaryFailure?.() ?? null
       const reason = unavailableReason(failure, Object.keys(modelsCatalog).length > 0)
+      currentUnavailReason = reason
       const previous = account.quotaUnavailable
       // A free-tier refusal tracks the weekly window; an unlicensed account is
       // re-probed sooner because a fresh licence can arrive at any time.
@@ -291,6 +296,7 @@ export async function refreshAccountQuotaPipeline(
         since: previous?.reason === reason ? previous.since : now,
         retryAfter: now + retryMs,
         ...(failure?.detail === undefined ? {} : { detail: failure.detail }),
+        ...(failure?.actionUrl === undefined ? {} : { actionUrl: failure.actionUrl }),
       })
     }
   }
@@ -301,8 +307,9 @@ export async function refreshAccountQuotaPipeline(
 
   // Authenticated backend calls just succeeded with this token: any stale
   // authRequired flag (e.g. set while the OLD account was logging out) is
-  // disproven — clear it so the slot rejoins selection and polling.
-  if (account.authRequired) {
+  // disproven — unless the summary call JUST revealed VALIDATION_REQUIRED or
+  // TOS_VIOLATION, which requires user intervention before the account can run.
+  if (account.authRequired && currentUnavailReason !== 'validation_required' && currentUnavailReason !== 'tos_violation') {
     deps.pool.clearAuthRequired(account.id)
   }
 

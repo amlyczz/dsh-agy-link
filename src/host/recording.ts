@@ -233,6 +233,23 @@ export class RunRecording {
     return null
   }
 
+  /**
+   * True when at least one consumable `result` event (`ok` or non-empty
+   * `response`) exists at index >= `from`. A settled recording with
+   * `failureInfo === null` and no consumable result at `>= from` would always
+   * fail with `agy stream ended without a result event` if re-driven.
+   */
+  hasConsumableResultFrom(from: number): boolean {
+    const start = Math.max(0, from)
+    for (let i = start; i < this.events.length; i++) {
+      const ev = this.events[i]
+      if (ev !== undefined && ev.kind === 'result' && (ev.ok || ev.response !== '')) {
+        return true
+      }
+    }
+    return false
+  }
+
   /** Event at an absolute index (bounds-checked). */
   eventAt(index: number): AgyEvent | undefined {
     return this.events[index]

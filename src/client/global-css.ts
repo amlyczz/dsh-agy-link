@@ -267,23 +267,21 @@ body.dark,
 	border-radius: 50%;
 }
 .agy-card-hover {
-	transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+	transition: border-color 0.15s ease, opacity 0.15s ease;
 }
 .agy-card-hover:hover {
 	border-color: var(--agy-border-card-primary, #3b82f6) !important;
-	box-shadow: var(--agy-shadow-card-hover) !important;
 }
 
 .agy-btn {
-	transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, filter 0.15s ease, transform 0.15s ease;
+	transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
 	user-select: none;
 }
 .agy-btn:hover:not(:disabled) {
-	filter: brightness(1.08);
-	transform: translateY(-0.5px);
+	opacity: 0.9;
 }
 .agy-btn:active:not(:disabled) {
-	transform: translateY(0.5px);
+	opacity: 0.78;
 }
 
 /* Standalone enable/disable toggle (rows without a segment group). Class-based
@@ -331,9 +329,9 @@ body.dark,
 .agy-shimmer-track {
 	position: relative;
 	overflow: hidden;
-	contain: paint;
-	transform: translateZ(0);
-	isolation: isolate;
+	/* No contain: paint / transform: translateZ(0) / isolation: isolate here:
+	   forcing GPU layer promotion on quota tracks inside a scrolling settings
+	   menu/modal triggers Chromium/Electron backing-layer drop flicker. */
 }
 .agy-shimmer-track::after {
 	content: '';

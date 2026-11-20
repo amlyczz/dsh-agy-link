@@ -1,6 +1,7 @@
 // Quota HTTP I/O: endpoint fan-out for the summary / user-quota / available
 // models calls plus the OAuth userinfo lookup. URLs, headers, bodies and the
 // 401/403/network fallbacks match the previous QuotaService bodies.
+import { looksLikeTosViolation, looksLikeValidationRequired } from '../../common/types.ts'
 import { agyUserAgent } from '../../domain/quota/identity.ts'
 import type {
   DiscoveredModelsResponse,
@@ -29,10 +30,15 @@ export interface QuotaSummaryFailure {
    * `no_summary_access` — the backend refuses the SUMMARY endpoint for this
    * account (free tier: `403 PERMISSION_DENIED`). Terminal for the summary call
    * only; the account can still serve models, so it keeps polling (#137).
+   * `validation_required` / `tos_violation` — Google `403 PERMISSION_DENIED`
+   * carrying `VALIDATION_REQUIRED` or `TOS_VIOLATION`; must never be mislabeled
+   * as a free-tier account.
    */
-  kind: 'no_license' | 'no_summary_access' | 'auth' | 'http' | 'network'
+  kind: 'no_license' | 'no_summary_access' | 'validation_required' | 'tos_violation' | 'auth' | 'http' | 'network'
   status?: number
   detail?: string
+  /** Optional HTTPS verification/appeal URL extracted from structured 403 details. */
+  actionUrl?: string
 }
 
 /**
@@ -82,19 +88,61 @@ function networkFailureCode(error: unknown): string | undefined {
   return typeof cause?.code === 'string' ? cause.code : undefined
 }
 
+function extractHttpsActionUrl(bodyText: string): string | undefined {
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: { details?: Array<Record<string, unknown>> } }
+    const details = parsed?.error?.details
+    if (Array.isArray(details)) {
+      for (const d of details) {
+        const meta = d?.metadata as Record<string, unknown> | undefined
+        const direct = meta?.validation_url ?? meta?.appeal_url ?? d?.url
+        if (typeof direct === 'string' && direct.startsWith('https://')) return direct
+        const links = d?.links
+        if (Array.isArray(links)) {
+          for (const l of links) {
+            const u = (l as Record<string, unknown> | undefined)?.url
+            if (typeof u === 'string' && u.startsWith('https://')) return u
+          }
+        }
+      }
+    }
+  } catch {
+    // fall through to regex scan
+  }
+  const m = bodyText.match(/https:\/\/accounts\.google\.com\/[^\s"'<>]+|https:\/\/support\.google\.com\/[^\s"'<>]+/)
+  return m ? m[0] : undefined
+}
+
 /**
- * Classify a refusal. A 403 that talks about a licence is the one case the
- * account can never retry its way out of, so it gets its own kind.
+ * Classify a refusal. Structured `VALIDATION_REQUIRED` and `TOS_VIOLATION`
+ * share `403 PERMISSION_DENIED` with free-tier refusals, so they MUST be
+ * checked first — otherwise a Pro/Ultra account needing Google verification is
+ * mislabeled as a free-tier account.
  */
 export function classifySummaryRefusal(status: number, bodyText = ''): QuotaSummaryFailure {
   const detail = apiErrorStatus(bodyText)
   if (status === 401) return { kind: 'auth', status, ...(detail === undefined ? {} : { detail }) }
+  if (status === 403 && looksLikeTosViolation(bodyText)) {
+    const actionUrl = extractHttpsActionUrl(bodyText)
+    return {
+      kind: 'tos_violation',
+      status,
+      ...(detail === undefined ? {} : { detail }),
+      ...(actionUrl === undefined ? {} : { actionUrl }),
+    }
+  }
+  if (status === 403 && looksLikeValidationRequired(bodyText)) {
+    const actionUrl = extractHttpsActionUrl(bodyText)
+    return {
+      kind: 'validation_required',
+      status,
+      ...(detail === undefined ? {} : { detail }),
+      ...(actionUrl === undefined ? {} : { actionUrl }),
+    }
+  }
   // A free-tier account has no 5h summary window, so the endpoint refuses it.
   // `status` (the API-level detail) is the more specific signal, so it is
-  // checked FIRST: a body can carry both PERMISSION_DENIED and a "licence"
-  // phrase, and ordering the licence regex first made this branch unreachable
-  // (#142) — the account then stayed on the 6h licence window instead of the
-  // free-tier one, and the poll kept hammering the refused endpoint.
+  // checked before the licence regex (#142).
   if (status === 403 && detail === 'PERMISSION_DENIED') {
     return { kind: 'no_summary_access', status, detail }
   }

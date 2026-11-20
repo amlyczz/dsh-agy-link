@@ -5,7 +5,10 @@
 // so this module stays presentational and the busy state stays per-action
 // (test/busy-scoping.test.ts pins that contract).
 
-import type { AccountPoolData, ManagedAccount, ModelQuotaInfo } from '../../common/pool-types.ts';
+import { buildAccountModelRows, type AccountModelDisplayItem } from '../../common/account-models.ts';
+import type { AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
+import { effortLabel } from '../../common/reasoning.ts';
+import type { CatalogModelView } from '../status.ts';
 import { h } from '../react.ts';
 import { S } from '../styles.ts';
 import { uiIcon } from '../icons.ts';
@@ -30,6 +33,7 @@ export interface AccountsPanelProps {
 	t: Translator;
 	pool: AccountPoolData | undefined;
 	accounts: ManagedAccount[];
+	accountModels?: Readonly<Record<string, ReadonlyArray<CatalogModelView>>>;
 	loadingAction: string | null;
 	/** Account ids the HOST reports as refreshing right now (survives the click). */
 	quotaRefreshing?: readonly string[];
@@ -45,7 +49,7 @@ export interface AccountsPanelProps {
 
 export function AccountsPanel(props: AccountsPanelProps): unknown {
 	const {
-		t, pool, accounts, loadingAction, quotaRefreshing = [], proxyInputs, setProxyInputs,
+		t, pool, accounts, accountModels, loadingAction, quotaRefreshing = [], proxyInputs, setProxyInputs,
 		editingProxyId, setEditingProxyId, expandedModels, toggleExpand,
 		optimisticActiveId, handlers,
 	} = props;
@@ -100,12 +104,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			? acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accIndex + 1 })
 			: acc.alias;
 
-		const allChildModels: { family: string; model: ModelQuotaInfo }[] = [
-			...(acc.quotas.google?.models ?? []).map((m) => ({ family: 'Google', model: m })),
-			...(acc.quotas.argon?.models ?? []).map((m) => ({ family: 'Argon', model: m })),
-			...(acc.quotas.anthropic?.models ?? []).map((m) => ({ family: 'Anthropic', model: m })),
-			...(acc.quotas.openai?.models ?? []).map((m) => ({ family: 'OpenAI', model: m })),
-		];
+		const childModels = buildAccountModelRows(acc, accountModels?.[acc.id]);
 
 		return h('div', {
 			key: acc.id,
@@ -139,7 +138,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 				isExpanded ? h('div', { key: 'expanded-details' },
 					renderQuotaBar('Claude', 'anthropic', acc),
 					renderQuotaBar('GPT-OSS', 'openai', acc),
-					allChildModels.length > 0 ? renderChildModels(t, allChildModels) : null,
+					childModels.length > 0 ? renderChildModels(t, childModels) : null,
 				) : null,
 			),
 			hasCooldown ? renderCooldownBanner(t, acc, loadingAction, accountActionBusy, handlers) : null,
@@ -437,7 +436,7 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	);
 }
 
-function renderChildModels(t: Translator, allChildModels: { family: string; model: ModelQuotaInfo }[]): unknown {
+function renderChildModels(t: Translator, childModels: readonly AccountModelDisplayItem[]): unknown {
 	return h('div', {
 		style: {
 			marginTop: '6px',
@@ -445,17 +444,21 @@ function renderChildModels(t: Translator, allChildModels: { family: string; mode
 			borderTop: '1px solid var(--agy-border-box)',
 		},
 	},
-		h('div', { style: { color: 'var(--agy-text-secondary)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, t('account.models')),
-		allChildModels.map(({ family, model }) => {
-			const frac = model.remainingFraction ?? 1;
-			const pct = Math.round(frac * 100);
+		h('div', { style: { color: 'var(--agy-text-secondary)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, `${t('account.models')} (${childModels.length})`),
+		childModels.map((model) => {
+			const hasPct = typeof model.remainingFraction === 'number';
+			const pct = hasPct ? Math.round((model.remainingFraction ?? 0) * 100) : null;
 			const w = formatQuotaWindow(t, model.resetTime);
-			const pColor = pct <= 20 ? 'var(--agy-quota-low-text)' : pct <= 50 ? 'var(--agy-quota-med-text)' : 'var(--agy-quota-high-text)';
-			return h('div', { key: `${family}-${model.modelId}`, className: 'agy-submodel-row' },
-				h('span', { style: { fontWeight: 500, color: 'var(--agy-text-primary)' } }, `[${family}] ${model.displayName || model.modelId}`),
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-					h('span', { style: { color: pColor, fontWeight: 700 } }, `${pct}%`),
-					w.resetText ? h('span', { style: { color: 'var(--agy-text-tertiary)', fontSize: '10.5px' } }, `↻ ${w.resetText}`) : null,
+			const pColor = pct === null ? 'var(--agy-text-secondary)' : pct <= 20 ? 'var(--agy-quota-low-text)' : pct <= 50 ? 'var(--agy-quota-med-text)' : 'var(--agy-quota-high-text)';
+			const effortTag = model.efforts.length > 0 ? model.efforts.map(effortLabel).join('/') : '';
+			return h('div', { key: `${model.family}-${model.id}`, className: 'agy-submodel-row' },
+				h('div', { key: 'left', style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' } },
+					h('span', { key: 'label', style: { fontWeight: 500, color: 'var(--agy-text-primary)' } }, `[${model.familyLabel}] ${model.name}`),
+					effortTag ? h('span', { key: 'efforts', style: { color: 'var(--agy-text-tertiary)', fontSize: '10px' } }, effortTag) : null,
+				),
+				h('div', { key: 'right', style: { display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 } },
+					pct !== null ? h('span', { key: 'pct', style: { color: pColor, fontWeight: 700 } }, `${pct}%`) : null,
+					w.resetText ? h('span', { key: 'reset', style: { color: 'var(--agy-text-tertiary)', fontSize: '10.5px' } }, `↻ ${w.resetText}`) : null,
 				),
 			);
 		}),

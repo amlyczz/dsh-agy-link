@@ -319,10 +319,10 @@ export function defaultConfig(): PluginConfig {
     // turn, so the default must never silently start billing a user.
     autoTranslate: false,
     translateModel: PREFERRED_GEMINI_FLASH,
-    // Medium is the speed/quality compromise measured on real agy: low ≈ 12s,
-    // medium ≈ 33s, high ≈ 45s for the same 964-char reply (most of the low
-    // figure is agy's own ~9s startup). high made a frequent action feel broken.
-    translateEffort: 'medium',
+    // Default to 'low': real agy measurements give ~12s cold / ~4-9s warm at low
+    // vs ~33s at medium and ~45s at high, and plain-language rewriting needs
+    // conversational clarity rather than multi-step chain-of-thought reasoning.
+    translateEffort: 'low',
     translateTargetLanguage: '中文（简体）',
     translateMaxChars: 8_000,
     translateMaxTokens: 4_096,

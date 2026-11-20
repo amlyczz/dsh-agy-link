@@ -13,7 +13,7 @@
 import { LlmError, type Message } from '@deepseek-ai/dsh-llm'
 import type { AgyEvent, PluginConfig } from '../common/types.ts'
 import { createToolWatchdog, type ToolWatchdog } from './tool-watchdog.ts'
-import { Err } from '../common/types.ts'
+import { Err, looksLikeTosViolation } from '../common/types.ts'
 import type { ManagedAccount, ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import type { SessionBinding, SessionStore } from '../host/sessions.ts'
@@ -192,7 +192,7 @@ export interface AttemptRecorder {
 }
 
 /** Create the recording, parser, HOME snapshot and tool watchdog for one run. */
-export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, account: ManagedAccount | undefined, initialConversationId?: string): AttemptRecorder {
+export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, account: ManagedAccount | undefined, initialConversationId?: string, trackSubagents = true): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
   // The fallback conversation-id discovery must watch the SAME HOME the child
@@ -203,18 +203,20 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
   const parser = new StreamJsonParser()
   deps.onParser?.(parser)
   const watchdog = createToolWatchdog(deps.log, cfg)
-  const tracker = new SubagentTracker({
-    conversationId: initialConversationId,
-    resumed: Boolean(initialConversationId),
-    accountHome: rec.accountHome,
-    log: deps.log,
-    onEvent: (ev) => {
-      rec.append(ev)
-    },
-    noteActivity: () => {
-      watchdog.markEvent()
-    },
-  })
+  const tracker = trackSubagents
+    ? new SubagentTracker({
+        conversationId: initialConversationId,
+        resumed: Boolean(initialConversationId),
+        accountHome: rec.accountHome,
+        log: deps.log,
+        onEvent: (ev) => {
+          rec.append(ev)
+        },
+        noteActivity: () => {
+          watchdog.markEvent()
+        },
+      })
+    : undefined
   const state: AttemptRecorder = {
     rec,
     parser,
@@ -224,8 +226,8 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
     printTimeoutMinutes: watchdog.printTimeoutMinutes,
     attachProcess: (proc) => {
       watchdog.attach(proc)
-      tracker.start()
-      void proc.outcome.finally(() => tracker.stop())
+      tracker?.start()
+      void proc.outcome.finally(() => tracker?.stop())
     },
     feedLine: (line, onEvent, onFirstEvent) => {
       watchdog.markEvent()
@@ -235,11 +237,11 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
       for (const ev of parser.feed(line + '\n')) {
         if (ev.kind === 'init' && ev.conversationId) {
           state.streamCid = ev.conversationId
-          tracker.setConversationId(ev.conversationId)
+          tracker?.setConversationId(ev.conversationId)
         }
         if (ev.kind === 'result' && ev.conversationId !== '') {
           state.streamCid = ev.conversationId
-          tracker.setConversationId(ev.conversationId)
+          tracker?.setConversationId(ev.conversationId)
         }
         watchdog.trackStep(ev)
         rec.append(ev)
@@ -256,7 +258,7 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
       for (const ev of parser.flush()) {
         if (ev.kind === 'result' && ev.conversationId !== '') {
           state.streamCid = ev.conversationId
-          tracker.setConversationId(ev.conversationId)
+          tracker?.setConversationId(ev.conversationId)
         }
         rec.append(ev)
         if (typeof onEvent === 'function') {
@@ -270,7 +272,7 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
     },
     stop: () => {
       watchdog.stop()
-      tracker.stop()
+      tracker?.stop()
     },
     conversationId: () => state.streamCid ?? diffConversations(before, conversationsDir).conversationId,
   }
@@ -354,6 +356,37 @@ export async function waitForRunSettle(run: { isSettled: boolean }, timeoutMs: n
     await new Promise((r) => setTimeout(r, 50))
   }
   return run.isSettled
+}
+
+function persistBindingOnResult(
+  deps: AttemptDeps,
+  input: AttemptInput,
+  recorder: AttemptRecorder,
+  ev: AgyEvent,
+): void {
+  if (
+    ev.kind !== 'result' ||
+    !ev.ok ||
+    looksLikeTosViolation(ev.response) ||
+    !input.persistBinding ||
+    input.sessionAccountKey === '' ||
+    deps.isSuperseded(input.sessionKey, recorder.rec)
+  ) {
+    return
+  }
+  const finalId = input.binding !== undefined ? input.binding.conversationId : (ev.conversationId || recorder.streamCid)
+  if (!finalId) return
+  const mergedImages =
+    input.binding?.sentImageIds || input.newlySentImageIds.length > 0
+      ? [...new Set([...(input.binding?.sentImageIds ?? []), ...input.newlySentImageIds])]
+      : undefined
+  deps.store.set(input.sessionAccountKey, {
+    conversationId: finalId,
+    lastMessageCount: input.messages.length,
+    updatedAt: Date.now(),
+    model: input.activeModel,
+    ...(mergedImages && mergedImages.length > 0 ? { sentImageIds: mergedImages } : {}),
+  })
 }
 
 export interface SpawnedAttempt {
@@ -449,9 +482,11 @@ export async function startAttemptProcess(
       // long step is running, and a run that only talks on stderr used to be
       // "idle" as far as the watchdog was concerned.
       stderrKeepalive: true,
-      onLine: (line) => {
-        recorder.feedLine(line, input.agyOnEvent, () => slotHandoff?.onFirstEvent())
-      },
+      onLine: (line) => recorder.feedLine(
+        line,
+        (ev) => { persistBindingOnResult(deps, input, recorder, ev); input.agyOnEvent?.(ev) },
+        () => slotHandoff?.onFirstEvent(),
+      ),
     })
     spawned = true
     recorder.attachProcess(proc)

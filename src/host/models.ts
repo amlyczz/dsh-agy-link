@@ -43,7 +43,10 @@ export function poolHasArgon(
   return accounts.some((acc) => accountHasArgon(acc, pool, catalog?.getAccountCatalog(acc.id)))
 }
 
-export type DiscoverFn = (signal?: AbortSignal, accountId?: string) => Promise<{ stdout: string; stderr: string }>
+export type DiscoverFn = (
+  signal?: AbortSignal,
+  accountId?: string,
+) => Promise<{ stdout: string; stderr: string; accountId?: string }>
 
 export interface ModelCatalogOptions {
   cacheFile?: string
@@ -330,7 +333,7 @@ export class ModelCatalog {
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(), 30_000)
       try {
-        const { stdout, stderr } = await this.discover(ac.signal, accountId)
+        const { stdout, stderr, accountId: probedAccountId } = await this.discover(ac.signal, accountId)
         if (isUnauthenticatedModelsFallback(stdout, stderr)) {
           const msg = 'agy models returned unauthenticated fallback output'
           if (accountId) {
@@ -357,6 +360,9 @@ export class ModelCatalog {
             }
           } else {
             this.current = newCatalog
+            if (probedAccountId) {
+              this.accountCatalogs.set(probedAccountId, newCatalog)
+            }
           }
           this.persistToDisk()
           if (changed && announce) {

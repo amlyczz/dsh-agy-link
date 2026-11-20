@@ -118,3 +118,17 @@ test('startAgyProcess does not reset watchdog on background stderr noise', async
   assert.equal(outcome.timedOut, true, 'background noise must not prevent timeout')
 })
 
+test('RunRecording.hasConsumableResultFrom ignores bare error results so idleGraceTerminated and continuation retry recover cleanly', async () => {
+  const { RunRecording } = await import('../src/host/recording.ts')
+  const rec = new RunRecording('run-bare-err')
+  rec.append({ kind: 'init', conversationId: 'c1', model: 'gemini-4-neon', raw: {} })
+  rec.append({ kind: 'result', conversationId: 'c1', ok: false, response: '', error: 'signal: terminated', usage: {}, raw: {} })
+  assert.equal(rec.hasResult, true)
+  assert.equal(rec.hasConsumableResultFrom(0), false, 'bare error result is NOT consumable by EventMapper')
+
+  rec.append({ kind: 'result', conversationId: 'c1', ok: true, response: 'recovered reply', usage: {}, raw: {} })
+  assert.equal(rec.hasConsumableResultFrom(0), true)
+  assert.equal(rec.hasConsumableResultFrom(2), true)
+  assert.equal(rec.hasConsumableResultFrom(3), false)
+})
+

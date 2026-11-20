@@ -250,10 +250,16 @@ function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unkno
             }
             // Manual refresh also re-reads the model catalog: after an
             // external re-login the subscription tier (and thus model list)
-            // may differ. One `agy models` spawn per explicit click only —
-            // the background poller never touches the catalog.
-            // ModelCatalog emits notifyPicker internally ONLY when entries change.
-            await catalog.forceRefresh().catch(() => undefined)
+            // may differ. Pass `id` when syncing a single account so its
+            // per-account catalog is updated; full sync also warms accounts.
+            if (id) {
+              await catalog.forceRefresh(id).catch(() => undefined)
+            } else {
+              await catalog.forceRefresh().catch(() => undefined)
+              if (typeof catalog.warmAccounts === 'function') {
+                await catalog.warmAccounts(pool.getAccounts()).catch(() => undefined)
+              }
+            }
           })().catch(() => undefined)
           let releaseTimer: ReturnType<typeof setTimeout> | undefined
           const entry: Promise<void> = work.finally(() => {

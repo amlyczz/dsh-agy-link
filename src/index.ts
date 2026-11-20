@@ -454,6 +454,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   ctx.effect(() => {
     return () => {
       bridgeDisposed = true
+      services.translationWorkers?.dispose()
       auth.dispose()
       void poolAuth.cancel()
       if (askToolDispose.current !== null) askToolDispose.current()

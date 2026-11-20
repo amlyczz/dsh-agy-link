@@ -33,7 +33,11 @@ GET  /plugins/agy-link/translate/state?session=<id>&message=<id>  # 该条回复
 
 ## 3. 模型与档位
 
-- 默认 `translateModel = gemini-3.8-flash`、`translateEffort = medium`。实机实测（同一段 964 字回复，真实 agy）：**low ≈ 12s、medium ≈ 33s、high ≈ 45s**，其中约 9s 是 agy 进程启动的固定开销。high 不仅慢，输出也更像正式报告，与「人话」目标相反，因此默认降到 medium；想更快可在设置里切 low（或 `/tsl --effort low`）。
+- 默认 `translateModel = gemini-3.8-flash`、`translateEffort = low`。实机实测（`agy 1.5.11`）：**冷启动 low ≈ 12.4s，常驻热进程复用后仅需 ~4–9s**，而 medium ≈ 33s、high ≈ 45s；人话改写需要口语直观表达而非深度链式推理，因此默认采用 `low` 并在设置/提示中标注更慢选项。
+- **常驻热进程池（`TranslationWorkerPool`，`src/features/translation/worker.ts`）**：
+  - 非 Windows 下（Windows 仍走 `ctx.llm.stream` 遵循 `acquireCredentialSlot` 互斥锁）维护最多 1 个常驻 `agy -p --output-format stream-json --input-format stream-json --mode plan`（`cwd = tmpdir()`，**不传 `--add-dir`、不传 `--disable-slash-commands`**，以免破坏 `--mode plan` 与 `step_update` 流输出），按 `${account.id}|${model}|${effort}` 复用；空闲 `5m` 或累计 `8` 轮 / `32000` 字符后自动回收，收到 `result` 事件立即结算释放，免除 ~9s CLI 冷启动与退出等待。
+  - 请求串行排队执行；遇到 `429` 冷却切号、`--effort` 拒绝时自动记住并无感重放、发生超时/中断/致命异常立即销毁进程组，插件卸载时 `dispose()` 清理。
+  - 非生图辅助调用（`isAux && !isImage`）在回退路径上跳过 `SubagentTracker` 与 SQLite 思考/工具参数重试轮询，消除无意义睡眠延迟。
 - 解析顺序（`resolveTranslateTarget`）：显式入参 → `cfg.translateModel` → `gemini-3.8-flash` → 目录中最新的 `gemini-*-flash` → `cfg.defaultModel` → 目录首个模型。显式覆盖允许未在目录中的 id（目录只是 advisory）。
 - 档位：模型支持 `efforts` 时用请求值/默认值（high 优先），固定思考模型（Claude/GPT-OSS）不带 `--effort`。
 

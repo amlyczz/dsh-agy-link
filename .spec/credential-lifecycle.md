@@ -35,6 +35,10 @@
 - **第三方 MCP 鉴权错误隔离**：stderr 中明确带 MCP 服务前缀的鉴权报错不归因于 Google Antigravity 账号登出。
 - **Windows 凭据槽瞬时网络错误与文件缺失解耦**：`resolvePrimaryCredentialAt` 因网络不可达无法在线核验主账号身份时，抛可重试瞬时错误而非把当前调度的辅账号标为 `authRequired`；仅当账号自身凭据文件确实缺失或损坏时才标 `authRequired`。
 - **macOS 启动钥匙串自愈无损化（`boot-hygiene.ts` / `keychain.ts`）**：`security` 命令超时不删除隔离钥匙串文件；`restoreTokenFromMacKeychain` 复用统一的 `parseGoKeyringPayload`（同时兼容 `go-keyring-base64:` 与明文 JSON）。
+- **macOS/Linux `systemHome` 与 OS 钥匙串互不踩踏（`token.ts` / `services.ts`）**：
+  - 隔离池账号使用各自目录的 `Library/Keychains/login.keychain-db`（macOS）与 `.gemini/antigravity-cli/antigravity-oauth-token`，绝不触碰系统默认钥匙串；仅 `systemHome`（`acc_primary`）与 `Antigravity.app` / 系统终端 `agy` 共用单一钥匙串项（`service=gemini, account=antigravity`）。
+  - 非 Windows 下对 `systemHome` 刷新 OAuth token 时，落盘前再次校验实时系统钥匙串 `refreshToken` 未切换；若用户在刷新途中于 `Antigravity.app` 切号则直接丢弃本次旧响应，且当 `~/.gemini/antigravity-cli/antigravity-oauth-token` 不存在时不创建磁盘残片。
+  - `ModelCatalog` 全局发现回退严格跳过已禁用/异常的 `lastActiveAccountId` 与 `primaryAccountId`（`pickEnabled`）；当池内所有账号均停用或不可用时拒绝回退真实 `HOME` 触发无隔离 `agy models`。
 
 ## 4. 结构化异常态：区分「需重登」「需网页验证」与「终态封禁」
 

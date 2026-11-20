@@ -22,6 +22,7 @@ const settleListeners = new Set<() => void>();
 // with a full-screen compositing layer on top that turns into visible flashing.
 // This flag is the single source of truth for "an overlay owns the screen".
 let overlaySuspended = false;
+let overlaySuspendRefs = 0;
 
 function onScrollActivity(): void {
 	isScrolling = true;
@@ -29,6 +30,7 @@ function onScrollActivity(): void {
 	scrollTimer = setTimeout(() => {
 		isScrolling = false;
 		scrollTimer = null;
+		if (overlaySuspended || overlaySuspendRefs > 0) return;
 		for (const fn of settleListeners) {
 			try { fn(); } catch { /* ignore listener errors */ }
 		}
@@ -51,15 +53,31 @@ export function isScrollActive(): boolean {
 export function setOverlaySuspended(active: boolean): void {
 	if (overlaySuspended === active) return;
 	overlaySuspended = active;
-	if (!active) {
+	if (!active && overlaySuspendRefs === 0) {
 		for (const fn of settleListeners) {
 			try { fn(); } catch { /* ignore listener errors */ }
 		}
 	}
 }
 
+/** Ref-counted suspend for mounted Settings views (e.g. DSH native Settings dialog). */
+export function acquireOverlaySuspend(): () => void {
+	overlaySuspendRefs += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		overlaySuspendRefs = Math.max(0, overlaySuspendRefs - 1);
+		if (!overlaySuspended && overlaySuspendRefs === 0) {
+			for (const fn of settleListeners) {
+				try { fn(); } catch { /* ignore listener errors */ }
+			}
+		}
+	};
+}
+
 export function isOverlaySuspended(): boolean {
-	return overlaySuspended;
+	return overlaySuspended || overlaySuspendRefs > 0;
 }
 
 /**
@@ -68,7 +86,7 @@ export function isOverlaySuspended(): boolean {
  * the screen. Scanners must not act while this is true.
  */
 export function isInteractionLocked(): boolean {
-	return isScrolling || overlaySuspended;
+	return isScrolling || overlaySuspended || overlaySuspendRefs > 0;
 }
 
 /** Set scroll active state explicitly (useful for testing or programmatic scrolls). */
@@ -104,4 +122,5 @@ export function disposeScrollListener(): void {
 	settleListeners.clear();
 	isScrolling = false;
 	overlaySuspended = false;
+	overlaySuspendRefs = 0;
 }
