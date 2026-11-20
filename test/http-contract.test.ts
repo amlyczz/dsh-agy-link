@@ -127,6 +127,7 @@ const BASE_CONFIG: Record<string, unknown> = {
   defaultEffort: 'high',
   askTool: false,
   hiddenModels: [] as string[],
+  selectedModels: [] as string[],
   autoWarmup: false,
   warmupModels: [] as string[],
   autoTranslate: false,
@@ -567,6 +568,12 @@ test('/config is POST-only and validates keys before writing', async () => {
   assert.deepEqual(badArray.json(), { error: 'hiddenModels must be an array of model ids' })
   assert.equal(writes.length, 0)
 
+  // issue #131: the allow-list is validated exactly like the deny-list.
+  const badSelected = await invoke(route, fakeReq('POST', '/', { key: 'selectedModels', value: ['ok', 1] }))
+  assert.equal(badSelected.status(), 400)
+  assert.deepEqual(badSelected.json(), { error: 'selectedModels must be an array of model ids' })
+  assert.equal(writes.length, 0)
+
   const badWarmup = await invoke(route, fakeReq('POST', '/', { key: 'warmupModels', value: ['ok', 1] }))
   assert.equal(badWarmup.status(), 400)
   assert.deepEqual(badWarmup.json(), { error: 'warmupModels must be an array of model names' })
@@ -602,6 +609,12 @@ test('/config is POST-only and validates keys before writing', async () => {
   assert.equal(wide.status(), 200)
   assert.deepEqual(writes.at(-1), ['poolWideCatalog', true])
   assert.equal(pickerEvents, 2, 'poolWideCatalog must refresh the model picker like hiddenModels')
+
+  // issue #131: ticking a subset changes the picker contents too.
+  const selected = await invoke(route, fakeReq('POST', '/', { key: 'selectedModels', value: ['gemini-3.7-flash'] }))
+  assert.equal(selected.status(), 200)
+  assert.deepEqual(writes.at(-1), ['selectedModels', ['gemini-3.7-flash']])
+  assert.equal(pickerEvents, 3, 'selectedModels writes must announce the picker update')
 })
 
 test('/config treats malformed and oversized bodies as empty (non-strict read)', async () => {

@@ -132,6 +132,7 @@ export function resolveConfig(
         )
       : base.fallbackModels,
     hiddenModels: asStringArray(get('hiddenModels')) ?? base.hiddenModels,
+    selectedModels: asStringArray(get('selectedModels')) ?? base.selectedModels,
     askTool: asBool(get('askTool')) ?? base.askTool,
     mediaDir: asString(get('mediaDir')) ?? base.mediaDir,
     mediaTtlMs: asNum(get('mediaTtlMs')) ?? base.mediaTtlMs,
@@ -218,6 +219,13 @@ export function resolveConfig(
   if (env.DSH_AGY_HIDDEN_MODELS) {
     const list = asStringArray(env.DSH_AGY_HIDDEN_MODELS.split(','))
     if (list) cfg.hiddenModels = list
+  }
+  // Empty env value means "no allow-list" (show everything), which is also the
+  // default — assigning [] would otherwise be indistinguishable from a user
+  // deliberately ticking nothing off.
+  if (env.DSH_AGY_SELECTED_MODELS) {
+    const list = asStringArray(env.DSH_AGY_SELECTED_MODELS.split(','))
+    if (list && list.length > 0) cfg.selectedModels = list
   }
   if (env.DSH_AGY_WORKSPACE_ROOT) cfg.workspaceRoot = env.DSH_AGY_WORKSPACE_ROOT
   if (env.DSH_AGY_MEDIA_DIR) cfg.mediaDir = env.DSH_AGY_MEDIA_DIR

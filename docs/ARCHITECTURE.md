@@ -8,7 +8,8 @@ client bundle and one CLI, with a one-way dependency rule.
 ```
 common/      pure types, protocol extensions, config schema, errors
   ↑
-domain/      pure business rules (quota bucket math, account paths/eligibility)
+domain/      pure business rules (quota bucket math, account paths/eligibility,
+             model-catalog folding/merging in domain/models/)
   ↑
 runtime/     process and platform I/O (agy runner/parser/mapper, proxy/env)
   ↑

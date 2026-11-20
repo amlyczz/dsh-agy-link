@@ -105,6 +105,14 @@ export interface PluginConfig {
    * resolveModel still accepts hidden ids so in-flight sessions keep working.
    */
   hiddenModels: readonly string[]
+  /**
+   * Model ids the picker is ALLOWED to show (allow-list). Empty = no
+   * restriction, so every discovered model stays visible — an allow-list that
+   * defaults to "nothing" would silently empty the model menu on upgrade.
+   * Applied AFTER `hiddenModels`, so a deny-listed id stays hidden even when
+   * it also appears here.
+   */
+  selectedModels: readonly string[]
   askTool: boolean
   /** Directory where inbound images are staged for agy (path-based multimodal). */
   mediaDir: string
@@ -291,6 +299,8 @@ export function defaultConfig(): PluginConfig {
     workspaceRoot: '',
     fallbackModels: DEFAULT_FALLBACK_MODELS,
     hiddenModels: [],
+    // Empty = no allow-list: every model the account supports stays visible.
+    selectedModels: [],
     askTool: false,
     mediaDir: '',
     mediaTtlMs: 86_400_000,

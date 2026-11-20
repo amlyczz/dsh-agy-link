@@ -10,6 +10,10 @@ import { accountSupportsModel, type ManagedAccount } from '../common/pool-types.
 import type { AccountPoolManager } from '../host/pool.ts'
 import { defaultEffortFor, findEntry, sanitizeCatalogEntries, type CatalogEntry, type ModelCatalog } from '../host/models.ts'
 import { effortLabel, normalizeEfforts } from '../common/reasoning.ts'
+import { mergeCatalogWithQuotaModels, quotaCatalogForAccount } from '../domain/models/quota-catalog.ts'
+
+/** One picker row after sanitizing (efforts are always a concrete array). */
+type SanitizedEntry = { id: string; name: string; efforts: string[] }
 
 /** What model resolution needs from the adapter. */
 export interface ModelResolutionDeps {
@@ -57,15 +61,74 @@ export function listAvailableModels(deps: ModelResolutionDeps): readonly LlmMode
       'model catalog contained duplicate ids [' + dropped.join(', ') + '] — kept first occurrence so DSH does not drop the whole provider group (INVALID_CATALOG)',
     )
   }
+  const quotaScoped = quotaScopeAccounts(pool, accounts, activeAcc, cfg.poolWideCatalog)
+  const visible = visibleEntries(entries, quotaScoped, cfg)
+  return visible.map((m) => ({
+    provider: PROVIDER_ID,
+    id: m.id,
+    name: m.name,
+    inputModalities: ['text', 'image'] as const,
+  }))
+}
+
+/**
+ * Accounts whose quota snapshots describe models the picker may offer.
+ *
+ * Narrow mode (default) describes ONE account — the same account whose `agy
+ * models` catalog the picker is showing, so the two sources never contradict
+ * each other. Pool-wide mode describes every enabled account because the
+ * scheduler can route to any of them (issue #107).
+ */
+function quotaScopeAccounts(
+  pool: ModelResolutionDeps['pool'],
+  accounts: readonly ManagedAccount[],
+  activeAcc: ManagedAccount | undefined,
+  poolWide: boolean,
+): readonly ManagedAccount[] {
+  if (!pool) return []
+  if (poolWide) return accounts
+  if (activeAcc) return [activeAcc]
+  return accounts.slice(0, 1)
+}
+
+/**
+ * Fold quota-derived models into the catalog and apply BOTH visibility filters.
+ *
+ * Quota rows are merged in because a host without the agy CLI only ever has the
+ * static fallback catalog, while every quota refresh already stored the real
+ * per-account model list — that list is what makes the picker useful at all
+ * (issue #131). Merge, don't replace: `agy models` stays authoritative for the
+ * models it knows about.
+ *
+ * Visibility order is allow-list THEN deny-list: `selectedModels` is the
+ * checkbox state the settings panel writes, `hiddenModels` remains the older
+ * deny-list (env/config escape hatch) and still wins on a conflict so an
+ * operator can hide a model without editing the selection.
+ */
+function visibleEntries(
+  entries: readonly SanitizedEntry[],
+  quotaScope: readonly ManagedAccount[],
+  cfg: PluginConfig,
+): readonly CatalogEntry[] {
+  const quota = quotaCatalogForAccounts(quotaScope)
+  const merged = mergeCatalogWithQuotaModels(entries, quota)
+  const selected = new Set(cfg.selectedModels.map((s) => s.trim()).filter((s) => s !== ''))
   const hidden = new Set(cfg.hiddenModels.map((s) => s.trim()))
-  return entries
-    .filter((m) => !hidden.has(m.id))
-    .map((m) => ({
-      provider: PROVIDER_ID,
-      id: m.id,
-      name: m.name,
-      inputModalities: ['text', 'image'] as const,
-    }))
+  return merged.filter((m) => (selected.size === 0 || selected.has(m.id)) && !hidden.has(m.id))
+}
+
+/** Union of the quota-derived catalogs of several accounts, first label wins. */
+function quotaCatalogForAccounts(accounts: readonly ManagedAccount[]): CatalogEntry[] {
+  const out: CatalogEntry[] = []
+  const seen = new Set<string>()
+  for (const acc of accounts) {
+    for (const entry of quotaCatalogForAccount(acc)) {
+      if (seen.has(entry.id)) continue
+      seen.add(entry.id)
+      out.push(entry)
+    }
+  }
+  return out
 }
 
 export function resolveModelInfo(deps: ModelResolutionDeps, model: string): LlmResolvedModelInfo {
@@ -82,6 +145,10 @@ export function resolveModelInfo(deps: ModelResolutionDeps, model: string): LlmR
     ?? allModels.find((m) => m.id === cleanId)
     ?? findEntry(deps.catalog.get(activeAcc?.id), cleanId)
     ?? findEntry(deps.catalog.get(), cleanId)
+    // A model may only be known from a quota snapshot (CLI-less host, issue
+    // #131). Resolution must still find it — an in-flight conversation keeps
+    // working after the user unticks it in the settings panel.
+    ?? quotaCatalogForAccounts(quotaScopeAccounts(pool, accounts, activeAcc, cfg.poolWideCatalog)).find((m) => m.id === cleanId)
   const rawName = entry ? entry.name : cleanId
   const name = (typeof rawName === 'string' && rawName.trim() !== '') ? rawName.trim() : cleanId
   const contextWindow = typeof cfg.contextWindowDefault === 'number' && cfg.contextWindowDefault > 0 ? cfg.contextWindowDefault : 200_000

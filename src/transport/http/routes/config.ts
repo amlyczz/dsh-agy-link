@@ -14,7 +14,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'enabled', 'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
-          'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog',
+          'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
@@ -24,6 +24,10 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           sendJson(res as RawRes, 400, { error: 'hiddenModels must be an array of model ids' })
           return
         }
+        if (key === 'selectedModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
+          sendJson(res as RawRes, 400, { error: 'selectedModels must be an array of model ids' })
+          return
+        }
         if (key === 'warmupModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
           sendJson(res as RawRes, 400, { error: 'warmupModels must be an array of model names' })
           return
@@ -31,11 +35,12 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         setOverride(key, body.value)
         onConfigWritten(key, body.value)
         // Both keys change the model set DSH's picker must display:
-        // `hiddenModels` hides ids, `poolWideCatalog` switches between the
-        // active account's catalog and the pool-wide union (issue #107/#108).
-        // Without this event the cached picker keeps the old list until a
-        // restart, so enabling the switch looked like "it did nothing".
-        if (key === 'hiddenModels' || key === 'poolWideCatalog' || key === 'enabled') {
+        // `hiddenModels`/`selectedModels` change visibility, `poolWideCatalog`
+        // switches between the active account's catalog and the pool-wide union
+        // (issue #107/#108). Without this event the cached picker keeps the old
+        // list until a restart, so ticking a checkbox looked like "it did
+        // nothing".
+        if (key === 'hiddenModels' || key === 'selectedModels' || key === 'poolWideCatalog' || key === 'enabled') {
           notifyPicker()
         }
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })

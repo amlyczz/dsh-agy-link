@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { accountHasArgon, buildFallbackCatalog, defaultEffortFor, findEntry, foldEfforts, isArgonModel, ModelCatalog, parseModelsOutput, resolveModelSlug } from '../src/host/models.ts'
 import { DEFAULT_FALLBACK_MODELS, defaultConfig, type PluginConfig } from '../src/common/types.ts'
-import { listAvailableModels, type ModelResolutionDeps } from '../src/provider/model-resolution.ts'
+import { listAvailableModels, resolveModelInfo, type ModelResolutionDeps } from '../src/provider/model-resolution.ts'
 
 test('parseModelsOutput reads the JSON array shape', () => {
   const raw = JSON.stringify([
@@ -612,6 +612,46 @@ test('issue #107: poolWideCatalog exposes the pool-wide union; default stays iso
   assert.ok(wide.includes('gemini-4-argon'))
   assert.ok(wide.includes('claude-sonnet-4-6'), 'union surfaces the other account’s model for model-aware routing')
   assert.ok(wide.includes('claude-sonnet-5-5'))
+})
+
+test('issue #131: selectedModels whitelists the picker, and an empty selection shows everything', async () => {
+  const base = await poolWideDeps(true)
+  const withSelection = (ids: string[]): ModelResolutionDeps => ({
+    ...base,
+    getConfig: () => ({ ...defaultConfig(), poolWideCatalog: true, selectedModels: ids } as PluginConfig),
+  })
+
+  const all = listAvailableModels(withSelection([])).map((m) => m.id)
+  assert.ok(all.length > 3, 'an empty whitelist must not restrict the picker')
+  assert.deepEqual(listAvailableModels(withSelection(['  '])).map((m) => m.id), all, 'blank ids are ignored, not treated as a match')
+
+  const picked = listAvailableModels(withSelection(['gemini-3.8-flash', ' claude-sonnet-4-6 '])).map((m) => m.id)
+  assert.deepEqual(picked.sort(), ['claude-sonnet-4-6', 'gemini-3.8-flash'], 'trimmed ids survive and everything else is dropped')
+})
+
+test('issue #131: hiddenModels still wins over selectedModels', async () => {
+  const base = await poolWideDeps(true)
+  const deps: ModelResolutionDeps = {
+    ...base,
+    getConfig: () => ({
+      ...defaultConfig(),
+      poolWideCatalog: true,
+      selectedModels: ['gemini-3.8-flash', 'claude-sonnet-5-5'],
+      hiddenModels: ['claude-sonnet-5-5'],
+    } as PluginConfig),
+  }
+  assert.deepEqual(listAvailableModels(deps).map((m) => m.id), ['gemini-3.8-flash'], 'the deny-list applies after the allow-list')
+})
+
+test('issue #131: a deselected model still resolves for an in-flight session', async () => {
+  const base = await poolWideDeps(true)
+  const deps: ModelResolutionDeps = {
+    ...base,
+    getConfig: () => ({ ...defaultConfig(), poolWideCatalog: true, selectedModels: ['gemini-3.8-flash'] } as PluginConfig),
+  }
+  assert.equal(listAvailableModels(deps).some((m) => m.id === 'claude-sonnet-5-5'), false)
+  const resolved = resolveModelInfo(deps, 'claude-sonnet-5-5')
+  assert.equal(resolved.id, 'claude-sonnet-5-5', 'the whitelist is a picker filter, not a resolution gate')
 })
 
 // ---------------------------------------------------------------------------

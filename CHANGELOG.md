@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0 (2026-11-20)
+
+### English
+
+- **Feature(settings): tick which models the picker shows, per account, straight from the quota snapshot (issues #131).** The "Model visibility" panel was a deny-list of chips fed only by `agy models`; on a host without the CLI it listed the 7 static fallback rows while the account pool already knew the account could run 23+ models, so the picker looked broken. The panel is now a tick-list over the **full selectable universe**, and ticking a model writes the new `selectedModels` allow-list (`POST /config`, env `DSH_AGY_SELECTED_MODELS`). An empty selection still means "no restriction", so the shipped default is unchanged and unticking the last model cannot blank the picker. `hiddenModels` keeps working and is applied after the allow-list, so a denied model stays denied and its chip says why. Resolution is deliberately NOT filtered: a session already running a now-unticked model keeps resolving it.
+- **Feature(catalog): `/status` merges the per-account quota model list into `catalogModels`.** New domain module `src/domain/models/quota-catalog.ts` folds `accounts[].quotas.<family>.models[]` into catalog entries (effort suffixes fold exactly like the CLI list) and merges them with whatever `agy models` discovered, preserving the CLI's order and identity. The status payload is scoped to the active account, or to the whole pool when `poolWideCatalog` is on, and now echoes `selectedModels`; `model-resolution` gained the same merge so a quota-only model resolves for in-flight sessions too.
+
+### 中文
+
+- **新功能(设置)：直接按账号勾选模型选择器显示哪些模型，数据来自配额快照（issue #131）。** 原来的「模型显示」区是一个黑名单 chip 列表，且只喂 `agy models` 的结果；在没装 CLI 的机器上它只列出 7 条静态 fallback，而账号池其实早就知道这个账号能跑 23 个以上的模型，于是模型选择器看起来像坏了。现在该区变成**全量可勾选列表**，勾中的模型写进新的 `selectedModels` 白名单（`POST /config`，环境变量 `DSH_AGY_SELECTED_MODELS`）。**一个都不勾仍然表示「不限制」**，所以默认行为不变，取消勾选最后一个也不会把选择器清空。`hiddenModels` 继续有效并且**在白名单之后**应用，被它禁用的模型依旧不显示，chip 的 tooltip 会说明原因。解析链路**故意不做过滤**：已经在用某个模型的会话，即使用户后来取消勾选，也仍能继续解析它。
+- **新功能(目录)：`/status` 会把每账号配额里的模型列表合并进 `catalogModels`。** 新增纯函数模块 `src/domain/models/quota-catalog.ts`，把 `accounts[].quotas.<family>.models[]` 折叠成目录条目（effort 后缀折叠规则与 CLI 列表完全一致），再与 `agy models` 发现的结果合并，并保持 CLI 的顺序与命名权威。状态负载按活动账号取范围（`poolWideCatalog` 打开时按全池），并新增回传 `selectedModels`；`model-resolution` 也做了同样的合并，因此「只有配额知道」的模型对 in-flight 会话依然可解析。
+
 ## 0.6.48 (2026-11-20)
 
 ### English

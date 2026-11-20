@@ -1,6 +1,25 @@
 import type { HostServices } from '../../../host/services.ts'
 import { runRoute, sendJsonWithEtag, type RawRes, type RouteRegistrar } from '../respond.ts'
 import { sanitizeCatalogEntries } from '../../../host/models.ts'
+import { mergeCatalogWithQuotaModels, quotaCatalogForAccount } from '../../../domain/models/quota-catalog.ts'
+import type { ManagedAccount } from '../../../common/pool-types.ts'
+
+/**
+ * The selectable universe the Settings ticks describe.
+ *
+ * Deliberately UNFILTERED by `selectedModels`/`hiddenModels`: unticking a model
+ * must stay reversible, so the panel always receives the full set and knows the
+ * current selection separately. Quota-derived models are merged in because a
+ * host without the agy CLI has only the static fallback catalog while the
+ * account's own quota snapshot already lists the real models (issue #131).
+ */
+function selectableModels(
+  supportedModels: Parameters<typeof sanitizeCatalogEntries>[0],
+  quotaScope: readonly ManagedAccount[],
+): Array<{ id: string; name: string; efforts: string[] }> {
+  const quota = quotaScope.flatMap((acc) => quotaCatalogForAccount(acc))
+  return sanitizeCatalogEntries(mergeCatalogWithQuotaModels(sanitizeCatalogEntries(supportedModels).entries, quota)).entries
+}
 
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, bin, store, pool, quota, catalog, auth, poolAuth, adapter, translation, lastRun } = services
@@ -26,7 +45,11 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
         } else {
           supportedModels = catalog.getModelsForAccount(activeAcc, pool)
         }
-        const sanitizedCatalogModels = sanitizeCatalogEntries(supportedModels).entries
+        // Same account scope the picker merges quota rows for, so the panel and
+        // the picker never disagree about which models exist.
+        const allAccounts = typeof pool?.getAccounts === 'function' ? pool.getAccounts() : []
+        const quotaScope = cfg.poolWideCatalog ? allAccounts : (activeAcc ? [activeAcc] : allAccounts.slice(0, 1))
+        const sanitizedCatalogModels = selectableModels(supportedModels, quotaScope)
         const activeCat = (!cfg.poolWideCatalog && activeAcc && typeof catalog.getAccountCatalog === 'function')
           ? (catalog.getAccountCatalog(activeAcc.id) ?? cat)
           : cat
@@ -65,6 +88,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           catalogModels: sanitizedCatalogModels,
           accountModels,
           hiddenModels: cfg.hiddenModels,
+          selectedModels: cfg.selectedModels,
           autoWarmup: cfg.autoWarmup,
           warmupModels: cfg.warmupModels,
           autoTranslate: cfg.autoTranslate,

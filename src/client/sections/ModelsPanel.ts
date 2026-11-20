@@ -1,5 +1,15 @@
-// Model visibility panel: the catalog chip list where an enabled chip is
-// visible and a struck-through, dimmed chip is hidden from the pickers.
+// Model selection panel: one chip per model, ticked = that model appears in
+// DSH's model picker.
+//
+// Semantics that matter:
+//   - An EMPTY selection means "no restriction" (every model shows). That is the
+//     shipped default, and unticking the last model must not blank the picker,
+//     so the panel renders every chip as ticked in that state.
+//   - The list is the full selectable universe (never pre-filtered), otherwise
+//     an unticked model could never be ticked again.
+//   - A model can still be denied outright by the `hiddenModels` deny-list
+//     (config/env escape hatch). Such a chip shows as dimmed and explains why,
+//     so a ticked-but-invisible model is never a silent mystery.
 
 import { h } from '../react.ts';
 import { S } from '../styles.ts';
@@ -12,30 +22,56 @@ export interface ModelsPanelProps {
 	t: Translator;
 	catalogModels: ReadonlyArray<CatalogModelView>;
 	hiddenModelSet: Set<string>;
+	/** Empty set = no allow-list, i.e. everything is shown. */
+	selectedModelSet: Set<string>;
 	loadingAction: string | null;
-	toggleModelHidden: (id: string, hide: boolean) => Promise<void>;
+	setSelectedModels: (ids: ReadonlyArray<string>) => Promise<void>;
 }
 
-export function ModelsPanel({ t, catalogModels, hiddenModelSet, loadingAction, toggleModelHidden }: ModelsPanelProps): unknown {
+export function ModelsPanel({ t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels }: ModelsPanelProps): unknown {
+	const unrestricted = selectedModelSet.size === 0;
+	const isVisible = (id: string): boolean => !hiddenModelSet.has(id) && (unrestricted || selectedModelSet.has(id));
+	const visibleCount = catalogModels.filter((m) => isVisible(m.id)).length;
+	const busy = loadingAction === 'config:selectedModels';
+
+	const onChipClick = (id: string): void => {
+		// The allow-list currently restricts to an explicit subset: just add or
+		// remove this one id.
+		if (!unrestricted) {
+			const next = new Set(selectedModelSet);
+			if (next.has(id)) next.delete(id); else next.add(id);
+			void setSelectedModels(Array.from(next));
+			return;
+		}
+		// "No restriction" state: unticking one model has to materialise what is
+		// currently visible minus that model. Writing `[id]` (or `[]`) here would
+		// hide every OTHER model — a surprising regression from one click.
+		const next = catalogModels.filter((m) => !hiddenModelSet.has(m.id) && m.id !== id).map((m) => m.id);
+		void setSelectedModels(next);
+	};
+
 	return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('models.label')),
+		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } },
+			t('models.label', { selected: visibleCount, total: catalogModels.length })),
 		catalogModels.length === 0
 			? h('span', { style: S.muted }, t('models.empty'))
 			: h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } },
 				catalogModels.map((m) => {
-					const isHidden = hiddenModelSet.has(m.id);
+					const denied = hiddenModelSet.has(m.id);
+					const ticked = isVisible(m.id);
 					// One chip per MODEL. Its effort levels are folded into the
 					// model (agy lists them as separate slugs); the tooltip names
 					// them so a single chip never looks like a missing entry.
 					const efforts = (m.efforts ?? []).map((id) => effortLabel(id));
-					const title = efforts.length > 0 ? m.id + ' · ' + efforts.join(' / ') : m.id;
+					const title = (efforts.length > 0 ? m.id + ' · ' + efforts.join(' / ') : m.id)
+						+ (denied ? '\n' + t('models.deniedHint') : '');
 					return h(Button, {
 						key: m.id,
-						variant: isHidden ? 'seg' : 'segActive',
+						variant: ticked ? 'segActive' : 'seg',
 						title,
-						disabled: loadingAction === 'config:hiddenModels',
-						style: isHidden ? { opacity: 0.45, textDecoration: 'line-through' } : undefined,
-						onClick: () => void toggleModelHidden(m.id, !isHidden),
+						disabled: busy,
+						style: ticked ? undefined : { opacity: 0.45, textDecoration: 'line-through' },
+						onClick: () => onChipClick(m.id),
 					}, m.name);
 				}),
 			),
