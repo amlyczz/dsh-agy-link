@@ -12,7 +12,7 @@
  * boundary cut the line), which keeps the conservative "arm the grace" path.
  */
 export function backgroundTasksFrom(text: string): number | null {
-  const match = /root agent idle;\s*waiting\s+for\s+(\d+)\s+background/i.exec(text)
+  const match = /root agent idle;\s*waiting(?:\s+up\s+to\s+\S+)?\s+for\s+(\d+)\s+background/i.exec(text)
   if (match === null) return null
   const count = Number(match[1])
   return Number.isSafeInteger(count) && count >= 0 ? count : null

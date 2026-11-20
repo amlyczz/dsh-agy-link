@@ -273,8 +273,8 @@ export class AgyAdapter extends LlmAdapter {
       // must still surface as the turn's error instead of re-running the work
       // forever on rotating accounts.
       const deadFailure = rec !== undefined && rec.isSettled ? rec.failureInfo : null
-      const deadMissingResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasConsumableResultFrom(continuation.eventIndex + 1)
-      if (rec !== undefined && !deadMissingResult && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
+      const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, hasToolSupport)
+      if (rec !== undefined && !deadNoResult && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
         yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
         return
       }
@@ -282,8 +282,8 @@ export class AgyAdapter extends LlmAdapter {
         this.deps.runs.forget(continuation.runId)
         this.warnOnce(
           'dead-continuation:' + continuation.runId,
-          deadMissingResult
-            ? 'agy run ' + continuation.runId + ' settled without a consumable result — retrying this step instead of replaying an empty stream'
+          deadNoResult
+            ? 'agy run ' + continuation.runId + ' settled without a consumable result — retrying this step instead of replaying it'
             : 'agy run ' + continuation.runId + ' settled in ' + (deadFailure?.code ?? '') + ' — retrying this step instead of replaying it'
               + (deadFailure?.code === Err.NETWORK && this.sharesSingleEgress() ? ' on the same account (shared egress)' : ' on another account'),
         )
@@ -591,6 +591,6 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice, isAux && !isImage)
+    yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice)
   }
 }

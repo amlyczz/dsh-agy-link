@@ -24,10 +24,10 @@ test('issue #124: hasResult reflects a real result envelope, not the init conver
   assert.equal(rec.hasResult, true, 'the real result envelope flips it')
 })
 
-/** Spawn a child that reports the idle line and then stays alive. */
+/** Spawn a child that reports the idle line (0 remaining tasks) and then stays alive. */
 function idleChild(opts: { idleGraceMs: number }) {
   const script = `
-    process.stderr.write('root agent idle; waiting up to 240m0s for 1 background task(s)\\n');
+    process.stderr.write('root agent idle; waiting up to 240m0s for 0 background task(s)\\n');
     setInterval(() => {}, 1000);
   `
   return startAgyProcess({
@@ -54,7 +54,7 @@ test('issue #124: an idle-grace kill is skipped while a subagent is being awaite
 
 test('issue #124: new stdout output cancels a pending idle-grace kill', async () => {
   const script = `
-    process.stderr.write('root agent idle; waiting up to 240m0s for 1 background task(s)\\n');
+    process.stderr.write('root agent idle; waiting up to 240m0s for 0 background task(s)\\n');
     setTimeout(() => { process.stdout.write('{"event":"step_update"}\\n'); }, 30);
     setInterval(() => {}, 1000);
   `

@@ -7,15 +7,16 @@ import { classifyEvent } from '../src/host/parser.ts'
 import { resolveConfig } from '../src/common/config.ts'
 
 test('startAgyProcess terminates on root agent idle grace period and sets idleGraceTerminated', async () => {
-  // Simulate agy child that prints root agent idle on stderr and then sits blocked
+  // Simulate agy child that prints root agent idle (0 remaining tasks) on stderr and then sits blocked
   const script = `
-    process.stderr.write('root agent idle; waiting up to 240m0s for 1 background task(s)\\n');
+    process.stderr.write('root agent idle; waiting up to 240m0s for 0 background task(s)\\n');
     setTimeout(() => {}, 60000);
   `
   const proc = startAgyProcess({
     bin: process.execPath,
     args: ['-e', script],
     timeoutMs: 30_000,
+    idleGraceMs: 60,
   })
   const outcome = await proc.outcome
   assert.equal(outcome.idleGraceTerminated, true)

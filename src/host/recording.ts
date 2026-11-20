@@ -224,6 +224,38 @@ export class RunRecording {
     return this.events.some((e) => e.kind === 'result')
   }
 
+  /** Whether a result event that EventMapper will finish on (ok, or non-empty error response) was recorded. */
+  get hasConsumableResult(): boolean {
+    const r = this.getResultEvent()
+    return r !== null && (r.ok || r.response !== '')
+  }
+
+  /**
+   * Whether any recorded event at or after `from` can finish a span cleanly
+   * (a consumable result envelope, or a completed tool step when `cutOnTool`
+   * is enabled). A settled recording with `failureInfo === null` and no such
+   * event would otherwise replay `INVALID_OUTPUT: agy stream ended without a
+   * result event` on every continuation retry.
+   */
+  hasFinishableEventFrom(from: number, cutOnTool = true): boolean {
+    for (let i = Math.max(0, from); i < this.events.length; i++) {
+      const ev = this.events[i]
+      if (ev === undefined) continue
+      if (ev.kind === 'result' && (ev.ok || ev.response !== '')) return true
+      if (
+        cutOnTool
+        && ev.kind === 'step'
+        && ev.stepKind === 'tool'
+        && ev.tool !== undefined
+        && (ev.state === 'DONE' || ev.state === 'ERROR' || ev.state === 'RUNNING'
+          || (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined)))
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+
   /** The last result envelope's finish-relevant projection, when one arrived. */
   getResultEvent(): { ok: boolean; response: string } | null {
     for (let i = this.events.length - 1; i >= 0; i--) {
