@@ -136,11 +136,24 @@ test('issue #144: a positive background-task count never arms the reaper', async
   const parsers = await import('../src/runtime/agy/idle-line.ts')
   assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting for 2 background task(s)'), 2)
   assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting for 1 background task'), 1)
+  assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting up to 240m0s for 1 background task(s)'), 1)
+  assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting up to 240m0s for 0 background task(s)'), 0)
   // Zero is the only count that means "nothing left; reclaim it".
   assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting for 0 background tasks'), 0)
   // Unparseable idleness still counts as idle — keep the old conservative path.
   assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting'), null)
   assert.equal(parsers.backgroundTasksFrom('unrelated stderr'), null)
+})
+
+test('issue #144: waiting up to <duration> for positive background tasks also never reaps', async () => {
+  const proc = idleChild(60, 'root agent idle; waiting up to 240m0s for 1 background task(s)')
+  try {
+    await new Promise((r) => setTimeout(r, 400))
+    assert.equal(proc.child.exitCode, null, 'waiting up to <duration> with positive count must keep the child alive')
+  } finally {
+    proc.kill('abort')
+    await proc.outcome.catch(() => undefined)
+  }
 })
 
 test('issue #144: a child waiting on its OWN background task is never reaped, however short the grace', async () => {

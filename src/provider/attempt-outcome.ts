@@ -364,11 +364,14 @@ export async function handleAttemptOutcome(
   deps.clearInFlightPrompt(sessionKey, spawn.prompt)
   recorder.drain(input.agyOnEvent)
   const conversationId = recorder.conversationId()
-  if (!rec.hasResult && outcome.idleGraceTerminated) {
+  if (!rec.hasConsumableResult && outcome.idleGraceTerminated) {
     // The idle reaper can end a turn whose answer agy already wrote to its own
-    // transcript but had not flushed as a stdout step. Recovering it keeps the
-    // reply visible; leaving it empty made DSH show "completed" with no bubble
-    // at all (issues #127, #128).
+    // transcript but had not flushed as a stdout step — or agy may flush an
+    // empty error `result` (`ok: false, response: ''`) on SIGTERM, which
+    // EventMapper skips without finishing. Checking `hasConsumableResult`
+    // (not bare `hasResult`) ensures a usable reply or notice is always
+    // appended so the span finishes cleanly instead of falling into
+    // `INVALID_OUTPUT: agy stream ended without a result event`.
     const recovered = conversationId === null ? '' : recoverFinalReply(conversationId, rec.accountHome)
     const synthResult: AgyEvent = {
       kind: 'result',
