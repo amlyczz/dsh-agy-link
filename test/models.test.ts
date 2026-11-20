@@ -654,6 +654,26 @@ test('issue #131: a deselected model still resolves for an in-flight session', a
   assert.equal(resolved.id, 'claude-sonnet-5-5', 'the whitelist is a picker filter, not a resolution gate')
 })
 
+test('issue #131: a stale effort-variant id still selects its folded base model', async () => {
+  const base = await poolWideDeps(true)
+  const withSelection = (ids: string[]): ModelResolutionDeps => ({
+    ...base,
+    getConfig: () => ({ ...defaultConfig(), poolWideCatalog: true, selectedModels: ids } as PluginConfig),
+  })
+
+  // The picker lists gemini-3.8-flash as one row. A selection saved while the
+  // CLI still advertised `-high`/`-low` as separate slugs must keep selecting
+  // that row; an exact-id match would leave the set non-empty, match nothing,
+  // and silently hide every model.
+  const stale = listAvailableModels(withSelection(['gemini-3.8-flash-high', 'gemini-3.8-flash-low'])).map((m) => m.id)
+  assert.deepEqual(stale, ['gemini-3.8-flash'], 'a folded effort variant keeps selecting its base row')
+
+  // A selection that matches nothing must not be confused with the empty
+  // "show everything" state - it genuinely selects nothing.
+  const orphan = listAvailableModels(withSelection(['gemini-does-not-exist'])).map((m) => m.id)
+  assert.deepEqual(orphan, [], 'a selection naming only unknown models shows no models')
+})
+
 // ---------------------------------------------------------------------------
 // Issue #106: listModels must never close a discovery → adapters-updated →
 // listModels loop when discovery fails (signed out / token expired / timeout).

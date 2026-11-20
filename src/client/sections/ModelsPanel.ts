@@ -16,6 +16,7 @@ import { S } from '../styles.ts';
 import { Button } from '../ui/Button.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import { effortLabel } from '../../common/reasoning.ts';
+import { modelMatches } from '../../common/pool-types.ts';
 import type { CatalogModelView } from '../status.ts';
 
 export interface ModelsPanelProps {
@@ -30,7 +31,14 @@ export interface ModelsPanelProps {
 
 export function ModelsPanel({ t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels }: ModelsPanelProps): unknown {
 	const unrestricted = selectedModelSet.size === 0;
-	const isVisible = (id: string): boolean => !hiddenModelSet.has(id) && (unrestricted || selectedModelSet.has(id));
+	// Match the host's rule, not a plain set lookup: a stored selection can name
+	// an effort variant (`gemini-4-hydrogen-tiered`) that has since folded into
+	// its base row. The host still treats that row as ticked via modelMatches, so
+	// the chip has to agree - otherwise the panel renders a model as unticked
+	// while the picker keeps showing it.
+	const selected = Array.from(selectedModelSet);
+	const isTicked = (id: string): boolean => unrestricted || selected.some((want) => modelMatches(want, id));
+	const isVisible = (id: string): boolean => !hiddenModelSet.has(id) && isTicked(id);
 	const visibleCount = catalogModels.filter((m) => isVisible(m.id)).length;
 	const busy = loadingAction === 'config:selectedModels';
 
@@ -38,8 +46,8 @@ export function ModelsPanel({ t, catalogModels, hiddenModelSet, selectedModelSet
 		// The allow-list currently restricts to an explicit subset: just add or
 		// remove this one id.
 		if (!unrestricted) {
-			const next = new Set(selectedModelSet);
-			if (next.has(id)) next.delete(id); else next.add(id);
+			const next = new Set(selected.filter((want) => !modelMatches(want, id)));
+			if (!isTicked(id)) next.add(id);
 			void setSelectedModels(Array.from(next));
 			return;
 		}

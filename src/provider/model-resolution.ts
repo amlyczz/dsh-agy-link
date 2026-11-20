@@ -6,7 +6,7 @@
 // advisory effort levels minus learned refusals) is unchanged.
 import type { LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import { PROVIDER_ID, type PluginConfig } from '../common/types.ts'
-import { accountSupportsModel, type ManagedAccount } from '../common/pool-types.ts'
+import { accountSupportsModel, modelMatches, type ManagedAccount } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import { defaultEffortFor, findEntry, sanitizeCatalogEntries, type CatalogEntry, type ModelCatalog } from '../host/models.ts'
 import { effortLabel, normalizeEfforts } from '../common/reasoning.ts'
@@ -112,9 +112,25 @@ function visibleEntries(
 ): readonly CatalogEntry[] {
   const quota = quotaCatalogForAccounts(quotaScope)
   const merged = mergeCatalogWithQuotaModels(entries, quota)
-  const selected = new Set(cfg.selectedModels.map((s) => s.trim()).filter((s) => s !== ''))
+  const selected = cfg.selectedModels.map((s) => s.trim()).filter((s) => s !== '')
   const hidden = new Set(cfg.hiddenModels.map((s) => s.trim()))
-  return merged.filter((m) => (selected.size === 0 || selected.has(m.id)) && !hidden.has(m.id))
+  return merged.filter((m) => (selected.length === 0 || isSelected(m.id, selected)) && !hidden.has(m.id))
+}
+
+/**
+ * Whether a stored selection still covers a catalog row.
+ *
+ * Selections are persisted, and catalog rows are not stable: effort variants
+ * (`gemini-4-hydrogen-tiered`) fold into their base row (`gemini-4-hydrogen`)
+ * once the CLI or a quota snapshot reports the family, and the base row then
+ * carries the effort as a flag instead of an id. Matching by exact id only
+ * would turn every such row into a stale entry that silently hides the base
+ * model - the user ticked it, the panel shows nothing, and nothing on screen
+ * explains why. `modelMatches` degrades an effort-suffixed / aliased id to its
+ * base slug, so a selection made before a fold keeps selecting the same model.
+ */
+function isSelected(id: string, selected: readonly string[]): boolean {
+  return selected.some((want) => modelMatches(want, id))
 }
 
 /** Union of the quota-derived catalogs of several accounts, first label wins. */
