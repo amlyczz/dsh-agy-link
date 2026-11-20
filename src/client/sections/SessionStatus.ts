@@ -2,6 +2,11 @@
 // modal, and (on exactly one mounted header) hosts the modal portal. The header
 // is a READOUT, not a picker — it displays exactly the server-scheduled account.
 
+import {
+	accountHasActiveCooldown,
+	accountHasQuotaBench,
+	isAccountCriticalAuth,
+} from '../../common/quota-bench.ts';
 import { agyIcon } from '../icons.ts';
 import { h, useEffect, useRef, useState } from '../react.ts';
 import { isUiVisible, useAgyStatus } from '../status.ts';
@@ -53,9 +58,12 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 		// Display EXACTLY the server-scheduled account — same semantics as the
 		// console's per-card "当前使用" badge.
 		const activeAcc = rawActiveId !== undefined ? accounts.find((a) => a.id === rawActiveId) : undefined;
-		const activeAuthRequired = activeAcc?.authRequired === true;
-		const activeHasCooldown = activeAcc ? Object.entries(activeAcc.cooldowns ?? {}).some(([, cd]) => cd && cd.cooldownUntil > Date.now()) : false;
-		const allInCooldown = accounts.length > 0 && accounts.every((a) => !a.enabled || a.authRequired || Object.entries(a.cooldowns ?? {}).some(([, cd]) => cd && cd.cooldownUntil > Date.now()));
+		const now = Date.now();
+		const activeAuthRequired = activeAcc ? isAccountCriticalAuth(activeAcc) : false;
+		const activeHasCooldown = activeAcc ? (accountHasActiveCooldown(activeAcc, now) || accountHasQuotaBench(activeAcc, now)) : false;
+		const allInCooldown = accounts.length > 0 && accounts.every((a) =>
+			!a.enabled || isAccountCriticalAuth(a) || accountHasActiveCooldown(a, now) || accountHasQuotaBench(a, now)
+		);
 		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
 		const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : allInCooldown ? '#f59e0b' : activeAuthRequired ? '#ef4444' : activeHasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
 
@@ -68,7 +76,7 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 			? Math.max(0, Math.min(100, Math.round(gFrac * 100)))
 			: null;
 		// Only an ELIGIBLE account may be announced as "in use".
-		const activeEligible = activeAcc !== undefined && activeAcc.enabled && !activeAcc.authRequired;
+		const activeEligible = activeAcc !== undefined && activeAcc.enabled && !activeAuthRequired;
 		const activeDetail = activeAcc !== undefined && activeEligible
 			? ` · ${t('status.inUse')}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}${activePct !== null ? ` · ${activePct}%` : ''}`
 			: '';

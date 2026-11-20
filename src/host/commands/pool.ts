@@ -1,5 +1,6 @@
 // /agy pool (accounts), account add/enable/disable/remove and quota/cooldown ops.
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { accountHasQuotaBench, isAccountCriticalAuth } from '../../common/quota-bench.ts'
 import { redactProxyUrl } from '../diagnostics.ts'
 import { err, ok, type CommandContext, type CommandDeps } from './shared.ts'
 
@@ -24,20 +25,23 @@ function renderPool(deps: CommandDeps): CommandResult {
     const qA = a.quotas.argon?.weeklyFraction ?? a.quotas.argon?.remainingFraction
     const quotaLine = `   - Quota: Gemini ${qG} | Claude ${qC} | GPT-OSS ${qO}` +
       (qA !== undefined ? ` | Argon ${Math.round(qA * 100)}%` : '')
+    const now = Date.now()
     const cds: string[] = []
     for (const [fam, cd] of Object.entries(a.cooldowns)) {
-      if (cd && cd.cooldownUntil > Date.now()) {
-        const sec = Math.ceil((cd.cooldownUntil - Date.now()) / 1000)
+      if (cd && cd.cooldownUntil > now) {
+        const sec = Math.ceil((cd.cooldownUntil - now) / 1000)
         cds.push(`${fam} cooldown: ${sec}s left (${cd.reason})`)
       }
     }
     let statusText = '   - Status: 🟢 Ready'
     if (!a.enabled) {
       statusText = '   - Status: ⏸️ Disabled'
-    } else if (a.authRequired) {
-      statusText = `   - Status: 🔴 Auth required (${a.authError || 'sign in again'})`
+    } else if (isAccountCriticalAuth(a)) {
+      statusText = `   - Status: 🔴 Auth required (${a.authError || a.quotaUnavailable?.reason || 'sign in again'})`
     } else if (cds.length > 0) {
       statusText = `   - ⚠️ ${cds.join('; ')}`
+    } else if (accountHasQuotaBench(a, now)) {
+      statusText = '   - ⚠️ Quota-limited (auto-rotated until reset)'
     }
     lines.push(
       `${i + 1}. **${a.alias}** (${a.email || 'email unknown'}; id: \`${a.id}\`)${isPrimary ? ' ⭐ primary' : ''}`,
@@ -60,7 +64,7 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
     if (!pool) return err('Account pool not available')
     const prev = pool.getActiveAccountId('google')
     const success = pool.setActiveAccount(arg)
-    if (!success) return err(`Account ${arg} not found or not eligible (disabled / auth required)`)
+    if (!success) return err(`Account ${arg} not found or not eligible (disabled / cooldown / quota-limited / auth required)`)
     if (arg === prev) deps.notifyPicker?.()
     return ok(`Active account set to **${arg}** — model picker synced.`)
   }

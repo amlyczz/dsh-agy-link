@@ -245,7 +245,7 @@ export class PoolAdmin {
   setActiveAccount(id: string, family: ModelFamily = 'google'): boolean {
     const data = this.deps.getData()
     const acc = this.account(id)
-    if (!acc || !acc.enabled || acc.authRequired) return false
+    if (!acc || !isAccountEligible(acc, family, Date.now(), this.deps.pool)) return false
     if (!data.activeAccountIds) data.activeAccountIds = {}
     data.activeAccountIds[family] = id
     data.lastActiveAccountId = id

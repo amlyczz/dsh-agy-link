@@ -298,6 +298,11 @@ export async function refreshAccountQuotaPipeline(
         ...(failure?.detail === undefined ? {} : { detail: failure.detail }),
         ...(failure?.actionUrl === undefined ? {} : { actionUrl: failure.actionUrl }),
       })
+      if ((reason === 'validation_required' || reason === 'tos_violation') && !account.authRequired) {
+        const tag = reason === 'tos_violation' ? 'TOS_VIOLATION' : 'VALIDATION_REQUIRED'
+        const suffix = failure?.actionUrl ? ` (${failure.actionUrl})` : ''
+        deps.pool.markAuthRequired(account.id, `${tag}${suffix}`)
+      }
     }
   }
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.49 (2026-11-20)
+
+### English
+
+- **Fix(accounts/UI): one source of truth for quota admission, so the console never disagrees with the scheduler.** A Pro account at `0%` on the 5-hour window (e.g. `god`) was rotated out by `isQuotaBenched()` while every client surface still painted it eligible: the dot stayed green, no badge appeared, "Set as in use" was offered, and `/agy pool` printed `Ready`. Clicking it reported success and then silently retreated, because `setActiveAccount()` never consulted eligibility.
+  - New `src/common/quota-bench.ts` holds the pure predicates (`is5hQuotaBenched`, `isWeeklyQuotaBenched`, `isQuotaBenched`, `accountHasActiveCooldown`, `accountHasQuotaBench`, `isAccountCriticalAuth`). `domain/accounts/selection.ts` re-exports them, so scheduling and rendering share one implementation instead of two drifting copies.
+  - `AccountsPanel` now derives the dot, the `rate-limited` badge, the banner (with its clear action) and the visibility of "Set as in use" from those predicates; a quota-benched account is no longer advertised as usable. `VALIDATION_REQUIRED` / `TOS_VIOLATION` render as `Verification required` / `Suspended (ToS)` with the verification link, taken from `quotaUnavailable` when `authError` carries no URL.
+  - `QuotaPanel` marks the 5-hour and weekly rows `· rate-limited` when they are what benched the account. `SessionStatus` includes quota benches in both the active-account and all-accounts-drained checks, so the header dot turns amber too.
+  - `setActiveAccount()` validates with `isAccountEligible()`, so a rejected pin returns `false` up front instead of a false success. `/agy pool` reports `Quota-limited (auto-rotated until reset)` instead of `Ready`.
+- **Fix(quota): the "data frozen at" stamp names the oldest frozen window.** `renderQuotaUnavailableNote` used `Math.max` across families, so a partial refresh that only touched `argon` dated the whole row to *now* (14:05) while the failing `google` snapshot was hours old (11:27). It now takes the oldest non-zero `updatedAt`, which is what "the data is stuck at" actually means.
+- **Fix(quota): verification and ToS refusals quarantine the account immediately.** A `403` carrying `VALIDATION_REQUIRED` or `TOS_VIOLATION` recorded `quotaUnavailable` but left `authRequired` unset, so selection kept routing to an account Google had just refused. Both reasons now stamp `authRequired` (with the verification URL) and clear again once a later summary succeeds.
+- Four locales updated (en/es/ptBR/zh). Regression suite added: `test/status-consistency.test.ts` (5 cases covering the benched-card render, the header dot, `setActiveAccount` agreement, the frozen-stamp choice, and the verification heals-on-success path).
+
+### 中文
+
+- **修复(账号/UI)：配额可用性判定收敛为单一真源，控制台不再与调度器打架。** 一个 5 小时额度 `0%` 的 Pro 账号（如 `god`）已被 `isQuotaBenched()` 轮转掉，但所有前端面仍把它画成可用：圆点还是绿的、没有任何标签、「设为当前使用」照常出现、`/agy pool` 也打印 `Ready`。点下去还会提示成功然后悄悄退回，因为 `setActiveAccount()` 从未校验可用性。
+  - 新增 `src/common/quota-bench.ts` 承载纯谓词（`is5hQuotaBenched`、`isWeeklyQuotaBenched`、`isQuotaBenched`、`accountHasActiveCooldown`、`accountHasQuotaBench`、`isAccountCriticalAuth`）。`domain/accounts/selection.ts` 复用它并再导出，调度与渲染共用一份实现，而不是两份逐渐分叉的副本。
+  - `AccountsPanel` 的圆点、`限流中` 标签、提示条（含清除动作）以及「设为当前使用」的可见性，全部由这些谓词推导；被配额限流的账号不再被宣称为可用。`VALIDATION_REQUIRED` / `TOS_VIOLATION` 显示为 `需安全验证` / `已封禁 (ToS)` 并附验证链接——当 `authError` 里没有 URL 时从 `quotaUnavailable` 取。
+  - `QuotaPanel` 在 5 小时或周额度正是限流原因时，于对应行标注 `· 限流中`。`SessionStatus` 把配额限流也纳入「当前账号」与「全部账号耗尽」的判定，顶部圆点同步变琥珀色。
+  - `setActiveAccount()` 改用 `isAccountEligible()` 校验，被拒绝的固定会当场返回 `false`，而不是假成功。`/agy pool` 输出 `Quota-limited (auto-rotated until reset)`，不再是 `Ready`。
+- **修复(额度)：冻结时间戳改取最早冻结的那个窗口。** `renderQuotaUnavailableNote` 原先取各族的 `Math.max`，于是一次只刷新了 `argon` 的部分刷新会把整行标成「数据停留在」当下（14:05），而真正失败的 `google` 快照已经是几小时前（11:27）。现改取最早的非零 `updatedAt`——这才是「数据卡在什么时候」的本意。
+- **修复(额度)：需验证与被封禁会被立即隔离。** 携带 `VALIDATION_REQUIRED` 或 `TOS_VIOLATION` 的 `403` 只记录了 `quotaUnavailable`，却没设 `authRequired`，于是选号仍在往 Google 刚拒绝过的账号上派活。现在这两种原因都会打上 `authRequired`（含验证链接），并在后续 summary 成功时自动解除。
+- 四语言词条同步（en/es/ptBR/zh）。新增回归套件 `test/status-consistency.test.ts`（5 条用例，覆盖限流卡片渲染、顶部圆点、`setActiveAccount` 一致性、冻结时间戳选取，以及验证通过后自动恢复）。
+
 ## 0.6.48 (2026-11-20)
 
 ### English

@@ -7,6 +7,12 @@
 
 import { buildAccountModelRows, type AccountModelDisplayItem } from '../../common/account-models.ts';
 import type { AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
+import {
+	accountHasActiveCooldown,
+	accountHasQuotaBench,
+	isAccountCriticalAuth,
+	isQuotaBenched,
+} from '../../common/quota-bench.ts';
 import { effortLabel } from '../../common/reasoning.ts';
 import type { CatalogModelView } from '../status.ts';
 import { h } from '../react.ts';
@@ -77,12 +83,17 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 	const authoritativeActiveId = pool?.activeAccountId ?? pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
 	const activeAccountId = optimisticActiveId ?? authoritativeActiveId;
 
+	const now = Date.now();
 	return accounts.map((acc: ManagedAccount) => {
 		const isPrimary = acc.id === pool?.primaryAccountId;
-		const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
-		const isAuthRequired = acc.authRequired === true;
+		const hasCooldown = accountHasActiveCooldown(acc, now);
+		const hasQuotaBench = accountHasQuotaBench(acc, now);
+		const isRateLimited = hasCooldown || hasQuotaBench;
+		const isAuthRequired = isAccountCriticalAuth(acc);
+		const isGoogleCooldown = Boolean(acc.cooldowns?.google && acc.cooldowns.google.cooldownUntil > now);
+		const isGoogleEligible = acc.enabled && !isAuthRequired && !isGoogleCooldown && !isQuotaBenched(acc, 'google', now);
 		const isInUse = Boolean(acc.enabled && !isAuthRequired && activeAccountId !== undefined && activeAccountId === acc.id);
-		const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : hasCooldown ? '#f59e0b' : '#10b981';
+		const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : isRateLimited ? '#f59e0b' : '#10b981';
 		const isEditingProxy = editingProxyId === acc.id;
 		const isExpanded = expandedModels[acc.id] ?? false;
 		const accIndex = accounts.indexOf(acc);
@@ -112,7 +123,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			style: cardStyle,
 		},
 			renderCardHeader(t, acc, {
-				isPrimary, isAuthRequired, hasCooldown, isInUse, dotColor, isEditingProxy,
+				isPrimary, isAuthRequired, hasCooldown, hasQuotaBench, isGoogleEligible, isInUse, dotColor, isEditingProxy,
 				displayAlias, accIndex, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId,
 			}),
 			// Body: Always directly visible, showing quota
@@ -141,7 +152,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 					childModels.length > 0 ? renderChildModels(t, childModels) : null,
 				) : null,
 			),
-			hasCooldown ? renderCooldownBanner(t, acc, loadingAction, accountActionBusy, handlers) : null,
+			isRateLimited ? renderCooldownBanner(t, acc, loadingAction, accountActionBusy, handlers) : null,
 			isEditingProxy ? renderProxyEditor(t, acc, pool, proxyInputs, setProxyInputs, setEditingProxyId, loadingAction, accountActionBusy, handlers) : null,
 		);
 	});
@@ -151,6 +162,8 @@ interface CardHeaderCtx {
 	isPrimary: boolean;
 	isAuthRequired: boolean;
 	hasCooldown: boolean;
+	hasQuotaBench: boolean;
+	isGoogleEligible: boolean;
 	isInUse: boolean;
 	dotColor: string;
 	isEditingProxy: boolean;
@@ -171,11 +184,14 @@ function extractActionUrl(text?: string): string | undefined {
 }
 
 function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown[] {
-	const { isAuthRequired, hasCooldown, isInUse, pool } = ctx;
-	const isTos = isAuthRequired && /\bTOS_VIOLATION\b|violation of Terms of Service/i.test(acc.authError ?? '');
-	const isValidation = isAuthRequired && !isTos && /\bVALIDATION_REQUIRED\b/i.test(acc.authError ?? '');
+	const { isAuthRequired, hasCooldown, hasQuotaBench, isInUse, pool } = ctx;
+	const unavailReason = acc.quotaUnavailable?.reason;
+	const isTos = isAuthRequired && (unavailReason === 'tos_violation' || /\bTOS_VIOLATION\b|violation of Terms of Service/i.test(acc.authError ?? ''));
+	const isValidation = isAuthRequired && !isTos && (unavailReason === 'validation_required' || /\bVALIDATION_REQUIRED\b/i.test(acc.authError ?? ''));
 	const authLabel = isTos ? t('status.tosBanned') : isValidation ? t('status.validationRequired') : t('status.authRequired');
-	const actionUrl = isAuthRequired ? extractActionUrl(acc.authError) : undefined;
+	const actionUrl = isAuthRequired
+		? (extractActionUrl(acc.authError) ?? (typeof acc.quotaUnavailable?.actionUrl === 'string' && acc.quotaUnavailable.actionUrl.startsWith('https://') ? acc.quotaUnavailable.actionUrl : undefined))
+		: undefined;
 	return [
 		acc.email ? h('span', {
 			style: {
@@ -237,7 +253,7 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 				textDecoration: actionUrl ? 'underline' : 'none',
 			},
 		}, uiIcon('alert', 10, '#ef4444'), authLabel) : null,
-		hasCooldown ? h('span', {
+		(hasCooldown || hasQuotaBench) ? h('span', {
 			style: {
 				...S.badgeTag!,
 				background: 'rgba(245, 158, 11, 0.15)',
@@ -250,7 +266,7 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 				whiteSpace: 'nowrap',
 				flexShrink: 0,
 			},
-		}, uiIcon('alert', 10, '#f59e0b'), t('status.cooldown')) : null,
+		}, uiIcon('alert', 10, '#f59e0b'), hasCooldown ? t('status.cooldown') : t('status.quotaLimited')) : null,
 		!acc.enabled ? h('span', {
 			style: {
 				...S.badgeTag!,
@@ -338,7 +354,7 @@ function renderMetaRow(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): 
 
 function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
 	const {
-		isEditingProxy, isInUse, displayAlias, accounts, loadingAction, accountActionBusy, handlers, setEditingProxyId,
+		isEditingProxy, isAuthRequired, isInUse, isGoogleEligible, displayAlias, accounts, loadingAction, accountActionBusy, handlers, setEditingProxyId,
 	} = ctx;
 	return h('div', {
 		className: 'agy-card-header',
@@ -361,7 +377,7 @@ function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx
 			},
 		},
 			renderHeaderBadges(t, acc, ctx),
-			renderActionButtons(t, acc, { isEditingProxy, isInUse, displayAlias, showRemove: accounts.length > 1, loadingAction, accountActionBusy, handlers, setEditingProxyId }),
+			renderActionButtons(t, acc, { isEditingProxy, isAuthRequired, isInUse, isGoogleEligible, displayAlias, showRemove: accounts.length > 1, loadingAction, accountActionBusy, handlers, setEditingProxyId }),
 		),
 		renderMetaRow(t, acc, ctx),
 	);
@@ -369,7 +385,9 @@ function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx
 
 function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	isEditingProxy: boolean;
+	isAuthRequired: boolean;
 	isInUse: boolean;
+	isGoogleEligible: boolean;
 	displayAlias: string;
 	showRemove: boolean;
 	loadingAction: string | null;
@@ -377,7 +395,7 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	handlers: AccountsPanelHandlers;
 	setEditingProxyId: (id: string | null) => void;
 }): unknown {
-	const { isEditingProxy, isInUse, displayAlias, showRemove, loadingAction, accountActionBusy, handlers, setEditingProxyId } = ctx;
+	const { isEditingProxy, isAuthRequired, isInUse, isGoogleEligible, displayAlias, showRemove, loadingAction, accountActionBusy, handlers, setEditingProxyId } = ctx;
 	return h('div', {
 		className: 'agy-card-actions',
 		style: { display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 },
@@ -398,21 +416,21 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 			disabled: accountActionBusy(acc, 'refresh'),
 			onClick: () => void handlers.refreshQuota(acc.id),
 		}, ...(loadingAction === `refresh:${acc.id}` ? [Spinner(), t('account.syncing')] : [uiIcon('refresh', 10), ` ${t('account.sync')}`])),
-		acc.authRequired && handlers.beginReauth ? h(Button, {
+		isAuthRequired && handlers.beginReauth ? h(Button, {
 			variant: 'primary', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			title: t('account.reauthTitle'),
 			disabled: accountActionBusy(acc, 'reauth'),
 			onClick: () => void handlers.beginReauth!(acc),
 		}, ...(loadingAction === `reauth:${acc.id}` ? [Spinner(), t('account.reauthing')] : [uiIcon('externalLink', 10, '#ffffff'), ` ${t('account.reauth')}`])) : null,
-		acc.enabled && !acc.authRequired ? h(Button, {
+		acc.enabled && !isAuthRequired ? h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px', justifyContent: 'center' },
 			title: t('account.warmupTitle'),
 			disabled: accountActionBusy(acc, 'warmup'),
 			onClick: () => void handlers.warmupAccount(acc.id),
 		}, ...(loadingAction === `warmup:${acc.id}` ? [Spinner(), t('account.warmingUp')] : [uiIcon('flame', 10, '#f97316'), ` ${t('account.warmup')}`])) : null,
-		acc.enabled && !acc.authRequired && !isInUse ? h(Button, {
+		isGoogleEligible && !isInUse ? h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			title: t('account.setActive'),

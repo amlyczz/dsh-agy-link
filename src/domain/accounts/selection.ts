@@ -13,22 +13,15 @@ import {
   type ManagedAccount,
   type ModelFamily,
 } from '../../common/pool-types.ts'
+import {
+  isAccountCriticalAuth,
+  isQuotaBenched,
+  LOW_QUOTA_5H,
+  LOW_QUOTA_WEEKLY,
+} from '../../common/quota-bench.ts'
 import { computeQuotaPacing, FIVE_HOUR_WINDOW_MS, WEEKLY_WINDOW_MS } from '../../common/quota-pacing.ts'
 
-/**
- * Proactive rotation thresholds: an account at or below these remaining
- * fractions is benched until its reset instead of being served
- * (isQuotaBenched / updateAccountQuotas / getEarliestAvailableCountdown).
- *
- * The old 2%/1% values only benched an account AFTER it had already died:
- * 2026-10-17 01:42 — the primary sat at 4.07% (above the old gate), so the
- * sticky affinity kept every session pinned to it while three parallel turns
- * slammed into the wall together and stalled in agy-internal retries, with
- * q98 idle at 100%. Benching at 10%/5% rotates while the successor still has
- * runway; the benched account comes back at its own reset.
- */
-export const LOW_QUOTA_5H = 0.10
-export const LOW_QUOTA_WEEKLY = 0.05
+export { isQuotaBenched, LOW_QUOTA_5H, LOW_QUOTA_WEEKLY }
 
 /** Why a pool account cannot serve a family right now (diagnostics only). */
 export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported' | 'model-unsupported'
@@ -41,46 +34,6 @@ export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quo
 export interface DedicatedGroupSource {
   hasDedicatedGroup?: (id: string, family: ModelFamily) => boolean
   isModelSupported?: (acc: ManagedAccount, model: string) => boolean
-}
-
-/**
- * True when a family's cached quota snapshot benches the account.
- *
- * A user-visible `clearCooldown(..., includeQuotaBench = true)` records the
- * `updatedAt` of the snapshot it overrode; the gate stays off only while the
- * cached row is no newer than that stamp, so a fresh poll always re-arms it.
- */
-export function isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
-  // Argon has no quota pool of its own once the backend folds it into the
-  // plain Gemini group (agy >= 1.5.5 stops reporting a dedicated group and
-  // parse.ts no longer projects one). Gate it on the Gemini row instead of
-  // pretending the family is unmetered — a drained shared pool must still
-  // rotate/bench Argon requests rather than let them bounce off a 429.
-  const quota = acc.quotas?.[family] ?? (family === 'argon' ? acc.quotas?.google : undefined)
-  if (!quota) return false
-  const clearedAt = acc.quotaGateClearedAt?.[family]
-  if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) return false
-  // If 5h quota remaining is at/below the proactive rotation threshold and
-  // reset time is in future (or missing), treat as in cooldown
-  if (typeof quota.remainingFraction === 'number' && quota.remainingFraction <= LOW_QUOTA_5H) {
-    if (quota.resetTime) {
-      const resetMs = Date.parse(quota.resetTime)
-      if (Number.isNaN(resetMs) || resetMs > now) return true
-    } else {
-      return true
-    }
-  }
-  // If weekly quota remaining is at/below the rotation threshold and weekly
-  // reset time is in future (or missing), treat as in cooldown
-  if (typeof quota.weeklyFraction === 'number' && quota.weeklyFraction <= LOW_QUOTA_WEEKLY) {
-    if (quota.weeklyResetTime) {
-      const resetMs = Date.parse(quota.weeklyResetTime)
-      if (Number.isNaN(resetMs) || resetMs > now) return true
-    } else {
-      return true
-    }
-  }
-  return false
 }
 
 /**
@@ -98,7 +51,7 @@ export function explainIneligibility(
   model?: string,
 ): AccountIneligibilityReason | null {
   if (!acc.enabled) return 'disabled'
-  if (acc.authRequired) return 'auth'
+  if (isAccountCriticalAuth(acc)) return 'auth'
   if (family === 'argon' && !accountHasArgon(acc, pool)) return 'unsupported'
   // "This model is not in the account's catalog" is NOT the same diagnosis as
   // "the account has no access to this family / plan" (issues #120, #122).
