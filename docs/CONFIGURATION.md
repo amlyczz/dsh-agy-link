@@ -35,6 +35,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `timeoutMs` | `DSH_AGY_TIMEOUT_MS` | `600000` | Activity watchdog timeout per turn |
 | `maxTurnMinutes` | `DSH_AGY_MAX_TURN_MINUTES` | `0` | Hard wall-clock cap per turn (0 = unlimited); bounds a self-driving turn that never goes idle |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget while a tool step is open; `0` keeps `timeoutMs` so wedged tools fail fast |
+| `idleGraceMinutes` | `DSH_AGY_IDLE_GRACE_MINUTES` | `10` | Grace before the `root agent idle; waiting for N background task(s)` reaper kills the agy tree; `0` disables the reaper (the activity watchdog and `maxTurnMinutes` still bound the turn) |
 | `dispatchTimeoutMinutes` | `—` | `15` | Cap on waiting for the Windows credential slot before backing off and retrying; `0` waits indefinitely |
 | `dispatchRetries` | `—` | `1` | Extra dispatch attempts after a credential-slot timeout |
 | `parallelSameAccount` | `—` | `true` | Concurrent sessions on the credential already in the slot start without exclusivity; `false` restores full slot exclusivity |

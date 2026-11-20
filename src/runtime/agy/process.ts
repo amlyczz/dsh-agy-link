@@ -324,6 +324,9 @@ function clearIdleGrace(state: RunState): void {
 function armIdleGrace(child: ChildProcess, opts: RunOptions, state: RunState): void {
   if (state.idleGraceTimer !== null || state.settled) return
   const graceMs = opts.idleGraceMs ?? IDLE_BACKGROUND_GRACE_MS
+  // `idleGraceMinutes: 0` disables the reaper; the activity watchdog and
+  // maxTurnMs still bound the turn.
+  if (graceMs <= 0) return
   state.idleGraceTimer = setTimeout(() => {
     state.idleGraceTimer = null
     if (state.settled) return

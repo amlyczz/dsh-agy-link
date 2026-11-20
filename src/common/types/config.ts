@@ -35,6 +35,17 @@ export interface PluginConfig {
    * loop that keeps printing can run unbounded (issue #92).
    */
   maxTurnMinutes: number
+  /**
+   * Grace (minutes) before the `root agent idle; waiting for N background
+   * task(s)` reaper kills the agy process tree. agy prints that line while it
+   * legitimately waits for a build, integration test or Docker job it launched;
+   * the former hard-coded 5 s killed those turns and surfaced as
+   * `agy stream ended without a result event` (issue #144). Default 10 minutes,
+   * which stays below the normal generation idle budget (`timeoutMs`, at least
+   * 15 min) so a real orphan is still reclaimed. 0 disables the reaper: the
+   * activity watchdog and `maxTurnMinutes` then bound the turn alone.
+   */
+  idleGraceMinutes: number
   /** Hard cap (minutes) on the credential-slot wait before release+retry; 0 = unlimited. */
   dispatchTimeoutMinutes: number
   /** Extra dispatch attempts after a credential-slot hard-cap timeout. */
@@ -239,6 +250,7 @@ export function defaultConfig(): PluginConfig {
     timeoutMs: 600_000,
     longToolIdleMinutes: 240,
     maxTurnMinutes: 0,
+    idleGraceMinutes: 10,
     /**
      * Hard cap (minutes) on waiting for the Windows credential slot before the
      * dispatch releases, backs off and retries (dispatchRetries). Each attempt
