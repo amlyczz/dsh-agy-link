@@ -86,10 +86,10 @@ agy 1.5.4 把生成图写到：
 `agyOnEvent` 从 `init` 事件拿 `conversation_id`；`agyOnAccount` 给出本次使用的 HOME（主账号=系统 HOME，隔离账号=`account.dir`）。候选顺序：
 
 1. 回复里的 `IMAGE_PATH=`
-2. 文本 / 工具输出中提取的绝对图片路径（含 `file://`）
+2. 文本 / 工具输出中提取的绝对图片路径（含 POSIX `/`、`~/`、Windows `C:\...`、WSL `\\wsl...` 及 `file://`，支持 `.png/.jpg/.jpeg/.webp/.gif/.bmp`）
 3. 扫描上述 brain 目录中本次运行开始后新增的图片（`mtime >= start - 2s`），按时间倒序
 
-逐个校验，第一个通过者胜出。
+逐个校验，第一个通过者胜出（`copyArtifact` 在 `source === target` 时保持幂等）。
 
 ## 7. 产物校验（硬门槛）
 

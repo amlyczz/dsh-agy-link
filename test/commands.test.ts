@@ -369,3 +369,89 @@ test('agy config, status, models, use, refresh-quota and non-destructive auth-co
   }
 })
 
+test('agy goal delegates to GoalService (1:1 semantics, 0-redundancy & idempotent) and config handles mode/effort/workspace spaces', async () => {
+  let goalState: {
+    id: string; revision: number; objective: string; phase: string;
+    activation: string; maxGoalRounds?: number; createdAt: number; updatedAt: number;
+  } | null = null
+  const ops: string[] = []
+  const fakeGoals = {
+    get: () => (goalState ? { ...goalState, roundsStarted: 1 } : undefined),
+    create: (_a: unknown, req: { objective: string; maxGoalRounds?: number }) => {
+      ops.push('set:' + req.objective)
+      goalState = { id: 'g-1', revision: 1, objective: req.objective, phase: 'active', activation: 'armed', maxGoalRounds: req.maxGoalRounds ?? 256, createdAt: 100, updatedAt: 100 }
+      return goalState
+    },
+    edit: (_a: unknown, _ref: { id: string; revision: number }, req: { objective: string }) => {
+      ops.push('edit:' + req.objective)
+      if (goalState) goalState = { ...goalState, revision: goalState.revision + 1, objective: req.objective }
+      return goalState!
+    },
+    pause: () => {
+      ops.push('pause')
+      if (goalState) {
+        goalState = { ...goalState, revision: goalState.revision + 1, phase: 'paused', activation: 'disarmed' }
+      }
+      return goalState!
+    },
+    resume: () => {
+      ops.push('resume')
+      if (goalState) {
+        goalState = { ...goalState, revision: goalState.revision + 1, phase: 'active', activation: 'armed' }
+      }
+      return goalState!
+    },
+    complete: () => {
+      ops.push('complete')
+      if (goalState) {
+        goalState = { ...goalState, revision: goalState.revision + 1, phase: 'complete', activation: 'disarmed' }
+      }
+      return goalState!
+    },
+    clear: () => {
+      ops.push('clear')
+      goalState = null
+      return undefined
+    },
+  }
+  const overrides: Record<string, unknown> = {}
+  const def = agyCommandDefinition({
+    ...baseDeps,
+    setOverride: (k: string, v: unknown) => { overrides[k] = v },
+    goals: () => fakeGoals,
+    agents: () => ({ get: () => ({ id: 'sess-1' }) }),
+  } as never)
+  const inv = { agent: { id: 'sess-1' } }
+
+  // Clear when empty is idempotent no-op
+  assert.match((await def.handler({ rawInput: 'goal clear', ...inv } as never)).text ?? '', /No active goal/)
+  assert.deepEqual(ops, [])
+
+  // Set + idempotent resume + edit + pause (twice -> second is no-op)
+  assert.match((await def.handler({ rawInput: 'goal set Ship feature X', ...inv } as never)).text ?? '', /Ship feature X/)
+  assert.match((await def.handler({ rawInput: 'goal resume', ...inv } as never)).text ?? '', /already active (?:and|&) armed/)
+  assert.match((await def.handler({ rawInput: 'goal edit Ship feature Y', ...inv } as never)).text ?? '', /Ship feature Y/)
+  assert.match((await def.handler({ rawInput: 'goal pause', ...inv } as never)).text ?? '', /Paused goal/)
+  assert.match((await def.handler({ rawInput: 'goal pause', ...inv } as never)).text ?? '', /already paused/)
+  assert.match((await def.handler({ rawInput: 'goal resume', ...inv } as never)).text ?? '', /Resumed goal/)
+  assert.match((await def.handler({ rawInput: 'goal complete', ...inv } as never)).text ?? '', /Marked goal .* complete/)
+  assert.match((await def.handler({ rawInput: 'goal complete', ...inv } as never)).text ?? '', /already complete/)
+  assert.match((await def.handler({ rawInput: 'goal clear', ...inv } as never)).text ?? '', /Cleared goal/)
+  assert.match((await def.handler({ rawInput: 'goal clear', ...inv } as never)).text ?? '', /No active goal/)
+  assert.deepEqual(ops, [
+    'set:Ship feature X',
+    'edit:Ship feature Y',
+    'pause',
+    'resume',
+    'complete',
+    'clear',
+  ], 'redundant state transitions must be idempotent no-ops')
+
+  // Config helpers: bare mode/effort and workspace path containing spaces
+  assert.match((await def.handler({ rawInput: 'mode' } as never)).text ?? '', /Current permission mode/)
+  assert.match((await def.handler({ rawInput: 'effort' } as never)).text ?? '', /Current default effort/)
+  assert.match((await def.handler({ rawInput: 'effort invalid_tier' } as never)).text ?? '', /usage:/)
+  assert.match((await def.handler({ rawInput: 'workspace C:\\My Projects\\dsh agy' } as never)).text ?? '', /C:\\My Projects\\dsh agy/)
+  assert.equal(overrides.workspaceRoot, 'C:\\My Projects\\dsh agy')
+})
+

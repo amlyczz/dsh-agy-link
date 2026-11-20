@@ -247,7 +247,7 @@ export class RunRecording {
         && ev.kind === 'step'
         && ev.stepKind === 'tool'
         && ev.tool !== undefined
-        && (ev.state === 'DONE' || ev.state === 'ERROR' || ev.state === 'RUNNING'
+        && (ev.state === 'DONE' || ev.state === 'ERROR' || ev.state === 'CANCELED' || ev.state === 'CANCELLED' || ev.state === 'RUNNING'
           || (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined)))
       ) {
         return true
@@ -385,6 +385,9 @@ export function mirrorCallId(runId: string, eventIndex: number): string {
 export function parseMirrorCallId(callId: string): { runId: string; eventIndex: number } | null {
   if (!callId.startsWith(AGY_CALL_PREFIX)) return null
   const rest = callId.slice(AGY_CALL_PREFIX.length)
+  // Bridge lifecycle calls (agytc-bridge-goal-..., agytc-bridge-plan-...) are
+  // never mirror tool steps even when their trailing suffix happens to be numeric.
+  if (rest.startsWith('bridge-')) return null
   // Strip any collision-disambiguation suffix (#toolName) before extracting coordinates
   const hashIdx = rest.indexOf('#')
   const baseRest = hashIdx >= 0 ? rest.slice(0, hashIdx) : rest

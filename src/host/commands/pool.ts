@@ -74,8 +74,11 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
     const enabled = sub === 'enable-account'
+    const prevActive = pool.getActiveAccountId('google')
     const success = pool.setAccountEnabled(arg, enabled)
-    if (success) deps.notifyPicker?.()
+    if (success && !(typeof pool.onAccountSwitch === 'function' && pool.getActiveAccountId('google') !== prevActive)) {
+      deps.notifyPicker?.()
+    }
     return success ? ok(`${enabled ? 'Enabled' : 'Disabled'} account ${arg}`) : err(`Account ${arg} not found`)
   }
 
@@ -101,7 +104,9 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
     const quota = deps.quota?.()
     if (!quota) return err('Quota service not available')
     await quota.refreshAllQuotas(true)
-    return ok('Refreshed quota statistics for all accounts in pool.')
+    await deps.catalog().forceRefresh().catch(() => undefined)
+    deps.notifyPicker?.()
+    return ok('Refreshed quota statistics and model catalog for all accounts in pool.')
   }
 
   if (sub === 'clear-cooldown') {
@@ -119,8 +124,14 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
     if (!arg) return err('usage: /agy remove-account <id>')
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
+    const prevActive = pool.getActiveAccountId('google')
     const success = pool.deleteAccount(arg)
-    if (success) deps.notifyPicker?.()
+    if (success) {
+      deps.store().cleanupStaleAccounts?.(new Set(pool.getAccounts().map((a) => a.id)))
+      if (!(typeof pool.onAccountSwitch === 'function' && pool.getActiveAccountId('google') !== prevActive)) {
+        deps.notifyPicker?.()
+      }
+    }
     return success ? ok(`Removed account ${arg}`) : err(`Account ${arg} not found`)
   }
 

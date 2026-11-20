@@ -410,7 +410,8 @@ export class EventMapper {
 
     // If running in a DSH goal continuation round and DSH provided the update_goal tool:
     // Emit a synthetic update_goal call to mark the goal complete and prevent infinite loop continuation rounds.
-    if (this.opts.supportsGoalUpdate && this.opts.goalContext) {
+    // Require a resolved goalId so we never emit a guaranteed-failing CAS call against a dummy id.
+    if (this.opts.supportsGoalUpdate && this.opts.goalContext?.goalId) {
       for (const ch of buildGoalCompleteToolCallBlock(this.opts.goalContext, this.blockIdx)) yield ch
       this.blockIdx++
       yield {

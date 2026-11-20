@@ -21,7 +21,8 @@ import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess } from './host/runner.ts'
 import { agyNotInstalledMessage } from './provider/call-context.ts'
 import { sweepDir } from './host/media.ts'
-import { agyMcpConfigPath, startMcpBridge, writeMcpConfig, type ToolsServiceLike } from './host/mcp-bridge.ts'
+import { agyMcpConfigPath, registerBridgeMcpConfig, startMcpBridge, teardownBridgeState, type ToolsServiceLike } from './host/mcp-bridge.ts'
+import type { GoalServiceLike } from './host/commands/shared.ts'
 import { runBootHygiene } from './host/boot-hygiene.ts'
 import { closeProxyAgents } from './host/net.ts'
 import { setRuntimeAgyVersion } from './host/oauth.ts'
@@ -152,6 +153,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       setOverride,
       notifyPicker,
       sessions: () => sessionsSvc(),
+      goals: () => (ctx.get('goals') as GoalServiceLike | undefined) ?? ((ctx as unknown as { goals?: GoalServiceLike }).goals),
+      agents: () => (ctx.get('agents') as { get(id: unknown): unknown } | undefined) ?? ((ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents),
       runDoctor: async () => {
         return writeDoctorReport({
           cfg: getConfig,
@@ -430,23 +433,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             targets.push(join(root, '.mcp.json'))
           }
           const uniqueTargets = Array.from(new Set(targets))
-          bridgeState.restores = uniqueTargets.map((file) => writeMcpConfig(file, bridge))
+          for (const file of uniqueTargets) registerBridgeMcpConfig(bridgeState, file)
           log('mcp bridge ready at ' + bridge.url + ' (registries: ' + uniqueTargets.join(', ') + ')' + (toolsSvc ? '' : ' (tools service not yet available)'))
         } catch (e) {
-          for (const undo of bridgeState.restores) undo()
-          await bridgeState.bridge?.close()
-          bridgeState.bridge = null
-          bridgeState.restores = []
+          await teardownBridgeState(bridgeState)
           log('mcp bridge failed to start: ' + String(e))
         } finally {
           bridgeStarting = false
         }
       })()
     } else if (!want && bridgeState.bridge !== null) {
-      for (const undo of bridgeState.restores) undo()
-      void bridgeState.bridge.close()
-      bridgeState.bridge = null
-      bridgeState.restores = []
+      void teardownBridgeState(bridgeState)
     }
   }
   syncMcpBridge()
@@ -459,8 +456,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       void poolAuth.cancel()
       if (askToolDispose.current !== null) askToolDispose.current()
       if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
-      for (const undo of bridgeState.restores) undo()
-      void bridgeState.bridge?.close()
+      void teardownBridgeState(bridgeState)
       void closeProxyAgents()
     }
   })

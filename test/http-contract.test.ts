@@ -1666,3 +1666,30 @@ test('REGRESSION: every route answers 500 when a dependency throws (no silent ha
   assert.equal(res.status(), 200)
   assert.equal((res.json() as { ok?: boolean }).ok, true)
 })
+
+test('/config validates permissionMode enum and registerBridgeMcpConfig is idempotent', async () => {
+  const s = setup()
+  const route = s.route('/plugins/agy-link/config')
+  const badMode = await invoke(route, fakeReq('POST', '/', { key: 'permissionMode', value: 'yolo' }))
+  assert.equal(badMode.status(), 400)
+  assert.match((badMode.json() as { error?: string }).error ?? '', /permissionMode/)
+
+  const goodMode = await invoke(route, fakeReq('POST', '/', { key: 'permissionMode', value: 'accept-edits' }))
+  assert.equal(goodMode.status(), 200)
+
+  const { startMcpBridge, registerBridgeMcpConfig, teardownBridgeState } = await import('../src/host/mcp-bridge.ts')
+  const dir = mkdtempSync(join(tmpdir(), 'agy-mcp-idem-'))
+  try {
+    const bridge = await startMcpBridge({ bridgeScript: 'fake-bridge.mjs', tools: () => undefined, allowlist: () => '' })
+    const cfgFile = join(dir, 'mcp_config.json')
+    const state = { bridge, restores: [] as Array<() => void> }
+    registerBridgeMcpConfig(state, cfgFile)
+    registerBridgeMcpConfig(state, cfgFile)
+    assert.equal(state.restores.length, 1, 'registerBridgeMcpConfig must not duplicate restores for the same file')
+    teardownBridgeState(state)
+    assert.equal(state.bridge, null)
+    assert.equal(state.restores.length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

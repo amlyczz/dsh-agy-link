@@ -2857,3 +2857,50 @@ test('issue #138: DSH context messages never make a tool continuation look like 
   // A real typed message still ends the scan: it IS a new request.
   assert.equal(detectContinuation([toolResult('agytc-run-1-7'), msg('user', '补充一点：先写草稿')]), null)
 })
+
+test('plan approval continues execution via agy (drops --mode plan) while dismissal stops cleanly', async () => {
+  const { adapter, store } = makeAdapter({ permissionMode: 'accept-edits' })
+  store.set('sess-plan:primary', { conversationId: 'conv-plan-1', lastMessageCount: 2, updatedAt: Date.now() })
+  const argsFile = join(workDir, 'args-plan-exec.json')
+  process.env.FAKE_AGY_MODE = 'ok'
+  process.env.FAKE_AGY_ARGS_FILE = argsFile
+  try {
+    const approved = {
+      role: 'user',
+      content: [{
+        type: 'tool-result',
+        toolCallId: 'agytc-bridge-plan-100',
+        content: [{ type: 'text', text: 'Plan approved. Exit plan mode and execute the plan.' }],
+      }],
+    } as unknown as Message
+    const chunks = await collect(adapter.stream(opts([msg('user', 'make a plan'), approved], {
+      sessionId: 'sess-plan' as never,
+      tools: [{ name: 'exit_plan_mode', description: 'exit', parameters: {} } as never],
+      system: 'Planning is disabled after approval.',
+    })))
+    assert.equal((chunks[chunks.length - 1] as { reason: { kind: string } }).reason.kind, 'stop')
+    const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[]
+    assert.equal(argv[argv.indexOf('--mode') + 1], 'accept-edits', 'approved plan exits plan mode to configured mode')
+    const promptArg = argv[argv.indexOf('-p') + 1] ?? ''
+    assert.match(promptArg, /Plan approved\. Exit plan mode/, 'bound conversation receives approval text from bridge tool-result')
+
+    // Dismissed plan short-circuits without spawning agy.
+    const argsFile2 = join(workDir, 'args-plan-dismissed.json')
+    process.env.FAKE_AGY_ARGS_FILE = argsFile2
+    const dismissed = {
+      role: 'user',
+      content: [{
+        type: 'tool-result',
+        toolCallId: 'agytc-bridge-plan-101',
+        content: [{ type: 'text', text: 'Plan review was dismissed by the user.' }],
+      }],
+    } as unknown as Message
+    const dismissedChunks = await collect(adapter.stream(opts([msg('user', 'make a plan'), dismissed], {
+      sessionId: 'sess-plan' as never,
+    })))
+    assert.deepEqual(dismissedChunks, [{ type: 'finish', reason: { kind: 'stop' } }])
+    assert.equal(existsSync(argsFile2), false, 'dismissed plan review must not spawn agy')
+  } finally {
+    delete process.env.FAKE_AGY_ARGS_FILE
+  }
+})

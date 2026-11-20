@@ -50,6 +50,7 @@ export function isToolResultMessage(m: Message): boolean {
 
 /** Flatten visible text, including nested tool-result payloads. */
 export function textOf(m: Message): string {
+  if (typeof m.content === 'string') return m.content
   const parts: string[] = []
   const walk = (blocks: readonly unknown[] | undefined): void => {
     for (const raw of blocks ?? []) {
@@ -106,6 +107,7 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
       kind === 'system-reminder' ||
       kind === 'dsh-session-title-llm' ||
       kind === 'tool-goal' ||
+      kind === 'plan-mode' ||
       kind === 'agent-instructions' ||
       kind === 'synthetic'
     ) {
@@ -126,6 +128,7 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
     text.startsWith('[model changed:') ||
     text.startsWith('[conversation so far]') ||
     text.startsWith('<goal_complete>') ||
+    text.startsWith('<goal_blocked>') ||
     text.startsWith('A skill is a reusable set of task-specific instructions')
   ) {
     return true

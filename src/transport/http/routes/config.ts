@@ -1,6 +1,27 @@
 import type { HostServices } from '../../../host/services.ts'
 import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
 
+const PERMISSION_MODES = new Set(['skip', 'plan', 'accept-edits'])
+
+function validateConfigValue(key: string, value: unknown): string | null {
+  if (key === 'hiddenModels') {
+    return Array.isArray(value) && value.every((x) => typeof x === 'string')
+      ? null
+      : 'hiddenModels must be an array of model ids'
+  }
+  if (key === 'warmupModels') {
+    return Array.isArray(value) && value.every((x) => typeof x === 'string')
+      ? null
+      : 'warmupModels must be an array of model names'
+  }
+  if (key === 'permissionMode') {
+    return typeof value === 'string' && PERMISSION_MODES.has(value)
+      ? null
+      : 'permissionMode must be skip, plan, or accept-edits'
+  }
+  return null
+}
+
 function handleConfig(services: HostServices, req: unknown, res: unknown): void {
   const { setOverride, notifyPicker, onConfigWritten } = services
       runRoute(res, async () => {
@@ -20,21 +41,15 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           sendJson(res as RawRes, 400, { error: 'key not settable' })
           return
         }
-        if (key === 'hiddenModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
-          sendJson(res as RawRes, 400, { error: 'hiddenModels must be an array of model ids' })
-          return
-        }
-        if (key === 'warmupModels' && (!Array.isArray(body.value) || !(body.value as unknown[]).every((x) => typeof x === 'string'))) {
-          sendJson(res as RawRes, 400, { error: 'warmupModels must be an array of model names' })
+        const validationError = validateConfigValue(key, body.value)
+        if (validationError !== null) {
+          sendJson(res as RawRes, 400, { error: validationError })
           return
         }
         setOverride(key, body.value)
         onConfigWritten(key, body.value)
-        // Both keys change the model set DSH's picker must display:
-        // `hiddenModels` hides ids, `poolWideCatalog` switches between the
-        // active account's catalog and the pool-wide union (issue #107/#108).
-        // Without this event the cached picker keeps the old list until a
-        // restart, so enabling the switch looked like "it did nothing".
+        // Keys that change the visible model set must broadcast immediately so
+        // DSH's picker stays synchronized with the console.
         if (key === 'hiddenModels' || key === 'poolWideCatalog' || key === 'enabled') {
           notifyPicker()
         }

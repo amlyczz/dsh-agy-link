@@ -421,13 +421,25 @@ test('issue #139: activeCwds degrades to empty when the sessions service is unus
 
 test('global ModelCatalog discovery skips disabled primaryAccountId and rejects when all accounts are disabled', async (t) => {
   const root = sandbox(t)
-  const fakeBin = join(root, 'agy')
-  writeFileSync(fakeBin, [
-    '#!/bin/sh',
-    'echo "home=$HOME" >> "' + join(root, 'probe-homes.log') + '"',
-    'echo "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)"',
-    'echo "gemini-3.8-flash-high\tGemini 3.8 Flash (High)"',
-  ].join('\n'))
+  const isWin = process.platform === 'win32'
+  const fakeBin = join(root, isWin ? 'agy.cmd' : 'agy')
+  const logFile = join(root, 'probe-homes.log')
+  writeFileSync(
+    fakeBin,
+    isWin
+      ? [
+          '@echo off',
+          `echo home=%HOME%>> "${logFile}"`,
+          'echo gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
+          'echo gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+        ].join('\r\n')
+      : [
+          '#!/bin/sh',
+          'echo "home=$HOME" >> "' + logFile + '"',
+          'echo "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)"',
+          'echo "gemini-3.8-flash-high\tGemini 3.8 Flash (High)"',
+        ].join('\n'),
+  )
   chmodSync(fakeBin, 0o755)
   process.env.DSH_AGY_BIN = fakeBin
 

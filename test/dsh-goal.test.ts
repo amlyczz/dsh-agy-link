@@ -7,9 +7,11 @@ import {
   isPlanMode,
   isGoalToolContinuation,
   isPlanToolContinuation,
+  classifyPlanToolContinuation,
   buildGoalCompleteToolCallBlock,
   buildPlanExitToolCallBlock,
 } from '../src/host/dsh-goal.ts'
+import { parseMirrorCallId } from '../src/host/recording.ts'
 
 test('detectGoalContext extracts goal context from source.kind === "goal"', () => {
   const messages: Message[] = [
@@ -525,4 +527,40 @@ test('issue #136: DSH rejecting our synthesized exit_plan_mode is decisive evide
     { role: 'tool', toolCallId: 't2', content: 'Error: exit_plan_mode is only available in plan mode' } as unknown as Message,
   ]
   assert.equal(isPlanMode136(messages), false, 'a rejected exit_plan_mode means the session is not planning')
+})
+
+test('plan mode semantics: system policy, live planMode, approved reset, continuation classification, and bridge call ids', () => {
+  const plain: Message[] = [{ role: 'user', content: 'write plan' } as unknown as Message]
+  assert.equal(isPlanMode(plain, 'You are in plan mode. Read only.'), true, 'options.system plan:policy activates plan mode')
+  assert.equal(isPlanMode(plain, undefined, true), true, 'live session planMode flag activates plan mode')
+  assert.equal(isPlanMode([{ role: 'user', content: 'You are in plan mode.' } as unknown as Message], undefined, false), false, 'explicit live false overrides stale message text')
+
+  const approvedMsgs: Message[] = [
+    { role: 'user', content: [{ type: 'tool-result', toolCallId: 'agytc-bridge-plan-1', content: [{ type: 'text', text: 'Plan approved. Exit plan mode and execute the plan.' }] }] } as unknown as Message,
+  ]
+  assert.equal(isPlanMode(approvedMsgs, undefined, undefined), false, 'approved exit_plan_mode exits plan mode')
+  assert.equal(classifyPlanToolContinuation(approvedMsgs), 'continue', 'approved plan must run next turn')
+  assert.equal(isPlanToolContinuation(approvedMsgs), true, 'approved exit_plan_mode is a bridge plan continuation')
+
+  const feedbackMsgs: Message[] = [
+    { role: 'user', content: [{ type: 'tool-result', toolCallId: 'agytc-bridge-plan-2', content: [{ type: 'text', text: 'Keep planning with feedback:\nSplit phase 2' }] }] } as unknown as Message,
+  ]
+  assert.equal(classifyPlanToolContinuation(feedbackMsgs), 'continue', 'keep-planning feedback must re-run planner')
+
+  const dismissedMsgs: Message[] = [
+    { role: 'user', content: [{ type: 'tool-result', toolCallId: 'agytc-bridge-plan-3', content: [{ type: 'text', text: 'Plan review was dismissed by the user.' }] }] } as unknown as Message,
+  ]
+  assert.equal(classifyPlanToolContinuation(dismissedMsgs), 'dismissed', 'dismissed plan must short-circuit cleanly')
+  assert.equal(isPlanToolContinuation(dismissedMsgs), true)
+
+  const planChunksA = buildPlanExitToolCallBlock('Step 1\nStep 2', 0) as Array<{ type: string; block?: { id: string; arguments: string } }>
+  const planChunksB = buildPlanExitToolCallBlock('# Existing Title\nStep 1', 1) as Array<{ type: string; block?: { id: string; arguments: string } }>
+  const idA = planChunksA[1]!.block!.id
+  const idB = planChunksB[1]!.block!.id
+  assert.notEqual(idA, idB, 'each synthesized exit_plan_mode receives a unique callId')
+  assert.equal(JSON.parse(planChunksA[1]!.block!.arguments).plan.startsWith('# '), true, 'prepends # heading when absent')
+  assert.equal(JSON.parse(planChunksB[1]!.block!.arguments).plan.startsWith('# Existing Title'), true, 'preserves existing # heading')
+  assert.equal(parseMirrorCallId(idA), null, 'bridge plan callId must not parse as a mirror runId/eventIndex')
+  const goalChunks = buildGoalCompleteToolCallBlock({ goalId: 'g1', revision: 1 }, 0) as Array<{ type: string; block?: { id: string } }>
+  assert.equal(parseMirrorCallId(goalChunks[1]!.block!.id), null, 'bridge goal callId must not parse as a mirror runId/eventIndex')
 })

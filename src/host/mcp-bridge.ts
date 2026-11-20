@@ -432,6 +432,42 @@ export function mcpServerEntry(
   }
 }
 
+export interface BridgeRegistryState {
+  bridge: McpBridge | null
+  restores: Array<() => void>
+}
+
+const registeredFilesByBridge = new WeakMap<McpBridge, Set<string>>()
+
+/**
+ * Idempotently register the MCP bridge into `file` and record its restore
+ * hook on `state.restores` at most once per `(state.bridge, file)` pair.
+ */
+export function registerBridgeMcpConfig(state: BridgeRegistryState, file: string): void {
+  const bridge = state.bridge
+  if (bridge === null) return
+  let files = registeredFilesByBridge.get(bridge)
+  if (files === undefined) {
+    files = new Set<string>()
+    registeredFilesByBridge.set(bridge, files)
+  }
+  if (files.has(file)) return
+  files.add(file)
+  state.restores.push(writeMcpConfig(file, bridge))
+}
+
+/** Restore every registered MCP config file and close the active bridge. */
+export async function teardownBridgeState(state: BridgeRegistryState): Promise<void> {
+  for (const undo of state.restores) undo()
+  const bridge = state.bridge
+  state.bridge = null
+  state.restores = []
+  if (bridge !== null) {
+    registeredFilesByBridge.delete(bridge)
+    await bridge.close()
+  }
+}
+
 export function writeMcpConfig(file: string, bridge: McpBridge): () => void {
   const key = mcpServerKey(bridge.port)
   let previous: string | null = null

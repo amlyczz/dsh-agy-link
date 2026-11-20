@@ -11,6 +11,8 @@
 // still active and drive Round 2, Round 3... in an infinite loop.
 import type { Message, StreamChunk, ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as dshLlm from '@deepseek-ai/dsh-llm'
+import { toolCallIdOf } from '../provider/continuation.ts'
+import { isSyntheticHarnessMessage, isToolResultMessage, textOf } from '../provider/prompt-text.ts'
 
 export const toToolCallId: (id: string) => ToolCallId =
   (dshLlm as { ToolCallId?: (id: string) => ToolCallId; CallId?: (id: string) => ToolCallId }).ToolCallId ??
@@ -25,22 +27,6 @@ export interface GoalContext {
   objective?: string
 }
 
-function extractText(m: Message): string {
-  const content = m.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    const parts: string[] = []
-    for (const b of content) {
-      if (b && typeof b === 'object') {
-        const blk = b as { type?: string; text?: unknown }
-        if (blk.type === 'text' && typeof blk.text === 'string') parts.push(blk.text)
-      }
-    }
-    return parts.join('\n')
-  }
-  return ''
-}
-
 function parseGoalRoundText(text: string): { goalId?: string; revision?: number; round?: number; maxRounds?: number; objective?: string } | null {
   if (!text.includes('<goal_round>')) return null
   const roundMatch = text.match(/Round:\s*(\d+)(?:\/(\d+))?/)
@@ -51,7 +37,7 @@ function parseGoalRoundText(text: string): { goalId?: string; revision?: number;
   // Never guess an id from loose prose: DSH's round prompt contains the words
   // "goal-tool policy" and the token <goal_round>, so a generic /goal-[A-Za-z0-9_-]+/
   // scan once synthesized update_goal calls against the literal id "goal-tool"
-  // (always missing → CAS failure → the driver queued round after round). Real
+  // (always missing -> CAS failure -> the driver queued round after round). Real
   // DSH goal ids are UUID-shaped ("goal-3fe686a1-0298-4a5a-88dd-670562821182");
   // accept only that shape or an explicit `id:`-prefixed value, and otherwise
   // leave goalId undefined so the host-side sessionGoal fallback supplies the
@@ -63,40 +49,16 @@ function parseGoalRoundText(text: string): { goalId?: string; revision?: number;
 }
 
 /**
- * Harness-injected user-role source kinds. They are metadata, not instructions,
- * and must stay transparent to the trailing-span scans.
- */
-const HARNESS_USER_SOURCE_KINDS = new Set([
-  'time-context',
-  'skill-catalog',
-  'runtime-context',
-  'model-selection',
-  'system-reminder',
-  'dsh-session-title-llm',
-  'tool-goal',
-  'synthetic',
-])
-
-/** Whether this user-role message was injected by the harness, not typed by a human. */
-function isHarnessInjectedMessage(m: Message): boolean {
-  const src = (m as unknown as { source?: { kind?: string; form?: string } }).source
-  if (!src || typeof src !== 'object') return false
-  if (typeof src.kind === 'string' && HARNESS_USER_SOURCE_KINDS.has(src.kind)) return true
-  return src.kind === 'plugin' && src.form === 'snapshot'
-}
-
-/**
  * A genuine human instruction (the current turn's task). Goal-round prompts
- * (`source.kind === 'goal'`) and harness metadata are not human instructions.
+ * (`source.kind === 'goal'`), tool results, and harness metadata are not human instructions.
  */
-function isGenuineUserMessage(m: Message): boolean {
+function isGenuineHumanMessage(m: Message): boolean {
   if (m.role !== 'user') return false
   const src = (m as unknown as { source?: { kind?: string } }).source
   if (src && typeof src === 'object' && src.kind === 'goal') return false
-  if (isHarnessInjectedMessage(m)) return false
-  const text = extractText(m)
-  if (text.trim() === '') return false
-  return !isHarnessInjectedUserText(text)
+  if (isToolResultMessage(m)) return false
+  if (isSyntheticHarnessMessage(m)) return false
+  return textOf(m).trim() !== ''
 }
 
 /**
@@ -105,11 +67,7 @@ function isGenuineUserMessage(m: Message): boolean {
  *
  * The scan stops at the newest genuine human message: goal markers BEFORE it
  * belong to an earlier (possibly already completed) goal and must not leak into
- * this turn's request. Without that stop every later turn in a session that had
- * ever run a goal re-synthesized `update_goal(complete)` for the stale goal —
- * with a deterministic call id, so the transcript accumulated identical
- * `tool_call` ids and HTTP providers rejected it with
- * `400 Duplicate 'call_id'` (2026-11-07 incident).
+ * this turn's request.
  */
 export function detectGoalContext(messages: readonly Message[]): GoalContext | null {
   let goalId: string | undefined
@@ -129,7 +87,7 @@ export function detectGoalContext(messages: readonly Message[]): GoalContext | n
       if (revision === undefined && typeof src.revision === 'number') revision = src.revision
       if (round === undefined && typeof src.round === 'number') round = src.round
     }
-    const text = extractText(m)
+    const text = textOf(m)
     if (text.includes('<goal_round>')) {
       isGoal = true
       const parsed = parseGoalRoundText(text)
@@ -142,7 +100,7 @@ export function detectGoalContext(messages: readonly Message[]): GoalContext | n
       }
     }
     // A new human instruction ends the current turn's goal span.
-    if (isGenuineUserMessage(m)) break
+    if (isGenuineHumanMessage(m)) break
   }
 
   if (isGoal) {
@@ -186,57 +144,70 @@ export function resolveGoalContext(
   return { goalId: live.goalId, revision: live.revision }
 }
 
-/**
- * Detect whether DSH is in Plan Mode.
- * DSH plan-mode injects "You are in plan mode" into the runtime context prompt.
- */
-export function isPlanMode(messages: readonly Message[]): boolean {
-  const last = messages[messages.length - 1]
-  if (!last) return false
-  const text = extractText(last)
-  // DSH rejecting a synthesized exit_plan_mode is DECISIVE: whatever the history
-  // says, this session is not planning. Without this, a false positive could
-  // never self-correct and the session stayed read-only forever (issue #136).
-  if (/exit_plan_mode is only available in plan mode/i.test(text)) return false
-  // Only the CURRENT turn's instruction can prove plan mode. Scanning the whole
-  // history matched source code, tool output and completed planning turns that
-  // merely mention the phrase, which forced `--mode plan` on ordinary turns
-  // (#136 — with permissionMode=skip that denied every tool and broke the turn).
-  if (last.role !== 'user' && last.role !== 'system') return false
-  return text.includes('You are in plan mode')
+/** Find the newest non-harness-metadata message in the trailing span. */
+function trailingNonSyntheticMessage(messages: readonly Message[]): Message | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (!m) continue
+    if (m.role === 'user' && isSyntheticHarnessMessage(m)) continue
+    return m
+  }
+  return undefined
 }
 
 /**
- * Harness-injected user-role texts (turn-preparation time samples, system
- * reminders, runtime context) are NOT user instructions: they must not break
- * the completion-hop scan, while a genuine instruction must.
+ * Detect whether DSH is in Plan Mode.
+ *
+ * DSH (`@deepseek-ai/dsh-plan-mode`) exposes `ctx.planMode` on the host AND
+ * injects the `plan:policy` section ("You are in plan mode...") into
+ * `options.system` (NOT `messages`). We also support the current-turn message
+ * signal for tests / older hosts, while still honoring a decisive rejection
+ * (`exit_plan_mode is only available in plan mode`) or an approved
+ * `exit_plan_mode` result in the trailing span.
  */
-function isHarnessInjectedUserText(text: string): boolean {
-  const t = text.trimStart()
-  return (
-    t.startsWith('Time sampled while preparing') ||
-    t.startsWith('Current runtime context') ||
-    t.includes('<system-reminder>')
-  )
+export function isPlanMode(
+  messages: readonly Message[],
+  systemPrompt?: string,
+  livePlanMode?: boolean,
+): boolean {
+  const trailing = trailingNonSyntheticMessage(messages)
+  if (trailing) {
+    const text = textOf(trailing)
+    // DSH rejecting a synthesized exit_plan_mode is DECISIVE: whatever the
+    // history or prompt says, this session is not planning (issue #136).
+    if (/exit_plan_mode is only available in plan mode/i.test(text)) return false
+    // An approved exit_plan_mode result means plan mode just exited so the
+    // next step must execute the plan in the user's configured mode.
+    const callId = toolCallIdOf(trailing)
+    if (callId !== null && callId.startsWith('agytc-bridge-plan-') && isPlanApprovedResult(text)) {
+      return false
+    }
+  }
+
+  if (livePlanMode !== undefined) return livePlanMode
+
+  if (typeof systemPrompt === 'string' && systemPrompt.includes('You are in plan mode')) {
+    return true
+  }
+
+  const last = messages[messages.length - 1]
+  if (!last) return false
+  if (last.role !== 'user' && last.role !== 'system') return false
+  return textOf(last).includes('You are in plan mode')
+}
+
+function isPlanApprovedResult(text: string): boolean {
+  return /"approved"\s*:\s*true\b/i.test(text) || /plan approved\b/i.test(text)
+}
+
+function isPlanDismissedResult(text: string): boolean {
+  return /"approved"\s*:\s*false\b/i.test(text) || /plan review(?: was)? dismissed|dismissed the plan/i.test(text)
 }
 
 /**
  * Check if the trailing span represents completion of a bridge-emitted `update_goal` call.
- * This covers both the direct tool-result message and DSH's deferred `<goal_complete>` notice.
- *
- * The markers only mean "synthetic completion hop" while they are the TRAILING
- * content. A genuine user message appearing before any marker is a fresh
- * instruction that must reach agy — scanning a fixed window for markers
- * "anywhere" swallowed exactly that: a message sent right after a goal
- * completed was finished as an empty turn without spawning agy
- * (2026-10-17, "把相关的经验整理到agents.md" × 2).
- *
- * The TEXTUAL marker is only trustworthy on a user-role message (the `tool-goal`
- * notice). Reading it out of every message let the agent's own tool output
- * poison the scan: a `grep` over the built `dist/index.js` — whose doc comments
- * contain the literal marker — printed it into a tool result, and the very next
- * request was short-circuited into an EMPTY turn that was still recorded as
- * "completed" (2026-11-15, three silent replies in a row).
+ * This covers both the direct tool-result message and DSH's deferred `<goal_complete>` /
+ * `<goal_blocked>` wrap-up notice.
  */
 export function isGoalToolContinuation(messages: readonly Message[]): boolean {
   if (messages.length === 0) return false
@@ -244,57 +215,61 @@ export function isGoalToolContinuation(messages: readonly Message[]): boolean {
   for (let i = messages.length - 1; i >= spanStart; i--) {
     const m = messages[i]
     if (!m) continue
-    const callId = (m as unknown as { toolCallId?: unknown; source?: { callId?: unknown } }).toolCallId
-      ?? (m as unknown as { source?: { callId?: unknown } }).source?.callId
-    if (typeof callId === 'string' && callId.startsWith('agytc-bridge-goal-')) {
+    const callId = toolCallIdOf(m)
+    if (callId !== null && callId.startsWith('agytc-bridge-goal-')) {
       return true
     }
     const src = (m as unknown as { source?: { kind?: string } }).source
     if (src && typeof src === 'object' && src.kind === 'tool-goal') {
       return true
     }
-    const text = extractText(m)
+    const text = textOf(m)
     // Only a user-role message can be DSH's deferred notice; a tool result or an
     // assistant transcript merely *quoting* the marker must not short-circuit.
-    if (m.role === 'user' && text.includes('<goal_complete>')) {
+    if (m.role === 'user' && (text.includes('<goal_complete>') || text.includes('<goal_blocked>'))) {
       return true
     }
     // A genuine user message with no marker ends the scan: the completion hop
     // is over — whatever the user said must be driven normally.
-    if (m.role === 'user' && text.trim() !== '' && !isHarnessInjectedUserText(text)) {
+    if (isGenuineHumanMessage(m)) {
       return false
     }
   }
   return false
 }
 
+export type PlanToolContinuation = 'none' | 'dismissed' | 'continue'
+
+/**
+ * Classify whether the trailing span is a tool result from a bridge-emitted
+ * `exit_plan_mode` call:
+ * - `'dismissed'`: user cancelled the plan review -> short-circuit cleanly.
+ * - `'continue'`: user approved (must carry out the plan) or asked to keep
+ *   planning (must revise the plan with feedback) -> drive agy normally.
+ * - `'none'`: not a bridge `exit_plan_mode` continuation.
+ */
+export function classifyPlanToolContinuation(messages: readonly Message[]): PlanToolContinuation {
+  const trailing = trailingNonSyntheticMessage(messages)
+  if (!trailing) return 'none'
+  const callId = toolCallIdOf(trailing)
+  if (callId === null || !callId.startsWith('agytc-bridge-plan-')) return 'none'
+  return isPlanDismissedResult(textOf(trailing)) ? 'dismissed' : 'continue'
+}
+
 /**
  * Check if the trailing message is the tool result of a bridge-emitted `exit_plan_mode` call.
  */
 export function isPlanToolContinuation(messages: readonly Message[]): boolean {
-  if (messages.length === 0) return false
-  const last = messages[messages.length - 1]
-  if (!last) return false
-  const callId = (last as unknown as { toolCallId?: unknown; source?: { callId?: unknown } }).toolCallId
-    ?? (last as unknown as { source?: { callId?: unknown } }).source?.callId
-  if (typeof callId === 'string' && callId.startsWith('agytc-bridge-plan-')) {
-    return true
-  }
-  return false
+  return classifyPlanToolContinuation(messages) !== 'none'
 }
 
 // Monotonic per-process counter used together with Date.now() to keep every
-// synthetic completion id unique. A deterministic `goalId-revision` id meant a
-// second emission (repeated turn, retry, forked transcript) produced a
-// duplicate tool_call id in one request, which providers reject with
-// `400 Duplicate 'call_id'` (2026-11-07 incident). The `agytc-bridge-goal-`
-// prefix is part of the continuation protocol; only the suffix changes.
-let goalCallSeq = 0
+// synthetic bridge call id unique (avoids `400 Duplicate 'call_id'`).
+let bridgeCallSeq = 0
 
-/** Mint a unique id for one synthetic goal-completion tool call. */
-function nextGoalCallId(goalId: string, revision: number): ToolCallId {
-  goalCallSeq += 1
-  return toToolCallId(`agytc-bridge-goal-${goalId}-${revision}-${Date.now().toString(36)}-${goalCallSeq.toString(36)}`)
+function nextBridgeCallId(prefix: string): ToolCallId {
+  bridgeCallSeq += 1
+  return toToolCallId(`${prefix}-${Date.now().toString(36)}-${bridgeCallSeq.toString(36)}`)
 }
 
 /**
@@ -310,7 +285,7 @@ export function buildGoalCompleteToolCallBlock(goalContext: GoalContext, blockId
       index: blockIdx,
       block: {
         type: 'tool-call',
-        id: nextGoalCallId(goalId, revision),
+        id: nextBridgeCallId(`agytc-bridge-goal-${goalId}-${revision}`),
         name: 'update_goal',
         arguments: JSON.stringify({
           goal_id: goalId,
@@ -324,8 +299,15 @@ export function buildGoalCompleteToolCallBlock(goalContext: GoalContext, blockId
 
 /**
  * Build the synthetic `exit_plan_mode` tool-call chunk that presents the generated plan to DSH.
+ * DSH's `exit_plan_mode` requires markdown starting with a `#` heading (`/^#\s+\S/`).
  */
 export function buildPlanExitToolCallBlock(planMarkdown: string, blockIdx: number): StreamChunk[] {
+  const trimmed = planMarkdown.trim()
+  const plan = trimmed === ''
+    ? '# Plan Completed\n\nPlan generated and ready for review.'
+    : /^#\s+\S/.test(trimmed)
+      ? trimmed
+      : `# Implementation Plan\n\n${trimmed}`
   return [
     { type: 'block-start', index: blockIdx, blockType: 'tool-call' },
     {
@@ -333,11 +315,9 @@ export function buildPlanExitToolCallBlock(planMarkdown: string, blockIdx: numbe
       index: blockIdx,
       block: {
         type: 'tool-call',
-        id: toToolCallId(`agytc-bridge-plan-${Date.now()}`),
+        id: nextBridgeCallId('agytc-bridge-plan'),
         name: 'exit_plan_mode',
-        arguments: JSON.stringify({
-          plan: planMarkdown.trim() !== '' ? planMarkdown : '# Plan Completed\n\nPlan generated and ready for review.',
-        }),
+        arguments: JSON.stringify({ plan }),
       },
     },
   ]

@@ -1,13 +1,17 @@
 // /agy config: permission mode, effort, dispatch guards, parallelism and workspace.
 import { isAbsolute } from 'node:path'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { isEffortId, REASONING_EFFORTS } from '../../common/reasoning.ts'
 import { credentialSlotMutex, fastPathRunCount } from '../credential-slot.ts'
 import { err, ok, type CommandContext, type CommandDeps } from './shared.ts'
 
 export function handleConfig(deps: CommandDeps, ctx: CommandContext): CommandResult {
-  const { sub, arg } = ctx
+  const { sub, arg, raw } = ctx
 
   if (sub === 'mode') {
+    if (arg === '') {
+      return ok(`Current permission mode: **${deps.cfg().permissionMode}** (usage: /agy mode <skip|plan|accept-edits>)`)
+    }
     if (!['skip', 'plan', 'accept-edits'].includes(arg)) {
       return err('usage: /agy mode <skip|plan|accept-edits>')
     }
@@ -16,12 +20,17 @@ export function handleConfig(deps: CommandDeps, ctx: CommandContext): CommandRes
   }
 
   if (sub === 'effort') {
-    if (!['low', 'medium', 'high', 'xhigh', 'default'].includes(arg)) {
-      return err('usage: /agy effort <low|medium|high|xhigh|default>')
+    if (arg === '') {
+      const cur = deps.cfg().defaultEffort || 'model default'
+      return ok(`Current default effort: **${cur}** (usage: /agy effort <${REASONING_EFFORTS.join('|')}|default>)`)
     }
-    deps.setOverride('defaultEffort', arg === 'default' ? '' : arg)
+    const normalized = arg.toLowerCase()
+    if (normalized !== 'default' && !isEffortId(normalized)) {
+      return err(`usage: /agy effort <${REASONING_EFFORTS.join('|')}|default>`)
+    }
+    deps.setOverride('defaultEffort', normalized === 'default' ? '' : normalized)
     deps.notifyPicker?.()
-    return ok('Default effort set to **' + (arg === 'default' ? 'model default' : arg) + '**.')
+    return ok('Default effort set to **' + (normalized === 'default' ? 'model default' : normalized) + '**.')
   }
 
   if (sub === 'dispatch' || sub === 'dispatch-retries') {
@@ -90,14 +99,16 @@ export function handleConfig(deps: CommandDeps, ctx: CommandContext): CommandRes
   }
 
   if (sub === 'workspace') {
-    if (arg === '') return ok('Current workspace: ' + (deps.cfg().workspaceRoot !== '' ? deps.cfg().workspaceRoot : '(session cwd / process cwd)'))
-    if (arg === 'default' || arg === 'clear') {
+    const rawPath = (raw ?? '').trim().replace(/^(?:\/agy\s+)?workspace\s*/i, '').trim()
+    const target = rawPath !== '' ? rawPath : arg
+    if (target === '') return ok('Current workspace: ' + (deps.cfg().workspaceRoot !== '' ? deps.cfg().workspaceRoot : '(session cwd / process cwd)'))
+    if (target === 'default' || target === 'clear') {
       deps.setOverride('workspaceRoot', '')
       return ok('Workspace reset to session cwd / process cwd.')
     }
-    if (!isAbsolute(arg)) return err('workspace must be an absolute path (or `default` to clear)')
-    deps.setOverride('workspaceRoot', arg)
-    return ok('Workspace set to **' + arg + '** — effective next turn.')
+    if (!isAbsolute(target)) return err('workspace must be an absolute path (or `default` to clear)')
+    deps.setOverride('workspaceRoot', target)
+    return ok('Workspace set to **' + target + '** — effective next turn.')
   }
 
   return err(`Unknown config command \`${sub}\`.`)

@@ -12,7 +12,7 @@ import type { Route } from '../src/transport/http/respond.ts'
 import { TranslationService } from '../src/features/translation/service.ts'
 import { ImageService } from '../src/features/image/service.ts'
 import { SubagentTracker } from '../src/features/subagent/tracker.ts'
-import { Semaphore, findSessionLogFile, readSessionImage, resolveSessionGoal, runTranslationStream } from '../src/host/service-helpers.ts'
+import { Semaphore, findSessionLogFile, readSessionImage, resolveSessionGoal, resolveSessionPlanMode, runTranslationStream } from '../src/host/service-helpers.ts'
 import { defaultConfig } from '../src/common/types.ts'
 import { R } from '../src/client/react.ts'
 import { agyIcon, brandIcon, uiIcon } from '../src/client/icons.ts'
@@ -574,4 +574,53 @@ test('ImageService verifies cached path exists before returning cache hit', asyn
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('resolveSessionGoal tracks edit operations and resolveSessionPlanMode tracks plan state', () => {
+  const goalEvents = [
+    { type: 'goal/change', data: { kind: 'goal/change', operation: 'set', goal: { id: 'g1', revision: 1, phase: 'active' } } },
+    { type: 'goal/change', data: { kind: 'goal/change', operation: 'edit', goal: { id: 'g1', revision: 2, phase: 'paused' } } },
+    { type: 'goal/change', data: { kind: 'goal/change', operation: 'resume', goal: { id: 'g1', revision: 3, phase: 'active' } } },
+    { type: 'goal/change', data: { kind: 'goal/change', operation: 'edit', goal: { id: 'g1', revision: 4, phase: 'paused' } } },
+  ]
+  const ctxGoal = {
+    get: (k: string) => (k === 'sessions' ? { get: () => ({ snapshotEvents: () => goalEvents }) } : undefined),
+  } as never
+  // Latest edit had phase: 'paused' -> must NOT report active armed goal from earlier 'resume'
+  assert.equal(resolveSessionGoal(ctxGoal, 's1'), null)
+
+  const activeEditEvents = [
+    { type: 'goal/change', data: { kind: 'goal/change', operation: 'set', goal: { id: 'g1', revision: 1, phase: 'active' } } },
+    { type: 'goal/change', data: { kind: 'goal/change', operation: 'edit', goal: { id: 'g1', revision: 2, phase: 'active' } } },
+  ]
+  const ctxGoalActive = {
+    get: (k: string) => (k === 'sessions' ? { get: () => ({ snapshotEvents: () => activeEditEvents }) } : undefined),
+  } as never
+  assert.deepEqual(resolveSessionGoal(ctxGoalActive, 's1'), { goalId: 'g1', revision: 2 })
+
+  const planCtx = {
+    get: (k: string) => {
+      if (k === 'agents') {
+        return {
+          get: (id: unknown) =>
+            id === 'pending-on' || id === 'active-only' || id === 'off' ? { id } : undefined,
+        }
+      }
+      if (k === 'planMode') {
+        return {
+          get: (agent: { id: string }) =>
+            agent.id === 'pending-on'
+              ? { active: false, pending: true }
+              : agent.id === 'active-only'
+                ? { active: true }
+                : { active: false, pending: false },
+        }
+      }
+      return undefined
+    },
+  } as never
+  assert.equal(resolveSessionPlanMode(planCtx, 'pending-on'), true)
+  assert.equal(resolveSessionPlanMode(planCtx, 'active-only'), true)
+  assert.equal(resolveSessionPlanMode(planCtx, 'off'), false)
+  assert.equal(resolveSessionPlanMode(planCtx, 'missing'), undefined)
 })

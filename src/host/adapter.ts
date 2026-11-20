@@ -29,7 +29,7 @@ import { Err, accountsShareSingleEgress, PROVIDER_ID, type PluginConfig } from '
 import type { RunRecording } from './recording.ts'
 import { defaultEffortFor, findEntry, resolveModelSlug } from './models.ts'
 import { detectSystemProxy } from './wincred.ts'
-import { isGoalToolContinuation, isPlanToolContinuation, isPlanMode, resolveGoalContext } from './dsh-goal.ts'
+import { classifyPlanToolContinuation, isGoalToolContinuation, isPlanMode, resolveGoalContext } from './dsh-goal.ts'
 
 import type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
 export type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
@@ -230,11 +230,9 @@ export class AgyAdapter extends LlmAdapter {
     // `else if (isTranslateSession)` narrow `translateSession` below.
     const translateSession = ctx.translateSession
     const isTranslateSession = translateSession !== null
-    // DSH synthetic lifecycle tool continuation: if the trailing message is
-    // the tool-result of an update_goal or exit_plan_mode bridge call, the
-    // DSH state machine has accepted the transition. Finish cleanly without
-    // re-spawning an agy process.
-    if (isGoalToolContinuation(options.messages) || isPlanToolContinuation(options.messages)) {
+    // DSH synthetic lifecycle continuations: short-circuit on goal completion
+    // or dismissed plan review; approved/keep-planning must run agy next.
+    if (isGoalToolContinuation(options.messages) || classifyPlanToolContinuation(options.messages) === 'dismissed') {
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
     }
@@ -248,7 +246,9 @@ export class AgyAdapter extends LlmAdapter {
     const liveGoal = sessionKey !== '' && this.deps.sessionGoal ? this.deps.sessionGoal(sessionKey) : undefined
     const goalContext = resolveGoalContext(options.messages, liveGoal)
     const supportsGoalUpdate = Boolean(options.tools?.some((t) => t.name === 'update_goal'))
-    const supportsPlanExit = Boolean(options.tools?.some((t) => t.name === 'exit_plan_mode')) && isPlanMode(options.messages)
+    const livePlanMode = sessionKey !== '' && this.deps.sessionPlanMode ? this.deps.sessionPlanMode(sessionKey) : undefined
+    const supportsPlanExit = Boolean(options.tools?.some((t) => t.name === 'exit_plan_mode'))
+      && isPlanMode(options.messages, options.system, livePlanMode)
     // `exit_plan_mode` exists only in active DSH plan mode: a current-turn signal.
     const agyPermissionMode = effectivePermissionMode(permissionMode, supportsPlanExit, isAux)
 
@@ -273,9 +273,9 @@ export class AgyAdapter extends LlmAdapter {
       // must still surface as the turn's error instead of re-running the work
       // forever on rotating accounts.
       const deadFailure = rec !== undefined && rec.isSettled ? rec.failureInfo : null
-      const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, hasToolSupport)
+      const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport)
       if (rec !== undefined && !deadNoResult && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
-        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
+        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
         return
       }
       if (rec !== undefined) {
@@ -459,7 +459,7 @@ export class AgyAdapter extends LlmAdapter {
             'duplicate-debounce rescue: identical prompt for a live agy run ' + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
           )
           this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
-          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
+          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
           return
         }
         throw new LlmError(

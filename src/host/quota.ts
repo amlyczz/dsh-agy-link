@@ -503,25 +503,16 @@ export class QuotaService {
       this.cliDeps.forceStaggerMs?.() ??
       (process.env.NODE_TEST_CONTEXT !== undefined ? 0 : 400 + Math.floor(Math.random() * 450))
 
-    if (process.platform === 'win32') {
-      for (let i = 0; i < accounts.length; i++) {
-        await this.refreshAccountQuota(accounts[i]!, force).catch(() => null)
-        if (i < accounts.length - 1) {
-          const gap = nextForceGapMs()
-          if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap))
-        }
-      }
-      return
-    }
-    // Group by effective proxy egress: distinct proxies run concurrently, while
-    // accounts sharing the SAME egress stay bounded and keep an organic jitter
-    // between starts — one IP must never fire a simultaneous multi-account
-    // burst. A user-initiated sweep may overlap a COUPLE of accounts on one
-    // egress (see sweep.ts); waiting for every account's full cascade in turn
-    // made a five-account pool take ~55s (measured 2026-11-19).
-    const concurrency = Math.max(1, Math.floor(this.cliDeps.forceConcurrency?.() ?? QUOTA_FORCE_CONCURRENCY))
+    // Windows serializes default manual sweeps across the whole pool so CLI
+    // usage fallback cannot contend on the single OS Credential Manager slot
+    // (PR #69). Callers that inject `forceConcurrency` opt into bounded
+    // per-egress concurrency directly.
+    const serializeWin32 = process.platform === 'win32' && this.cliDeps.forceConcurrency === undefined
+    const concurrency = serializeWin32
+      ? 1
+      : Math.max(1, Math.floor(this.cliDeps.forceConcurrency?.() ?? QUOTA_FORCE_CONCURRENCY))
     await sweepAccountsByEgress(accounts, {
-      egressOf: (acc) => this.proxyFor(acc) || '__direct__',
+      egressOf: serializeWin32 ? () => '__win32_serial__' : (acc) => this.proxyFor(acc) || '__direct__',
       run: async (acc) => {
         await this.refreshAccountQuota(acc, force).catch(() => null)
       },

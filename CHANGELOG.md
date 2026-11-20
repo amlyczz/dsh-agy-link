@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.52 (2026-11-21)
+
+### English
+
+- **Fix(commands/goal & plan): align DSH `/goal`, `/plan`, and `/agy` bridges 1-to-1 with zero redundancy and strict idempotency.**
+  - **DSH GoalService parity (`/agy goal`)**: `handleGoal` now delegates to DSH `ctx.goals` (`GoalService`) when present, adding `set` and `edit` subcommands, keeping `activation` (`armed`/`disarmed`), `goal/changed` broadcasts, and `roundsStarted` accurate, and turning repeated `pause`/`resume`/`complete`/`clear` calls into idempotent no-ops. Its fallback event-log path enforces DSH `goalProjectionDefinition` fold invariants (blocking illegal transitions like `complete -> pause` or empty `clear`), and `resolveSessionGoal()` no longer skips `edit` events.
+  - **Plan mode & `exit_plan_mode` continuation**: `isPlanMode()` consults live session state (`ctx.planMode` / `plan/change`), `options.system` (`plan:policy`), and approved/rejected `exit_plan_mode` tool results; `classifyPlanToolContinuation()` only short-circuits on dismissal so approved plans execute outside `--mode plan` and keep-planning feedback re-runs cleanly; `buildChatPromptText()` preserves `agytc-bridge-*` tool results even on bound conversations; `buildPlanExitToolCallBlock()` ensures a leading `# ` heading and uses monotonic callIds excluded from `parseMirrorCallId()`.
+  - **`EventMapper` & continuation safety**: `EventMapper` only synthesizes `update_goal` when `goalContext.goalId` is defined; `isSyntheticHarnessMessage()` recognizes `'plan-mode'` and `'<goal_blocked>'`; `hasFinishableEventFrom()` treats `CANCELED`/`CANCELLED` as terminal states.
+- **Refactor(host/commands/routes): remove duplication and enforce idempotency across config, MCP bridge, session, pool, and image utilities.**
+  - Deduplicated message-text helpers in `src/host/dsh-goal.ts` (reusing `prompt-text.ts`), MCP bridge registration via `registerBridgeMcpConfig()` / `teardownBridgeState()`, and session binding removal via `dropMostRecentBinding()` / `dropSessionBindings()`.
+  - Made `setOverride()` disk writes, `copyArtifact()` (when `source === target`), `/agy remove-account` (`cleanupStaleAccounts?.()` + non-duplicated `notifyPicker`), `/agy effort`/`mode`/`workspace` (spaces preserved from `ctx.raw`), and `/config` `permissionMode` validation consistent and idempotent.
+  - Fixed Windows drive/WSL path + `.bmp` extraction in `IMAGE_PATH_RE` (`src/features/image/prompt.ts`), unified Windows manual quota sweeps in `QuotaService.refreshAllQuotas(true)` through `sweepAccountsByEgress()` honoring `forceConcurrency`, and made `test/services.test.ts`'s mock `agy` stub cross-platform.
+
+### 中文
+
+- **修复(命令/Goal 与 Plan)：使 DSH `/goal`、`/plan` 与 `/agy` 桥接及状态机与 `agy` 一一对齐，零冗余且严格幂等。**
+  - **对齐 DSH `GoalService`（`/agy goal`）**：优先委托给 DSH `ctx.goals`（`GoalService`），补全 `set` 与 `edit` 子命令，确保 `activation`（`armed`/`disarmed`）、`goal/changed` 事件和 `roundsStarted` 计数准确；重复执行 `pause`/`resume`/`complete`/`clear` 改为幂等空操作；事件日志回退路径严格遵循 DSH `goalProjectionDefinition` 折叠约束（阻止 `complete -> pause` 等非法跃迁）；修复 `resolveSessionGoal()` 跳过 `edit` 事件导致状态陈旧的 bug。
+  - **Plan 模式与 `exit_plan_mode` 续接**：`isPlanMode()` 综合读取实时会话状态（`ctx.planMode` / `plan/change`）、`options.system`（`plan:policy`）及审批结果；`classifyPlanToolContinuation()` 仅在用户取消/驳回审查时短路结束，审批通过或带反馈继续规划时会继续驱动 `agy` 执行/修订，并在 `buildChatPromptText()` 中对已绑定会话保留 `agytc-bridge-*` 工具结果文本；`buildPlanExitToolCallBlock()` 自动补全 `# ` 标题前缀并使用不与镜像工具 ID 冲突的单调 `agytc-bridge-plan-*` ID。
+  - **`EventMapper` 与续接一致性**：仅在 `goalContext.goalId` 明确存在时合成 `update_goal`；`isSyntheticHarnessMessage()` 补充识别 `'plan-mode'` 与 `'<goal_blocked>'`；`hasFinishableEventFrom()` 将 `CANCELED`/`CANCELLED` 识别为终止状态。
+- **重构(宿主/命令/路由)：消除全项目冗余与非幂等问题，补齐校验与清理逻辑。**
+  - 收敛 `dsh-goal.ts` 的消息文本提取（复用 `prompt-text.ts`）、`registerBridgeMcpConfig()` / `teardownBridgeState()` 的 MCP 配置幂等注册与清理，以及 `dropMostRecentBinding()` / `dropSessionBindings()`。
+  - 修复 `setOverride()` 重复写盘、`copyArtifact()` 同路径复制、`/agy remove-account` 清理残留账号绑定与重复刷新选择器、`/agy effort`/`mode`/`workspace`（保留含空格路径）及 `/config` 的 `permissionMode` 校验。
+  - 修复 `IMAGE_PATH_RE` 对 Windows 盘符路径及 `.bmp` 的匹配问题，统一 `QuotaService.refreshAllQuotas(true)` 在 Windows 下通过 `sweepAccountsByEgress()` 执行并尊重 `forceConcurrency`，并使 `test/services.test.ts` 的 mock `agy` 脚本跨平台兼容。
+
 ## 0.6.51 (2026-11-21)
 
 ### English

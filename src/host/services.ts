@@ -26,7 +26,7 @@ import { detectSystemProxy } from './wincred.ts'
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir } from './media.ts'
-import { agyMcpConfigPath, writeMcpConfig, type McpBridge } from './mcp-bridge.ts'
+import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
 import { acquireCredentialSlot } from './credential-slot.ts'
 import {
@@ -34,6 +34,7 @@ import {
   findSessionLogFile,
   readSessionImage,
   resolveSessionGoal,
+  resolveSessionPlanMode,
   runTranslationStream,
   syncSessionModelSelection,
 } from './service-helpers.ts'
@@ -261,7 +262,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       if (bridgeState.bridge !== null && acc.dir) {
         const cfg = getConfig()
         if (cfg.mcpConfigScope === 'global' || cfg.mcpConfigScope === 'both') {
-          bridgeState.restores.push(writeMcpConfig(agyMcpConfigPath('', isolatedHomeEnv(acc.dir)), bridgeState.bridge))
+          registerBridgeMcpConfig(bridgeState, agyMcpConfigPath('', isolatedHomeEnv(acc.dir)))
         }
       }
     },
@@ -290,6 +291,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     onEffortUnsupported: (model) => effortStore.remember(model),
     sessionCwd: (sessionId) => sessionWorkspace(sessionId),
     sessionGoal: (sessionId) => resolveSessionGoal(ctx, sessionId),
+    sessionPlanMode: (sessionId) => resolveSessionPlanMode(ctx, sessionId),
     syncSessionModel: (sessionId, model, effort) => syncSessionModelSelection(ctx, sessionId, model, effort),
     onRun: (info) => { lastRun = info },
     onParser: (p) => { lastParser = p },
@@ -348,10 +350,11 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   })
 
   const setOverride = (key: string, value: unknown): void => {
+    binCache = undefined
     const file = overridesPath()
     const current = readOverrides(file)
+    if (key in current && JSON.stringify(current[key]) === JSON.stringify(value)) return
     current[key] = value
-    binCache = undefined
     try {
       writeFileAtomicSync(file, JSON.stringify(current, null, 2))
     } catch (e) {

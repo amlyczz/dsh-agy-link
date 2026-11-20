@@ -144,6 +144,7 @@ test('issue #151: fresh CLI quota data clears a stale quotaUnavailable marker', 
   const out = await refreshAccountQuotaPipeline({
     shouldUseCli: () => true,
     readCliUsageFamilies: async () => ({ google: { weeklyFraction: 0.4 } }),
+    readPrimaryCredential: () => null,
     detectEmailFromLogs: () => undefined,
     pool: { ...pool, getAccounts: () => [] },
   } as never, { ...(account as object), email: 'a@example.com' } as never, true)
@@ -166,6 +167,7 @@ test('issue #151: a CLI read that yields nothing leaves the marker alone', async
     shouldUseCli: () => true,
     readCliUsageFamilies: async () => null,
     getValidAccessToken: async () => null,
+    readPrimaryCredential: () => null,
     detectEmailFromLogs: () => undefined,
     pool: { ...pool, getAccounts: () => [], dir: '' },
   } as never, { ...(account as object), email: 'b@example.com' } as never, true)

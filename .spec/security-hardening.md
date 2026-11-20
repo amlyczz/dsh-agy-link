@@ -21,7 +21,9 @@ Each invariant below is enforced in code AND covered by a regression test.
   **8 MiB** (`413`). (tests: `test/v02.test.ts`)
 - `writeMcpConfig()` writes `mcp_config.json` (which embeds `DSH_MCP_TOKEN`) atomically
   with `0600` owner-only permissions and prunes stale `dsh-tools-<deadPort>` entries left
-  behind by crashed processes; `syncMcpBridge()` serializes concurrent starts.
+  behind by crashed processes; `syncMcpBridge()` serializes concurrent starts;
+  `registerBridgeMcpConfig()` de-duplicates `(bridge, file)` registrations idempotently
+  and `teardownBridgeState()` runs/clears all registered restores once. (test: `test/http-contract.test.ts`)
 
 ## One-shot `agy_ask` file inlining (`src/host/oneshot.ts`)
 
@@ -82,16 +84,26 @@ Each invariant below is enforced in code AND covered by a regression test.
   and dropped as a `garbage` event, so a runaway stream cannot grow memory without
   bound. (test: `test/parser.test.ts`)
 
-## Plan mode is read-only at the agy layer (issues #113, #136)
+## Plan mode & Goal state-machine parity with DSH (issues #113, #136)
 
 - `effectivePermissionMode(configured, dshPlanMode, isAux)` forces `plan` (`--mode plan`)
   whenever `dshPlanMode && !isAux`, preventing `--dangerously-skip-permissions` from
   writing files during a read-only planning turn. (tests: `test/call-context.test.ts`, `test/adapter.test.ts`)
-- **Plan mode is a CURRENT-TURN fact, never history.** `isPlanMode(messages)` may only
-  read the last message, and only when its role is `user`/`system`; scanning history
-  matched tool output and previously-finished planning turns that merely mention the
-  phrase, which forced `--mode plan` on ordinary turns (with `permissionMode: skip`
-  every tool was denied and the turn broke — issue #136).
+- **Authoritative current-turn signals**: `isPlanMode(messages, systemPrompt?, livePlanMode?)`
+  checks `livePlanMode` (from `ctx.planMode` / `plan/change` / `plan/enter|exit`), trailing
+  approved/rejected `exit_plan_mode` tool results, `options.system` (`plan:policy`), and only
+  then the trailing `user`/`system` message — never historical tool output. (tests: `test/dsh-goal.test.ts`, `test/phase2-client.test.ts`)
+- **Explicit Plan Continuation Classification**: `classifyPlanToolContinuation(messages)`
+  only short-circuits (`'dismissed'`) when the user dismissed `exit_plan_mode`. On approval or
+  keep-planning feedback (`'continue'`), `buildChatPromptText()` preserves `agytc-bridge-*`
+  tool-result text even on bound conversations so `agy` executes or revises the plan cleanly.
+  `buildPlanExitToolCallBlock()` ensures a leading `# ` heading and uses monotonic
+  `agytc-bridge-plan-<seq>` IDs excluded from `parseMirrorCallId()`. (tests: `test/dsh-goal.test.ts`, `test/adapter.test.ts`)
+- **`/agy goal` 1:1 DSH GoalService parity**: `handleGoal` delegates to `ctx.goals`
+  (`GoalService`: `set`, `edit`, `pause`, `resume`, `complete`, `clear`) so `activation`
+  (`armed`/`disarmed`), `goal/changed` effects, and `roundsStarted` stay exact, makes
+  repeated transitions idempotent no-ops, and enforces DSH `goalProjectionDefinition`
+  fold invariants (including across `edit` events in `resolveSessionGoal()`). (tests: `test/commands.test.ts`, `test/phase2-client.test.ts`)
 - **The presence of `exit_plan_mode` in `options.tools` is NOT evidence of plan mode**:
   current DSH ships that tool in standard mode too. It only gates the synthetic-exit
   path, never the permission downgrade on its own.

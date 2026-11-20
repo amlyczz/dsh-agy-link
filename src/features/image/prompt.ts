@@ -92,14 +92,18 @@ export function parseImageReply(text: string): { path?: string; error?: string }
   return out
 }
 
-const IMAGE_PATH_RE = /(?<![\w:/])(?:file:\/\/)?(?:\/|~\/)[^\s"'`<>|]+?\.(?:png|jpe?g|webp|gif)\b/gi
+const IMAGE_PATH_RE = /(?<![\w:/])(?:file:\/\/\/?)?(?:[A-Za-z]:[\\/]|\\\\wsl\.localhost\\|\/|~\/)[^\s"'`<>|]+?\.(?:png|jpe?g|webp|gif|bmp)\b/gi
 
 /** Every image path mentioned in free text (absolute or `file://`). */
 export function extractImagePaths(text: string): string[] {
   const found: string[] = []
   const seen = new Set<string>()
   for (const m of text.matchAll(IMAGE_PATH_RE)) {
-    let p = m[0].trim().replace(/^file:\/\//, '')
+    let p = m[0].trim()
+    if (p.startsWith('file://')) {
+      p = p.slice(7)
+      if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1)
+    }
     if (p.startsWith('~/')) p = join(homedir(), p.slice(2))
     if (!isAbsolute(p)) continue
     if (seen.has(p)) continue

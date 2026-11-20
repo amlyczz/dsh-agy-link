@@ -3,10 +3,8 @@ import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistra
 import { QUOTA_REFRESH_DEDUP_MS, WARMUP_WRITE_TIMEOUT_MS, longRouteTimeout } from '../../../common/timeouts.ts'
 import type { WarmupResult } from '../../../host/warmup.ts'
 import { detectSystemProxy } from '../../../host/wincred.ts'
-import { openAccountTerminal } from '../../../host/runner.ts'
-import { isolatedHomeEnv } from '../../../host/runner.ts'
-import { writeMcpConfig } from '../../../host/mcp-bridge.ts'
-import { agyMcpConfigPath } from '../../../host/mcp-bridge.ts'
+import { isolatedHomeEnv, openAccountTerminal } from '../../../host/runner.ts'
+import { agyMcpConfigPath, registerBridgeMcpConfig } from '../../../host/mcp-bridge.ts'
 
 function handlePoolList(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, pool } = services
@@ -94,7 +92,7 @@ function handlePoolAdd(services: HostServices, req: unknown, res: unknown): void
           const cfg = getConfig()
           if (cfg.mcpConfigScope === 'global' || cfg.mcpConfigScope === 'both') {
             const accTarget = agyMcpConfigPath('', isolatedHomeEnv(acc.dir))
-            bridgeState.restores.push(writeMcpConfig(accTarget, bridgeState.bridge))
+            registerBridgeMcpConfig(bridgeState, accTarget)
           }
         }
         // Quarantine until the terminal login completes (same contract as
@@ -129,7 +127,7 @@ function handlePoolOpenTerminal(services: HostServices, req: unknown, res: unkno
 }
 
 function handlePoolRemove(services: HostServices, req: unknown, res: unknown): void {
-  const { pool, notifyPicker } = services
+  const { pool, store, notifyPicker } = services
       runRoute(res, async () => {
         if (methodOf(req) !== 'POST') {
           sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -137,7 +135,9 @@ function handlePoolRemove(services: HostServices, req: unknown, res: unknown): v
         }
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
-        pool.deleteAccount(id)
+        if (pool.deleteAccount(id)) {
+          store?.cleanupStaleAccounts?.(new Set(pool.getAccounts().map((a) => a.id)))
+        }
         // Deleting the active/primary account changes the effective account.
         notifyPicker()
         sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })

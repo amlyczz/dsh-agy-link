@@ -16,6 +16,7 @@ import { defaultMediaDir, stageImages, type ImageRefLike } from '../host/media.t
 import { stateDir } from '../common/config.ts'
 import type { CompactionNotice } from '../common/compaction.ts'
 import type { CallContext } from './call-context.ts'
+import { toolCallIdOf } from './continuation.ts'
 import type { PurposePolicy } from './purpose-policy.ts'
 import {
   buildDigest,
@@ -441,14 +442,25 @@ function buildChatPromptText(input: ChatPromptInput): string {
   // filtered out every user message (a pasted reminder block IS the task).
   const taskText = latestUserTaskText(messages) || latestUserMessageAny(messages)
   const dropToolPayloads = binding !== undefined
+  const isBridgeToolResult = (m: Message): boolean => {
+    if (!isToolResultMessage(m)) return false
+    const callId = toolCallIdOf(m)
+    return callId !== null && callId.startsWith('agytc-bridge-')
+  }
   const trailingText = effectiveTrailingUser
-    .filter((m) => !(dropToolPayloads && isToolResultMessage(m)))
+    .filter((m) => !(dropToolPayloads && isToolResultMessage(m) && !isBridgeToolResult(m)))
     .map(textOf)
     .map((s) => s.trim())
     .filter((s) => s !== '')
+  const hasBridgeToolResult = effectiveTrailingUser.some(isBridgeToolResult)
   const trailingJoined = trailingText.join('\n\n')
   let prompt: string
-  if (taskText !== '') {
+  if (hasBridgeToolResult && trailingJoined !== '') {
+    // A bridge-synthesized tool result (e.g. exit_plan_mode approval or keep-planning
+    // feedback) was executed by DSH, not agy — send it directly instead of repeating
+    // the earlier human prompt.
+    prompt = trailingJoined
+  } else if (taskText !== '') {
     prompt = trailingText.includes(taskText) || trailingJoined.includes(taskText)
       ? trailingJoined
       : (trailingJoined === '' ? taskText : taskText + '\n\n' + trailingJoined)

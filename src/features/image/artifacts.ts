@@ -190,6 +190,7 @@ export async function validateArtifact(
   }
 
 export async function copyArtifact(source: string, outPath: string): Promise<string> {
+    const absSource = isAbsolute(source) ? resolvePath(source) : resolvePath(source)
     const abs = isAbsolute(outPath) ? outPath : resolvePath(outPath)
     let target = abs
     try {
@@ -198,6 +199,7 @@ export async function copyArtifact(source: string, outPath: string): Promise<str
     } catch {
       // Not an existing path: treat it as the target file name.
     }
+    if (resolvePath(target) === absSource) return absSource
     await mkdir(dirname(target), { recursive: true })
     await copyFile(source, target)
     return target

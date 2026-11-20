@@ -9,6 +9,27 @@ import type { AccountPoolManager } from '../pool.ts'
 import type { PoolAuthFlow } from '../pool-auth.ts'
 import type { QuotaService } from '../quota.ts'
 
+export interface GoalViewLike {
+  id: string
+  revision: number
+  objective: string
+  phase: string
+  maxGoalRounds?: number
+  roundsStarted?: number
+  activation?: string
+  blockedReason?: { code?: string; message: string }
+}
+
+export interface GoalServiceLike {
+  get(agent: unknown): GoalViewLike | undefined
+  create(agent: unknown, req: { objective: string; maxGoalRounds?: number }): GoalViewLike
+  edit(agent: unknown, ref: { id: string; revision: number }, req: { objective: string }): GoalViewLike
+  pause(agent: unknown, ref: { id: string; revision: number }): GoalViewLike
+  resume(agent: unknown, ref: { id: string; revision: number }): GoalViewLike
+  complete(agent: unknown, ref: { id: string; revision: number }): GoalViewLike
+  clear(agent: unknown, ref: { id: string; revision: number }): unknown
+}
+
 export interface CommandDeps {
   cfg: () => PluginConfig
   bin: () => string | null
@@ -31,6 +52,8 @@ export interface CommandDeps {
   notifyPicker?: () => void
   runDoctor: () => Promise<string>
   sessions?: () => { get(id: unknown): unknown } | undefined
+  goals?: () => GoalServiceLike | undefined
+  agents?: () => { get(id: unknown): unknown } | undefined
 }
 
 /** Parsed invocation handed to every command group. */
@@ -48,7 +71,7 @@ export const HELP = [
   '**/agy** — Antigravity (agy CLI) bridge',
   '- `/agy status` — binary, version, auth, mode, catalog, bindings',
   '- `/agy pool` / `/agy accounts` — account pool, live quota %, cooldowns',
-  '- `/agy goal [status|complete|clear|pause]` — inspect or control the current DSH goal',
+  '- `/agy goal [status|set <obj>|edit <obj>|pause|resume|complete|clear]` — inspect or control the current DSH goal',
   '- `/agy session [info|clear]` — view or drop the current session agy binding',
   '- `/agy add-account [alias]` — start OAuth login for a new account slot',
   '- `/agy use <id>` — switch the active account immediately',
@@ -63,7 +86,7 @@ export const HELP = [
   '- `/agy import <refresh_token_or_json> [alias]` — import account via refresh token or token JSON',
   '- `/agy models` — refresh and list discovered models',
   '- `/agy mode <skip|plan|accept-edits>` — permission mode (next turn)',
-  '- `/agy effort <low|medium|high|default>` — default reasoning effort',
+  '- `/agy effort <low|medium|high|xhigh|max|default>` — default reasoning effort',
   '- `/agy dispatch [minutes|off]` — credential-slot wait cap per attempt (omit to inspect; `off` = unlimited)',
   '- `/agy dispatch-retries <n>` — extra dispatch attempts after the cap',
   '- `/agy parallel <on|off>` — same-account parallel agy runs (Windows slot fast path)',
