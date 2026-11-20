@@ -55,4 +55,7 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
 - 宽限期由 `idleGraceMinutes`（`DSH_AGY_IDLE_GRACE_MINUTES`）决定，默认 10 分钟，必须低于普通生成的空闲预算；`0` 关闭收割器，此时由活动看门狗与 `maxTurnMinutes` 兜底。
 - 收割器在**任意未完成工具步骤**期间挂起（不只是子代理类工具），最后一步完成后重新武装——`run_command` 启动的构建与子代理等待是同一类情形。
 - 教训：初版把「5 秒」当作经验值硬编码，而 agy 早已在日志里给出更可靠的判据。**能从协议里读到的信息，不要用时间猜。**
-- 锚点：`test/issue144-idle-grace.test.ts`（默认值/配置/环境变量/0 语义/工具挂起/正数不收割）、`test/background-task-hang.test.ts`（0 计数仍收割）。
+- **两种措辞都要解析**：`waiting for N background task(s)` 与 `waiting up to <duration> for N background task(s)`（agy 两种都会输出）。只匹配前者会让后者返回 `null`、从而在正数计数下仍然武装收割器（PR #147）。
+- **被收割的轮次必须留下可消费的收尾**：SIGTERM 时 agy 可能刷出 `{ ok: false, response: '' }` 空结果。判据是 `hasConsumableResult`（`ok` 或非空 `response`），不是裸 `hasResult`——否则恢复逻辑被跳过、而 `EventMapper` 又忽略空结果，最终仍是 `INVALID_OUTPUT`。
+- **死续接不得被重放**：settled recording 在续接点之后既无可消费 result、也无可切割工具步骤时，每次重试都会重驱同一份 recording（毫秒级失败直到耗尽）。`hasFinishableEventFrom(from, cutOnTool)` 让适配器遗忘它并新起尝试；注意判据必须包含**工具步骤**维度，只看 result 会把「工具步骤中途被切断」误判为死 recording 并重跑已完成的工作。
+- 锚点：`test/issue144-idle-grace.test.ts`（默认值/配置/环境变量/0 语义/工具挂起/正数不收割/up-to 措辞）、`test/background-task-hang.test.ts`（0 计数仍收割）、`test/idle-grace-empty-result-and-dead-continuation.test.ts`（空结果恢复 + 死续接遗忘）。

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.48 (2026-11-20)
+
+### English
+
+- **Fix(idle-grace): three linked causes of `INVALID_OUTPUT: agy stream ended without a result event` (merges PR #147).** Follow-up to #144/#146, from a report that the failure could still replay three times within milliseconds on continuation retries:
+  - **`waiting up to <duration> for N background task(s)`** is a second wording agy emits (e.g. `waiting up to 240m0s for 1 background task(s)`). `backgroundTasksFrom()` only matched `waiting for N`, so this variant returned `null` and the reaper was still armed for a positive count. The regex now accepts the optional `up to <duration>` segment.
+  - **An empty error result no longer hides the recoverable reply.** On SIGTERM agy can flush `{ ok: false, response: '' }`; `hasResult` counted that envelope, so the `idleGraceTerminated` recovery was skipped while `EventMapper` ignored the empty result without finishing. The guard is now `hasConsumableResult` (ok, or non-empty response), so a usable reply or the explicit notice is always appended.
+  - **A settled recording with no finishable event stops replaying.** When a continuation had no consumable result and no cuttable tool step after its resume point, every DSH retry re-drove the same dead recording (~20 ms each) until retries were exhausted. `hasFinishableEventFrom()` makes the adapter forget such a recording and spawn a fresh attempt instead. **This is the part that goes beyond what shipped in v0.6.47**, which only checked the result dimension — a recording cut mid-tool-step now resumes instead of re-running the work.
+- Note: v0.6.47 independently landed the first two items and the `recording` helpers; this merge keeps that structure and takes the wider adapter predicate plus PR #147's regression suite (4 new tests, 347 lines).
+
+### 中文
+
+- **修复(idle-grace)：`INVALID_OUTPUT: agy stream ended without a result event` 的三条关联成因（合并 PR #147）。** 是 #144/#146 的后续，源于「该失败在续接重试时仍会在毫秒级重复三次」的报告：
+  - **`waiting up to <duration> for N background task(s)`** 是 agy 的第二种措辞（例如 `waiting up to 240m0s for 1 background task(s)`）。`backgroundTasksFrom()` 只匹配 `waiting for N`，该变体返回 `null`，于是正数计数下收割器仍会被武装。正则现在接受可选的 `up to <duration>` 片段。
+  - **空的错误 result 不再掩盖可恢复的回复。** SIGTERM 时 agy 可能刷出 `{ ok: false, response: '' }`；`hasResult` 把这个信封算作结果，导致 `idleGraceTerminated` 的恢复逻辑被跳过，而 `EventMapper` 又忽略空结果、不置 finished。判据改为 `hasConsumableResult`（ok 或非空 response），因此总会补上可用回复或明确提示。
+  - **没有可完成事件的 settled recording 不再被重放。** 续接点在可消费 result 与可切割工具步骤之后都没有事件时，DSH 每次重试都会重驱同一份死 recording（每次约 20ms）直到重试耗尽。`hasFinishableEventFrom()` 让适配器遗忘这种 recording 并新起一次尝试。**这部分超出 v0.6.47 已发布的内容**——它只检查 result 维度；在工具步骤中途被切断的 recording 现在会续接，而不是重跑已有工作。
+- 说明：v0.6.47 已独立落地前两项与 `recording` 辅助方法；本次合并保留其结构，吸收更宽的适配器判据与 PR #147 的回归测试（4 条新用例，347 行）。
+
 ## 0.6.47 (2026-11-20)
 
 ### English
