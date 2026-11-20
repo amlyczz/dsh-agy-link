@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.50 (2026-11-21)
+
+### English
+
+- **Fix(watchdog): a scheduled wake-up no longer releases the idle-grace exemption on its own status line (fixes #148).** When agy hands work to the background it asks the model for a short status update before it prints the idle line, so the sequence was: tool returns `state === 'RUNNING'` → `text`/`thinking` step → `root agent idle; waiting …`. `text`/`thinking` cleared the subagent exemption and `RUNNING` counted as a completed hand-off, so nothing held the exemption when the idle line finally arrived.
+  - A `schedule` step that returns `RUNNING` is now tracked until it reports a terminal state, and that wait holds the exemption independently; a `text`/`thinking` step no longer cancels it (it still restores the normal idle *budget*, which is a different concern).
+  - **`run_command` is deliberately excluded.** agy also uses it for daemons (dev servers, watchers) that never report back, and reclaiming those is exactly what #119 exists for — #124's test pins that. A backgrounded *build* is protected by agy's own count instead (`waiting for N background task(s)` with N > 0 disarms the reaper, shipped in v0.6.46/0.6.48), which needs no exemption and cannot resurrect the daemon case.
+- **Fix(mcp-bridge): `/tools` now lists the caller's own tool surface (fixes #150).** The endpoint called `svc.schemas()` with no scope, so every tool registered inside a DSH preset (`present`, `todo_write`, `job_*`, `schedule_*`, `office_*`) was invisible to an allowlisted agy child even though `/call` could invoke it. The session→agent resolution that `/call` already performed is now a shared `resolveSessionAgent()` used by both endpoints, including the bare-sub-agent-key retry with the `session-` prefix.
+
+### 中文
+
+- **修复(watchdog)：定时唤醒不再因为自己的状态提示而解除 idle-grace 豁免（修复 #148）。** agy 把工作交给后台时，要求模型先发一句简短状态更新，然后才打印 idle 行，于是顺序是：工具返回 `state === 'RUNNING'` → `text`/`thinking` 步骤 → `root agent idle; waiting …`。而 `text`/`thinking` 会清掉子代理豁免，`RUNNING` 又被当作「已完成交接」，等 idle 行真正出现时已没有任何东西撑着豁免。
+  - 返回 `RUNNING` 的 `schedule` 步骤现在被跟踪到它有终态为止，这个等待**独立**持有豁免；`text`/`thinking` 不再取消它（它仍然负责把空闲**预算**恢复正常，那是另一件事）。
+  - **`run_command` 被刻意排除。** agy 也用它启动永不回报的守护进程（dev server、watcher），而回收这类进程正是 #119 存在的理由——#124 的测试锁定着这一点。而后台化的**构建**由 agy 自己的计数保护（`waiting for N background task(s)`，N > 0 时不武装收割器，v0.6.46/0.6.48 已发布），既不需要豁免，也不会把守护进程那一类放回来。
+- **修复(mcp-bridge)：`/tools` 现在列出调用者自己的工具面（修复 #150）。** 该端点用无 scope 的 `svc.schemas()`，导致注册在 DSH preset 里的工具（`present`、`todo_write`、`job_*`、`schedule_*`、`office_*`）对已加入白名单的 agy 子进程完全不可见，尽管 `/call` 其实能调用它们。`/call` 原本就有的 session→agent 解析被提取为共用的 `resolveSessionAgent()`，两个端点都用它，包括「裸子会话 key 加 `session-` 前缀重试」的行为。
+
 ## 0.6.49 (2026-11-20)
 
 ### English

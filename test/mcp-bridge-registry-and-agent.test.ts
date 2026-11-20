@@ -381,3 +381,56 @@ test('DSH send_message can be bridged when it is allowlisted', async () => {
     await bridge.close()
   }
 })
+
+test('issue #150: /tools lists preset-scoped tools for the spawning session', async () => {
+  // The bridge already forwards X-DSH-Session on /tools, and /call resolves it.
+  // /tools called svc.schemas() with no scope, so every tool registered inside a
+  // DSH preset (present, todo_write, schedule_*, office_*) was invisible to an
+  // allowlisted agy child even though it could actually call them.
+  const scoped = [
+    { name: 'present', description: 'present', parameters: { type: 'object', properties: {} } },
+    { name: 'schedule_create', description: 'schedule', parameters: { type: 'object', properties: {} } },
+  ]
+  const rootOnly = [
+    { name: 'progress_update', description: 'progress', parameters: { type: 'object', properties: {} } },
+  ]
+  const seen: unknown[] = []
+  const tools = {
+    schemas: (agent?: unknown) => {
+      seen.push(agent)
+      return agent === undefined ? rootOnly : scoped
+    },
+    execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    tools: () => tools,
+    allowlist: () => '',
+    resolveAgent: (sessionId) => (sessionId === 'session-9' ? { id: 'agent-9', session: sessionId } : undefined),
+  })
+  const list = async (headers: Record<string, string>): Promise<string[]> => {
+    const res = await fetch(bridge.url + '/tools', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.token, ...headers },
+      body: '{}',
+    })
+    const body = (await res.json()) as { tools: Array<{ dshName: string }> }
+    return body.tools.map((t) => t.dshName)
+  }
+  try {
+    const forSession = await list({ 'X-DSH-Session': 'session-9' })
+    assert.deepEqual(forSession, ['present', 'schedule_create'], 'the preset surface must be listed for the caller')
+    assert.deepEqual(seen.at(-1), { id: 'agent-9', session: 'session-9' })
+
+    // A bare sub-agent key is retried with the `session-` prefix, exactly as
+    // /call does — so `9` resolves via `session-9`.
+    assert.deepEqual(await list({ 'X-DSH-Session': '9' }), ['present', 'schedule_create'])
+    // A session nobody knows falls back to the root surface, never to a scope.
+    assert.deepEqual(await list({ 'X-DSH-Session': 'session-unknown' }), ['progress_update'])
+
+    // No header at all: root surface, unchanged.
+    assert.deepEqual(await list({}), ['progress_update'])
+  } finally {
+    await bridge.close()
+  }
+})

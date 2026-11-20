@@ -21,6 +21,20 @@ export interface ToolWatchdog {
  */
 const SUBAGENT_COLLAB_TOOLS = new Set(['invoke_subagent', 'send_message', 'run_workflow', 'swarm'])
 
+/**
+ * Tools that hand work to the BACKGROUND and return `state === 'RUNNING'` with a
+ * DETERMINISTIC finish: a scheduled wake-up reports back when its timer fires.
+ * The root agent idles until then, so the reaper stays suspended for the wait
+ * (issue #148).
+ *
+ * `run_command` is deliberately NOT here: agy also uses it for daemons (dev
+ * servers, watchers) that never report back, and reclaiming those is exactly
+ * what #119 exists for. A backgrounded BUILD is protected by agy's own count
+ * instead — `waiting for N background task(s)` with N > 0 keeps the reaper
+ * disarmed (see idle-line.ts).
+ */
+const BACKGROUND_WAIT_TOOLS = new Set(['schedule'])
+
 function resolveWatchdogBudgets(cfg: PluginConfig) {
   const longToolIdleMinutes = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes : 0
   let printTimeoutMinutes = Math.max(
@@ -56,6 +70,40 @@ function isToolStepCompleted(ev: Extract<AgyEvent, { kind: 'step' }>): boolean {
  * build, …) — issue #33 — so the watchdog raises the idle budget; bare
  * generation gets a bounded floor so a hung SSE stream can fail and rotate.
  */
+/**
+ * Tracks backgrounded hand-offs whose completion agy will report later
+ * (`schedule`). They hold the idle-grace exemption on their own: the mapper
+ * treats `RUNNING` as a completed hand-off, so they never appear in
+ * `openToolKeys`, yet the root agent is still waiting on them (issue #148).
+ */
+function createBackgroundWaits(onChange: () => void) {
+  const keys = new Set<string>()
+  return {
+    note(stepKey: string, name: string, state: string | undefined, completed: boolean): void {
+      if (!BACKGROUND_WAIT_TOOLS.has(name)) return
+      const before = keys.size
+      if (state === 'RUNNING') keys.add(stepKey)
+      else if (completed) keys.delete(stepKey)
+      if (keys.size !== before) onChange()
+    },
+    get active(): boolean {
+      return keys.size > 0
+    },
+    clear(): void {
+      keys.clear()
+    },
+  }
+}
+
+/** Heartbeat log line: what the turn is waiting on and for how long. */
+function heartbeatMessage(openCount: number, oldestAt: number, sinceOutput: number, longToolIdleMs: number): string {
+  const mins = Math.max(1, Math.round((Date.now() - (openCount === 0 && sinceOutput > 0 ? sinceOutput : oldestAt)) / 60_000))
+  const budget = Math.round(longToolIdleMs / 60_000) + 'm'
+  return openCount > 0
+    ? 'agy tool step still running: ' + openCount + ' open, oldest ' + mins + 'm (idle budget ' + budget + ') — the turn is waiting on agy'
+    : 'agy run still working: no new output for ' + mins + 'm (idle budget ' + budget + ') — the turn is waiting on agy; press Stop to cancel'
+}
+
 export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg: PluginConfig): ToolWatchdog {
   const openToolKeys = new Set<string>()
   const openToolSince = new Map<string, number>()
@@ -73,8 +121,9 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
   // last tool step completes, so a genuinely orphaned background job is still
   // reclaimed by the activity watchdog / maxTurnMinutes.
   let idleGraceExempt = false
+  const backgroundWaits = createBackgroundWaits(() => syncIdleGraceExempt())
   const syncIdleGraceExempt = (): void => {
-    const next = awaitingSubagent || openToolKeys.size > 0
+    const next = awaitingSubagent || openToolKeys.size > 0 || backgroundWaits.active
     if (next === idleGraceExempt) return
     idleGraceExempt = next
     runningProc?.exemptIdleGrace(next)
@@ -105,17 +154,7 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
       for (const startedAt of openToolSince.values()) {
         if (startedAt < oldest) oldest = startedAt
       }
-      // With no tool step open the interesting number is time since the LAST
-      // output, not since a tool start.
-      if (openToolKeys.size === 0 && lastOutputAt > 0) oldest = lastOutputAt
-      const mins = Math.max(1, Math.round((Date.now() - oldest) / 60_000))
-      log?.(
-        openToolKeys.size > 0
-          ? 'agy tool step still running: ' + openToolKeys.size + ' open, oldest ' + mins +
-            'm (idle budget ' + Math.round(longToolIdleMs / 60_000) + 'm) — the turn is waiting on agy'
-          : 'agy run still working: no new output for ' + mins + 'm (idle budget ' +
-            Math.round(longToolIdleMs / 60_000) + 'm) — the turn is waiting on agy; press Stop to cancel',
-      )
+      log?.(heartbeatMessage(openToolKeys.size, oldest, lastOutputAt, longToolIdleMs))
     }, TOOL_HEARTBEAT_MS)
     toolHeartbeat.unref?.()
   }
@@ -138,6 +177,11 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
         if (SUBAGENT_COLLAB_TOOLS.has(ev.tool.name)) {
           setAwaitingSubagent(!isStepFailedOrCanceled(ev))
         }
+        // A backgrounded hand-off keeps the root agent waiting even though the
+        // step counts as "completed" for mapper purposes (issue #148).
+        // Only the exemption changes here: the idle BUDGET keeps the normal
+        // generation window because the root agent runs no synchronous tool.
+        backgroundWaits.note(ev.stepKey, ev.tool.name, ev.state, isToolStepCompleted(ev))
         // Mirror mapper's completion rule: DONE/ERROR/CANCELED/RUNNING state, or legacy events
         // that carry output/error without an explicit state.
         const completed = isToolStepCompleted(ev)
@@ -159,6 +203,9 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
         // When the model resumes generating text or thinking, no tool is running synchronously.
         // Any previously open tool has completed or backgrounded. Clear openToolKeys so the
         // idle budget restores to normal generationIdleMs instead of staying raised.
+        // `backgroundWaitKeys` is deliberately NOT cleared: agy asks the model for a
+        // short status line BEFORE it prints the idle line, so this text is part of
+        // the wait, not the end of it (issue #148).
         if (openToolKeys.size > 0) {
           openToolKeys.clear()
           openToolSince.clear()
@@ -172,6 +219,7 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
       awaitingSubagent = false
       openToolKeys.clear()
       openToolSince.clear()
+      backgroundWaits.clear()
       syncIdleGraceExempt()
     },
   }

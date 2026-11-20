@@ -131,3 +131,11 @@ Each invariant below is enforced in code AND covered by a regression test.
 - Electron 宿主注入 `ELECTRON_RUN_AS_NODE=1`（同一二进制以纯 Node 运行，不建窗口）；普通 Node 宿主不加该变量（`node` 会忽略它，但少一个无意义的环境项更干净）。
 - 既有契约不变：`DSH_MCP_URL` / `DSH_MCP_TOKEN` / `DSH_MCP_PID` 仍在 `env` 里，`type: 'stdio'` 与 `args: [bridgeScript]` 不变。
 - 锚点：`test/issue140-mcp-electron-env.test.ts`（Electron / 普通 Node 两种宿主）。
+
+## MCP bridge 的两个端点必须用同一个调用者作用域（issue #150）
+
+`/tools` 与 `/call` 都代表「某个 DSH 会话里的 agy 子进程」行事，因此两者都必须解析 `X-DSH-Session` → agent：
+
+- 只给 `/call` 解析、`/tools` 不解析，会让**注册在 preset 内的工具**（`present`、`todo_write`、`job_*`、`schedule_*`、`office_*`）在列表里完全消失，即使已加入 `mcpToolAllowlist`——调用能成功、列表却看不见，属于最难排查的一类不一致。
+- 解析规则只有一处（`resolveSessionAgent()`）：先按原值查（裸子会话 key 不得改写），查不到且未带 `session-` 前缀时再试一次前缀形式。
+- 锚点：`test/mcp-bridge-registry-and-agent.test.ts`（session 作用域列表、裸 key 重试、未知 session 回落 root）。
