@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.46 (2026-11-20)
+
+### English
+
+- **Fix(idle-grace): a turn waiting on its own background work is no longer reaped (fixes #144, merges PR #146).** agy prints `root agent idle; waiting for N background task(s)` while it finishes a build, integration test or Docker job it launched. The reaper that guards against genuinely orphaned waits gave that line a **hard-coded 5 seconds** and then SIGTERM'd the whole tree, so healthy turns died mid-flight and surfaced as `agy stream ended without a result event` (`INVALID_OUTPUT`, retried three times with the same outcome). Two independent problems, both fixed:
+  - **The grace is configurable**: `idleGraceMinutes` / `DSH_AGY_IDLE_GRACE_MINUTES`, default **10 minutes** (deliberately below the normal generation idle budget so a real orphan is still reclaimed). `0` disables the reaper entirely, leaving the activity watchdog and `maxTurnMinutes` to bound the turn.
+  - **The reaper stays suspended while any tool step is open**, not just the subagent hand-offs from #124 — a `run_command` build is exactly the same situation. It re-arms when the last step completes.
+  - **The count agy prints is now authoritative** (maintainer follow-up on top of the PR): `N > 0` means agy knows work is still running, so the reaper is not armed at all — no grace length makes killing it correct. Only `N = 0` (or a line without a count) takes the grace path, which keeps the conservative behaviour for older builds and chunk boundaries. The parsing lives in `src/runtime/agy/idle-line.ts`.
+- Two existing tests encoded the old assumption (reap even with one pending task) and were split into "0 pending → reaped after grace" and "N pending → never reaped".
+
+### 中文
+
+- **修复(idle-grace)：等待自身后台任务的轮次不再被收割（修复 #144，合并 PR #146）。** agy 在等待自己派发的构建、集成测试或 Docker 任务时会打印 `root agent idle; waiting for N background task(s)`。负责回收真正僵尸等待的收割器给这一行**硬编码 5 秒**，随后 SIGTERM 整棵进程树，于是健康轮次被杀在半路，表现为 `agy stream ended without a result event`（`INVALID_OUTPUT`，退避重试三次仍是同一结局）。两个独立问题都已修复：
+  - **宽限期可配置**：`idleGraceMinutes` / `DSH_AGY_IDLE_GRACE_MINUTES`，默认 **10 分钟**（刻意低于普通生成的空闲预算，真正被遗弃的任务仍会被回收）。`0` 彻底关闭收割器，由活动看门狗与 `maxTurnMinutes` 兜底。
+  - **任意未完成的工具步骤期间收割器挂起**，不再只限 #124 的子代理交接——`run_command` 启动的构建是同一情形；最后一步完成后重新武装。
+  - **agy 自己打印的任务数现在具有权威性**（维护者在 PR 基础上补充）：`N > 0` 表示 agy 明确知道还有工作未完成，此时**完全不武装**收割器——任何宽限期长度都不足以让终止变得正确。只有 `N = 0`（或该行没有数字）才走宽限期路径，从而为旧版本与分块边界保留保守行为。解析逻辑位于 `src/runtime/agy/idle-line.ts`。
+- 两条既有测试固化了「即使有一个待完成任务也要收割」的旧假设，现拆为「0 个待完成 → 宽限期后收割」与「N 个待完成 → 永不收割」。
+
 ## 0.6.45 (2026-11-20)
 
 ### English

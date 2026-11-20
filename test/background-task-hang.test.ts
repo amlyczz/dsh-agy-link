@@ -23,8 +23,11 @@ test('startAgyProcess terminates on root agent idle grace period and sets idleGr
 })
 
 test('startAgyProcess also matches root agent idle waiting without up to duration', async () => {
+  // The count decides: 0 means nothing is left, so the reaper reclaims the
+  // child after its grace. (A positive count must NOT be reaped — that is
+  // issue #144 and is covered in test/issue144-idle-grace.test.ts.)
   const script = `
-    process.stderr.write('root agent idle; waiting for 1 background task(s) to finish\\n');
+    process.stderr.write('root agent idle; waiting for 0 background tasks to finish\\n');
     setTimeout(() => {}, 60000);
   `
   const proc = startAgyProcess({

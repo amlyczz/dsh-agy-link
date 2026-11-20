@@ -16,12 +16,15 @@ import { createToolWatchdog } from '../src/provider/tool-watchdog.ts'
 import type { AgyEvent } from '../src/common/types.ts'
 import type { RunningProcess } from '../src/host/runner.ts'
 
-const IDLE_LINE = 'root agent idle; waiting for 1 background task(s) to finish'
+// agy reports its OWN count of work still running. `0` means nothing is left,
+// so reclaiming after the grace is right; a positive count means the wait is
+// legitimate (see the positive-count test below).
+const IDLE_LINE = 'root agent idle; waiting for 0 background tasks to finish'
 
 /** A child that reports the idle line and then sits blocked, like agy waiting on a build. */
-function idleChild(idleGraceMs: number) {
+function idleChild(idleGraceMs: number, idleLine = IDLE_LINE) {
   const script = `
-    process.stderr.write(${JSON.stringify(IDLE_LINE)} + '\\n');
+    process.stderr.write(${JSON.stringify(idleLine)} + '\\n');
     setInterval(() => {}, 1000);
   `
   return startAgyProcess({
@@ -121,5 +124,35 @@ test('issue #144: a completed tool step never suspends the reaper', () => {
     assert.equal(calls.includes(true), false, 'a finished command must not hold the reaper off')
   } finally {
     wd.stop()
+  }
+})
+
+// ---- the reaper must read agy's own background-task count ----
+test('issue #144: a positive background-task count never arms the reaper', async () => {
+  // agy prints `root agent idle; waiting for 2 background task(s)` precisely
+  // when it KNOWS work it launched is still running. That is authoritative:
+  // waiting a grace period and then killing it is wrong no matter how long the
+  // grace is, so a positive count must not arm the reaper at all.
+  const parsers = await import('../src/runtime/agy/idle-line.ts')
+  assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting for 2 background task(s)'), 2)
+  assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting for 1 background task'), 1)
+  // Zero is the only count that means "nothing left; reclaim it".
+  assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting for 0 background tasks'), 0)
+  // Unparseable idleness still counts as idle — keep the old conservative path.
+  assert.equal(parsers.backgroundTasksFrom('root agent idle; waiting'), null)
+  assert.equal(parsers.backgroundTasksFrom('unrelated stderr'), null)
+})
+
+test('issue #144: a child waiting on its OWN background task is never reaped, however short the grace', async () => {
+  // This is the reported failure mode verbatim: agy says it is waiting for one
+  // task it launched (a build / integration test / Docker job). Killing it after
+  // any grace cuts a healthy turn, so the count — not the grace — decides.
+  const proc = idleChild(60, 'root agent idle; waiting for 1 background task(s) to finish')
+  try {
+    await new Promise((r) => setTimeout(r, 400))
+    assert.equal(proc.child.exitCode, null, 'a positive background count must keep the child alive')
+  } finally {
+    proc.kill('abort')
+    await proc.outcome.catch(() => undefined)
   }
 })

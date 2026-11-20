@@ -46,3 +46,13 @@ spawn 之前必须先定位 `agy`。`resolveAgyBin()` 返回 `null` 时，**必�
 - `agyBinDiagnostics(cfg)` 返回 `{ probed, configured, installHint }`；`agyNotInstalledMessage()` 据此生成错误文案，包含两种覆盖方式（`agyBin` 配置项、`DSH_AGY_BIN` 环境变量——后者在 `common/config.ts` 里映射进 `cfg.agyBin`）与 `/agy doctor` 指路。头部徽标与 doctor 报告复用同一信息。
 - 测试必须**注入 PATH**（`process.env.PATH` 临时替换）而不是假设宿主 PATH 的形态，否则在不同机器/CI 上会假失败。
 - 锚点：`test/agy-not-installed-diagnostics.test.ts`（候选顺序、PATH 探测、平台安装位置、`agyBin` 优先级、诊断载荷、错误文案、doctor 段落）。
+
+## 后台等待收割器（`src/runtime/agy/process.ts`, `idle-line.ts`, issues #124/#144）
+
+agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N background task(s)`。收割器的唯一目的是回收**僵尸等待**，绝不能误伤健康轮次。
+
+- **N 由 agy 报告，是权威信号**：`N > 0` → 不武装收割器（任何宽限期长度都不足以让终止变正确）；`N = 0` 或该行无数字 → 走宽限期路径。
+- 宽限期由 `idleGraceMinutes`（`DSH_AGY_IDLE_GRACE_MINUTES`）决定，默认 10 分钟，必须低于普通生成的空闲预算；`0` 关闭收割器，此时由活动看门狗与 `maxTurnMinutes` 兜底。
+- 收割器在**任意未完成工具步骤**期间挂起（不只是子代理类工具），最后一步完成后重新武装——`run_command` 启动的构建与子代理等待是同一类情形。
+- 教训：初版把「5 秒」当作经验值硬编码，而 agy 早已在日志里给出更可靠的判据。**能从协议里读到的信息，不要用时间猜。**
+- 锚点：`test/issue144-idle-grace.test.ts`（默认值/配置/环境变量/0 语义/工具挂起/正数不收割）、`test/background-task-hang.test.ts`（0 计数仍收割）。
