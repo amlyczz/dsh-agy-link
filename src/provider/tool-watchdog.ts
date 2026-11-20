@@ -66,13 +66,27 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
   let lastOutputAt = 0
   const TOOL_HEARTBEAT_MS = 5 * 60_000
   let toolHeartbeat: NodeJS.Timeout | null = null
+  // The orphan reaper must stay suspended while agy is legitimately waiting on
+  // work it launched — whether that is a subagent hand-off (#124) or ANY tool
+  // step still open: a build / test command routinely runs far longer than the
+  // old hard-coded 5 s grace (#144). The recording is re-armed as soon as the
+  // last tool step completes, so a genuinely orphaned background job is still
+  // reclaimed by the activity watchdog / maxTurnMinutes.
+  let idleGraceExempt = false
+  const syncIdleGraceExempt = (): void => {
+    const next = awaitingSubagent || openToolKeys.size > 0
+    if (next === idleGraceExempt) return
+    idleGraceExempt = next
+    runningProc?.exemptIdleGrace(next)
+  }
   const apply = (): void => {
     runningProc?.noteActivity(openToolKeys.size > 0 ? longToolIdleMs : generationIdleMs)
+    syncIdleGraceExempt()
   }
   const setAwaitingSubagent = (next: boolean): void => {
     if (awaitingSubagent === next) return
     awaitingSubagent = next
-    runningProc?.exemptIdleGrace(next)
+    syncIdleGraceExempt()
   }
   const stop = (): void => {
     if (toolHeartbeat !== null) {
@@ -109,7 +123,7 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
     printTimeoutMinutes,
     attach: (proc) => {
       runningProc = proc
-      proc?.exemptIdleGrace(awaitingSubagent)
+      proc?.exemptIdleGrace(idleGraceExempt)
       apply()
     },
     markEvent: () => {
@@ -155,9 +169,10 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
     },
     stop: () => {
       stop()
-      setAwaitingSubagent(false)
+      awaitingSubagent = false
       openToolKeys.clear()
       openToolSince.clear()
+      syncIdleGraceExempt()
     },
   }
 }

@@ -436,6 +436,11 @@ export async function startAttemptProcess(
       // re-armed by every output line, so a self-driving loop that keeps
       // printing never trips it. 0 disables (behaviour unchanged).
       maxTurnMs: cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined,
+      // A turn that legitimately waits on background work (a build, an
+      // integration test, a Docker job it launched) prints `root agent idle;
+      // waiting for N background task(s)`; the reaper must not treat that as an
+      // orphan after 5 s (issue #144). 0 disables the reaper.
+      idleGraceMs: cfg.idleGraceMinutes > 0 ? Math.round(cfg.idleGraceMinutes * 60_000) : 0,
       signal,
       env,
       stdinPayload: spawn.stdinPayload,
