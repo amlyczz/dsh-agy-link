@@ -14,6 +14,7 @@ export const zh = {
   'account.reauth': '重新登录', 'account.reauthing': '重登中', 'account.reauthTitle': '原位重新登录此账号（保留别名、代理与优先级）',
   'status.proxy': '代理', 'status.inUse': '当前使用',
   'account.add': '添加 Google 账号', 'account.aliasDefault': '备用 Google 账号 {number}', 'account.defaultAlias': '主账号（系统登录）',
+  'decision.quickFill': '💬 点击选项快速填入：', 'decision.insertTooltip': '点击填入: {text}', 'decision.insertPayload': '我选择 {choice}',
   'account.proxyPlaceholder': '专属代理 URL（如 http://127.0.0.1:7890，留空则继承全局）', 'account.aliasPlaceholder': '账号别名（例如：备用账号 2）', 'account.removeTitle': '移除此账号',
   'aria.aliasInput': '账号别名', 'aria.proxyInput': '专属代理 URL', 'aria.authCodeInput': '授权码或回调 URL', 'aria.closeToast': '关闭提示',
   'account.details': '明细', 'account.collapse': '收起',

@@ -14,6 +14,7 @@ export const es: AgyDictionary = {
   'account.reauth': 'Iniciar sesión de nuevo', 'account.reauthing': 'Iniciando...', 'account.reauthTitle': 'Reautenticar esta cuenta en su sitio (conserva alias, proxy y prioridad)',
   'status.proxy': 'Proxy', 'status.inUse': 'En uso',
   'account.add': 'Añadir cuenta de Google', 'account.aliasDefault': 'Cuenta de Google de respaldo {number}', 'account.defaultAlias': 'Cuenta principal (inicio de sesión del sistema)',
+  'decision.quickFill': '💬 Haz clic en una opción para rellenarla:', 'decision.insertTooltip': 'Insertar: {text}', 'decision.insertPayload': 'Elijo {choice}',
   'account.proxyPlaceholder': 'URL de proxy dedicada (p. ej., http://127.0.0.1:7890; déjalo vacío para heredar la global)', 'account.aliasPlaceholder': 'Alias de la cuenta (por ejemplo: Cuenta de respaldo 2)', 'account.removeTitle': 'Eliminar esta cuenta',
   'aria.aliasInput': 'Alias de la cuenta', 'aria.proxyInput': 'URL de proxy exclusivo', 'aria.authCodeInput': 'Código de autorización o URL de devolución', 'aria.closeToast': 'Cerrar notificación',
   'account.details': 'Detalles', 'account.collapse': 'Contraer',

@@ -14,6 +14,7 @@ export const ptBR: AgyDictionary = {
   'account.reauth': 'Entrar novamente', 'account.reauthing': 'Entrando...', 'account.reauthTitle': 'Reautenticar esta conta no lugar (mantém apelido, proxy e prioridade)',
   'status.proxy': 'Proxy', 'status.inUse': 'Em uso',
   'account.add': 'Adicionar conta Google', 'account.aliasDefault': 'Conta Google reserva {number}', 'account.defaultAlias': 'Conta principal (login do sistema)',
+  'decision.quickFill': '💬 Clique numa opção para preenchê-la:', 'decision.insertTooltip': 'Inserir: {text}', 'decision.insertPayload': 'Escolho {choice}',
   'account.proxyPlaceholder': 'URL de proxy dedicada (ex.: http://127.0.0.1:7890; deixe vazio para herdar a global)', 'account.aliasPlaceholder': 'Apelido da conta (por exemplo: Conta reserva 2)', 'account.removeTitle': 'Remover esta conta',
   'aria.aliasInput': 'Apelido da conta', 'aria.proxyInput': 'URL do proxy exclusivo', 'aria.authCodeInput': 'Código de autorização ou URL de retorno', 'aria.closeToast': 'Fechar notificação',
   'account.details': 'Detalhes', 'account.collapse': 'Recolher',

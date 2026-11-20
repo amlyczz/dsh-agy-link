@@ -119,3 +119,55 @@ test('403 PERMISSION_DENIED with VALIDATION_REQUIRED or TOS_VIOLATION is never m
   assert.equal(accountPollSuppressed(valAcc), true)
   assert.equal(shouldPollAccount(valAcc), false)
 })
+
+test('issue #151: fresh CLI quota data clears a stale quotaUnavailable marker', async () => {
+  // The CLI path returns before the REST/summary branch that owns
+  // clearQuotaUnavailable, so a marker written while the endpoint was down
+  // outlived the successful refresh: the panel kept claiming "quota endpoint
+  // unreachable · data from 19:02" while the stored quotas advanced past 22:44.
+  const { refreshAccountQuotaPipeline } = await import('../src/features/quota/refresh.ts')
+  const cleared: string[] = []
+  const updated: string[] = []
+  const pool = {
+    clearQuotaUnavailable: (id: string) => cleared.push(id),
+    updateAccountQuotas: (id: string) => updated.push(id),
+    clearAuthRequired: () => {},
+    noteDedicatedGroup: () => {},
+    clearQuotaFamily: () => {},
+    forgetDedicatedGroup: () => {},
+    clearCooldown: () => {},
+  }
+  const account = {
+    id: 'acc-151', alias: 'a', dir: '', createdAt: 1, enabled: true, cooldowns: {}, quotas: {},
+    quotaUnavailable: { reason: 'unreachable', since: 0, retryAfter: Date.now() - 1 },
+  } as never
+  const out = await refreshAccountQuotaPipeline({
+    shouldUseCli: () => true,
+    readCliUsageFamilies: async () => ({ google: { weeklyFraction: 0.4 } }),
+    detectEmailFromLogs: () => undefined,
+    pool: { ...pool, getAccounts: () => [] },
+  } as never, { ...(account as object), email: 'a@example.com' } as never, true)
+  assert.ok(out !== null, 'the CLI path returns its families')
+  assert.deepEqual(updated, ['acc-151'], 'the fresh quotas are stored')
+  assert.deepEqual(cleared, ['acc-151'], 'and the stale marker is cleared')
+})
+
+test('issue #151: a CLI read that yields nothing leaves the marker alone', async () => {
+  const { refreshAccountQuotaPipeline } = await import('../src/features/quota/refresh.ts')
+  const cleared: string[] = []
+  const pool = {
+    clearQuotaUnavailable: (id: string) => cleared.push(id),
+    updateAccountQuotas: () => {},
+    clearAuthRequired: () => {},
+  }
+  const account = { id: 'acc-2', alias: 'a', dir: '', createdAt: 1, enabled: true, cooldowns: {}, quotas: {} } as never
+  // Falling through to REST: no token, so the pipeline bails without touching it.
+  await refreshAccountQuotaPipeline({
+    shouldUseCli: () => true,
+    readCliUsageFamilies: async () => null,
+    getValidAccessToken: async () => null,
+    detectEmailFromLogs: () => undefined,
+    pool: { ...pool, getAccounts: () => [], dir: '' },
+  } as never, { ...(account as object), email: 'b@example.com' } as never, true)
+  assert.deepEqual(cleared, [], 'nothing was proven fresh, so nothing is cleared')
+})

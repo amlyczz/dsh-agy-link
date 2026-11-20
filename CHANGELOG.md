@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.51 (2026-11-21)
+
+### English
+
+- **Fix(quota): a successful CLI refresh now clears the stale `quotaUnavailable` marker (fixes #151).** The CLI-first path returns as soon as it has families, before the REST/summary branch that owns `clearQuotaUnavailable`. A marker written while the summary endpoint was down therefore outlived the successful refresh: the panel kept showing "quota refresh failed · endpoint unreachable · data from 19:02" while the stored quotas advanced past 22:44. Fresh CLI data is authoritative for this account, so the marker is cleared on that path too.
+- **Fix(client): the decision chips speak the host language (fixes #153, part 1).** `installDecisionChips()` injected hardcoded Simplified Chinese: the header, the button tooltips, and — worst of all — the text written into the composer, so an English-configured host received a Chinese prefix as its own prompt. The copy now goes through the plugin's `locale` binding with English fallbacks, and the four locales define `decision.quickFill` / `decision.insertTooltip` / `decision.insertPayload`. An existing test that asserted the Chinese payload was updated to assert the localized one.
+
+### 中文
+
+- **修复(额度)：CLI 刷新成功后清除陈旧的 `quotaUnavailable` 标记（修复 #151）。** CLI 优先路径拿到 families 就返回，早于拥有 `clearQuotaUnavailable` 的 REST/汇总分支。于是在汇总接口不可达期间写入的标记会比成功刷新活得更久：面板一直显示「配额刷新失败 · 接口不可达 · 数据停留在 19:02」，而存储的额度其实已推进到 22:44 之后。CLI 的新鲜数据对该账号是权威的，因此这条路径也要清除标记。
+- **修复(客户端)：决策芯片改用宿主语言（修复 #153 第一部分）。** `installDecisionChips()` 硬编码了简体中文：标题、按钮 tooltip，以及**最糟的**——直接写进输入框的文本，导致英文配置的宿主把中文前缀当作自己的 prompt。文案现在走插件的 `locale` 绑定并带英文兜底，四个语言都新增 `decision.quickFill` / `decision.insertTooltip` / `decision.insertPayload`。一条原本断言中文 payload 的既有测试已改为断言本地化后的文本。
+
 ## 0.6.50 (2026-11-21)
 
 ### English

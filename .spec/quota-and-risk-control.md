@@ -98,3 +98,11 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - 手动刷新（`force`）绕过压制，用户升级后可立即恢复。
 - UI 对 `no_summary_access` 显示「免费账号 · 仅限周配额」，不显示通用失败（四语言 locale）。
 - 锚点：`test/issue137-free-tier-summary.test.ts`（分类、两类压制边界、轮询不变式、周期常量）。
+
+## 刷新成功后必须清除 unavailable 标记（issue #151）
+
+`quotaUnavailable` 是「当前额度不可信」的标记，任何**真正拿到新鲜数据**的路径都必须清除它，而不只是 REST/汇总分支。
+
+- CLI 优先路径拿到 families 后**提前 return**，早于拥有 `clearQuotaUnavailable` 的汇总分支——于是接口故障期间写入的 `unreachable` 会一直残留，面板持续显示旧时间戳，而存储额度其实在推进。
+- 规则：**谁证明数据是新鲜的，谁负责清标记**。CLI 成功 → clear；汇总权威 → clear；只有「什么都拿不到」才保留/写入。
+- 锚点：`test/issue137-free-tier-summary.test.ts`（CLI 成功后清除；CLI 无数据时不动标记）。

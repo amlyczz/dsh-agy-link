@@ -174,6 +174,13 @@ export async function refreshAccountQuotaPipeline(
         deps.pool.forgetDedicatedGroup(account.id, 'argon')
         deps.pool.clearCooldown(account.id, 'argon')
       }
+      // The CLI just produced authoritative quotas for this account, so any
+      // marker recorded while the REST summary endpoint was down no longer
+      // describes reality. This path returns before the summary branch that owns
+      // clearQuotaUnavailable, which left the panel claiming "quota endpoint
+      // unreachable · data from <old time>" while the stored quotas kept
+      // advancing (issue #151).
+      deps.pool.clearQuotaUnavailable(account.id)
       deps.pool.updateAccountQuotas(account.id, cliFamilies, email)
       return cliFamilies
     }

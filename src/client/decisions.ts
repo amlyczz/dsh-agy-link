@@ -1,3 +1,4 @@
+import { NS } from './locales.ts';
 import { isInteractionLocked, onScrollSettle } from './scroll-guard.ts';
 
 // Interactive User Decision & Choice Quick-Actions for dsh-agy-link.
@@ -238,7 +239,9 @@ export function scanAndEnhanceDecisions(): void {
 
       const header = document.createElement('div');
       header.className = 'agy-decision-header';
-      header.innerHTML = '<span>💬 点击选项快速填入：</span>';
+      const headerLabel = document.createElement('span');
+      headerLabel.textContent = activeTranslate('decision.quickFill');
+      header.appendChild(headerLabel);
       box.appendChild(header);
 
       const chips = document.createElement('div');
@@ -248,7 +251,7 @@ export function scanAndEnhanceDecisions(): void {
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'agy-decision-chip';
-        chip.title = `点击填入: ${opt.fullText}`;
+        chip.title = activeTranslate('decision.insertTooltip', { text: opt.fullText });
 
         const numSpan = document.createElement('span');
         numSpan.className = 'agy-decision-chip-num';
@@ -264,7 +267,9 @@ export function scanAndEnhanceDecisions(): void {
         chip.onclick = (e) => {
           e.stopPropagation();
           const cleanText = opt.fullText.replace(/^[0-9]+[、.．:]\s*/, '').trim();
-          const insertPayload = `我选择 ${opt.num ? opt.num + ' ' : ''}${cleanText}`;
+          const insertPayload = activeTranslate('decision.insertPayload', {
+            choice: (opt.num ? opt.num + ' ' : '') + cleanText,
+          });
           insertTextIntoChatComposer(insertPayload);
 
           chip.classList.add('selected');
@@ -294,8 +299,41 @@ function scheduleDecisionScan(): void {
   }, 100);
 }
 
-export function installDecisionChips(): () => void {
+/**
+ * The plugin's translator, or an English fallback.
+ *
+ * The chip labels are user-facing copy, and `insertPayload` is written straight
+ * into the user's prompt: leaving them in Chinese made an English-configured
+ * host inject a Chinese prefix into the composer (issue #153).
+ */
+type Translate = (key: string, params?: Record<string, unknown>) => string;
+
+/** Active translator for the scan pass (module scope: the scan runs outside install). */
+let activeTranslate: Translate = (key, params) => {
+  const fallback: Record<string, string> = {
+    'decision.quickFill': '💬 Click an option to fill it in:',
+    'decision.insertTooltip': 'Insert: {text}',
+    'decision.insertPayload': 'I choose {choice}',
+  };
+  return (fallback[key] ?? key).replace(/\{(\w+)\}/g, (_, name: string) => String(params?.[name] ?? ''))
+};
+
+function translatorFor(ctx: unknown): Translate {
+  try {
+    const locale = (ctx as { locale?: { bind?: (ns: string) => Translate } } | undefined)?.locale;
+    const bound = locale?.bind?.(NS);
+    if (typeof bound === 'function') return bound;
+  } catch {
+    // A host without the locale service keeps the English defaults below.
+  }
+  // Fall back to the module-level English translator.
+  return activeTranslate;
+}
+
+export function installDecisionChips(ctx?: unknown): () => void {
   if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
+  activeTranslate = translatorFor(ctx);
+  const t = activeTranslate;
   // Same lifecycle contract as installImageEnhancer: a reload replaces the
   // observer instead of accumulating one per plugin load.
   decisionChipsDispose?.();

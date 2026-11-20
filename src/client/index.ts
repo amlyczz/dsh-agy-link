@@ -198,7 +198,7 @@ export function apply(ctx: ClientContext): void {
 	ctx.effect(() => installImageEnhancer(ctx));
 
 	// Interactive user decision & choice chips (recovered working tree).
-	ctx.effect(() => installDecisionChips());
+	ctx.effect(() => installDecisionChips(ctx));
 
 	// Interactive compaction card (DeepSeek Flash native visual parity + token delta metrics).
 	ctx.effect(() => installCompactionCard());

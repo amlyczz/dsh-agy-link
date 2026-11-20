@@ -485,7 +485,9 @@ test('decisions: chip click inserts the selected option and marks the chip', asy
 	scanAndEnhanceDecisions();
 	const chip = container.querySelector('.agy-decision-chip') as HTMLButtonElement;
 	await act(() => { chip.click(); });
-	assert.ok((ta as HTMLTextAreaElement).value.includes('我选择'));
+	// No locale service is installed here, so the English fallback copy is used
+	// (issue #153: the payload must follow the host language).
+	assert.ok((ta as HTMLTextAreaElement).value.includes('I choose'), 'the inserted payload is localized');
 	assert.ok(chip.classList.contains('selected'));
 	await act(async () => { await wait(10); }); // flush after click
 });

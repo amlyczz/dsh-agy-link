@@ -14,6 +14,7 @@ export const en: AgyDictionary = {
   'account.reauth': 'Sign in again', 'account.reauthing': 'Signing in...', 'account.reauthTitle': 'Re-authenticate this account in place (keeps alias, proxy and priority)',
   'status.proxy': 'Proxy', 'status.inUse': 'In use',
   'account.add': 'Add Google account', 'account.aliasDefault': 'Backup Google account {number}', 'account.defaultAlias': 'Primary account (system sign-in)',
+  'decision.quickFill': '💬 Click an option to fill it in:', 'decision.insertTooltip': 'Insert: {text}', 'decision.insertPayload': 'I choose {choice}',
   'account.proxyPlaceholder': 'Dedicated proxy URL (e.g. http://127.0.0.1:7890; leave blank to inherit global)', 'account.aliasPlaceholder': 'Account alias (for example: Backup account 2)', 'account.removeTitle': 'Remove this account',
   'aria.aliasInput': 'Account alias', 'aria.proxyInput': 'Dedicated proxy URL', 'aria.authCodeInput': 'Authorization code or callback URL', 'aria.closeToast': 'Dismiss notification',
   'account.details': 'Details', 'account.collapse': 'Collapse',
