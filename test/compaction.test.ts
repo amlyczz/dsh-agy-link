@@ -242,7 +242,7 @@ test('client scanAndEnhanceCompactionCards transforms modern markdown anchor int
 
     const button = row.children.find((c) => c.className.includes('agy-compaction-button'))!
     const body = row.children.find((c) => c.className.includes('agy-compaction-body'))!
-    assert.ok(button.innerHTML.includes('上下文已压缩'))
+    assert.ok(button.innerHTML.includes('Context compacted'))
     assert.ok(button.innerHTML.includes('243.5k → 200 tokens (-100%)'))
     assert.equal(body.style.display, 'none')
 
@@ -289,7 +289,7 @@ test('client scanAndEnhanceCompactionCards transforms legacy HTML marker into in
 
     const button = row.children.find((c) => c.className.includes('agy-compaction-button'))!
     const body = row.children.find((c) => c.className.includes('agy-compaction-body'))!
-    assert.ok(button.innerHTML.includes('上下文已压缩'))
+    assert.ok(button.innerHTML.includes('Context compacted'))
     assert.ok(button.innerHTML.includes('128.5k → 14.2k tokens (-89%)'))
     assert.equal(body.style.display, 'none')
 

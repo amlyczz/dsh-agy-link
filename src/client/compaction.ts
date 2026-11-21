@@ -1,5 +1,6 @@
 import { isInteractionLocked, onScrollSettle } from './scroll-guard.ts';
 import { formatTokenCount, calcTokenReduction, formatCompactionSummary } from '../common/compaction.ts';
+import { translateOr } from './i18n-bridge.ts';
 
 // Native-parity Compaction Card Presentation for dsh-agy-link.
 //
@@ -176,13 +177,16 @@ function injectStyles(): void {
   }
 }
 
-/** Check if document language is Chinese or English. */
+/**
+ * Card title, from the plugin's locale binding.
+ *
+ * `document.documentElement.lang` used to be consulted here as a shortcut, but it
+ * is DSH's page language rather than this plugin's locale, and it made the copy
+ * disagree with every other surface when the two differed. The binding is the
+ * authority; hosts without one get the English default (issue #153).
+ */
 function getCompactionTitle(): string {
-  if (typeof document !== 'undefined') {
-    const lang = document.documentElement.lang || '';
-    if (lang.startsWith('en')) return 'Context compacted';
-  }
-  return '上下文已压缩';
+  return translateOr('compaction.contextCompacted', 'Context compacted');
 }
 
 export function buildCompactionRow(notice: {

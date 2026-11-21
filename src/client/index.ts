@@ -22,6 +22,7 @@ import { agyModalStore } from './ui/Modal.ts';
 import { createSettingsSection } from './sections/SettingsSection.ts';
 import { createSessionStatus } from './sections/SessionStatus.ts';
 import type { LocaleLike } from './hooks/useTranslation.ts';
+import { bindTranslator } from './i18n-bridge.ts';
 
 export const name = 'dsh-agy-link-client';
 // Cordis inject entries are hard dependencies: accessing a service not listed
@@ -52,6 +53,11 @@ export function apply(ctx: ClientContext): void {
 	}, 'agy-link: status polling');
 	// locale is declared in inject — cordis guarantees ctx.locale (issue #24).
 	const locale = ctx.locale;
+	// One translator binding for the whole client surface: the DOM enhancers
+	// (image scanner, lightbox, decision chips, mermaid, compaction, toolview
+	// cards) are not React components and several have no ctx of their own
+	// (issue #153).
+	bindTranslator(ctx);
 	ctx.effect(() => {
 		const safeAddLanguage = (lang: { id: string; label: string; fallback: string }) => {
 			try {
@@ -198,7 +204,7 @@ export function apply(ctx: ClientContext): void {
 	ctx.effect(() => installImageEnhancer(ctx));
 
 	// Interactive user decision & choice chips (recovered working tree).
-	ctx.effect(() => installDecisionChips(ctx));
+	ctx.effect(() => installDecisionChips());
 
 	// Interactive compaction card (DeepSeek Flash native visual parity + token delta metrics).
 	ctx.effect(() => installCompactionCard());

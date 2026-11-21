@@ -1,6 +1,7 @@
 // Fullscreen image & media lightbox (modern glassmorphism, video player, zoom, pan, copy path, reveal in finder).
 import { injectStyles } from './styles.ts';
 import { isVideoFile, openInSystem } from './media.ts';
+import { translateOr } from '../i18n-bridge.ts';
 
 let lightboxOverlay: HTMLElement | null = null;
 let activeLightboxCleanup: (() => void) | null = null;
@@ -43,19 +44,19 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
   if (!isVideo) {
     const btnZoomIn = document.createElement('button');
     btnZoomIn.className = 'agy-lightbox-btn';
-    btnZoomIn.title = '放大 / Zoom In';
-    btnZoomIn.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg></span><span class="agy-btn-text">放大</span><span style="display:none">🔍+</span>';
+    btnZoomIn.title = translateOr('lightbox.zoomIn', 'Zoom in');
+    btnZoomIn.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.zoomInChip', 'Zoom in') + '</span><span style="display:none">🔍+</span>';
     btnZoomIn.onclick = (e) => { e.stopPropagation(); callbacks.onZoomIn(); };
 
     const btnZoomOut = document.createElement('button');
     btnZoomOut.className = 'agy-lightbox-btn';
-    btnZoomOut.title = '缩小 / Zoom Out';
-    btnZoomOut.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg></span><span class="agy-btn-text">缩小</span><span style="display:none">🔍-</span>';
+    btnZoomOut.title = translateOr('lightbox.zoomOut', 'Zoom out');
+    btnZoomOut.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.zoomOutChip', 'Zoom out') + '</span><span style="display:none">🔍-</span>';
     btnZoomOut.onclick = (e) => { e.stopPropagation(); callbacks.onZoomOut(); };
 
     const btnReset = document.createElement('button');
     btnReset.className = 'agy-lightbox-btn';
-    btnReset.title = '实际大小 / Reset (1:1)';
+    btnReset.title = translateOr('lightbox.reset', 'Actual size (1:1)');
     btnReset.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg></span><span class="agy-btn-text">1:1</span>';
     btnReset.onclick = (e) => { e.stopPropagation(); callbacks.onReset(); };
 
@@ -67,40 +68,40 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
   if (rawPath) {
     const btnOpen = document.createElement('button');
     btnOpen.className = 'agy-lightbox-btn';
-    btnOpen.title = '用系统默认应用打开 / Open with default app';
-    btnOpen.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span><span class="agy-btn-text">打开</span>';
+    btnOpen.title = translateOr('lightbox.openWithApp', 'Open with the default app');
+    btnOpen.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.openChip', 'Open') + '</span>';
     btnOpen.onclick = (e) => {
       e.stopPropagation();
       openInSystem(rawPath, false).then((res) => {
-        showToast(res.ok ? '已在系统应用中打开' : `打开失败: ${res.error || '未知错误'}`);
+        showToast(res.ok ? translateOr('lightbox.openedInApp', 'Opened in the system app') : translateOr('lightbox.openFailed', 'Could not open: {error}', { error: res.error || translateOr('lightbox.unknownError', 'unknown error') }));
       });
     };
     actions.appendChild(btnOpen);
 
     const btnReveal = document.createElement('button');
     btnReveal.className = 'agy-lightbox-btn';
-    btnReveal.title = '在访达 / 资源管理器中显示 (Reveal in File Manager)';
-    btnReveal.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></span><span class="agy-btn-text">定位</span>';
+    btnReveal.title = translateOr('lightbox.reveal', 'Reveal in the file manager');
+    btnReveal.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></span><span class="agy-btn-text">' + translateOr('lightbox.revealChip', 'Reveal') + '</span>';
     btnReveal.onclick = (e) => {
       e.stopPropagation();
       openInSystem(rawPath, true).then((res) => {
-        showToast(res.ok ? '已在文件管理器中定位' : `定位失败: ${res.error || '未知错误'}`);
+        showToast(res.ok ? translateOr('lightbox.revealed', 'Revealed in the file manager') : translateOr('lightbox.revealFailedDetail', 'Could not reveal: {error}', { error: res.error || translateOr('lightbox.unknownError', 'unknown error') }));
       });
     };
     actions.appendChild(btnReveal);
 
     const btnCopyPath = document.createElement('button');
     btnCopyPath.className = 'agy-lightbox-btn';
-    btnCopyPath.title = '复制完整文件路径';
-    btnCopyPath.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span><span class="agy-btn-text">复制路径</span>';
+    btnCopyPath.title = translateOr('lightbox.copyPath', 'Copy the full file path');
+    btnCopyPath.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span><span class="agy-btn-text">' + translateOr('lightbox.copyChip', 'Copy path') + '</span>';
     btnCopyPath.onclick = (e) => {
       e.stopPropagation();
       if (navigator.clipboard) {
         navigator.clipboard.writeText(rawPath).then(() => {
-          showToast('文件路径已复制到剪贴板');
-          btnCopyPath.innerHTML = '<span class="agy-btn-text">✓ 已复制</span>';
+          showToast(translateOr('lightbox.pathCopied', 'File path copied to the clipboard'));
+          btnCopyPath.innerHTML = '<span class="agy-btn-text">' + translateOr('lightbox.copiedChip', '✓ Copied') + '</span>';
           setTimeout(() => {
-            btnCopyPath.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span><span class="agy-btn-text">复制路径</span>';
+            btnCopyPath.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span><span class="agy-btn-text">' + translateOr('lightbox.copyChip', 'Copy path') + '</span>';
           }, 1500);
         }).catch(() => {});
       }
@@ -114,8 +115,8 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
 
   const btnClose = document.createElement('button');
   btnClose.className = 'agy-lightbox-btn agy-lightbox-btn-close';
-  btnClose.title = '关闭 (ESC)';
-  btnClose.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></span><span class="agy-btn-text">关闭</span><span style="display:none">✕ 关闭</span>';
+  btnClose.title = translateOr('lightbox.close', 'Close (ESC)');
+  btnClose.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.closeChip', 'Close') + '</span><span style="display:none">✕ ' + translateOr('lightbox.closeChip', 'Close') + '</span>';
   btnClose.onclick = (e) => { e.stopPropagation(); callbacks.onClose(); };
   actions.appendChild(btnClose);
 
@@ -133,7 +134,7 @@ function buildErrorCard(rawPath: string | undefined, src: string): HTMLElement {
 
   const errorTitle = document.createElement('div');
   errorTitle.className = 'agy-lightbox-error-title';
-  errorTitle.textContent = '无法直接预览媒体 / Media Preview Unavailable';
+  errorTitle.textContent = translateOr('lightbox.unavailableTitle', 'Preview unavailable');
 
   const errorDesc = document.createElement('div');
   errorDesc.className = 'agy-lightbox-error-desc';
@@ -141,7 +142,7 @@ function buildErrorCard(rawPath: string | undefined, src: string): HTMLElement {
 
   const errorHint = document.createElement('div');
   errorHint.className = 'agy-lightbox-error-hint';
-  errorHint.textContent = '文件可能正在生成中、已移动或格式需由外部应用呈现。';
+  errorHint.textContent = translateOr('lightbox.unavailableHint', 'The file may still be generating, may have moved, or needs an external app.');
 
   errorCard.appendChild(errorIcon);
   errorCard.appendChild(errorTitle);
@@ -154,10 +155,10 @@ function buildErrorCard(rawPath: string | undefined, src: string): HTMLElement {
 
     const btnOpen = document.createElement('button');
     btnOpen.className = 'agy-lightbox-btn';
-    btnOpen.textContent = '在访达/资源管理器中查找';
+    btnOpen.textContent = translateOr('lightbox.revealAction', 'Reveal in the file manager');
     btnOpen.onclick = () => {
       openInSystem(rawPath, true).then((r) => {
-        showToast(r.ok ? '已在文件管理器中定位' : '无法定位文件');
+        showToast(r.ok ? translateOr('lightbox.revealed', 'Revealed in the file manager') : translateOr('lightbox.revealFailed', 'Could not locate the file'));
       });
     };
     btnRow.appendChild(btnOpen);
@@ -251,7 +252,7 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
 
   const spinner = document.createElement('div');
   spinner.className = 'agy-lightbox-spinner';
-  spinner.innerHTML = '<div class="agy-lightbox-spinner-ring"></div><div class="agy-lightbox-spinner-text">加载媒体中...</div>';
+  spinner.innerHTML = '<div class="agy-lightbox-spinner-ring"></div><div class="agy-lightbox-spinner-text">' + translateOr('lightbox.loading', 'Loading media…') + '</div>';
 
   const errorCard = buildErrorCard(rawPath, src);
 
@@ -305,7 +306,7 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
 
   const hints = document.createElement('div');
   hints.className = 'agy-lightbox-hints';
-  hints.textContent = isVideo ? 'ESC 退出 · 点击空白处关闭' : 'ESC 退出 · 滚轮缩放 · 拖拽平移';
+  hints.textContent = isVideo ? translateOr('lightbox.hintClose', 'ESC to exit · click the backdrop to close') : translateOr('lightbox.hintZoom', 'ESC to exit · scroll to zoom · drag to pan');
   overlay.appendChild(hints);
   overlay.appendChild(body);
 

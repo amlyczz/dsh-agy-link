@@ -14,9 +14,10 @@ test('issue #153: decisions.ts no longer hardcodes the chip copy', () => {
   for (const literal of ['点击选项快速填入', '我选择', '点击填入:']) {
     assert.equal(src.includes(literal), false, `hardcoded copy still present: ${literal}`)
   }
-  // ...and it goes through the locale binding instead.
-  assert.match(src, /activeTranslate\('decision\.quickFill'\)/)
-  assert.match(src, /activeTranslate\('decision\.insertPayload'/)
+  // ...and it goes through the shared translator bridge instead.
+  assert.match(src, /i18n-bridge/)
+  assert.match(src, /translateOr\('decision\.quickFill'/)
+  assert.match(src, /translateOr\('decision\.insertPayload'/)
 })
 
 test('issue #153: every locale defines the decision keys', () => {

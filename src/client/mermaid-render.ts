@@ -8,6 +8,7 @@
 import { isInteractionLocked } from './scroll-guard.ts'
 import { isMermaidBlock, isMermaidLang } from './mermaid-config.ts'
 import { loadMermaid } from './mermaid-loader.ts'
+import { translateOr } from './i18n-bridge.ts';
 
 /** Banner infostring text ("mermaid") identifies the fence language. */
 function fenceLang(block: HTMLElement): string {
@@ -24,6 +25,8 @@ function fenceLang(block: HTMLElement): string {
 	const info = block.querySelector('[data-code-block-banner] [class*="infostring"]')
 		?? block.querySelector('[data-code-block-banner] [class*="language"]')
 	const text = (info?.textContent ?? '').trim().toLowerCase()
+	// `代码块` is DSH's own localized placeholder banner text, used here to DETECT
+	// "no real language label" — it must stay verbatim (issue #153).
 	if (text !== '' && text !== '代码块' && text !== 'code' && text !== 'code block') {
 		return text.split(/\s+/)[0] ?? ''
 	}
@@ -238,18 +241,18 @@ async function renderInto(block: HTMLElement, source: string, lang = ''): Promis
 		const toggleBtn = document.createElement('button')
 		toggleBtn.type = 'button'
 		toggleBtn.className = 'agy-mermaid-toggle'
-		toggleBtn.textContent = '查看源码'
-		toggleBtn.title = '切换图表与原始代码'
+		toggleBtn.textContent = translateOr('mermaid.viewSource', 'View source')
+		toggleBtn.title = translateOr('mermaid.toggle', 'Switch between the diagram and its source')
 		toggleBtn.addEventListener('click', (ev) => {
 			ev.preventDefault()
 			ev.stopPropagation()
 			const isSrc = block.getAttribute('data-agy-mermaid-view') === 'source'
 			if (isSrc) {
 				block.removeAttribute('data-agy-mermaid-view')
-				toggleBtn.textContent = '查看源码'
+				toggleBtn.textContent = translateOr('mermaid.viewSource', 'View source')
 			} else {
 				block.setAttribute('data-agy-mermaid-view', 'source')
-				toggleBtn.textContent = '查看图表'
+				toggleBtn.textContent = translateOr('mermaid.viewDiagram', 'View diagram')
 			}
 		})
 		toolbar.appendChild(toggleBtn)
@@ -272,7 +275,7 @@ async function renderInto(block: HTMLElement, source: string, lang = ''): Promis
 		} else {
 			// Explicit mermaid block: show clear warning without hiding the code block!
 			block.setAttribute('data-agy-mermaid', 'error')
-			mount.innerHTML = '<div class="agy-mermaid-warn">⚠️ Mermaid 图表解析失败，已保留原始代码呈现</div>'
+			mount.innerHTML = '<div class="agy-mermaid-warn">' + translateOr('mermaid.parseFailed', '⚠️ This Mermaid diagram could not be rendered; the source is kept below.') + '</div>'
 		}
 		} finally {
 			cleanupTempElements(id)

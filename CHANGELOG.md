@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.54 (2026-11-21)
+
+### English
+
+- **Fix(client): the rest of the DOM surfaces now speak the host language (fixes #153, part 2).** Part 1 localized the decision chips; this one covers the image chips and their toasts, the whole image lightbox (tooltips, button labels, loading and keyboard hints), the mermaid view-source toggle and parse warning, the compaction card title, and the question-card insert/recorded labels.
+  - **New `src/client/i18n-bridge.ts`**: these modules are plain DOM enhancers, not React components, and several have no `ctx` of their own (the lightbox is opened by the scanner). They now read one translator bound once in `index.ts`, with `translateOr(key, englishFallback)` guaranteeing copy instead of a bare key when no locale service exists. `decisions.ts` was migrated onto it, deleting its private copy of the same fallback logic.
+  - **`mermaid` keeps one Chinese literal on purpose**: `代码块` is DSH's own placeholder banner text, matched to DETECT "this banner carries no real language label". Translating it would break the detection.
+  - **`compaction` no longer reads `document.documentElement.lang`**: that is DSH's page language, not this plugin's locale, and the two can disagree — the binding is the authority now.
+- **Test(dx): hardened two timing guards in `test/proxy-keychain.test.ts`.** They measured machine load rather than the watchdog: a starved event loop on a busy host made a 5s guard fire before a 400ms timeout could settle, and one escalation test hung to the runner's 60s default. The guards are widened and now reap the child on overrun, while the assertions that bound the actual tick are unchanged.
+
+### 中文
+
+- **修复(客户端)：其余 DOM 界面也改用宿主语言（修复 #153 第二部分）。** 第一部分本地化了决策芯片；本次覆盖图片 chip 与其 toast、整个图片灯箱（tooltip、按钮文字、加载与键盘提示）、mermaid 的「查看源码」切换与解析失败警告、压缩卡片标题，以及问题卡片的填入/已记录文案。
+  - **新增 `src/client/i18n-bridge.ts`**：这些模块是纯 DOM 增强器而非 React 组件，其中几个根本没有自己的 `ctx`（灯箱由 scanner 打开）。它们现在统一读取在 `index.ts` 一次性绑定的 translator，`translateOr(key, 英文兜底)` 保证没有 locale 服务时输出文案而不是裸 key。`decisions.ts` 已迁移过来，删掉了它自己那份重复的兜底逻辑。
+  - **`mermaid` 刻意保留一处中文**：`代码块` 是 DSH 自己的占位 banner 文本，用来**识别**「该 banner 没有真实语言标签」。翻译它会破坏这段判断。
+  - **`compaction` 不再读 `document.documentElement.lang`**：那是 DSH 的页面语言，不是本插件的 locale，两者可能不一致——现在以 locale 绑定为准。
+- **测试(开发体验)：加固 `test/proxy-keychain.test.ts` 的两处时序守卫。** 它们实际在测机器负载而非看门狗：繁忙宿主上被饿死的事件循环会让 5 秒守卫早于 400ms 超时结算，另有一条升级用例会一直挂到 runner 的 60 秒默认超时。守卫已放宽，并在超时时主动回收子进程；约束真实 tick 的断言保持不变。
+
 ## 0.6.53 (2026-11-21)
 
 ### English

@@ -278,7 +278,13 @@ test('watchdog: stderr chatter does NOT keep an offline run alive', async () => 
     args: nodeChild('const t=Date.now();const i=setInterval(()=>{if(Date.now()-t>2000){process.exit(0)};console.error("noise")},100)'),
     timeoutMs: 400,
   })
-  const outcome = await Promise.race([p.outcome, new Promise<null>((r) => setTimeout(() => r(null), 5000))])
+  // A fully parallel `npm test` can starve the parent event loop: the child
+  // itself settles at ~400ms, so a 5s guard was measuring machine load, not the
+  // watchdog. Widen the guard (the assertion below still bounds the TICK, which
+  // is what the semantics are about) and reap the child if it ever overruns, so
+  // a starved host fails this test instead of hanging the whole run.
+  const outcome = await Promise.race([p.outcome, new Promise<null>((r) => setTimeout(() => r(null), 40000))])
+  if (outcome === null) p.kill('abort')
   assert.ok(outcome, 'run should settle')
   assert.equal(outcome!.timedOut, true)
   assert.ok(outcome!.durationMs < 2000, `took ${outcome!.durationMs}ms`)
@@ -356,13 +362,17 @@ test('Stop button: SIGTERM-ignoring children still die via SIGKILL escalation', 
       await new Promise((r) => setTimeout(r, 20))
     }
     p.kill('abort')
-    const outcome = await Promise.race([p.outcome, new Promise<null>((r) => setTimeout(() => r(null), 10000))])
+    // SIGTERM→SIGKILL escalates at 3s; the guard must cover that PLUS a cold
+    // Node start on a loaded host (seen at >10s under a parallel full run).
+    const outcome = await Promise.race([p.outcome, new Promise<null>((r) => setTimeout(() => r(null), 25000))])
     assert.ok(outcome, 'run should settle')
     assert.equal(outcome!.aborted, true)
     if (process.platform !== 'win32') {
       assert.equal(outcome!.signal, 'SIGKILL', `expected SIGKILL escalation, got ${outcome!.signal}`)
       assert.ok(outcome!.durationMs >= 2500, `escalated too early: ${outcome!.durationMs}ms`)
-      assert.ok(outcome!.durationMs < 8000, `escalated too late: ${outcome!.durationMs}ms`)
+      // durationMs spans spawn→exit, so it includes the child's cold start. Keep
+      // the "did not hang" bound generous rather than machine-dependent.
+      assert.ok(outcome!.durationMs < 20000, `escalated too late: ${outcome!.durationMs}ms`)
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })

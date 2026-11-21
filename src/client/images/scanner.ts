@@ -1,5 +1,6 @@
 // DOM scanner that turns rendered image/media alt-text and file links into previews and native file handlers.
-import { isInteractionLocked, onScrollSettle } from '../scroll-guard.ts';
+import { isInteractionLocked, onScrollSettle } from '../scroll-guard.ts'
+import { translateOr } from '../i18n-bridge.ts';
 import { buildMediaUrl, getOrigin, isImageFile, isVideoFile, isLocalFilePath, openInSystem } from './media.ts';
 import { openLightbox, showToast } from './lightbox.ts';
 import { injectStyles } from './styles.ts';
@@ -307,7 +308,7 @@ function enhanceAltSpans(): void {
 
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 'agy-image-thumb-wrap';
-      thumbWrap.title = `${altText || 'Image'} (点击全屏放大)`;
+      thumbWrap.title = translateOr('image.zoomHint', '{alt} (click to view full screen)', { alt: altText || 'Image' });
 
       const img = document.createElement('img');
       img.className = 'agy-image-thumb';
@@ -360,8 +361,8 @@ function enhanceImageLink(link: HTMLAnchorElement, rawHref: string, resolvedHref
     badge.className = 'agy-image-link-chip agy-image-link-icon';
     badge.setAttribute('role', 'button');
     badge.setAttribute('tabindex', '0');
-    badge.title = `预览图片 / Preview (${linkText})`;
-    badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;display:inline-block;"><path d="M1 8s3-5.5 7-5.5S15 8 15 8s-3 5.5-7 5.5S1 8 1 8z"/><circle cx="8" cy="8" r="2.5"/></svg></span><span class="agy-image-chip-text">预览</span>';
+    badge.title = translateOr('image.previewTitle', 'Preview ({name})', { name: linkText });
+    badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;display:inline-block;"><path d="M1 8s3-5.5 7-5.5S15 8 15 8s-3 5.5-7 5.5S1 8 1 8z"/><circle cx="8" cy="8" r="2.5"/></svg></span><span class="agy-image-chip-text">' + translateOr('image.previewChip', 'Preview') + '</span>';
 
     badge.onclick = (e) => {
       e.preventDefault();
@@ -399,8 +400,8 @@ function enhanceVideoLink(link: HTMLAnchorElement, rawHref: string, resolvedHref
     badge.className = 'agy-image-link-chip agy-chip-video agy-video-link-icon';
     badge.setAttribute('role', 'button');
     badge.setAttribute('tabindex', '0');
-    badge.title = `播放视频 / Play Video (${linkText})`;
-    badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></span><span class="agy-image-chip-text">播放</span>';
+    badge.title = translateOr('image.playTitle', 'Play video ({name})', { name: linkText });
+    badge.innerHTML = '<span class="agy-image-chip-icon"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></span><span class="agy-image-chip-text">' + translateOr('image.playChip', 'Play') + '</span>';
 
     badge.onclick = (e) => {
       e.preventDefault();
@@ -432,11 +433,13 @@ function enhanceFileLink(link: HTMLAnchorElement, rawHref: string, resolvedHref:
     e.stopPropagation();
     const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
     if (openInRightSidebar(pathToUse)) {
-      showToast(`已在原生边栏打开: ${fileName}`);
+      showToast(translateOr('file.openedInSidebar', 'Opened in the sidebar: {name}', { name: fileName }));
       return;
     }
     openInSystem(pathToUse, false).then((res) => {
-      showToast(res.ok ? `已在系统程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
+      showToast(res.ok
+        ? translateOr('file.openedInSystem', 'Opened in the system app: {name}', { name: fileName })
+        : translateOr('file.openFailed', 'Could not open: {error}', { error: res.error || translateOr('file.notFound', 'file not found') }));
     });
   });
 }
@@ -508,11 +511,13 @@ function handleGlobalLinkClick(e: MouseEvent): void {
     e.stopPropagation();
     const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
     if (openInRightSidebar(pathToUse)) {
-      showToast(`已在原生边栏打开: ${fileName}`);
+      showToast(translateOr('file.openedInSidebar', 'Opened in the sidebar: {name}', { name: fileName }));
       return;
     }
     openInSystem(pathToUse, false).then((res) => {
-      showToast(res.ok ? `已在系统程序中打开: ${fileName}` : `打开失败: ${res.error || '未找到文件'}`);
+      showToast(res.ok
+        ? translateOr('file.openedInSystem', 'Opened in the system app: {name}', { name: fileName })
+        : translateOr('file.openFailed', 'Could not open: {error}', { error: res.error || translateOr('file.notFound', 'file not found') }));
     });
   }
 }

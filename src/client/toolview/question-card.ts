@@ -4,6 +4,7 @@ import { insertTextIntoChatComposer } from '../decisions.ts';
 import { cls } from './format.ts';
 import { hx, react } from './runtime.ts';
 import type { MirrorCardModel } from './types.ts';
+import { translateOr } from '../i18n-bridge.ts';
 
 export function QuestionCardBody({ model }: { model: MirrorCardModel }): unknown {
 	const h = hx;
@@ -87,9 +88,11 @@ export function QuestionCardBody({ model }: { model: MirrorCardModel }): unknown
 					onInsert();
 				},
 			},
-				inserted ? '✓ 已填入对话框' : '💬 填入对话框 / Insert into Chat'
+				inserted
+					? translateOr('question.inserted', '✓ Inserted into the chat')
+					: translateOr('question.insert', '💬 Insert into the chat')
 			),
-			model.output ? h('div', { className: 'agy-tv-q-answered' }, `已记录: ${model.output}`) : null
+			model.output ? h('div', { className: 'agy-tv-q-answered' }, translateOr('question.recorded', 'Recorded: {value}', { value: String(model.output) })) : null
 		)
 	);
 }

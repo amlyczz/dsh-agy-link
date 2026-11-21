@@ -70,4 +70,7 @@
 - 形态：模块级 `activeTranslate`（`install*` 时由 `ctx.locale.bind(NS)` 注入），并提供英文兜底，使无 locale 服务的宿主（SSR/测试）仍可用。
 - 新增键必须四个语言齐全（`en`/`zh`/`es`/`ptBR`），英文值不得含中日韩字符。
 - 测试要锁两件事：源码里不再出现该文案的字面量；四个 locale 都定义了对应键。
-- 锚点：`test/issue153-decision-locale.test.ts`、`test/client-dom.test.ts`（插入 payload 已本地化）。
+- **统一入口**：`src/client/i18n-bridge.ts` 的 `translateOr(key, englishFallback, params)`。客户端 DOM 增强器（图片 chip、灯箱、mermaid、压缩卡片、问题卡片、决策芯片）不是 React 组件，多数没有自己的 `ctx`，全部读 `index.ts` 里一次性 `bindTranslator(ctx)` 建立的绑定；没有绑定（SSR/测试）时输出英文兜底，**绝不输出裸 key**。
+- **不要翻译用于「识别」的文本**：例如 mermaid 里 `代码块` 是 DSH 的占位 banner 文案，用来判断 banner 是否携带真实语言标签；翻译它等于破坏检测逻辑。
+- **不要用 `document.documentElement.lang` 代替 locale 绑定**：那是 DSH 页面语言，与插件 locale 可能不一致。
+- 锚点：`test/issue153-decision-locale.test.ts`、`test/issue153-client-locale.test.ts`（源码无中文字面量 + 四语言键齐全 + 兜底语义）、`test/client-dom.test.ts`（插入 payload 已本地化）。

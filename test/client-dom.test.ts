@@ -178,12 +178,12 @@ test('lightbox: opens with title/alt, zoom controls and closes through the butto
 	assert.ok(document.querySelector('.agy-lightbox-btn-close'), 'close button');
 	assert.ok(document.querySelector('.agy-lightbox-actions'), 'actions');
 	// Copy-path button only exists when a raw path is supplied.
-	const copyBtn = Array.from(document.querySelectorAll('.agy-lightbox-btn')).find((b) => (b.textContent ?? '').includes('复制路径')) as HTMLButtonElement;
+	const copyBtn = Array.from(document.querySelectorAll('.agy-lightbox-btn')).find((b) => (b.textContent ?? '').includes('Copy path')) as HTMLButtonElement;
 	assert.ok(copyBtn, 'copy path button');
 	await act(() => { copyBtn.click(); });
 	await wait(0);
 	assert.deepEqual(clipboardWrites, ['/tmp/a.png']);
-	assert.ok(copyBtn.textContent?.includes('已复制'));
+	assert.ok(copyBtn.textContent?.includes('Copied'));
 
 	// Zoom in / out / reset mutate the wrapper transform.
 	const wrap = document.querySelector('.agy-lightbox-img-wrap') as HTMLElement;
@@ -607,7 +607,9 @@ test('compaction: locked DOM is skipped; buildCompactionRow title follows lang',
 	assert.ok((en.querySelector('.agy-compaction-title') as HTMLElement).textContent?.includes('Context compacted'));
 	document.documentElement.lang = 'zh';
 	const zh = buildCompactionRow({ beforeTokens: 100, afterTokens: 40 });
-	assert.ok((zh.querySelector('.agy-compaction-title') as HTMLElement).textContent?.includes('上下文已压缩'));
+	// No locale binding is installed in these DOM tests, so the English default
+	// is expected regardless of `document.documentElement.lang` (issue #153).
+	assert.ok((zh.querySelector('.agy-compaction-title') as HTMLElement).textContent?.includes('Context compacted'));
 });
 
 test('compaction: installer (complete + loading) and dispose', async () => {
@@ -802,7 +804,7 @@ test('question card: options + insert button fill the composer', async () => {
 	await act(() => { (container.querySelectorAll('.agy-tv-q-opt')[0] as HTMLButtonElement).click(); });
 	await act(() => { (container.querySelector('.agy-tv-q-insert-btn') as HTMLButtonElement).click(); });
 	assert.ok((ta as HTMLTextAreaElement).value.includes('A'));
-	assert.ok((container.querySelector('.agy-tv-q-insert-btn') as HTMLElement).textContent?.includes('已填入'));
+	assert.ok((container.querySelector('.agy-tv-q-insert-btn') as HTMLElement).textContent?.includes('Inserted'));
 	await act(async () => { await wait(10); }); // wait for react render
 	await act(() => { root.unmount(); });
 });
