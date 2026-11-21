@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.57 (2026-11-22)
+
+### English
+
+- **Fix(failover): full-chain quota exhaustion failover alignment across main runs, embedded subagents, delegated tools, auxiliary routes, translation, image generation, and ACP.**
+  - **Authoritative quota refusal detection & partial-response safety**: Extended `looksLikeHardRateLimit` / `parseResetDurationMs` (`"quotaResetDelay"`, `reset after`, `Individual quota reached`, `QUOTA_EXHAUSTED`), added `isTransientBurstRateLimit` (<= 30s `RATE_LIMIT_EXCEEDED` burst guard), `extractQuotaErrorModel`, `isHardQuotaResultError`, and `isNonConsumableResultError`. `EventMapper`, `attempt-outcome.ts`, `oneshot.ts`, and ACP no longer soft-finish partial responses carrying a hard quota refusal — they cool down the exact exhausted model family and rotate cleanly.
+  - **Live subagent & tool quota failover (`src/provider/quota-failover.ts`, `SubagentTracker`)**: Tails parent `SYSTEM_MESSAGE` errors and subagent `ERROR`/`FAILED` transcripts (with resumed-run EOF baselining and strict provenance checks) plus `generate_image`/`invoke_subagent`/`swarm`/`run_workflow` tool failures; cools the exhausted family and interrupts stuck runs with `ERR_RATE_LIMIT` whenever an eligible spare account exists, while keeping `TOS_VIOLATION` non-rotatable.
+  - **Auxiliary, one-shot, image & translation parity**: Scaled `providerRetryPolicyFor` and `canRetryAuxQuota` across pool depth (`isAux` fails over inside `streamWithEffortRetry`), aligned `runAgyOnce` (`oneshot.ts`), `ImageService`, `TranslationService`, and `isQuotaBenched` (`quotaGateClearedAt` & per-model exhaustion).
+- **Docs: updated READMEs, configuration/architecture/known-gaps/security guides, and refreshed all `docs/assets/*.png` screenshots (PII-redacted) for v0.6.55–v0.6.57.**
+
+### 中文
+
+- **修复(容灾)：主代理、内嵌子代理、委派工具、辅助路由、翻译、生图与 ACP 全链路额度耗尽自动切号对齐。**
+  - **权威硬配额识别与部分响应拦截**：扩展 `looksLikeHardRateLimit` 与 `parseResetDurationMs`（支持 `quotaResetDelay`、`reset after`、`Individual quota reached`、`QUOTA_EXHAUSTED`），新增 30 秒内瞬时突发过滤 `isTransientBurstRateLimit`、模型提取 `extractQuotaErrorModel` 及 `isHardQuotaResultError` / `isNonConsumableResultError`。`EventMapper`、`attempt-outcome.ts`、`oneshot.ts` 与 ACP 不再将携带硬配额报错的部分输出当作正常回合放行，而是按精确模型族与服务端重置时间冷却并切号。
+  - **子代理与工具实时额度切号（`src/provider/quota-failover.ts`、`SubagentTracker`）**：严格按来源监听父对话 `SYSTEM_MESSAGE`、子代理 `ERROR`/`FAILED` transcript（含续跑 EOF 基线防重放）及 `generate_image`/`invoke_subagent`/`swarm`/`run_workflow` 工具失败；存在可用备用账号时立即冷却耗尽族并以 `ERR_RATE_LIMIT` 中断卡死回合切号，同时保留 `TOS_VIOLATION` 防跨号连坐保护。
+  - **辅助通道、一次性调用、生图与翻译对齐**：将 `providerRetryPolicyFor` / `canRetryAuxQuota` 按号池深度扩展（`isAux` 在 `streamWithEffortRetry` 内自动换号），并对齐 `runAgyOnce`、`ImageService`、`TranslationService` 与 `isQuotaBenched`（尊重 `quotaGateClearedAt` 与单模型耗尽）。
+- **文档：同步更新中英文 README、配置/架构/已知限制/安全文档，并全面刷新脱敏后的最新版界面截图（`docs/assets/*.png`）。**
+
 ## 0.6.56 (2026-11-22)
 
 ### English
