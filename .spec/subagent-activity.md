@@ -18,7 +18,8 @@ createAttemptRecorder(deps, cfg, account, initialConversationId)   src/provider/
               → rec.append(ev) + watchdog.markEvent()（真实进度喂狗）
 ```
 
-`EventMapper` 把 `stepKind:'subagent'` 收敛成一条 `[agy subagent]` 横幅 + 逐行进度，避免每个子代理各起一个 reasoning 块。
+- `EventMapper` 把 `stepKind:'subagent'` 收敛成一条 `[agy subagent]` 横幅 + 逐行进度，避免每个子代理各起一个 reasoning 块；来自 `TaskActivityTracker` 的 `[后台任务 · <taskId>]` / `[后台通知 · <sender>]` 事件走同一通道并喂活看门狗。
+- `SubagentTracker` 现在同时委托 `TaskActivityTracker`（`src/features/subagent/task-activity.ts`）增量 tail 主会话 `.system_generated/tasks/*.log` 与 `.system_generated/messages/{,undelivered/}*.json`，并在 `runAcpAttempt` 与 `runAgyAttempt` 两条传输路径统一启用；`RUNNING` 工具卡片在 `presentMirrorResult` 与 `EventMapper` 保留可结束切卡语义的同时补充后台任务日志/定时器提示。
 
 ## 2. 不变式
 
@@ -42,3 +43,9 @@ DSH 会在工具结果之后追加**宿主生成**的上下文消息。各生产
 - 边界仍必须严格：真实用户文本（无 `source` 或 `kind === 'user'`）、其他 provider 的工具结果、以及任何未知形态都会**终止**扫描——跨过它们去重放会为错误的请求续接旧 run。
 - 既有约定保持不变：`kind: 'plugin'` 且 `form` 为 `instructions` / `notice` / `relay` / `recall` 的**带文本**消息仍视为携带新指令，不跳过。
 - 锚点：`test/adapter.test.ts` 的 `detectContinuation permits only trailing plugin snapshots…`（旧约定）与 `issue #138: DSH context messages never make a tool continuation look like a user steer`（新增三类上下文）。
+
+## 后台任务可见性与「中断」判定的真实性（PR #155）
+
+- **实时可见**：转后台的 `run_command` 任务日志（`.system_generated/tasks/*.log`）与完成/取消通知（`.system_generated/messages/{,undelivered/}*.json`）必须被增量跟随，而不是等到回合结束；ACP 运行同样要启用 tracker（`runAcpAttempt` 曾漏配）。跟随实现需满足：UTF-8 多字节安全、单次读取有界、续跑时以 EOF 为基线（避免重放历史）、消息按 id 去重、`stop()` 做最终同步 flush。
+- **中断横幅只对真正被中断的回合**：前一轮**已产出可消费结果**（`hasConsumableResult`）时，收尾超过 1.5 秒只是正常 shutdown，**不得**设置 `binding.interrupted` 或注入「上一轮被中断」文案——否则会对一个已经作答的回合说谎，并污染下一轮的上下文。
+- 锚点：`test/background-task-visibility.test.ts`（371 行：跟随、去重、续跑基线、可消费结果不标中断）。

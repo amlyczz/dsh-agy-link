@@ -13,6 +13,7 @@ import {
   type AgyEvent,
 } from '../../common/types.ts'
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
+import { TaskActivityTracker } from './task-activity.ts'
 
 export interface SubagentQuotaExhaustedInfo {
   source: 'subagent-transcript' | 'parent-system-message' | 'tool-step'
@@ -247,6 +248,7 @@ export class SubagentTracker {
   private brainDir: string | null = null
   private readonly trackedSubagents = new Map<string, TrackedSubagent>()
   private readonly seenStepKeys = new Set<string>()
+  private readonly taskActivity: TaskActivityTracker
   private timer: NodeJS.Timeout | null = null
   private active = false
   private polling = false
@@ -258,6 +260,7 @@ export class SubagentTracker {
     this.conversationId = opts.conversationId ?? ''
     this.accountHome = opts.accountHome
     this.pollIntervalMs = opts.pollIntervalMs ?? 500
+    this.taskActivity = new TaskActivityTracker(opts.log)
   }
 
   /** Follow the conversation agy reported in its stream-json init/result envelope. */
@@ -268,6 +271,7 @@ export class SubagentTracker {
     this.baselined = false
     this.parentCursor = createTranscriptCursor()
     this.parentLines = 0
+    this.taskActivity.reset()
     if (this.active) {
       if (this.opts.resumed === true) {
         this.baselined = true
@@ -299,6 +303,7 @@ export class SubagentTracker {
       if (!this.brainDir) return
       const parentLog = join(this.brainDir, '.system_generated', 'logs', 'transcript.jsonl')
       this.parentCursor = createTranscriptCursor(fileSizeOrZero(parentLog))
+      this.taskActivity.baseline(this.brainDir)
       this.scanSubagentsForConv(this.conversationId, true)
       for (const cid of Array.from(this.trackedSubagents.keys())) {
         this.scanSubagentsForConv(cid, true)
@@ -309,10 +314,16 @@ export class SubagentTracker {
   }
 
   stop(): void {
-    this.active = false
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
+    try {
+      if (this.active && !this.polling && this.conversationId !== '') {
+        this.poll()
+      }
+    } finally {
+      this.active = false
+      if (this.timer) {
+        clearInterval(this.timer)
+        this.timer = null
+      }
     }
   }
 
@@ -333,6 +344,9 @@ export class SubagentTracker {
       if (!this.brainDir) return
 
       this.pollParentTranscript()
+      this.taskActivity.poll(this.brainDir, (ev) => {
+        this.emitSubagentEvent(ev.stepKey, ev.text, ev.raw)
+      })
 
       // Collect directories to inspect for subagents
       const convsToScan = [this.conversationId, ...Array.from(this.trackedSubagents.keys())]

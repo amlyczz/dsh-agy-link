@@ -25,6 +25,32 @@ import { buildToolCallBlock } from './tool-block.ts'
 import { usageFromRaw } from './usage.ts'
 import type { ToolCallState } from './tool-calls.ts'
 
+function formatRunningToolFallback(toolName: string, rawArgs: unknown): string {
+  const unwrapped = unwrapMcpTool(toolName, rawArgs)
+  const a = unwrapped.input
+  const str = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = a[k]
+      if (typeof v === 'string' && v.trim() !== '') return v.trim()
+      if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+    }
+    return ''
+  }
+  if (unwrapped.tool === 'schedule') {
+    const cron = str('CronExpression', 'cron_expression')
+    const dur = str('DurationSeconds', 'duration_seconds')
+    const prompt = str('Prompt', 'prompt')
+    const timing = cron ? `cron ${cron}` : dur ? `${dur}s timer` : 'schedule'
+    return prompt ? `Schedule active (${timing}): ${prompt}` : `Schedule active (${timing})`
+  }
+  const cmd = str('CommandLine', 'command_line', 'command', 'cmd')
+  const taskId = str('TaskId', 'taskId', 'task_id', 'bgTaskId')
+  if (cmd !== '') {
+    return `Tool is running as a background task${taskId ? ` (${taskId})` : ''}: ${cmd}`
+  }
+  return taskId ? `Tool is running as a background task (${taskId})` : 'Tool is running as a background task'
+}
+
 export interface EventMapperOptions {
   /** Run whose event indices mint mirror callIds. */
   runId: string
@@ -376,8 +402,8 @@ export class EventMapper {
           }
           return
         }
-        if (ev.state === 'RUNNING' && ev.tool.output === undefined) {
-          ev.tool.output = ev.text !== '' ? ev.text : 'Tool is running as a background task'
+        if (ev.state === 'RUNNING' && (ev.tool.output === undefined || ev.tool.output === '')) {
+          ev.tool.output = ev.text !== '' ? ev.text : formatRunningToolFallback(ev.tool.name, ev.tool.args)
         }
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)

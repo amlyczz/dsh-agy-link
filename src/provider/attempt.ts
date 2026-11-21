@@ -231,6 +231,7 @@ export interface AttemptRecorder {
   streamCid: string | null
   printTimeoutMinutes: number
   attachProcess: (proc: RunningProcess) => void
+  startTracker?: () => void
   feedLine: (line: string, onEvent: ((ev: AgyEvent) => void) | undefined, onFirstEvent: (() => void) | undefined) => void
   drain: (onEvent: ((ev: AgyEvent) => void) | undefined) => void
   flushTracker: () => void
@@ -295,6 +296,9 @@ export function createAttemptRecorder(
       tracker?.start()
       if (pendingQuotaKill) proc.kill('quota')
       void proc.outcome.finally(() => tracker?.stop())
+    },
+    startTracker: () => {
+      tracker?.start()
     },
     feedLine: (line, onEvent, onFirstEvent) => {
       watchdog.markEvent()
