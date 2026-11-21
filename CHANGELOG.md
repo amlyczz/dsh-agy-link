@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.53 (2026-11-21)
+
+### English
+
+- **Feat(settings): the model list becomes a tick-list over the real selectable universe (merges PR #149, closes #131).** The "Model visibility" block was a deny-list of chips fed only by `agy models`, so a host without the CLI offered the 7 static fallback rows while the account pool already knew that account could run 23+ models — the picker looked broken.
+  - **Ticking writes an allow-list.** `selectedModels` (`POST /config`, `DSH_AGY_SELECTED_MODELS`) is applied after `hiddenModels`, so a denied model stays denied (and its chip says why). An empty selection still means "no restriction", which keeps the shipped default byte-for-byte and makes unticking the last model unable to blank the picker.
+  - **New pure module `src/domain/models/quota-catalog.ts`** folds `accounts[].quotas.<family>.models[]` into catalog entries (same effort-folding rules as the CLI list) and merges them into whatever `agy models` discovered — CLI order and naming stay authoritative, quota rows only contribute models the catalog never mentioned. `/status` scopes this to the active account (or the whole pool under `poolWideCatalog`) and echoes `selectedModels`; model resolution merges the same way so a quota-only model still resolves.
+  - **Resolution is deliberately NOT filtered**: a session already running a model the user later untickes keeps resolving it — unticking must not break in-flight work. Only `listModels` (the picker) filters.
+- Merge note: the PR's inline config validation was replaced by the unified `validateConfigValue()` that landed in v0.6.52, extended to cover `selectedModels`, and the maintainer-owned `CHANGELOG.md`/`package.json` were kept.
+
+### 中文
+
+- **特性(设置)：模型列表改为「真实可选集合」的勾选清单（合并 PR #149，关闭 #131）。** 原「模型可见性」是只由 `agy models` 供数的**拒绝清单**，于是没有 CLI 的宿主只列出 7 条静态兜底、而账号池其实知道该账号能跑 23+ 个模型——选择器看起来像坏了。
+  - **勾选写入允许清单。** `selectedModels`（`POST /config`、`DSH_AGY_SELECTED_MODELS`）在 `hiddenModels` **之后**应用，因此被拒绝的模型仍然隐藏（chip 会说明原因）；空选择仍表示「无限制」，默认配置逐字节不变，也不会因为取消最后一个勾选而把选择器清空。
+  - **新增纯模块 `src/domain/models/quota-catalog.ts`**：把 `accounts[].quotas.<family>.models[]` 折叠成目录条目（与 CLI 列表同一套 effort 折叠规则），再并入 `agy models` 的结果——CLI 的顺序与命名保持权威，配额行只贡献目录里从未出现的模型。`/status` 按活跃账号（或 `poolWideCatalog` 下的整池）限定范围并回显 `selectedModels`；模型解析同样合并，使「只有配额快照才知道」的模型仍可解析。
+  - **解析刻意不做过滤**：用户后来取消勾选的模型，已在运行的会话仍能解析——取消勾选不得打断进行中的工作。只有 `listModels`（选择器）过滤。
+- 合并说明：PR 内联的配置校验已替换为 v0.6.52 引入的统一 `validateConfigValue()` 并补充 `selectedModels`；维护者自有的 `CHANGELOG.md`/`package.json` 保持。
+
 ## 0.6.52 (2026-11-21)
 
 ### English

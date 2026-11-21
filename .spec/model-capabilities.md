@@ -64,3 +64,15 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
 
 - `test/models.test.ts`：折叠规则、按账号独立 single-flight 并发刷新、`name`/`efforts` 变更广播、`agy models` 未登录兜底输出不误标 `discovered`、`accountHasArgon` 目录优先于折叠 REST 列表。
 - `test/pool.test.ts` / `test/pool-auth.test.ts` / `test/http-contract.test.ts`：切号单次触发不双倍 spawn、429 自动切号广播、OAuth `finishWithCode` 广播、`manualPinAt` 优先于旧会话 `stickyAccount`、`/config` 修改 `defaultEffort`/`enabled` 同步刷新选择器。
+
+## 模型可见性是允许清单 + 拒绝清单两层（PR #149 / #131）
+
+选择器展示哪些模型，由三层共同决定，顺序不可颠倒：
+
+1. **目录来源**：`agy models` 发现的目录（顺序与命名权威）+ 从账号配额快照折叠出的模型（`src/domain/models/quota-catalog.ts`，纯函数）。配额行只**补充**目录里没有的模型，绝不覆盖 CLI 的结论——没有 CLI 的宿主正是靠它才有可用列表。
+2. **允许清单 `selectedModels`**：空数组 = 无限制（默认，保证升级不破坏）；非空 = 只显示这些 id。
+3. **拒绝清单 `hiddenModels`**：最后应用，**永远胜出**，让运维不必修改勾选状态就能临时隐藏某个模型。
+
+- **解析（`resolveModel`）不受可见性过滤**：只有 `listModels`（选择器）过滤。用户取消勾选一个正在被会话使用的模型，该会话必须继续工作——把可见性当成可用性会打断进行中的任务。
+- 作用域：默认按**活跃账号**的配额快照合并（与它显示的 `agy models` 目录同源，避免两个来源互相矛盾）；`poolWideCatalog` 开启时按整池枚举。
+- 锚点：`test/quota-catalog.test.ts`、`test/models-panel.test.ts`、`test/models.test.ts`、`test/config-precedence.test.ts`。
