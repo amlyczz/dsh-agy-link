@@ -361,6 +361,32 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
   }
 }
 
+function formatBackgroundTerminalOutput(text: string): string {
+  const taskMatch = /\b(task-\d+)\b/i.exec(text)
+  const isGenericRunning =
+    /^Tool is running as a background task(?:\s*\([^)]+\))?(?::\s*.*)?$/i.test(text) ||
+    /^Running in background\b/i.test(text)
+  if (!isGenericRunning || /tasks[\\/]+task-\d+\.log/i.test(text)) {
+    return text
+  }
+  const hint = taskMatch
+    ? `[background] ${taskMatch[1]} running — live lines stream from .system_generated/tasks/${taskMatch[1]}.log; completion arrives via background message.`
+    : '[background] running in background — awaiting completion notice.'
+  return text === '' ? hint : `${text}\n${hint}`
+}
+
+function formatScheduleResultOutput(input: Record<string, unknown>, text: string): string {
+  const cron = pick(input, 'CronExpression', 'cron_expression')
+  const duration = pick(input, 'DurationSeconds', 'duration_seconds')
+  const prompt = pick(input, 'Prompt', 'prompt')
+  const timing = cron ? `cron ${cron}` : duration ? `${duration}s timer` : 'schedule'
+  const header = prompt ? `[scheduled] ${timing} — ${prompt}` : `[scheduled] ${timing}`
+  if (text === '' || /^Tool is running as a background task/i.test(text)) {
+    return header
+  }
+  return `${header}\n${text}`
+}
+
 /** Native completed-card projection for one mirrored agy tool call. */
 export function presentMirrorResult(args: unknown, result: { content: unknown[]; isError: boolean }): ToolResultView | undefined {
   const a = args as { tool?: unknown; input?: unknown }
@@ -382,7 +408,13 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
       } else if (/\[command timed out/i.test(text) || result.isError) {
         exitCode = 1
       }
-      const view: TerminalResultView = { card: 'terminal', output: text, ...(exitCode !== undefined ? { exitCode } : {}) }
+      const rendered = formatBackgroundTerminalOutput(text)
+      const view: TerminalResultView = { card: 'terminal', output: rendered, ...(exitCode !== undefined ? { exitCode } : {}) }
+      return view
+    }
+    case 'schedule': {
+      const rendered = formatScheduleResultOutput(unwrapped.input, text)
+      const view: GenericResultView = { card: 'generic', content: [{ type: 'text', text: clip(rendered, 4000) }] }
       return view
     }
     case 'replace_file_content':
