@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.56 (2026-11-22)
+
+### English
+
+- **Fix(visibility): live background-task logs and ACP tracker activity are now surfaced, and a false "previous turn was interrupted" banner is gone (merges PR #155).** Two independent problems:
+  - Backgrounded `run_command` task logs (`.system_generated/tasks/*.log`) and completion/cancellation notices (`.system_generated/messages/{,undelivered/}*.json`) were not tailed in real time, and `runAcpAttempt()` created its attempt recorder with the tracker disabled. A new `TaskActivityTracker` (`src/features/subagent/task-activity.ts`) tails them incrementally (UTF-8 multi-byte safe, burst-bounded, EOF baselined on resumed runs, message ids de-duplicated) and is wired into `SubagentTracker` with a final synchronous flush in `stop()`; ACP runs now enable the tracker. `RUNNING` step fallback text and the mirror card carry task-id / log-path / timer hints.
+  - In `streamAttempt()`, a prior run that had **already produced a consumable result** but took slightly over 1.5s to tear down was still marked `binding.interrupted = true` and had `[the previous turn was interrupted before it finished …]` prepended to the next prompt — a lie about a turn that actually answered. Only runs **without** a consumable result are marked interrupted now.
+- Note: `hasConsumableResult` (added in 0.6.51) is what distinguishes the two cases; the change is a net reduction in `adapter.ts`.
+
+### 中文
+
+- **修复(可见性)：实时后台任务日志与 ACP tracker 活动现在会展示，且错误插入的「上一轮被中断」横幅已消除（合并 PR #155）。** 两个独立问题：
+  - 转后台的 `run_command` 任务日志（`.system_generated/tasks/*.log`）与完成/取消通知（`.system_generated/messages/{,undelivered/}*.json`）此前不会被实时跟随，且 `runAcpAttempt()` 创建 recorder 时未启用 tracker。新增 `TaskActivityTracker`（`src/features/subagent/task-activity.ts`）增量跟随（UTF-8 多字节安全、突发有界、续跑时以 EOF 为基线、消息 id 去重），接入 `SubagentTracker` 并在 `stop()` 做最终同步 flush；ACP 运行现在会启用 tracker。`RUNNING` 步骤的兜底文案与镜像卡片会带上 task-id / 日志路径 / 定时提示。
+  - `streamAttempt()` 里，上一轮**已经产出可消费结果**、只是收尾超过 1.5 秒的情形，仍会被标记 `binding.interrupted = true` 并把「上一轮在完成前被中断…」插到下一条 prompt 前面——对一个实际已经作答的回合说谎。现在只有**没有**可消费结果的 run 才会被标记为中断。
+- 说明：区分这两种情形依靠 0.6.51 引入的 `hasConsumableResult`；该改动使 `adapter.ts` 净减少代码。
+
 ## 0.6.55 (2026-11-21)
 
 ### English
