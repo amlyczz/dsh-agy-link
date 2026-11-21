@@ -11,7 +11,7 @@ import type { ManagedAccount } from '../../common/pool-types.ts'
 import { shouldMarkAuthRequired } from '../../common/types.ts'
 import { normalizeStoredToken, type StoredToken } from '../../domain/quota/identity.ts'
 import { formatLocalIso, refreshTokens } from '../../host/oauth.ts'
-import { readWindowsCredentialRaw } from '../../host/wincred.ts'
+import { readWindowsCredentialRawAsync } from '../../host/wincred.ts'
 import { readAccountCredential, saveCredentialBackup } from '../../domain/credentials/backup.ts'
 import { unwrapGoKeyringPayload } from '../../runtime/agy/keychain.ts'
 
@@ -174,7 +174,7 @@ export async function readMacKeychainToken(): Promise<StoredToken | null> {
 export async function readWindowsCredentialToken(): Promise<StoredToken | null> {
   if (process.platform !== 'win32') return null
   try {
-    const raw = readWindowsCredentialRaw('gemini:antigravity')
+    const raw = await readWindowsCredentialRawAsync('gemini:antigravity')
     if (!raw) return null
     return parseGoKeyringPayload(raw)
   } catch {

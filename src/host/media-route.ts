@@ -27,6 +27,10 @@ const MIME_MAP: Record<string, string> = {
   '.ogg': 'audio/ogg',
   '.m4a': 'audio/mp4',
   '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.opus': 'audio/opus',
+  '.ogv': 'video/ogg',
+  '.pdf': 'application/pdf',
   '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
@@ -46,7 +50,7 @@ function safeDecodeUri(s: string): string | null {
   }
 }
 
-function isCrossOriginBlocked(req: HttpRequestLike): boolean {
+export function isCrossOriginBlocked(req: HttpRequestLike): boolean {
   const rawOrigin = req.headers?.origin;
   const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
   if (!origin || origin === 'null') return false;
@@ -59,7 +63,7 @@ function isCrossOriginBlocked(req: HttpRequestLike): boolean {
   }
 }
 
-function isConfinementAllowed(filePath: string, workspaceRoots?: string | readonly string[]): boolean {
+export function isConfinementAllowed(filePath: string, workspaceRoots?: string | readonly string[]): boolean {
   if (SENSITIVE_PATH_RE.test(filePath)) return false;
   if (workspaceRoots === undefined) return true;
   const rawRoots = typeof workspaceRoots === 'string'
@@ -317,7 +321,7 @@ export function handleMediaRequest(
 
     const ext = extname(filePath).toLowerCase();
     const contentType = MIME_MAP[ext] ?? 'application/octet-stream';
-    const isMedia = contentType.startsWith('image/') || contentType.startsWith('video/') || contentType.startsWith('audio/') || ext === '.svg';
+    const isMedia = contentType.startsWith('image/') || contentType.startsWith('video/') || contentType.startsWith('audio/') || contentType === 'application/pdf' || ext === '.svg';
     if (!isMedia) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       res.end('access denied: not an image');

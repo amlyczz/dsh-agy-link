@@ -6,7 +6,9 @@ export const PROVIDER_ID = 'antigravity'
 export const PLUGIN_ID = 'agy-link'
 export const PKG_NAME = 'dsh-agy-link'
 
-export type PermissionMode = 'skip' | 'plan' | 'accept-edits'
+export type PermissionMode = 'skip' | 'auto' | 'plan' | 'accept-edits'
+
+export type AgyTransportMode = 'cli' | 'acp'
 
 
 export interface PluginConfig {
@@ -16,6 +18,20 @@ export interface PluginConfig {
   /** Extra argv appended to every spawn (escape hatch). */
   extraArgs: readonly string[]
   permissionMode: PermissionMode
+  /** Run agy with terminal sandboxing enabled (`--sandbox`). */
+  sandbox: boolean
+  /** Default custom agent name (`--agent`, empty = agy default). */
+  agent: string
+  /** Inline JSON object or path passed to `agy --settings`. */
+  agySettings: string
+  /** Execution transport: short-lived `-p` CLI or persistent `agy acp` stdio server. */
+  transport: AgyTransportMode
+  /** Register the `agy_image` DSH tool so any model can generate images via agy. */
+  imageTool: boolean
+  /** Automatically mirror primary account MCP/plugins/skills/rules into isolated pool accounts. */
+  syncAccountCustomizations: boolean
+  /** Per-file byte cap for non-image multimodal attachments (PDF/audio/video, default 20 MiB). */
+  mediaMaxFileBytes: number
   defaultModel: string
   defaultEffort: string
   /** Watchdog for one full agy -p run. */
@@ -225,9 +241,9 @@ export interface PluginConfig {
    */
   poolWideCatalog: boolean
   // ---- image generation (`dsh-agy-image` CLI, purpose:'image' adapter route) ----
-  /** Chat model that drives the `generate_image` call ('' = defaultModel → the preferred Gemini Flash). */
+  /** Chat model that drives the `generate_image` / `image-generator` call ('' = defaultModel → Gemini 4 Hydrogen when discovered, else Gemini Flash). */
   imageModel: string
-  /** Reasoning effort for that hop (default `low`: the image model does the real work). */
+  /** Reasoning effort for prompt planning and visual self-review (default `medium`: balanced quality and latency). */
   imageEffort: string
   /** Wall-clock cap for one image generation, including the image model (default 240s). */
   imageTimeoutMs: number
@@ -251,6 +267,13 @@ export function defaultConfig(): PluginConfig {
     agyBin: '',
     extraArgs: [],
     permissionMode: 'skip',
+    sandbox: false,
+    agent: '',
+    agySettings: '',
+    transport: 'cli',
+    imageTool: true,
+    syncAccountCustomizations: true,
+    mediaMaxFileBytes: 20 * 1024 * 1024,
     defaultModel: '',
     // Explicit 'high' (not ''): effort-capable models default to the highest
     // agy offers, and the per-model choice now lives in DSH's model menu.
@@ -345,7 +368,7 @@ export function defaultConfig(): PluginConfig {
     showTranslateAction: true,
     poolWideCatalog: false,
     imageModel: '',
-    imageEffort: 'low',
+    imageEffort: 'medium',
     imageTimeoutMs: 240_000,
     imageMaxBytes: 20 * 1024 * 1024,
     imageOutputDir: '',

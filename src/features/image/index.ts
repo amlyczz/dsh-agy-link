@@ -6,6 +6,7 @@ export {
   type ImageAgentCall,
   type ImageAgentResult,
   type ImageAgentToolCall,
+  type ImageCatalogLike,
   type ImageFailureCode,
   type ImageInfo,
   type ImageRequest,
@@ -23,3 +24,4 @@ export {
 } from './prompt.ts'
 export { aspectMatches, readImageInfo, simplifyRatio, sniffImage } from './artifacts.ts'
 export { ImageService, emptyImageResult, imageSummary } from './service.ts'
+export { runViaAdapter, type AdapterLike } from './adapter-runner.ts'

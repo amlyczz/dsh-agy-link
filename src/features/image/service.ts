@@ -96,7 +96,7 @@ export class ImageService {
   }
 
   target(override?: { model?: string; effort?: string }): ImageTarget {
-    return resolveImageTarget(this.deps.cfg(), override)
+    return resolveImageTarget(this.deps.cfg(), override, this.deps.catalog?.())
   }
 
   private cacheKey(req: ImageRequest, target: ImageTarget): string {

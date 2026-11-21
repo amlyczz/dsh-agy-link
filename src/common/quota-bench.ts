@@ -7,13 +7,27 @@ import type { FamilyQuotaInfo, ManagedAccount, ModelFamily } from './pool-types.
 export const LOW_QUOTA_5H = 0.10
 export const LOW_QUOTA_WEEKLY = 0.05
 
+export type QuotaFamily = 'google' | 'argon' | 'anthropic' | 'openai'
+
 /** Ordered quota families tracked on an account card. */
-export const QUOTA_FAMILIES: readonly ('google' | 'argon' | 'anthropic' | 'openai')[] = [
+export const QUOTA_FAMILIES: readonly QuotaFamily[] = [
   'google',
   'argon',
   'anthropic',
   'openai',
 ]
+
+/** Normalize user/CLI/HTTP model-family aliases onto canonical `ModelFamily` keys. */
+export function normalizeModelFamily(raw?: string): ModelFamily | undefined {
+  if (!raw) return undefined
+  const clean = raw.trim().toLowerCase()
+  if (clean === 'google' || clean === 'gemini') return 'google'
+  if (clean === 'argon') return 'argon'
+  if (clean === 'anthropic' || clean === 'claude') return 'anthropic'
+  if (clean === 'openai' || clean === 'gpt' || clean === 'gpt-oss') return 'openai'
+  if (clean === 'unknown') return 'unknown'
+  return undefined
+}
 
 function isWindowBenched(fraction: number | undefined, resetTime: string | undefined, threshold: number, now: number): boolean {
   if (typeof fraction !== 'number' || fraction > threshold) return false
@@ -74,6 +88,46 @@ export function accountHasQuotaBench(acc: ManagedAccount, now: number): boolean 
   return QUOTA_FAMILIES.some(
     (fam) => (fam !== 'argon' || acc.quotas?.argon !== undefined) && isQuotaBenched(acc, fam, now),
   )
+}
+
+/** True when a family has an active local 429 cooldown timer on this account. */
+export function isFamilyInCooldown(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
+  const cd = acc.cooldowns?.[family]
+  return Boolean(cd && cd.cooldownUntil > now)
+}
+
+/**
+ * Single source of truth for whether one model family on an account is
+ * currently cooling (either via an active 429 cooldown timer or proactive
+ * low-quota benching).
+ */
+export function isFamilyCooling(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
+  return isFamilyInCooldown(acc, family, now) || isQuotaBenched(acc, family, now)
+}
+
+/** Known quota families explicitly tracked on this account. */
+export function accountKnownFamilies(acc: ManagedAccount): QuotaFamily[] {
+  return QUOTA_FAMILIES.filter((fam) => {
+    if (fam === 'argon') {
+      return acc.quotas?.argon !== undefined || acc.cooldowns?.argon !== undefined
+    }
+    return acc.quotas?.[fam] !== undefined || acc.cooldowns?.[fam] !== undefined
+  })
+}
+
+/** Families on this account that are currently cooling. */
+export function accountCoolingFamilies(acc: ManagedAccount, now: number): QuotaFamily[] {
+  return accountKnownFamilies(acc).filter((fam) => isFamilyCooling(acc, fam, now))
+}
+
+/**
+ * True only when every known family on the account is cooling (drives the
+ * account-level amber indicator dot without punishing healthy families).
+ */
+export function isAccountFullyCooling(acc: ManagedAccount, now: number): boolean {
+  const known = accountKnownFamilies(acc)
+  if (known.length === 0) return accountHasActiveCooldown(acc, now)
+  return known.every((fam) => isFamilyCooling(acc, fam, now))
 }
 
 /**

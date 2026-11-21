@@ -455,6 +455,13 @@ export async function* runAgyAttempt(
   // Dispatch sees the NUL-sanitized prompt: its failure path clears the
   // in-flight marker with the same string the former inline block used.
   const slot = yield* dispatchCredentialSlot(deps, { ...input, prompt: spawn.prompt })
+  if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && !input.agySettings && !input.isAux) {
+    const acpRec = await deps.runAcp(deps, { ...input, prompt: spawn.prompt }, slot).catch(() => null)
+    if (acpRec !== null) {
+      recorder.stop()
+      return acpRec
+    }
+  }
   const spawned = await startAttemptProcess(deps, input, spawn, recorder, slot)
   void handleAttemptOutcome(deps, input, { ...spawned, recorder, slot, spawn }).catch((err) => {
     slot.releaseOnce()

@@ -9,6 +9,9 @@ import { handleConfig } from './config.ts'
 import { handleSession, handleGoal, handleClear } from './session.ts'
 import { handleModels } from './models.ts'
 import { handleDoctor } from './doctor.ts'
+import { handleImage } from './image.ts'
+import { handleEcosystem } from './ecosystem.ts'
+import { handleSlashBridge } from './slash-bridge.ts'
 
 interface CommandEntry {
   readonly subs: readonly string[]
@@ -30,7 +33,7 @@ export const COMMAND_REGISTRY: readonly CommandEntry[] = [
   { subs: ['models'], handle: handleModels },
   {
     subs: [
-      'mode', 'effort',
+      'mode', 'sandbox', 'agent', 'settings', 'transport', 'effort',
       'dispatch', 'dispatch-retries',
       'parallel', 'max-concurrent',
       'workspace',
@@ -40,6 +43,9 @@ export const COMMAND_REGISTRY: readonly CommandEntry[] = [
   { subs: ['goal'], handle: handleGoal },
   { subs: ['session'], handle: handleSession },
   { subs: ['clear'], handle: handleClear },
+  { subs: ['image', 'img'], handle: handleImage },
+  { subs: ['btw', 'fork', 'grill', 'grill-me', 'learn', 'compact'], handle: handleSlashBridge },
+  { subs: ['plugins', 'mcp', 'agents', 'skills', 'sync-ecosystem', 'sync'], handle: handleEcosystem },
   { subs: ['doctor'], handle: handleDoctor },
 ]
 

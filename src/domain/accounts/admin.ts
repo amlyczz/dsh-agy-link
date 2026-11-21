@@ -9,7 +9,6 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import {
   AUTH_CONFIRM_STRIKES,
-  accountHasArgon,
   isTerminalAuthError,
   type AccountPoolData,
   type ManagedAccount,
@@ -237,23 +236,21 @@ export class PoolAdmin {
   }
 
   /**
-   * Manually pin the active slot for one family (console "设为当前使用").
-   * The pin survives until the scheduler legitimately rotates away (quota
-   * exhaustion / cooldown / auth flag) — getActiveAccountId still enforces
-   * eligibility, so pinning an ineligible slot simply does not stick.
+   * Manually pin the active slot for one family (console per-family "设为当前").
+   * Strictly family-scoped: pinning one family never mutates or clears another
+   * family's active slot or session stickiness.
    */
   setActiveAccount(id: string, family: ModelFamily = 'google'): boolean {
     const data = this.deps.getData()
     const acc = this.account(id)
-    if (!acc || !isAccountEligible(acc, family, Date.now(), this.deps.pool)) return false
+    const now = Date.now()
+    if (!acc || !isAccountEligible(acc, family, now, this.deps.pool)) return false
     if (!data.activeAccountIds) data.activeAccountIds = {}
     data.activeAccountIds[family] = id
-    data.lastActiveAccountId = id
-    data.manualPinAt = Date.now()
-    if (!accountHasArgon(acc, this.deps.pool)) {
-      delete data.activeAccountIds.argon
-    } else {
-      data.activeAccountIds.argon = id
+    if (!data.manualPinAtByFamily) data.manualPinAtByFamily = {}
+    data.manualPinAtByFamily[family] = now
+    if (family === 'google' || !data.lastActiveAccountId) {
+      data.lastActiveAccountId = id
     }
     this.deps.persist()
     return true
@@ -369,11 +366,11 @@ export class PoolAdmin {
         google: id,
         anthropic: id,
         openai: id,
-        ...(accountHasArgon(acc, this.deps.pool) ? { argon: id } : {}),
       }
       data.lastActiveAccountId = id
     }
     data.manualPinAt = Date.now()
+    data.manualPinAtByFamily = {}
     this.deps.persist()
     return true
   }
@@ -398,6 +395,7 @@ export class PoolAdmin {
     data.activeAccountIds = {}
     data.lastActiveAccountId = undefined
     data.manualPinAt = Date.now()
+    data.manualPinAtByFamily = {}
     this.deps.persist()
     return true
   }
@@ -441,8 +439,10 @@ export class PoolAdmin {
       reason,
       consecutiveFailures: failures,
     }
-    // If the failed account was the active one, advance to the next candidate immediately
-    if (data.activeAccountIds?.[family] === id || data.lastActiveAccountId === id) {
+    // Only advance if this account currently owns this specific family pointer
+    // (or if this family has no pin yet and it is the fallback lastActiveAccountId).
+    const famPinned = data.activeAccountIds?.[family]
+    if (famPinned === id || (famPinned === undefined && data.lastActiveAccountId === id)) {
       this.advanceAccount(id, family)
     }
     this.deps.persist()
@@ -486,16 +486,18 @@ export class PoolAdmin {
     const next = orderByExpiry(data.accounts, candidates, family, fromId, Date.now())[0]!
     if (!data.activeAccountIds) data.activeAccountIds = {}
     data.activeAccountIds[family] = next.id
-    data.lastActiveAccountId = next.id
+    if (family === 'google' || !data.lastActiveAccountId) {
+      data.lastActiveAccountId = next.id
+    }
     this.deps.persist()
     return next.id
   }
 
   /**
-   * Returns the currently active and healthy account ID.
-   * If the recorded lastActiveAccountId is healthy, returns it;
-   * otherwise falls back to the scheduler (selectAccount) to advance to the next
-   * healthy candidate, or primaryAccountId if all are exhausted.
+   * Returns the currently active and healthy account ID for `family`.
+   * Checks this family's active pointer first; only checks `lastActiveAccountId`
+   * when this family has no pointer yet, otherwise selects the next eligible
+   * candidate strictly within `family`.
    */
   getActiveAccountId(family: ModelFamily = 'google', model?: string): string | undefined {
     const data = this.deps.getData()
@@ -507,7 +509,7 @@ export class PoolAdmin {
         return pinned.id
       }
     }
-    if (data.lastActiveAccountId) {
+    if (pinnedId === undefined && data.lastActiveAccountId) {
       const active = data.accounts.find((a) => a.id === data.lastActiveAccountId)
       if (active && isAccountEligible(active, family, now, this.deps.pool, model)) {
         return active.id

@@ -127,6 +127,10 @@ export async function runAgyOnce(
     signal?: AbortSignal
     readPaths?: readonly string[]
     schema?: unknown
+    agent?: string
+    sandbox?: boolean
+    agySettings?: string
+    conversationId?: string
   },
 ): Promise<OneShotResult> {
   const cfg = deps.cfg()
@@ -140,6 +144,12 @@ export async function runAgyOnce(
   const mode = req.mode ?? cfg.permissionMode
   if (mode === 'skip') args.push('--dangerously-skip-permissions')
   else args.push('--mode', mode)
+  if (req.sandbox ?? cfg.sandbox) args.push('--sandbox')
+  const agent = (req.agent ?? cfg.agent).trim()
+  if (agent !== '') args.push('--agent', agent)
+  const agySettings = (req.agySettings ?? cfg.agySettings).trim()
+  if (agySettings !== '') args.push('--settings', agySettings)
+  if (req.conversationId && req.conversationId.trim() !== '') args.push('--conversation', req.conversationId.trim())
   if (req.model) args.push('--model', req.model)
   if (req.effort) args.push('--effort', req.effort)
   let prompt = req.prompt

@@ -157,3 +157,23 @@ export function isError(block: ToolBlock): boolean {
 	const settled = block as ToolResultBlock;
 	return settled.isError === true || (settled.error !== undefined && settled.error !== null);
 }
+
+const CARD_IMAGE_PATH_RE = /(?<![\w:/])(?:file:\/\/\/?)?(?:[A-Za-z]:[\\/]|\\\\wsl\.localhost\\|\/|~\/)[^\s"'`<>|)\]]+?\.(?:png|jpe?g|webp|gif|bmp|avif)\b/gi;
+
+/** Extract local image paths / file:// image URIs from tool output text. */
+export function extractImagePathsFromText(text: string): string[] {
+	if (!text) return [];
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const m of text.matchAll(CARD_IMAGE_PATH_RE)) {
+		let p = m[0].trim();
+		if (p.startsWith('file://')) {
+			p = p.slice(7);
+			if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
+		}
+		if (p === '' || seen.has(p)) continue;
+		seen.add(p);
+		out.push(p);
+	}
+	return out;
+}

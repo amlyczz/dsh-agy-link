@@ -4,6 +4,7 @@
 // no overlap guard, and let a slow stale response overwrite a newer one.
 
 import type { AccountPoolData } from '../common/pool-types.ts';
+import type { WarmupStatusSnapshot } from '../common/warmup-types.ts';
 import { base, win, timedSignal, STATUS_TIMEOUT_MS } from './api.ts';
 import { useEffect, useState } from './react.ts';
 
@@ -21,6 +22,13 @@ export interface StatusPayload {
 	dormantReason?: string | null;
 	enabled?: boolean;
 	permissionMode?: string;
+	sandbox?: boolean;
+	agent?: string;
+	agySettings?: string;
+	transport?: 'cli' | 'acp';
+	acpStatus?: { activeProcesses: number; sessions: number; keys: readonly string[] } | null;
+	imageTool?: boolean;
+	syncAccountCustomizations?: boolean;
 	workspaceRoot?: string;
 	defaultModel?: string;
 	defaultEffort?: string;
@@ -36,6 +44,8 @@ export interface StatusPayload {
 	pool?: AccountPoolData;
 	/** Account ids with a quota refresh in flight on the host (real progress). */
 	quotaRefreshing?: readonly string[];
+	/** Live + last-run warmup state exposed by the host WarmupService. */
+	warmupState?: WarmupStatusSnapshot | null;
 	poolAuth?: {
 		phase: 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed';
 		stagingId?: string;

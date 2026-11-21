@@ -191,3 +191,28 @@ export function orderByExpiry(
     })
     .map((e) => e.acc)
 }
+
+/**
+ * Pure, side-effect-free lookup of the active eligible account ID for a given
+ * family. Honors a still-eligible family pin first, then falls back to the
+ * first eligible candidate in rotation order without mutating pool state.
+ */
+export function resolveEligibleActiveAccountId(
+  accounts: readonly ManagedAccount[],
+  activeAccountIds: Partial<Record<ModelFamily, string>> | undefined,
+  family: ModelFamily,
+  pool?: DedicatedGroupSource | null,
+  now = Date.now(),
+  model?: string,
+): string | undefined {
+  const pinnedId = activeAccountIds?.[family]
+  if (pinnedId) {
+    const pinned = accounts.find((a) => a.id === pinnedId)
+    if (pinned && isAccountEligible(pinned, family, now, pool, model)) {
+      return pinned.id
+    }
+  }
+  const candidates = accounts.filter((acc) => isAccountEligible(acc, family, now, pool, model))
+  if (candidates.length === 0) return undefined
+  return orderByExpiry(accounts, candidates, family, pinnedId, now)[0]?.id
+}

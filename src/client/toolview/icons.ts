@@ -194,6 +194,61 @@ export function IconImageOutline16(size = 14, className = ''): unknown {
 	}));
 }
 
+function glyph(size: number, className: string, ...paths: unknown[]): unknown {
+	return hx('svg', {
+		width: size,
+		height: size,
+		className: className || undefined,
+		viewBox: '0 0 16 16',
+		fill: 'none',
+		stroke: 'currentColor',
+		strokeWidth: 1.5,
+		strokeLinecap: 'round',
+		strokeLinejoin: 'round',
+		style: { display: 'block', flexShrink: 0 },
+		'aria-hidden': true,
+	}, ...paths);
+}
+
+export function IconSwarm16(size = 14, className = ''): unknown {
+	return glyph(size, className,
+		hx('circle', { cx: 8, cy: 3.5, r: 1.7 }),
+		hx('circle', { cx: 3.5, cy: 12, r: 1.7 }),
+		hx('circle', { cx: 12.5, cy: 12, r: 1.7 }),
+		hx('path', { d: 'M6.8 4.9L4.5 10.4M9.2 4.9L11.5 10.4M5.2 12h5.6' }),
+	);
+}
+
+export function IconWorkflow16(size = 14, className = ''): unknown {
+	return glyph(size, className,
+		hx('rect', { x: 1.8, y: 2, width: 4.5, height: 3.5, rx: 1 }),
+		hx('rect', { x: 9.7, y: 2, width: 4.5, height: 3.5, rx: 1 }),
+		hx('rect', { x: 5.75, y: 10.5, width: 4.5, height: 3.5, rx: 1 }),
+		hx('path', { d: 'M4 5.5V8h8V5.5M8 8v2.5' }),
+	);
+}
+
+export function IconSchedule16(size = 14, className = ''): unknown {
+	return glyph(size, className,
+		hx('circle', { cx: 8, cy: 8, r: 5.8 }),
+		hx('path', { d: 'M8 4.8V8l2.4 1.6' }),
+	);
+}
+
+export function IconSubagent16(size = 14, className = ''): unknown {
+	return glyph(size, className,
+		hx('circle', { cx: 8, cy: 5.2, r: 2.5 }),
+		hx('path', { d: 'M3.2 13.5c.6-2.4 2.3-3.6 4.8-3.6s4.2 1.2 4.8 3.6' }),
+	);
+}
+
+export function IconBrowser16(size = 14, className = ''): unknown {
+	return glyph(size, className,
+		hx('circle', { cx: 8, cy: 8, r: 5.8 }),
+		hx('path', { d: 'M2.4 8h11.2M8 2.2c1.7 1.6 2.5 3.6 2.5 5.8S9.7 12.2 8 13.8M8 2.2C6.3 3.8 5.5 5.8 5.5 8s.8 4.2 2.5 5.8' }),
+	);
+}
+
 export function toolIconFor(kind: CardKind, size = 14): unknown {
 	switch (kind) {
 		case 'terminal':
@@ -210,6 +265,17 @@ export function toolIconFor(kind: CardKind, size = 14): unknown {
 			return IconQuestionOutline16(size);
 		case 'image':
 			return IconImageOutline16(size);
+		case 'swarm':
+			return IconSwarm16(size);
+		case 'workflow':
+			return IconWorkflow16(size);
+		case 'schedule':
+		case 'task':
+			return IconSchedule16(size);
+		case 'subagent':
+			return IconSubagent16(size);
+		case 'browser':
+			return IconBrowser16(size);
 		default:
 			return IconCodeOutline16(size);
 	}

@@ -1037,3 +1037,144 @@ test('manual setActiveAccount overrides stale session stickyAccount and never fl
   assert.equal(res.account?.id, acc2.id, 'manual account switch must override older session sticky binding')
   assert.equal(pool.getActiveAccountId('google'), acc2.id, 'active account must remain acc2')
 })
+
+test('concurrent sessions isolate google (Neon) vs argon rotation, cooling, and manualPinAtByFamily', async () => {
+  const { selectSessionAccount } = await import('../src/provider/account-selection.ts')
+  const { SessionStore } = await import('../src/host/sessions.ts')
+  const { defaultConfig } = await import('../src/common/types.ts')
+  const dir = mkdtempSync(join(tmpdir(), 'agy-session-family-iso-'))
+  const pool = new AccountPoolManager(dir)
+  const acc1 = pool.getAccounts()[0]!
+  const acc2 = pool.createAccountSlot('Account 2')
+  const now = Date.now()
+  const future5h = new Date(now + 4 * 3_600_000).toISOString()
+  const future7d = new Date(now + 6 * 86_400_000).toISOString()
+  for (const id of [acc1.id, acc2.id]) {
+    pool.updateAccountQuotas(id, {
+      google: { remainingFraction: 1, weeklyFraction: 1, resetTime: future5h, weeklyResetTime: future7d, updatedAt: now },
+      argon: { weeklyFraction: 1, weeklyResetTime: future7d, updatedAt: now },
+    })
+  }
+  pool.setActiveAccount(acc1.id, 'google')
+  pool.setActiveAccount(acc1.id, 'argon')
+  const initialData = pool.getPoolData()
+  const googlePinAt = initialData.manualPinAtByFamily?.google ?? 0
+
+  await new Promise((r) => setTimeout(r, 10))
+  const sessionBindTs = Date.now()
+  const store = new SessionStore(join(dir, 'sessions.json'))
+  // Session A (Neon / google) has a sticky binding to acc2 newer than googlePinAt.
+  store.set(`sessionA:${acc2.id}`, {
+    conversationId: 'conv-a',
+    lastMessageCount: 1,
+    updatedAt: sessionBindTs,
+    model: 'gemini-pro-orchestrator-neon',
+  })
+  // Session B (Argon) has a sticky binding to acc1 at the same timestamp.
+  store.set(`sessionB:${acc1.id}`, {
+    conversationId: 'conv-b',
+    lastMessageCount: 1,
+    updatedAt: sessionBindTs,
+    model: 'gemini-4-argon',
+  })
+
+  await new Promise((r) => setTimeout(r, 15))
+  // Pinning Argon to acc2 happens AFTER sessionBindTs, but must NOT disturb google's pointer or Session A's Neon stickiness.
+  assert.equal(pool.setActiveAccount(acc2.id, 'argon'), true)
+  const afterArgonPin = pool.getPoolData()
+  assert.equal(afterArgonPin.activeAccountIds?.google, acc1.id)
+  assert.equal(afterArgonPin.activeAccountIds?.argon, acc2.id)
+  assert.ok((afterArgonPin.manualPinAtByFamily?.argon ?? 0) > sessionBindTs)
+  assert.equal(afterArgonPin.manualPinAtByFamily?.google, googlePinAt)
+
+  const cfg = { ...defaultConfig(), parallelSameAccount: false }
+  const resB = await selectSessionAccount({
+    deps: { pool, store },
+    cfg,
+    model: 'gemini-4-argon',
+    isAux: false,
+    sessionKey: 'sessionB',
+  })
+  assert.equal(resB.family, 'argon')
+  assert.equal(resB.account?.id, acc2.id, 'Session B (Argon) follows manual argon pin')
+
+  const resA = await selectSessionAccount({
+    deps: { pool, store },
+    cfg,
+    model: 'gemini-pro-orchestrator-neon',
+    isAux: false,
+    sessionKey: 'sessionA',
+  })
+  assert.equal(resA.family, 'google')
+  assert.equal(resA.account?.id, acc2.id, 'Session A (Neon/google) keeps its sticky binding even when manualPinAtByFamily.argon > sessionA.updatedAt')
+
+  // Move argon active pointer back to acc1; Session A requesting Argon ignores its google binding on acc2.
+  assert.equal(pool.setActiveAccount(acc1.id, 'argon'), true)
+  const resACross = await selectSessionAccount({
+    deps: { pool, store },
+    cfg,
+    model: 'gemini-4-argon',
+    isAux: false,
+    sessionKey: 'sessionA',
+  })
+  assert.equal(resACross.family, 'argon')
+  assert.equal(resACross.account?.id, acc1.id, 'google session binding must not leak into argon selection')
+
+  // Move argon pointer back to acc2 before testing google cooldown isolation.
+  assert.equal(pool.setActiveAccount(acc2.id, 'argon'), true)
+
+  // Cooling acc1 only on google advances google to acc2, while acc1 remains eligible and pinnable for argon.
+  pool.recordFailure(acc1.id, 'google', '429 Rate Limit', new Date(now + 60_000).toISOString())
+  assert.equal(pool.getActiveAccountId('google'), acc2.id)
+  assert.equal(pool.setActiveAccount(acc1.id, 'argon'), true, 'google cooldown must not block argon family pin')
+  assert.equal(pool.getActiveAccountId('argon'), acc1.id)
+  assert.equal(pool.getActiveAccountId('google'), acc2.id, 'pinning argon back to acc1 must not clobber google')
+
+  // Quota exhaustion reported on google leaves argon active pointer intact.
+  pool.updateAccountQuotas(acc1.id, {
+    google: { remainingFraction: 0, resetTime: future5h, weeklyFraction: 0.5, weeklyResetTime: future7d, updatedAt: now + 50 },
+    argon: { weeklyFraction: 1, weeklyResetTime: future7d, updatedAt: now + 50 },
+  })
+  assert.equal(pool.getActiveAccountId('argon'), acc1.id)
+})
+
+test('shouldPollAccount polls until ALL known quota families are in active cooldown', () => {
+  const now = Date.now()
+  const base = {
+    id: 'acc-poll',
+    alias: 'poll',
+    dir: '',
+    enabled: true,
+    createdAt: 1,
+  }
+
+  // Only Google is cooling, while Argon is healthy -> keep polling so healthy families refresh.
+  assert.equal(shouldPollAccount({
+    ...base,
+    cooldowns: { google: { cooldownUntil: now + 60_000, reason: '429', consecutiveFailures: 1 } },
+    quotas: {
+      google: { remainingFraction: 0, updatedAt: now },
+      argon: { weeklyFraction: 1, updatedAt: now },
+    },
+  }), true)
+
+  // Every known family is in active cooldown -> skip unattended poll.
+  assert.equal(shouldPollAccount({
+    ...base,
+    cooldowns: {
+      google: { cooldownUntil: now + 60_000, reason: '429', consecutiveFailures: 1 },
+      argon: { cooldownUntil: now + 60_000, reason: '429', consecutiveFailures: 1 },
+    },
+    quotas: {
+      google: { remainingFraction: 0, updatedAt: now },
+      argon: { weeklyFraction: 0, updatedAt: now },
+    },
+  }), false)
+
+  // Empty quotas fallback: any active cooldown stops unattended polling.
+  assert.equal(shouldPollAccount({
+    ...base,
+    cooldowns: { google: { cooldownUntil: now + 60_000, reason: '429', consecutiveFailures: 1 } },
+    quotas: {},
+  }), false)
+})

@@ -21,7 +21,7 @@ import { deliverContext } from '../provider/context-delivery.ts'
 export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
-import { buildAgyArgs, waitForRunSettle, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
+import { buildAgyArgs, resolveAttemptOverrides, waitForRunSettle, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
 import { runAgyAttempt } from '../provider/attempt-outcome.ts'
 export { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from '../provider/notices.ts'
 export { AGY_PROMPT_SAFE_BYTES, AGY_SINGLE_MESSAGE_MAX_BYTES, buildDigest, collectUnsentImageRefs, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserMessageAny, latestUserTaskText, utf8Bytes } from '../provider/prompt-text.ts'
@@ -366,10 +366,11 @@ export class AgyAdapter extends LlmAdapter {
     const account = selection.account
     let family = selection.family
     let activeModel = selection.activeModel
-    // The account is final here: record it as *the* in-use account so the
-    // console shows exactly one badge (per-family pointers may point at
-    // families the user is not currently running).
-    if (account && !isAux) this.deps.pool?.markAccountActive(account.id)
+    // The account is final here: record it as *the* in-use account for Google
+    // (or bootstrap when none is set) without hijacking it on Argon/Claude/GPT turns.
+    if (account && !isAux && (family === 'google' || !this.deps.pool?.getPoolData().lastActiveAccountId)) {
+      this.deps.pool?.markAccountActive(account.id)
+    }
     // Image callers need the account's HOME to find agy's artifact directory
     // (`<home>/.gemini/antigravity-cli/brain/<conversation>/`). The hook is
     // advisory: a throwing listener must never break a run.
@@ -564,6 +565,7 @@ export class AgyAdapter extends LlmAdapter {
       lastAccountSpawnTime: this.lastAccountSpawnTime,
       minSpawnIntervalMs: this.minSpawnIntervalMs,
       spawnLimiter: this.spawnLimiter,
+      ...(this.deps.runAcp === undefined ? {} : { runAcp: this.deps.runAcp }),
     }
     const attemptInput: AttemptInput = {
       cfg,
@@ -586,6 +588,7 @@ export class AgyAdapter extends LlmAdapter {
       family,
       signal: options.signal,
       agyOnEvent: options.agyOnEvent,
+      ...resolveAttemptOverrides(options, cfg),
     }
     const rec = yield* runAgyAttempt(attemptDeps, attemptInput)
 

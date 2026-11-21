@@ -2,7 +2,7 @@
 // entry config > defaults (spec ADR-13). The overrides file backs /agy
 // hot changes and survives restarts; the env is read per call so a changed
 // process environment is honored without reload.
-import { defaultConfig, type PermissionMode, type PluginConfig } from './types.ts'
+import { defaultConfig, type AgyTransportMode, type PermissionMode, type PluginConfig } from './types.ts'
 import { readFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -77,12 +77,18 @@ function asStringArray(v: unknown): string[] | undefined {
   return out
 }
 
-const MODES: readonly PermissionMode[] = ['skip', 'plan', 'accept-edits']
+const MODES: readonly PermissionMode[] = ['skip', 'auto', 'plan', 'accept-edits']
 
 function asMode(v: unknown): PermissionMode | undefined {
   return typeof v === 'string' && (MODES as readonly string[]).includes(v)
     ? (v as PermissionMode)
     : undefined
+}
+
+function asTransport(v: unknown): AgyTransportMode | undefined {
+  if (typeof v !== 'string') return undefined
+  const s = v.trim().toLowerCase()
+  return s === 'cli' || s === 'acp' ? s : undefined
 }
 
 /** Layered config read; cheap enough to call per request (thunk pattern). */
@@ -106,6 +112,13 @@ export function resolveConfig(
       ? (get('extraArgs') as unknown[]).filter((x): x is string => typeof x === 'string')
       : base.extraArgs,
     permissionMode: asMode(get('permissionMode')) ?? base.permissionMode,
+    sandbox: asBool(get('sandbox')) ?? base.sandbox,
+    agent: asString(get('agent')) ?? base.agent,
+    agySettings: asString(get('agySettings')) ?? base.agySettings,
+    transport: asTransport(get('transport')) ?? base.transport,
+    imageTool: asBool(get('imageTool')) ?? base.imageTool,
+    syncAccountCustomizations: asBool(get('syncAccountCustomizations')) ?? base.syncAccountCustomizations,
+    mediaMaxFileBytes: asNum(get('mediaMaxFileBytes')) ?? base.mediaMaxFileBytes,
     defaultModel: asString(get('defaultModel')) ?? base.defaultModel,
     defaultEffort: asString(get('defaultEffort')) ?? base.defaultEffort,
     timeoutMs: asNum(get('timeoutMs')) ?? base.timeoutMs,
@@ -183,6 +196,28 @@ export function resolveConfig(
   if (env.DSH_AGY_SKIP_PERMISSIONS !== undefined) {
     const skip = asBool(env.DSH_AGY_SKIP_PERMISSIONS)
     if (skip !== undefined) cfg.permissionMode = skip ? 'skip' : 'plan'
+  }
+  if (env.DSH_AGY_SANDBOX !== undefined) {
+    const sb = asBool(env.DSH_AGY_SANDBOX)
+    if (sb !== undefined) cfg.sandbox = sb
+  }
+  if (env.DSH_AGY_AGENT !== undefined) cfg.agent = env.DSH_AGY_AGENT
+  if (env.DSH_AGY_SETTINGS !== undefined) cfg.agySettings = env.DSH_AGY_SETTINGS
+  if (env.DSH_AGY_TRANSPORT) {
+    const t = asTransport(env.DSH_AGY_TRANSPORT)
+    if (t) cfg.transport = t
+  }
+  if (env.DSH_AGY_IMAGE_TOOL !== undefined) {
+    const it = asBool(env.DSH_AGY_IMAGE_TOOL)
+    if (it !== undefined) cfg.imageTool = it
+  }
+  if (env.DSH_AGY_SYNC_CUSTOMIZATIONS !== undefined) {
+    const sc = asBool(env.DSH_AGY_SYNC_CUSTOMIZATIONS)
+    if (sc !== undefined) cfg.syncAccountCustomizations = sc
+  }
+  if (env.DSH_AGY_MEDIA_MAX_FILE_BYTES) {
+    const v = asNum(env.DSH_AGY_MEDIA_MAX_FILE_BYTES)
+    if (v !== undefined && v > 0) cfg.mediaMaxFileBytes = v
   }
   if (env.DSH_AGY_DEFAULT_MODEL) cfg.defaultModel = env.DSH_AGY_DEFAULT_MODEL
   if (env.DSH_AGY_DEFAULT_EFFORT) cfg.defaultEffort = env.DSH_AGY_DEFAULT_EFFORT

@@ -80,6 +80,18 @@ export function displayTitle(model: MirrorCardModel, t?: Translate): string {
 			return tr(t, 'tv.question', 'Question');
 		case 'image':
 			return tr(t, 'tv.image', 'Image');
+		case 'swarm':
+			return tr(t, 'tv.swarm', 'Swarm');
+		case 'workflow':
+			return tr(t, 'tv.workflow', 'Workflow');
+		case 'schedule':
+			return tr(t, 'tv.schedule', 'Schedule');
+		case 'task':
+			return tr(t, 'tv.task', 'Task');
+		case 'subagent':
+			return tr(t, 'tv.subagent', 'Subagent');
+		case 'browser':
+			return tr(t, 'tv.browser', 'Browser');
 		default:
 			if (model.tool && model.tool !== 'agy_tool') {
 				return model.server ? `${model.server}: ${model.tool}` : model.tool.replace(/_/g, ' ');

@@ -11,7 +11,8 @@
 // The async outcome closure lives in ./attempt-outcome.ts (it also drives the
 // credential-slot dispatch); the adapter calls runAgyAttempt from there.
 import { LlmError, type Message } from '@deepseek-ai/dsh-llm'
-import type { AgyEvent, PluginConfig } from '../common/types.ts'
+import type { AgyEvent, AgyTransportMode, PluginConfig } from '../common/types.ts'
+import type { AgyGenerateOptions } from '../common/protocol.ts'
 import { createToolWatchdog, type ToolWatchdog } from './tool-watchdog.ts'
 import { Err, looksLikeTosViolation } from '../common/types.ts'
 import type { ManagedAccount, ModelFamily } from '../common/pool-types.ts'
@@ -67,6 +68,8 @@ export interface AttemptDeps {
   lastAccountSpawnTime: Map<string, number>
   minSpawnIntervalMs: number
   spawnLimiter?: SpawnLimiter
+  /** Optional persistent ACP attempt driver injected by host. */
+  runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
 }
 
 /** Everything one attempt needs. Values are produced by streamAttempt. */
@@ -93,6 +96,32 @@ export interface AttemptInput {
   family: ModelFamily
   signal: AbortSignal | undefined
   agyOnEvent: ((ev: AgyEvent) => void) | undefined
+  agent?: string
+  agySettings?: string
+  jsonSchema?: string
+  sandbox?: boolean
+  transport?: AgyTransportMode
+}
+
+function serializeOpt(v: string | Record<string, unknown> | undefined): string | undefined {
+  if (typeof v === 'string') return v.trim() !== '' ? v.trim() : undefined
+  if (v && typeof v === 'object') return JSON.stringify(v)
+  return undefined
+}
+
+export function resolveAttemptOverrides(options: AgyGenerateOptions, cfg: PluginConfig): Pick<AttemptInput, 'agent' | 'agySettings' | 'jsonSchema' | 'sandbox' | 'transport'> {
+  const agent = typeof options.agyAgent === 'string' ? options.agyAgent.trim() : cfg.agent.trim()
+  const agySettings = serializeOpt(options.agySettings) ?? serializeOpt(cfg.agySettings)
+  const jsonSchema = serializeOpt(options.agyJsonSchema)
+  const sandbox = options.agySandbox ?? cfg.sandbox
+  const transport = options.agyTransport ?? cfg.transport
+  return {
+    ...(agent !== '' ? { agent } : {}),
+    ...(agySettings !== undefined ? { agySettings } : {}),
+    ...(jsonSchema !== undefined ? { jsonSchema } : {}),
+    sandbox,
+    transport,
+  }
 }
 
 /** Pure argv builder for one agy call (same body as AgyAdapter.buildArgs). */
@@ -108,11 +137,19 @@ export function buildAgyArgs(opts: {
   printTimeoutMinutes?: number
   /** Omit `-p <prompt>` and add `--input-format stream-json` (prompt rides stdin). */
   promptViaStdin?: boolean
+  sandbox?: boolean
+  agent?: string
+  agySettings?: string
+  jsonSchema?: string
 }): string[] {
   const ptMins = opts.printTimeoutMinutes ?? Math.max(1, Math.ceil(opts.timeoutMs / 60_000))
   const args: string[] = ['--output-format', 'stream-json', '--print-timeout', ptMins + 'm']
   if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
   else args.push('--mode', opts.permissionMode)
+  if (opts.sandbox === true) args.push('--sandbox')
+  if (opts.agent && opts.agent.trim() !== '') args.push('--agent', opts.agent.trim())
+  if (opts.agySettings && opts.agySettings.trim() !== '') args.push('--settings', opts.agySettings.trim())
+  if (opts.jsonSchema && opts.jsonSchema.trim() !== '') args.push('--json-schema', opts.jsonSchema.trim())
   const effectiveModel = resolveModelSlug(opts.model)
   if (effectiveModel !== '') args.push('--model', effectiveModel)
   // Claude 5.5 accepts --effort on its base slug (verified against agy 1.5.3);
@@ -167,6 +204,10 @@ export function buildSpawnArgs(
     printTimeoutMinutes,
     extraArgs: input.cfg.extraArgs,
     addDirs: input.addDirs,
+    sandbox: input.sandbox ?? input.cfg.sandbox,
+    ...((input.agent ?? input.cfg.agent).trim() !== '' ? { agent: (input.agent ?? input.cfg.agent).trim() } : {}),
+    ...((input.agySettings ?? input.cfg.agySettings).trim() !== '' ? { agySettings: (input.agySettings ?? input.cfg.agySettings).trim() } : {}),
+    ...(input.jsonSchema && input.jsonSchema.trim() !== '' ? { jsonSchema: input.jsonSchema.trim() } : {}),
   }
   const argsBase = buildAgyArgs(base)
   // Decide transport: keep `-p <prompt>` for normal turns; switch to stdin

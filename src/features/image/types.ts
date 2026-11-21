@@ -87,6 +87,12 @@ export interface ImageTarget {
   effort: string
 }
 
+/** Narrow catalog view used by {@link ImageServiceDeps.catalog} (avoids importing host/models). */
+export interface ImageCatalogLike {
+  source?: string
+  models: ReadonlyArray<{ id: string }>
+}
+
 export interface ImageAgentCall {
   /** The fully-built bridge prompt. */
   prompt: string
@@ -126,6 +132,7 @@ export interface ImageServiceDeps {
   cfg: () => PluginConfig
   bin: () => string | null
   run: (call: ImageAgentCall) => Promise<ImageAgentResult>
+  catalog?: () => ImageCatalogLike
   log?: (msg: string) => void
   now?: () => number
 }

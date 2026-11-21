@@ -1,7 +1,8 @@
 // DOM scanner that turns rendered image/media alt-text and file links into previews and native file handlers.
-import { isInteractionLocked, onScrollSettle } from '../scroll-guard.ts'
+import { isInteractionLocked, onScrollSettle } from '../scroll-guard.ts';
 import { translateOr } from '../i18n-bridge.ts';
-import { buildMediaUrl, getOrigin, isImageFile, isVideoFile, isLocalFilePath, openInSystem } from './media.ts';
+import { buildMediaUrl, getOrigin, isImageFile, isVideoFile, isAudioFile, isLocalFilePath, openInSystem } from './media.ts';
+import { enhanceAudioLink } from './audio.ts';
 import { openLightbox, showToast } from './lightbox.ts';
 import { injectStyles } from './styles.ts';
 
@@ -446,7 +447,7 @@ function enhanceFileLink(link: HTMLAnchorElement, rawHref: string, resolvedHref:
 
 function enhanceLinks(): void {
   const links = document.querySelectorAll<HTMLAnchorElement>(
-    'a[href]:not([data-agy-link-scanned]):not([data-agy-link-enhanced]):not([data-agy-video-enhanced]):not([data-agy-file-enhanced])',
+    'a[href]:not([data-agy-link-scanned]):not([data-agy-link-enhanced]):not([data-agy-video-enhanced]):not([data-agy-audio-enhanced]):not([data-agy-file-enhanced])',
   );
   for (let i = 0; i < links.length; i++) {
     const link = links[i];
@@ -455,11 +456,14 @@ function enhanceLinks(): void {
 
     const rawHref = link.getAttribute('href') ?? '';
     const resolvedHref = link.href ?? '';
+    if (rawHref.includes('/plugins/agy-link/embed') || resolvedHref.includes('/plugins/agy-link/embed')) continue;
 
     if (isImageFile(rawHref) || isImageFile(resolvedHref)) {
       enhanceImageLink(link, rawHref, resolvedHref);
     } else if (isVideoFile(rawHref) || isVideoFile(resolvedHref)) {
       enhanceVideoLink(link, rawHref, resolvedHref);
+    } else if (isAudioFile(rawHref) || isAudioFile(resolvedHref)) {
+      enhanceAudioLink(link, rawHref, resolvedHref);
     } else if (rawHref.startsWith('file://') || resolvedHref.startsWith('file://') || isLocalFilePath(rawHref)) {
       enhanceFileLink(link, rawHref, resolvedHref);
     }
@@ -498,11 +502,12 @@ function handleGlobalLinkClick(e: MouseEvent): void {
   const target = e.target as HTMLElement | null;
   const a = target?.closest('a') as HTMLAnchorElement | null;
   if (!a) return;
-  if (a.dataset.agyLinkEnhanced === 'true' || a.dataset.agyVideoEnhanced === 'true' || a.dataset.agyFileEnhanced === 'true') return;
+  if (a.dataset.agyLinkEnhanced === 'true' || a.dataset.agyVideoEnhanced === 'true' || a.dataset.agyAudioEnhanced === 'true' || a.dataset.agyFileEnhanced === 'true') return;
   if (target?.closest?.('.agy-image-link-chip')) return;
 
   const rawHref = a.getAttribute('href') ?? '';
   const resolvedHref = a.href ?? '';
+  if (rawHref.includes('/plugins/agy-link/embed') || resolvedHref.includes('/plugins/agy-link/embed')) return;
   if (rawHref.startsWith('file://') || resolvedHref.startsWith('file://') || isLocalFilePath(rawHref)) {
     const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
     if (/^https?:\/\//i.test(pathToUse) && !pathToUse.includes('/plugins/agy-link/')) return;

@@ -26,6 +26,9 @@ import { detectSystemProxy } from './wincred.ts'
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { StreamJsonParser } from './parser.ts'
 import { defaultMediaDir } from './media.ts'
+import { ImageService, runViaAdapter } from './image.ts'
+import { EcosystemService } from '../features/ecosystem/index.ts'
+import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
 import { acquireCredentialSlot } from './credential-slot.ts'
@@ -246,11 +249,13 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
 
   pool.setCatalog(catalog)
   pool.onAccountSwitch = (newActiveId: string) => {
+    if (process.platform === 'win32') acpPool.evictOtherAccounts(newActiveId)
     notifyPicker()
     void catalog.forceRefreshAndNotify(newActiveId).catch(() => undefined)
   }
 
   const bridgeState: { bridge: McpBridge | null; restores: Array<() => void> } = { bridge: null, restores: [] }
+  const ecosystem = new EcosystemService({ pool, getConfig, log })
   const auth = new AuthHelper(bin, () => getConfig().suppressAgyAutoUpdate)
   const poolAuth = new PoolAuthFlow(pool, quota, log, {
     onUpdate: () => {
@@ -259,6 +264,9 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       if (activeId) void catalog.forceRefreshAndNotify(activeId).catch(() => undefined)
     },
     onIsolatedAccountCommitted: (acc) => {
+      if (getConfig().syncAccountCustomizations) {
+        ecosystem.syncAccount(acc)
+      }
       if (bridgeState.bridge !== null && acc.dir) {
         const cfg = getConfig()
         if (cfg.mcpConfigScope === 'global' || cfg.mcpConfigScope === 'both') {
@@ -269,6 +277,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   })
   const runs = new RunRegistry()
   const webServerPort: { current?: number } = {}
+  const acpPool = new AcpSessionPool({ bin, cfg: getConfig, log })
 
   const adapter = new AgyAdapter({
     getConfig,
@@ -296,6 +305,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     onRun: (info) => { lastRun = info },
     onParser: (p) => { lastParser = p },
     readImage: (ref) => readSessionImage(ctx, dshHome(), ref),
+    runAcp: (attemptDeps, attemptInput, slot) => runAcpAttempt(acpPool, attemptDeps, attemptInput, slot),
   })
 
   const translationWorkers = new TranslationWorkerPool({
@@ -388,9 +398,17 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     return list
   }
 
+  const imageService = new ImageService({
+    cfg: getConfig,
+    bin,
+    run: (call) => runViaAdapter(adapter, call),
+    catalog: () => catalog.get(),
+    log,
+  })
+
   return {
     getConfig, log, notifyPicker, bin, version, status, store, pool, quota, warmup, semaphore,
-    catalog, auth, poolAuth, runs, adapter, translation, translationWorkers, setOverride,
+    catalog, auth, poolAuth, runs, adapter, acpPool, ecosystem, imageService, translation, translationWorkers, setOverride,
     readEffortUnsupported: effortStore.read,
     rememberEffortUnsupported: effortStore.remember,
     sessionsSvc, sessionAuto,

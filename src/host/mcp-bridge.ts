@@ -35,7 +35,7 @@ const MCP_SERVER_KEY = 'dsh-tools'
  *                   over the bridge would let the agy child re-enter the bridge.
  * Kept in one place so the /tools listing and the /call guard can never drift.
  */
-const INTERNAL_TOOL_NAMES = new Set(['run_code', 'agy_ask', 'agy_tool'])
+const INTERNAL_TOOL_NAMES = new Set(['run_code', 'agy_ask', 'agy_tool', 'agy_image'])
 
 /** Minimal structural view of the DSH tool registry we need. */
 export interface ToolsServiceLike {

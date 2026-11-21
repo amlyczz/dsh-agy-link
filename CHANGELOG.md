@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.55 (2026-11-21)
+
+### English
+
+- **Feat(parity): full `agy` high- and medium-value parity suite — in-chat image generation, persistent ACP transport, multi-account ecosystem sync, Generative UI embeds, extended toolview cards, multimodal staging, slash bridges, and CLI security/passthrough flags.**
+  - **In-chat image generation & balanced defaults**: Added the `agy_image` DSH tool (`imageTool` config), `/agy image` (`/agy img`) slash command, and `image-generator` subagent image preview card. Updated defaults to balanced `imageEffort: 'medium'` and auto-preference for discovered `gemini-4-hydrogen` (falling back to `gemini-3.8-flash`).
+  - **Execution security & CLI passthrough**: Extended `PermissionMode` with `'auto'` (`--mode auto`), added `--sandbox` (`sandbox` config / request option), and wired `--agent`, `--settings`, and `--json-schema` passthrough into CLI arg assembly.
+  - **Multimodal input staging & audio playback**: Added PDF, audio, and video attachment staging up to `mediaMaxFileBytes` (20 MiB default) alongside an inline `<audio>` player enhancer (`src/client/images/audio.ts`).
+  - **Extended toolview cards**: Added dedicated cards and models for `swarm`, `run_workflow`, `schedule`, `manage_task`, subagent lifecycle (`invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`), and browser/devtools tools.
+  - **Generative UI `<agent-embed>`**: Added streaming `<agent-embed src="...">` tag buffering in `EventMapper`/`text.ts`, a strict-CSP `/plugins/agy-link/embed` route, and a sandboxed `<iframe sandbox="allow-scripts">` auto-resizing/theme-synced renderer (`src/client/embed.ts`).
+  - **Persistent `agy acp` session pool**: Added stdio JSON-RPC `AcpProcess` + `AcpSessionPool` (`transport: 'cli' | 'acp'`, lazy idle sweep timer, Windows single-account eviction, and automatic pre-stream CLI `-p` fallback).
+  - **Multi-account ecosystem inventory & sync**: Added discovery across `plugins`, `mcp`, `skills`, `rules`, and `agents`, allowlist sync into isolated pool accounts, `/ecosystem` HTTP routes, Settings `EcosystemPanel`, and `/agy plugins|mcp|agents|skills|sync-ecosystem`.
+  - **Slash command bridges**: Added `/agy btw`, `/agy fork` (including `list`/`restore`), `/agy grill` / `grill-me`, `/agy learn [--apply]`, and `/agy compact`.
+  - **Per-family account scoping & host-backed warmup bar**: Preserved per-family active account pins (`manualPinAtByFamily`, `resolvedActiveAccountIds`) and host-backed `WarmupStatusBar` + warmup resilience improvements.
+  - **i18n & Windows test hardening**: Localized all newly introduced DOM surfaces (`embed.ts`, `audio.ts`, `extended-cards.ts`, `image-card.ts`) onto `src/client/i18n-bridge.ts` across `en`/`zh`/`es`/`ptBR`, and fixed Windows path/CRLF handling in `test/issue153-client-locale.test.ts`.
+
+### 中文
+
+- **特性(能力对齐)：全面补齐 `agy` 高/中优先级能力——对话内生图、持久化 ACP 传输池、多账号生态清点与同步、Generative UI 内嵌页、扩展工具卡片、多模态附件暂存、斜杠命令桥接与安全透传参数。**
+  - **对话内生图与均衡默认参数**：新增 `agy_image` DSH 工具（`imageTool` 配置）、`/agy image`（`/agy img`）命令以及 `image-generator` 子代理图片预览卡片；将默认生图思考深度调整为均衡 `imageEffort: 'medium'`，并在发现 `gemini-4-hydrogen` 时自动优先选用（否则回退 `gemini-3.8-flash`）。
+  - **安全执行与 CLI 参数透传**：为 `PermissionMode` 新增 `'auto'`（`--mode auto`），新增 `--sandbox` 沙箱开关，并打通 `--agent`、`--settings`、`--json-schema` 参数透传。
+  - **多模态输入暂存与音频播放器**：支持 PDF、音频、视频附件暂存（默认单文件上限 `mediaMaxFileBytes` 20 MiB）与聊天内联 `<audio>` 播放器（`src/client/images/audio.ts`）。
+  - **扩展工具详情卡片**：为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理生命周期（`invoke_subagent` / `define_subagent` / `manage_subagents` / `send_message`）及浏览器/DevTools 工具提供专用卡片渲染。
+  - **Generative UI `<agent-embed>`**：在 `EventMapper`/`text.ts` 中实现流式标签缓冲，新增严格 CSP 的 `/plugins/agy-link/embed` 路由与支持自适应高度及主题同步的沙箱 `<iframe sandbox="allow-scripts">` 渲染器（`src/client/embed.ts`）。
+  - **持久化 `agy acp` 会话池**：实现 stdio JSON-RPC `AcpProcess` 与 `AcpSessionPool`（`transport: 'cli' | 'acp'`、懒启动空闲清理定时器、Windows 单账号驱逐与流前自动回退 CLI `-p`）。
+  - **多账号生态清点与同步**：支持 `plugins`/`mcp`/`skills`/`rules`/`agents` 跨账号清点、白名单同步到隔离池账号、`/ecosystem` HTTP 路由、设置页 `EcosystemPanel` 及 `/agy plugins|mcp|agents|skills|sync-ecosystem`。
+  - **斜杠命令桥接**：新增 `/agy btw`、`/agy fork`（含 `list`/`restore`）、`/agy grill` / `grill-me`、`/agy learn [--apply]` 与 `/agy compact`。
+  - **按模型家族的活跃账号隔离与宿主级预热条**：保留 `manualPinAtByFamily`、`resolvedActiveAccountIds` 及宿主后端驱动的 `WarmupStatusBar` 与预热韧性增强。
+  - **国际化与 Windows 测试加固**：将全部新增客户端 DOM 界面（`embed.ts`、`audio.ts`、`extended-cards.ts`、`image-card.ts`）接入 `src/client/i18n-bridge.ts` 并补齐 `en`/`zh`/`es`/`ptBR` 文案，同时修复 `test/issue153-client-locale.test.ts` 的 Windows 路径与 CRLF 注释处理。
+
 ## 0.6.54 (2026-11-21)
 
 ### English

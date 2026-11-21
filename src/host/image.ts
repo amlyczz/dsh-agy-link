@@ -35,13 +35,16 @@ export {
   parseImageReply,
   readImageInfo,
   resolveImageTarget,
+  runViaAdapter,
   simplifyRatio,
   sniffImage,
 } from '../features/image/index.ts'
 export type {
+  AdapterLike,
   ImageAgentCall,
   ImageAgentResult,
   ImageAgentToolCall,
+  ImageCatalogLike,
   ImageFailureCode,
   ImageInfo,
   ImageRequest,

@@ -12,6 +12,7 @@ import {
   normalizeAspectRatio,
   normalizeImageName,
   parseImageReply,
+  resolveImageTarget,
   simplifyRatio,
   sniffImage,
   type ImageAgentCall,
@@ -313,4 +314,56 @@ test('service retries once without --effort when the model refuses the flag', as
   assert.deepEqual(efforts, ['low', ''], 'the second attempt drops the refused flag')
   assert.equal(res.effort, '')
   assert.equal(res.attempts, 1, 'the flag fallback is free, not a retry budget')
+})
+
+test('resolveImageTarget defaults to medium effort, prefers discovered Hydrogen in auto mode, and falls back cleanly', () => {
+  const base = defaultConfig()
+  assert.equal(base.imageEffort, 'medium')
+
+  const discoveredWithHydrogen = {
+    source: 'discovered',
+    models: [{ id: 'gemini-3.8-flash' }, { id: 'gemini-4-hydrogen' }],
+  }
+  assert.deepEqual(resolveImageTarget(base, undefined, discoveredWithHydrogen), {
+    model: 'gemini-4-hydrogen',
+    effort: 'medium',
+  })
+
+  // Falls back to Flash when catalog is omitted, not discovered, or free-tier (no Hydrogen).
+  assert.deepEqual(resolveImageTarget(base), { model: 'gemini-3.8-flash', effort: 'medium' })
+  assert.deepEqual(
+    resolveImageTarget(base, undefined, { source: 'fallback', models: [{ id: 'gemini-4-hydrogen' }] }),
+    { model: 'gemini-3.8-flash', effort: 'medium' },
+  )
+  assert.deepEqual(
+    resolveImageTarget(base, undefined, { source: 'discovered', models: [{ id: 'gemini-3.8-flash' }] }),
+    { model: 'gemini-3.8-flash', effort: 'medium' },
+  )
+
+  // Explicit settings and per-call overrides keep precedence.
+  assert.deepEqual(
+    resolveImageTarget({ ...base, defaultModel: 'gemini-4-argon' }, undefined, discoveredWithHydrogen),
+    { model: 'gemini-4-argon', effort: 'medium' },
+  )
+  assert.deepEqual(
+    resolveImageTarget({ ...base, defaultModel: 'gemini-4-argon', imageModel: 'gemini-4-neon', imageEffort: 'high' }, undefined, discoveredWithHydrogen),
+    { model: 'gemini-4-neon', effort: 'high' },
+  )
+  assert.deepEqual(
+    resolveImageTarget(
+      { ...base, imageModel: 'gemini-4-neon', imageEffort: 'high' },
+      { model: 'gemini-3.8-flash', effort: 'low' },
+      discoveredWithHydrogen,
+    ),
+    { model: 'gemini-3.8-flash', effort: 'low' },
+  )
+
+  // ImageService forwards its catalog dep into resolveImageTarget.
+  const svc = new ImageService({
+    cfg: () => base,
+    bin: () => '/fake/agy',
+    run: okRun({}),
+    catalog: () => discoveredWithHydrogen,
+  })
+  assert.deepEqual(svc.target(), { model: 'gemini-4-hydrogen', effort: 'medium' })
 })

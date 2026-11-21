@@ -10,6 +10,7 @@ import type { AccountPoolManager } from '../host/pool.ts'
 import type { RunRecording, RunRegistry } from '../host/recording.ts'
 import type { StreamJsonParser } from '../host/parser.ts'
 import type { ImageRefLike } from '../host/media.ts'
+import type { AttemptDeps, AttemptInput, AttemptSlot } from './attempt.ts'
 
 export interface AgyAdapterDeps {
   getConfig: () => PluginConfig
@@ -74,4 +75,6 @@ export interface AgyAdapterDeps {
    * capabilities it advertises (its effort row must disappear).
    */
   onEffortUnsupported?: (model: string) => void
+  /** Optional persistent ACP attempt runner wired from host services. */
+  runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
 }

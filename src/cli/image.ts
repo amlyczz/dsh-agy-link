@@ -13,17 +13,15 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { resolveConfig, stateDir } from '../common/config.ts'
-import { PROVIDER_ID, type AgyEvent, type PermissionMode } from '../common/types.ts'
+import { type PermissionMode } from '../common/types.ts'
 import {
   ImageService,
   buildImageAgentPrompt,
   imageSummary,
   normalizeImageName,
-  type ImageAgentCall,
-  type ImageAgentResult,
-  type ImageAgentToolCall,
+  runViaAdapter,
+  type AdapterLike,
   type ImageRequest,
   type ImageResult,
 } from '../host/image.ts'
@@ -48,9 +46,9 @@ const USAGE = `dsh-agy-image — 用 agy 内置的 generate_image 生成图片�
   -i, --image, --ref <path>  参考图/源图（可重复；用于改图）
   -o, --out <path>           把成图复制到该路径（或目录）
       --model <id>           驱动调用的模型（默认跟随插件配置）
-      --effort <level>       思考档（默认 low）
+      --effort <level>       思考档（默认 medium）
       --timeout <seconds>    整次生成超时（默认 240）
-      --permission-mode <m>  skip | plan | accept-edits（默认跟随插件配置）
+      --permission-mode <m>  skip | auto | plan | accept-edits（默认跟随插件配置）
       --max-bytes <n>        接受的最大产物字节数（默认 20MiB）
       --json                 输出结构化 JSON（含 ok/path/width/height/mime/...）
       --force                忽略本进程内的结果缓存，重新生成
@@ -90,7 +88,7 @@ export interface ImageCliArgs {
   version: boolean
 }
 
-const MODES: readonly PermissionMode[] = ['skip', 'plan', 'accept-edits']
+const MODES: readonly PermissionMode[] = ['skip', 'auto', 'plan', 'accept-edits']
 
 /** Parse argv (without node/script). Unknown flags are a usage error. */
 export function parseImageCliArgs(argv: readonly string[]): ImageCliArgs {
@@ -229,160 +227,32 @@ function exitCodeFor(res: ImageResult): number {
   }
 }
 
-export interface AdapterLike {
-  stream: (options: GenerateOptions) => AsyncIterable<StreamChunk>
-}
+export { runViaAdapter, type AdapterLike }
 
-function toolCallFrom(ev: AgyEvent): ImageAgentToolCall | null {
-  if (ev.kind !== 'step' || ev.tool === undefined) return null
-  return {
-    name: ev.tool.name,
-    ...(ev.tool.args === undefined ? {} : { args: ev.tool.args }),
-    ...(ev.tool.output === undefined ? {} : { output: String(ev.tool.output) }),
-    ...(ev.tool.error === undefined ? {} : { error: ev.tool.error }),
-  }
-}
-
-function subagentsFrom(ev: AgyEvent): Array<{ conversationId?: string; logUri?: string }> {
-  if (ev.kind !== 'step') return []
-  const raw = ev.raw as { subagent_info?: { subagents?: unknown[] } } | undefined
-  const list = raw?.subagent_info?.subagents
-  if (!Array.isArray(list)) return []
-  const out: Array<{ conversationId?: string; logUri?: string }> = []
-  for (const d of list) {
-    const one = d as { conversation_id?: unknown; log_uri?: unknown }
-    out.push({
-      ...(typeof one.conversation_id === 'string' ? { conversationId: one.conversation_id } : {}),
-      ...(typeof one.log_uri === 'string' ? { logUri: one.log_uri } : {}),
-    })
-  }
-  return out
-}
-
-/**
- * One image attempt through the real adapter. This is the only place that
- * knows how to turn an `AgyAdapter` stream into the service's event contract.
- */
-export async function runViaAdapter(adapter: AdapterLike, call: ImageAgentCall): Promise<ImageAgentResult> {
-  const started = Date.now()
-  const toolCalls: ImageAgentToolCall[] = []
-  const subagents: Array<{ conversationId?: string; logUri?: string }> = []
-  const textParts: string[] = []
-  let responseText = ''
-  let conversationId: string | undefined
-  let home: string | undefined
-  let accountId: string | undefined
-  let failure: { code?: string; message?: string } | null = null
-  let timedOut = false
-  const controller = new AbortController()
-  const timer = setTimeout(() => {
-    timedOut = true
-    controller.abort()
-  }, call.timeoutMs)
-  timer.unref?.()
-  const signal = call.signal === undefined ? controller.signal : AbortSignal.any([call.signal, controller.signal])
-
-  const options = {
-    provider: PROVIDER_ID,
-    model: call.model,
-    ...(call.effort === '' ? {} : { reasoningEffort: call.effort }),
-    // The adapter's image route uses `agyImagePrompt` verbatim; the message is
-    // still provided so the shared prompt plumbing has a well-formed shape.
-    messages: [{ role: 'user', content: [{ type: 'text', text: call.prompt }], source: { kind: 'user' } }],
-    maxTokens: 4096,
-    purpose: 'image',
-    signal,
-    agyImagePrompt: call.prompt,
-    agyPermissionMode: call.permissionMode,
-    agyOnAccount: (info: { id?: string; home?: string }) => {
-      if (typeof info.id === 'string') accountId = info.id
-      if (typeof info.home === 'string' && info.home !== '') home = info.home
+/** Hydrate the cached catalog from disk without spawning `agy models`. */
+function createImageCatalog(cfg: ReturnType<typeof resolveConfig>): ModelCatalog {
+  return new ModelCatalog(
+    async () => {
+      throw new Error('model discovery is disabled for the image CLI')
     },
-    agyOnEvent: (ev: AgyEvent) => {
-      if (ev.kind === 'init' && ev.conversationId !== undefined) conversationId = ev.conversationId
-      if (ev.kind === 'step') {
-        if (ev.stepKind === 'text' && ev.text !== '') textParts.push(ev.text)
-        const tc = toolCallFrom(ev)
-        if (tc !== null) toolCalls.push(tc)
-        for (const s of subagentsFrom(ev)) subagents.push(s)
-      }
-      if (ev.kind === 'result') {
-        if (ev.conversationId !== '') conversationId = ev.conversationId
-        if (ev.response !== '') responseText = ev.response
-        const err = (ev.raw as { result?: { error?: unknown } } | undefined)?.result?.error
-        if (typeof err === 'string' && err !== '') failure = { message: err }
-      }
-    },
-  } as unknown as Record<string, unknown>
-
-  try {
-    for await (const chunk of adapter.stream(options as unknown as GenerateOptions)) {
-      if (chunk.type === 'text-delta' && typeof chunk.text === 'string') textParts.push(chunk.text)
-      if (chunk.type === 'finish') {
-        const reason = chunk.reason
-        if (reason?.kind === 'error' || reason?.kind === 'aborted') {
-          failure = {
-            ...(typeof reason.failure?.code === 'string' ? { code: reason.failure.code } : {}),
-            ...(typeof reason.failure?.message === 'string' ? { message: reason.failure.message } : {}),
-          }
-        }
-      }
-    }
-  } catch (e) {
-    const err = e as { code?: unknown; message?: unknown }
-    const message = typeof err.message === 'string' ? err.message : String(e)
-    // "All Antigravity accounts are unavailable" is a pool state, not a model
-    // error: classify it as a quota failure so the CLI reports NO_ACCOUNT.
-    const code = typeof err.code === 'string'
-      ? err.code
-      : /accounts are unavailable|no account/i.test(message)
-        ? 'RATE_LIMIT'
-        : undefined
-    failure = {
-      ...(code === undefined ? {} : { code }),
-      message,
-    }
-  } finally {
-    clearTimeout(timer)
-  }
-
-  const text = (textParts.join('\n').trim() || responseText).trim()
-  if (failure !== null) {
-    const code = timedOut ? 'TIMEOUT' : (failure.code ?? 'AGY_ERROR')
-    return {
-      ok: false,
-      text,
-      toolCalls,
-      subagents,
-      ...(conversationId === undefined ? {} : { conversationId }),
-      ...(home === undefined ? {} : { home }),
-      ...(accountId === undefined ? {} : { accountId }),
-      code,
-      error: timedOut ? 'timed out after ' + call.timeoutMs + 'ms' : (failure.message ?? 'image generation failed'),
-      durationMs: Date.now() - started,
-    }
-  }
-  return {
-    ok: true,
-    text,
-    toolCalls,
-    subagents,
-    ...(conversationId === undefined ? {} : { conversationId }),
-    ...(home === undefined ? {} : { home }),
-    ...(accountId === undefined ? {} : { accountId }),
-    durationMs: Date.now() - started,
-  }
+    cfg.fallbackModels,
+    300_000,
+    undefined,
+    { cacheFile: join(stateDir(), 'model-catalog.json') },
+  )
 }
 
 /** Build the real adapter (same deps as the smoke scripts / host). */
-export function createImageAdapter(cfg: ReturnType<typeof resolveConfig>, log?: (m: string) => void): AgyAdapter {
+export function createImageAdapter(
+  cfg: ReturnType<typeof resolveConfig>,
+  log?: (m: string) => void,
+  catalog: ModelCatalog = createImageCatalog(cfg),
+): AgyAdapter {
   return new AgyAdapter({
     getConfig: () => cfg,
-    // Image generation never needs the model picker; a static catalog keeps the
-    // CLI from spawning `agy models` just to validate an explicit model id.
-    catalog: new ModelCatalog(async () => {
-      throw new Error('model discovery is disabled for the image CLI')
-    }, cfg.fallbackModels, 300_000),
+    // Image generation never needs the model picker; hydrating the disk cache
+    // avoids spawning `agy models` while still letting auto mode spot Hydrogen.
+    catalog,
     store: new SessionStore(join(stateDir(), 'cli-image-sessions.json')),
     pool: new AccountPoolManager(),
     bin: () => resolveAgyBin(cfg),
@@ -425,11 +295,13 @@ export function createDefaultImageService(
   // warn about an unresolved session cwd and agy runs somewhere predictable.
   if (cfg.workspaceRoot === '') cfg.workspaceRoot = process.cwd()
   const bin = resolveAgyBin(cfg)
-  const adapter = createImageAdapter(cfg, args.quiet ? undefined : (m) => writeErr('[agy] ' + m + '\n'))
+  const catalog = createImageCatalog(cfg)
+  const adapter = createImageAdapter(cfg, args.quiet ? undefined : (m) => writeErr('[agy] ' + m + '\n'), catalog)
   return new ImageService({
     cfg: () => cfg,
     bin: () => bin,
     run: (call) => runViaAdapter(adapter, call),
+    catalog: () => catalog.get(),
     ...(args.quiet ? {} : { log: (m: string) => writeErr('[image] ' + m + '\n') }),
   })
 }

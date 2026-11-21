@@ -1,7 +1,8 @@
 import type { HostServices } from '../../../host/services.ts'
+import { isTerminalAuthError } from '../../../common/pool-types.ts'
+import { normalizeModelFamily } from '../../../common/quota-bench.ts'
 import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
-import { QUOTA_REFRESH_DEDUP_MS, WARMUP_WRITE_TIMEOUT_MS, longRouteTimeout } from '../../../common/timeouts.ts'
-import type { WarmupResult } from '../../../host/warmup.ts'
+import { QUOTA_REFRESH_DEDUP_MS } from '../../../common/timeouts.ts'
 import { detectSystemProxy } from '../../../host/wincred.ts'
 import { isolatedHomeEnv, openAccountTerminal } from '../../../host/runner.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig } from '../../../host/mcp-bridge.ts'
@@ -218,6 +219,19 @@ function handlePoolMode(services: HostServices, req: unknown, res: unknown): voi
  * not stack duplicate pipelines either.
  */
 const quotaRefreshInFlight = new Map<string, Promise<void>>();
+let catalogWarmInFlight: Promise<void> | null = null;
+const warmupInFlight = new Map<string, Promise<void>>();
+const WARMUP_DEDUP_MS = 180_000;
+
+function triggerCatalogWarm(services: HostServices): void {
+  if (catalogWarmInFlight !== null) return
+  const { pool, catalog } = services
+  if (typeof catalog.warmAccounts !== 'function') return
+  const job = catalog.warmAccounts(pool.getAccounts()).catch(() => undefined).finally(() => {
+    if (catalogWarmInFlight === job) catalogWarmInFlight = null
+  })
+  catalogWarmInFlight = job
+}
 
 function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unknown): void {
   const { pool, quota, catalog } = services
@@ -250,15 +264,13 @@ function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unkno
             }
             // Manual refresh also re-reads the model catalog: after an
             // external re-login the subscription tier (and thus model list)
-            // may differ. Pass `id` when syncing a single account so its
-            // per-account catalog is updated; full sync also warms accounts.
+            // may differ. Decouple background warmAccounts() so full-pool
+            // `agy models` never holds the quotaRefreshInFlight dedupe lock.
             if (id) {
               await catalog.forceRefresh(id).catch(() => undefined)
             } else {
               await catalog.forceRefresh().catch(() => undefined)
-              if (typeof catalog.warmAccounts === 'function') {
-                await catalog.warmAccounts(pool.getAccounts()).catch(() => undefined)
-              }
+              triggerCatalogWarm(services)
             }
           })().catch(() => undefined)
           let releaseTimer: ReturnType<typeof setTimeout> | undefined
@@ -279,53 +291,99 @@ function handlePoolRefreshQuota(services: HostServices, req: unknown, res: unkno
       })
 }
 
-function handlePoolWarmup(services: HostServices, req: unknown, res: unknown): void {
+function isWarmupBusy(key: string, warmup: HostServices['warmup']): boolean {
+  if (warmupInFlight.has(key)) return true
+  if (key === '__all__' && warmupInFlight.size > 0) return true
+  if (key !== '__all__' && warmupInFlight.has('__all__')) return true
+  return typeof warmup?.isRunning === 'function' && warmup.isRunning()
+}
+
+function launchWarmupJob(
+  services: HostServices,
+  opts: { key: string; id: string; force: boolean; model?: string; ignoreFailureBackoff: boolean },
+): void {
   const { pool, quota, warmup } = services
+  const { key, id, force, model, ignoreFailureBackoff } = opts
+  const work = (async () => {
+    if (id) {
+      const acc = pool.getAccount(id)
+      if (!acc) return
+      const results = await warmup.warmupAccount(acc, {
+        force,
+        ...(model !== undefined ? { model } : {}),
+        ...(ignoreFailureBackoff ? { ignoreFailureBackoff: true } : {}),
+      })
+      if (results.some((r) => r.success === true && !r.skipped)) {
+        await quota.refreshAccountQuota(acc, true).catch(() => undefined)
+      }
+      return
+    }
+    const results = await warmup.warmupAllAccounts({
+      force,
+      ...(ignoreFailureBackoff ? { ignoreFailureBackoff: true } : {}),
+    })
+    const succeededIds = new Set(
+      results.filter((r) => r.success === true && !r.skipped).map((r) => r.accountId),
+    )
+    for (const accId of succeededIds) {
+      const acc = pool.getAccount(accId)
+      if (acc && acc.enabled && !isTerminalAuthError(acc.authError)) {
+        await quota.refreshAccountQuota(acc, true).catch(() => undefined)
+      }
+    }
+  })().catch(() => undefined)
+
+  let releaseTimer: ReturnType<typeof setTimeout> | undefined
+  const entry: Promise<void> = work.finally(() => {
+    if (releaseTimer !== undefined) clearTimeout(releaseTimer)
+    if (warmupInFlight.get(key) === entry) warmupInFlight.delete(key)
+  })
+  warmupInFlight.set(key, entry)
+  releaseTimer = setTimeout(() => {
+    if (warmupInFlight.get(key) === entry) warmupInFlight.delete(key)
+  }, WARMUP_DEDUP_MS)
+  releaseTimer.unref?.()
+}
+
+function handlePoolWarmup(services: HostServices, req: unknown, res: unknown): void {
+  const { pool, warmup } = services
       runRoute(res, async () => {
-        try {
-          if (methodOf(req) !== 'POST') {
-            sendJson(res as RawRes, 405, { error: 'POST only' })
-            return
-          }
-          const body = await readBody(req, true)
-          if (body.__invalidJson === true) {
-            sendJson(res as RawRes, 400, { error: 'invalid JSON body' })
-            return
-          }
-          const id = typeof body.id === 'string' ? body.id : ''
-          const force = body.force === true
-          const rawModel = body.model
-          if (rawModel !== undefined && (typeof rawModel !== 'string' || !/^[A-Za-z0-9._/-]{1,80}$/.test(rawModel))) {
-            sendJson(res as RawRes, 400, { error: 'invalid model' })
-            return
-          }
-          const model = typeof rawModel === 'string' ? rawModel : undefined
-          // Never let an empty/malformed body fan out to every account: the
-          // caller must say either `{ id }` or `{ all: true }` explicitly.
-          if (id === '' && body.all !== true) {
-            sendJson(res as RawRes, 400, { error: 'id or { all: true } required' })
-            return
-          }
-          let results: WarmupResult[] = []
-          if (id) {
-            const acc = pool.getAccount(id)
-            if (!acc) {
-              sendJson(res as RawRes, 404, { error: 'Account not found' })
-              return
-            }
-            results = await warmup.warmupAccount(acc, { force, model })
-            await quota.refreshAccountQuota(acc, true).catch(() => undefined)
-          } else {
-            results = await warmup.warmupAllAccounts({ force })
-            // Non-forced refresh respects account cooldowns and the 10s cache,
-            // avoiding a second network burst right after a warmup pass.
-            await quota.refreshAllQuotas(false).catch(() => undefined)
-          }
-          sendJson(res as RawRes, 200, { ok: true, results, pool: pool.getPoolData() })
-        } catch (e) {
-          sendJson(res as RawRes, 500, { error: String(e) })
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
         }
-      }, longRouteTimeout(WARMUP_WRITE_TIMEOUT_MS))
+        const body = await readBody(req, true)
+        if (body.__invalidJson === true) {
+          sendJson(res as RawRes, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const id = typeof body.id === 'string' ? body.id : ''
+        const force = body.force === true
+        const ignoreFailureBackoff = body.ignoreFailureBackoff === true
+        const rawModel = body.model
+        if (rawModel !== undefined && (typeof rawModel !== 'string' || !/^[A-Za-z0-9._/-]{1,80}$/.test(rawModel))) {
+          sendJson(res as RawRes, 400, { error: 'invalid model' })
+          return
+        }
+        const model = typeof rawModel === 'string' ? rawModel : undefined
+        // Never let an empty/malformed body fan out to every account: the
+        // caller must say either `{ id }` or `{ all: true }` explicitly.
+        if (id === '' && body.all !== true) {
+          sendJson(res as RawRes, 400, { error: 'id or { all: true } required' })
+          return
+        }
+        if (id && !pool.getAccount(id)) {
+          sendJson(res as RawRes, 404, { error: 'Account not found' })
+          return
+        }
+        const key = id || '__all__'
+        const alreadyRunning = isWarmupBusy(key, warmup)
+        if (!alreadyRunning) {
+          launchWarmupJob(services, { key, id, force, model, ignoreFailureBackoff })
+        }
+        const warmupState = typeof warmup?.status === 'function' ? warmup.status() : null
+        sendJson(res as RawRes, 200, { ok: true, pending: true, alreadyRunning, warmupState, pool: pool.getPoolData() })
+      })
 }
 
 function handlePoolClearCooldown(services: HostServices, req: unknown, res: unknown): void {
@@ -353,8 +411,15 @@ function handlePoolSetActive(services: HostServices, req: unknown, res: unknown)
         }
         const body = await readBody(req)
         const id = typeof body.id === 'string' ? body.id : ''
-        const prev = pool.getActiveAccountId('google')
-        const ok = id !== '' && pool.setActiveAccount(id)
+        const rawFamily = typeof body.family === 'string' ? body.family : undefined
+        const family = rawFamily ? normalizeModelFamily(rawFamily) : 'google'
+        if (rawFamily && !family) {
+          sendJson(res as RawRes, 400, { ok: false, error: 'invalid family', pool: pool.getPoolData() })
+          return
+        }
+        const targetFamily = family ?? 'google'
+        const prev = pool.getActiveAccountId(targetFamily)
+        const ok = id !== '' && pool.setActiveAccount(id, targetFamily)
         if (ok) {
           const alreadyNotified = typeof pool.onAccountSwitch === 'function' && id !== prev
           if (!alreadyNotified) {

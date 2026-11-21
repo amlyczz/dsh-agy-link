@@ -151,3 +151,20 @@ Each invariant below is enforced in code AND covered by a regression test.
 - 只给 `/call` 解析、`/tools` 不解析，会让**注册在 preset 内的工具**（`present`、`todo_write`、`job_*`、`schedule_*`、`office_*`）在列表里完全消失，即使已加入 `mcpToolAllowlist`——调用能成功、列表却看不见，属于最难排查的一类不一致。
 - 解析规则只有一处（`resolveSessionAgent()`）：先按原值查（裸子会话 key 不得改写），查不到且未带 `session-` 前缀时再试一次前缀形式。
 - 锚点：`test/mcp-bridge-registry-and-agent.test.ts`（session 作用域列表、裸 key 重试、未知 session 回落 root）。
+
+## `--mode auto`、`--sandbox` 与斜杠命令写入边界
+
+- `PermissionMode` 新增 `'auto'`（`--mode auto`，仅高危动作由 `agy` 安全检查询问），保留 `'skip' | 'auto' | 'accept-edits' | 'plan'`，在 `/config` 与 `/agy mode` 均做白名单校验；`sandbox`（`--sandbox` / `DSH_AGY_SANDBOX`）为进程隔离提供 OS 级终端沙箱，保护 `~/.ssh` 与凭据目录。
+- `/agy learn --apply`（`src/host/commands/slash-bridge.ts`）强制 `--json-schema` 约束 `kind: 'skill' | 'rule'` 与严格正则 `^[a-z0-9][a-z0-9-]{0,63}$`，并通过 `resolve(workspaceRoot, '.agents', ...)` 前缀校验阻止任何目录穿越写入工作区 `.agents/` 之外。（测试：`test/slash-bridge-and-image-tool.test.ts`）
+
+## Generative UI 沙箱化 HTML 微件投递（`/plugins/agy-link/embed`, `src/host/embed-route.ts`）
+
+- 仅允许 `.html` / `.htm` 正规文件，大小上限 **2 MiB**（超限返回 `413`），跨站 `Origin` 拦截与工作区/staging 根目录限制（`isCrossOriginBlocked` / `isConfinementAllowed`）与 `/media` 完全对齐。
+- 响应强制 `Cache-Control: private, no-store`、`X-Content-Type-Options: nosniff` 及严格 CSP（`default-src 'none'; connect-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; script-src 'unsafe-inline' https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js`）。
+- 注入的 `postMessage` 桥接脚本对 `id` 参数做 `[a-zA-Z0-9_-]{1,64}` 清洗，前端渲染于 `<iframe sandbox="allow-scripts">` 且校验证 `ev.source === frame.contentWindow`。（测试：`test/http-contract.test.ts`, `test/extended-ui-and-embed.test.ts`）
+
+## 多账号定制生态白名单同步（`src/features/ecosystem/sync.ts`, `inventory.ts`）
+
+- 只按显式白名单从主账号 `~/.gemini/config` 同步 `plugins/`、`skills/`、`rules/`、`agents/` 与允许配置文件；**永不触碰**凭据、日志、对话或 Keychain。
+- 显式拒绝敏感文件名（`.env*`、`antigravity-oauth-token*`、`.primary-credential.json`、`id_rsa`、`id_ed25519`、`*.pem`、`*.key`），并拒绝指向 `primaryHome` 之外的符号链接。
+- `mergeMcpConfig()` 同步主账号其余 MCP 服务器时**严格保留目标账号自身的 `dsh-tools` 反向桥接配置**；`EcosystemService.setPluginEnabled()` 校验 `pluginId` 拒绝路径穿越；`inspectEcosystem()` 对 HTTP MCP URL 中的用户名/密码做脱敏。（测试：`test/ecosystem.test.ts`）

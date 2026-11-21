@@ -1,7 +1,8 @@
 // Map an agy_tool mirror step onto the card model the renderers consume.
 
 import { isImageFile } from '../images.ts';
-import { mirrorInfo, num, parsedArgsRaw, pick, resultText } from './args.ts';
+import { extractImagePathsFromText, mirrorInfo, num, parsedArgsRaw, pick, resultText } from './args.ts';
+import { classifyExtendedCard } from './extended-model.ts';
 import { relativize } from './format.ts';
 import type { CardKind, MirrorCardModel, ToolBlock } from './types.ts';
 
@@ -26,18 +27,27 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 	if (tool === 'invoke_subagent') {
 		const directRole = pick(input, 'Role', 'role');
 		const directTypeName = pick(input, 'TypeName', 'typeName');
-		const effRole = directRole && directTypeName ? `${directRole} (${directTypeName})` : (directRole ?? directTypeName);
-		const prompt = pick(input, 'Prompt', 'prompt');
-		return {
-			kind: 'generic',
-			tool,
-			server: info.server,
-			title: desc ?? (effRole ? `Subagent · ${effRole}` : 'Invoke Subagent'),
-			command: prompt,
-			output: out,
-			raw: parsedArgsRaw(block),
-		};
+		const prompt = pick(input, 'Prompt', 'prompt') ?? '';
+		if ((directTypeName && /image[-_\s]?gen/i.test(directTypeName)) || (directRole && /image[-_\s]?gen/i.test(directRole))) {
+			const paths = extractImagePathsFromText(out);
+			const imageName = pick(input, 'ImageName', 'image_name', 'name') ?? (paths[0]?.split(/[/\\]/).pop() || 'image');
+			const ratio = pick(input, 'AspectRatio', 'aspect_ratio') ?? '1:1';
+			return {
+				kind: 'image',
+				tool,
+				server: info.server,
+				title: desc ?? `Generate Image · ${imageName}`,
+				prompt,
+				imageName,
+				aspectRatio: ratio,
+				...(paths[0] ? { imagePath: paths[0], imagePaths: paths } : {}),
+				output: out,
+				raw: parsedArgsRaw(block),
+			};
+		}
 	}
+	const extended = classifyExtendedCard(tool, input, desc, out, parsedArgsRaw(block), info.server);
+	if (extended !== null) return extended;
 	if (QUESTION_TOOLS.has(tool)) {
 		const questionsRaw = (input as Record<string, unknown>).questions ?? (input as Record<string, unknown>).Questions;
 		const questions = Array.isArray(questionsRaw) ? (questionsRaw as Array<{ question?: string; options?: string[]; is_multi_select?: boolean }>) : [];
@@ -57,6 +67,7 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 		const prompt = pick(input, 'Prompt', 'prompt') ?? '';
 		const name = pick(input, 'ImageName', 'image_name', 'name') ?? 'image';
 		const ratio = pick(input, 'AspectRatio', 'aspect_ratio') ?? '1:1';
+		const paths = extractImagePathsFromText(out);
 		return {
 			kind: 'image',
 			tool,
@@ -65,6 +76,7 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 			prompt,
 			imageName: name,
 			aspectRatio: ratio,
+			...(paths[0] ? { imagePath: paths[0], imagePaths: paths } : {}),
 			output: out,
 			raw: parsedArgsRaw(block),
 		};

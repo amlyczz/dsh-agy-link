@@ -6,8 +6,14 @@
 // metadata. Every probe executes through the official `agy` Go binary in
 // read-only `--mode plan` with genuine Go TLS fingerprints and isolated account
 // environments (including Windows `acquireCredentialSlot` protection).
-import { shouldPollAccount, type ManagedAccount } from '../../common/pool-types.ts'
+import { accountPollSuppressed, modelFamilyOf, type ManagedAccount } from '../../common/pool-types.ts'
+import { isAccountCriticalAuth, isFamilyCooling } from '../../common/quota-bench.ts'
 import type { PluginConfig } from '../../common/types.ts'
+import type {
+  WarmupAccountSummary,
+  WarmupLastRunSnapshot,
+  WarmupStatusSnapshot,
+} from '../../common/warmup-types.ts'
 import { acquireCredentialSlot } from '../../host/credential-slot.ts'
 import { StreamJsonParser } from '../../host/parser.ts'
 import type { AccountPoolManager } from '../../host/pool.ts'
@@ -39,8 +45,62 @@ export interface WarmupCliDeps {
   runCliProbe?: (account: ManagedAccount, model: string) => Promise<CliProbeOutcome>
 }
 
+function summarizeWarmupRun(
+  scope: 'all' | string,
+  startedAt: number,
+  results: readonly WarmupResult[],
+): WarmupLastRunSnapshot {
+  const byAccount = new Map<string, WarmupAccountSummary>()
+  let succeeded = 0
+  let skipped = 0
+  let failed = 0
+  for (const r of results) {
+    let entry = byAccount.get(r.accountId)
+    if (!entry) {
+      entry = {
+        accountId: r.accountId,
+        alias: r.alias || r.email || r.accountId,
+        probed: 0,
+        succeeded: 0,
+        skipped: 0,
+        failed: 0,
+      }
+      byAccount.set(r.accountId, entry)
+    }
+    if (r.skipped) {
+      entry.skipped += 1
+      skipped += 1
+    } else if (r.success) {
+      entry.probed += 1
+      entry.succeeded += 1
+      succeeded += 1
+    } else {
+      entry.probed += 1
+      entry.failed += 1
+      failed += 1
+      if (r.error) entry.lastError = r.error
+    }
+  }
+  return {
+    scope,
+    startedAt,
+    finishedAt: Date.now(),
+    succeeded,
+    skipped,
+    failed,
+    accounts: [...byAccount.values()],
+  }
+}
+
 export class WarmupService {
   readonly history: WarmupHistoryStore
+  private activeScope: 'all' | string | null = null
+  private activeAccountIds: string[] = []
+  private currentAccountId: string | null = null
+  private activeStartedAt: number | null = null
+  private activeCompleted = 0
+  private activeTotal = 0
+  private lastRun: WarmupLastRunSnapshot | null = null
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -255,61 +315,135 @@ export class WarmupService {
     return results
   }
 
+  isRunning(): boolean {
+    return this.activeScope !== null
+  }
+
+  status(): WarmupStatusSnapshot {
+    return {
+      running: this.activeScope !== null,
+      scope: this.activeScope,
+      activeAccountIds: [...this.activeAccountIds],
+      currentAccountId: this.currentAccountId,
+      startedAt: this.activeStartedAt,
+      completed: this.activeCompleted,
+      total: this.activeTotal,
+      lastRun: this.lastRun
+        ? { ...this.lastRun, accounts: this.lastRun.accounts.map((a) => ({ ...a })) }
+        : null,
+    }
+  }
+
   async warmupAccount(
     account: ManagedAccount,
-    options: { force?: boolean; model?: string } = {},
+    options: { force?: boolean; model?: string; ignoreFailureBackoff?: boolean } = {},
   ): Promise<WarmupResult[]> {
     const now = Date.now()
-    if (!account.enabled) {
-      return [skippedWarmupResult(account, options.model ?? 'default', 'Account is disabled')]
+    const trackStandalone = this.activeScope === null
+    if (trackStandalone) {
+      this.activeScope = account.id
+      this.activeAccountIds = [account.id]
+      this.currentAccountId = account.id
+      this.activeStartedAt = now
+      this.activeCompleted = 0
+      this.activeTotal = 1
     }
-    if (account.authRequired) {
-      return [skippedWarmupResult(account, options.model ?? 'default', 'Account requires authentication')]
-    }
-    if (!options.force && !shouldPollAccount(account)) {
-      return [skippedWarmupResult(account, options.model ?? 'default', 'Account is in cooldown or auth quarantine')]
-    }
-    if (options.model) {
-      return [await this.warmupExplicitModel(account, options.model, options.force === true, now)]
-    }
+    let results: WarmupResult[] = []
+    try {
+      if (!account.enabled) {
+        results = [skippedWarmupResult(account, options.model ?? 'default', 'Account is disabled')]
+        return results
+      }
+      if (isAccountCriticalAuth(account)) {
+        results = [skippedWarmupResult(account, options.model ?? 'default', 'Account requires authentication')]
+        return results
+      }
+      if (!options.force && accountPollSuppressed(account, now)) {
+        results = [skippedWarmupResult(account, options.model ?? 'default', 'Account quota summary unavailable')]
+        return results
+      }
+      if (options.model) {
+        const fam = modelFamilyOf(options.model)
+        if (!options.force && isFamilyCooling(account, fam, now)) {
+          results = [skippedWarmupResult(account, options.model, `${fam} family is cooling down`)]
+          return results
+        }
+        results = [await this.warmupExplicitModel(account, options.model, options.force === true, now)]
+        return results
+      }
 
-    const plan = planWarmupTargets({
-      account,
-      force: options.force === true,
-      configuredModels: this.config().warmupModels,
-      now,
-      isCoolingDown: (key, cooldownMs) => this.history.checkCooldown(key, cooldownMs, now),
-    })
-    if (plan.kind === 'skip') {
-      return [skippedWarmupResult(account, plan.model, plan.reason, true)]
+      const plan = planWarmupTargets({
+        account,
+        force: options.force === true,
+        ignoreFailureBackoff: options.ignoreFailureBackoff === true,
+        configuredModels: this.config().warmupModels,
+        now,
+        isCoolingDown: (key, cooldownMs) => this.history.checkCooldown(key, cooldownMs, now),
+      })
+      if (plan.kind === 'skip') {
+        results = [skippedWarmupResult(account, plan.model, plan.reason, true)]
+        return results
+      }
+      results = await this.runWarmupTargets(account, plan.targets, now)
+      return results
+    } finally {
+      if (trackStandalone) {
+        this.activeCompleted = 1
+        this.lastRun = summarizeWarmupRun(account.id, now, results)
+        this.activeScope = null
+        this.activeAccountIds = []
+        this.currentAccountId = null
+        this.activeStartedAt = null
+        this.activeCompleted = 0
+        this.activeTotal = 0
+      }
     }
-    return this.runWarmupTargets(account, plan.targets, now)
   }
 
   /**
    * Warm up all eligible accounts sequentially, halting immediately if any
    * account hits a terminal `TOS_VIOLATION` (ban-sweep circuit breaker).
    */
-  async warmupAllAccounts(options: { force?: boolean } = {}): Promise<WarmupResult[]> {
+  async warmupAllAccounts(options: { force?: boolean; ignoreFailureBackoff?: boolean } = {}): Promise<WarmupResult[]> {
+    const startedAt = Date.now()
     const accounts = this.pool.getAccounts().filter((a) =>
-      options.force ? a.enabled && !a.authRequired : shouldPollAccount(a),
+      a.enabled && !isAccountCriticalAuth(a) && (options.force || !accountPollSuppressed(a, startedAt)),
     )
     const allResults: WarmupResult[] = []
 
-    for (let i = 0; i < accounts.length; i++) {
-      const acc = accounts[i]!
-      const res = await this.warmupAccount(acc, options)
-      allResults.push(...res)
-      if (res.some((r) => r.terminal === true)) {
-        this.log('[agy-link] warmup: terminal TOS_VIOLATION detected — halting remaining pool warmup as sweep protection')
-        break
-      }
-      if (i < accounts.length - 1) {
-        await new Promise((r) => setTimeout(r, warmupDelayMs()))
-      }
-    }
+    this.activeScope = 'all'
+    this.activeAccountIds = accounts.map((a) => a.id)
+    this.currentAccountId = null
+    this.activeStartedAt = startedAt
+    this.activeCompleted = 0
+    this.activeTotal = accounts.length
 
-    return allResults
+    try {
+      for (let i = 0; i < accounts.length; i++) {
+        const acc = accounts[i]!
+        this.currentAccountId = acc.id
+        const res = await this.warmupAccount(acc, options)
+        allResults.push(...res)
+        this.activeCompleted = i + 1
+        if (res.some((r) => r.terminal === true)) {
+          this.log('[agy-link] warmup: terminal TOS_VIOLATION detected — halting remaining pool warmup as sweep protection')
+          break
+        }
+        // Only pace between accounts when at least one CLI probe actually ran.
+        if (i < accounts.length - 1 && res.some((r) => !r.skipped)) {
+          await new Promise((r) => setTimeout(r, warmupDelayMs()))
+        }
+      }
+      return allResults
+    } finally {
+      this.lastRun = summarizeWarmupRun('all', startedAt, allResults)
+      this.activeScope = null
+      this.activeAccountIds = []
+      this.currentAccountId = null
+      this.activeStartedAt = null
+      this.activeCompleted = 0
+      this.activeTotal = 0
+    }
   }
 
   async runScheduledWarmup(): Promise<WarmupResult[]> {

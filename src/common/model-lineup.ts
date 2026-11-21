@@ -42,6 +42,9 @@ export interface FallbackModelDef {
 /** Gemini Flash — the cheap, always-available workhorse. */
 export const PREFERRED_GEMINI_FLASH = 'gemini-3.8-flash'
 
+/** Gemini 4 Hydrogen — fast, balanced Gemini 4 workhorse (Pro & Ultra plans). */
+export const PREFERRED_GEMINI_HYDROGEN = 'gemini-4-hydrogen'
+
 /** Gemini Pro tier / Argon (Pro & Ultra plans only). */
 export const PREFERRED_GEMINI_ARGON = 'gemini-4-argon'
 

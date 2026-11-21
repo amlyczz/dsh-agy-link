@@ -32,7 +32,27 @@ export interface AgyToolViewProps {
 	t?: (key: string, params?: Record<string, unknown>) => string;
 }
 
-export type CardKind = 'terminal' | 'diff' | 'read' | 'search' | 'list' | 'delete' | 'question' | 'image' | 'generic';
+export type CardKind =
+	| 'terminal'
+	| 'diff'
+	| 'read'
+	| 'search'
+	| 'list'
+	| 'delete'
+	| 'question'
+	| 'image'
+	| 'swarm'
+	| 'workflow'
+	| 'schedule'
+	| 'task'
+	| 'subagent'
+	| 'browser'
+	| 'generic';
+
+export interface CardBadge {
+	label: string;
+	tone?: 'neutral' | 'accent' | 'warn' | 'ok';
+}
 
 export interface MirrorCardModel {
 	kind: CardKind;
@@ -53,4 +73,8 @@ export interface MirrorCardModel {
 	aspectRatio?: string;
 	isImage?: boolean;
 	imagePath?: string;
+	imagePaths?: readonly string[];
+	brief?: string;
+	url?: string;
+	badges?: readonly CardBadge[];
 }

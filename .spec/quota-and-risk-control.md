@@ -18,7 +18,7 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
    - `agyFetch(url, init, proxyUrl, accountScope)` 按 `accountScope@@effectiveProxy` 隔离 Undici `ProxyAgent` / 连接池（上限 32 LRU，退出时统一关闭），确保共享同一代理出口的不同 Google 账号绝不复用同一条上游 Keep-Alive TCP/TLS 会话。
 4. **启动序列严格串行定锚与按出口错峰**：
    - 启动时先完成 `agy --version` 版本探测，填充真实版本号并同步给 OAuth 模块后，再允许后续 `QuotaService` 发起请求。
-   - 手动与 CLI 全池配额刷新（`refreshAllQuotas(true)`）同样跳过已停用（`!acc.enabled`）与 `TOS_VIOLATION` 终态封禁账号；按有效出口代理分组（不同代理组间并行）。**同一代理/直连出口内：后台自动轮询强制串行（并发 1），用户手动刷新允许有界并发 2（`QUOTA_FORCE_CONCURRENCY`），且每次账号 START 之间仍插入 `400~850ms` 随机抖动**——「串行到底」曾让 5 号同出口的池子点一次刷新耗掉约 55 秒（2026-11-19 实测），而并发上限 2 + 起点抖动既压掉大部分等待，又不产生同 IP 瞬时多号爆发。调度实现见 `src/features/quota/sweep.ts`（`sweepAccountsByEgress` / `runStaggered`），Windows 分支因凭据槽互斥保持完全串行。
+   - 手动与 CLI 全池配额刷新（`refreshAllQuotas(true)`）同样跳过已停用（`!acc.enabled`）与 `TOS_VIOLATION` 终态封禁账号；按有效出口代理分组（不同代理组间并行）。**同一代理/直连出口内：后台自动轮询强制串行（并发 1），用户手动刷新允许有界并发 2（`QUOTA_FORCE_CONCURRENCY`），且每次账号 START 之间仍插入 `400~850ms` 随机抖动**——「串行到底」曾让 5 号同出口的池子点一次刷新耗掉约 55 秒（2026-11-19 实测），而并发上限 2 + 起点抖动既压掉大部分等待，又不产生同 IP 瞬时多号爆发。调度实现见 `src/features/quota/sweep.ts`（`sweepAccountsByEgress` / `runStaggered`）；Windows 下隔离 REST 账号不再套用全局 `serializeWin32` 锁，同样享受同出口有界并发 2，且 Win32 Credential Manager 读写通过 `stateDir()/bin` 下缓存编译的轻量 `.NET` 辅助程序（`csc.exe` 懒编译，写密钥走 stdin，失败自动回退 `powershell.exe`）完成，避免每次逐号拉起 PowerShell 编译。
    - `AgyAdapter` 请求频率与账号/出口启动间隔采用 **TAT（理论到达时间）** 同步预占算法，防止多并发会话在 `await` 后同时唤醒形成惊群，并在共享出口跨号切换时保持 `350~650ms` 最小安全间隔。
 
 ## 2. 配额采集：CLI 优先 + 按需最小化 REST 降级
@@ -42,7 +42,8 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
 
 5. **REST 降级采用「按需补充，避免冗余三并发」**：
    - 先请求 `retrieveUserQuotaSummary` 与 `fetchAvailableModels`；仅当 `fetchAvailableModels` 未携带模型级 `quotaInfo` 时才回退请求 `retrieveUserQuota`（保留 issue #48 修正过期 5h 占位符能力的同时，消除稳态下每次轮询多余的第 3 个内部端点请求）。
-   - 后台自动轮询严格跳过已禁用、冷却中、终态封禁账号（`shouldPollAccount`），账号间保持 `2000~3500ms` 随机抖动间隔（`staggerJitterMs`）。
+   - 后台自动轮询通过 `shouldPollAccount` 跳过已禁用、终态封禁以及**全族冷却（`isAccountFullyCooling`）**的账号；单模型族冷却（例如仅 Gemini 处于 429/本地冷却而 Argon/Claude/GPT 仍健康）绝不阻断其余模型族的轮询与调度；账号间保持 `2000~3500ms` 随机抖动间隔（`staggerJitterMs`）。
+   - 预热规划（`planWarmupTargets` / `WarmupService`）按**模型族粒度**判定冷却与激活资格（`isFamilyCooling`）：点击一键预热默认使用 `force: false, ignoreFailureBackoff: true`，只激活已过期且健康的配额窗口，不强探周期中（mid-cycle）窗口、不触碰冷却中的模型族，且整号跳过时不插入账号间休眠延迟。
 
 ## 3. Proto3 零值省略与耗尽态解析
 
