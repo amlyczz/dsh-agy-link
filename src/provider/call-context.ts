@@ -103,7 +103,7 @@ export function resolveCallContext(input: CallContextInput): CallContext {
   // mode; titles keep the configured mode.
   const imageMode = isImage ? options.agyPermissionMode : undefined
   const permissionMode: PermissionMode =
-    imageMode === 'skip' || imageMode === 'plan' || imageMode === 'accept-edits'
+    imageMode === 'skip' || imageMode === 'auto' || imageMode === 'plan' || imageMode === 'accept-edits'
       ? imageMode
       : isAux && !isTitle && !isImage
         ? 'plan'

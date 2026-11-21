@@ -3,6 +3,7 @@
 // Zero direct HTTP endpoints or spoofed headers — probes run exclusively via
 // the official `agy` CLI binary.
 import type { FamilyQuotaInfo, ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
+import { isFamilyCooling } from '../../common/quota-bench.ts'
 import { PREFERRED_CLAUDE, PREFERRED_GEMINI_FLASH, PREFERRED_OPENAI } from '../../common/model-lineup.ts'
 
 /** Normalize a configured or quota-reported model ID into a clean `agy --model` CLI slug. */
@@ -116,11 +117,12 @@ export function skippedWarmupResult(
 function warmupDue(params: {
   quota: FamilyQuotaInfo
   force: boolean
+  ignoreFailureBackoff?: boolean
   now: number
   historyKey: string
   isCoolingDown(key: string, cooldownMs: number): boolean
 }): { shouldWarm: boolean; failureKey: string } {
-  const { quota, force, now, historyKey, isCoolingDown } = params
+  const { quota, force, ignoreFailureBackoff, now, historyKey, isCoolingDown } = params
   let shouldWarm = false
   const hasRecentWarmup = isCoolingDown(historyKey, SIX_DAYS_MS)
 
@@ -143,7 +145,7 @@ function warmupDue(params: {
   }
 
   const failureKey = `${historyKey}:failed`
-  if (shouldWarm && !force && isCoolingDown(failureKey, FAILURE_BACKOFF_MS)) {
+  if (shouldWarm && !force && !ignoreFailureBackoff && isCoolingDown(failureKey, FAILURE_BACKOFF_MS)) {
     shouldWarm = false
   }
   return { shouldWarm, failureKey }
@@ -151,17 +153,18 @@ function warmupDue(params: {
 
 /**
  * Pure target planner for one account: honors the configured/monitored model
- * list, skips families already in cooldown or not yet due, and falls back to a
+ * list, skips families already cooling or not yet due, and falls back to a
  * forced Google probe when a manual/forced run finds no weekly target.
  */
 export function planWarmupTargets(params: {
   account: ManagedAccount
   force: boolean
+  ignoreFailureBackoff?: boolean
   configuredModels: readonly string[] | undefined
   now: number
   isCoolingDown(key: string, cooldownMs: number): boolean
 }): WarmupPlan {
-  const { account, force, configuredModels, now, isCoolingDown } = params
+  const { account, force, ignoreFailureBackoff, configuredModels, now, isCoolingDown } = params
   const identity = account.email || account.id
 
   if (configuredModels !== undefined && configuredModels.length === 0) {
@@ -175,14 +178,13 @@ export function planWarmupTargets(params: {
   for (const fam of families) {
     const q: FamilyQuotaInfo | undefined = quotas[fam]
     if (!q) continue
-    const familyCooldown = account.cooldowns?.[fam]
-    if (!force && familyCooldown && familyCooldown.cooldownUntil > now) continue
+    if (!force && isFamilyCooling(account, fam, now)) continue
 
     const weeklyFrac = q.weeklyFraction
     if (weeklyFrac === undefined || weeklyFrac < 0.999) continue
 
     const historyKey = `${identity}:${fam}:weekly`
-    const { shouldWarm, failureKey } = warmupDue({ quota: q, force, now, historyKey, isCoolingDown })
+    const { shouldWarm, failureKey } = warmupDue({ quota: q, force, ignoreFailureBackoff, now, historyKey, isCoolingDown })
     if (shouldWarm) {
       const model = pickWarmupModelForFamily(fam, monitored, account)
       targets.push({ family: fam, model, historyKey, failureKey })

@@ -97,11 +97,7 @@ reference-counted slot is the strongest isolation the plugin can provide.
 
 ## Not forwarded to agy
 
-- **Images as true multimodal blocks** - agy print mode (`-p`) has no image
-  input flag. Since v0.2 the bridge stages DSH image attachments to a local
-  media directory (`mediaDir`, TTL-swept) and references them by absolute
-  path in the prompt, granting `--add-dir` so agy can view them with its own
-  file/vision tools. Same approach as the pi extension.
+- **Multimodal inputs via staged paths (`--add-dir`)** - agy print mode (`-p`) has no inline binary attachment flag. The bridge stages DSH attachments — images (up to `mediaMaxBytes` / `mediaMaxImages`) plus PDF, audio, and video files (up to `mediaMaxFileBytes`, 20 MiB default) — into a local media directory (`mediaDir`, TTL-swept) and references them by absolute path in the prompt, granting `--add-dir` so agy can inspect them with its own file/vision tools. Same approach as the pi extension.
 - **DSH tools to agy (reverse MCP bridge)** - available since v0.2 behind the
   `mcpBridge` config flag (experimental): the plugin runs a loopback-only,
   token-guarded HTTP endpoint and registers a zero-dependency stdio MCP
@@ -169,9 +165,7 @@ reference-counted slot is the strongest isolation the plugin can provide.
 
 ## Mapping choices
 
-- agy tool activity becomes **reasoning-block annotations**
-  (`[agy tool: name] ... -> output`), not DSH tool-call blocks — there is no
-  DSH-side tool round-trip to honor.
+- agy tool activity is mirrored as **native DSH tool cards** (`agy_tool` dispatched inside `run_code` and rendered by `tool.call.toolview` for terminal, inline diff, read, search, MCP, `swarm`, `run_workflow`, `schedule`, `manage_task`, subagents, `image-generator`, and browser/DevTools), falling back to reasoning-block annotations only when tool mirroring is disabled or unavailable.
 - Gemini effort suffixes fold into one base model with selectable efforts
   (`gemini-3-6-flash` + `--effort`); Claude / GPT-OSS slugs stay verbatim
   (agy rejects `--effort` for them).

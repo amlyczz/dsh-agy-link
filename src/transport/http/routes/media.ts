@@ -54,7 +54,7 @@ function handleMermaid(services: HostServices, req: unknown, res: unknown): void
   }
 }
 
-function collectWorkspaceRoots(services: HostServices): string[] {
+export function collectWorkspaceRoots(services: HostServices): string[] {
   const { getConfig, mediaDir, activeCwds } = services
   const roots: string[] = []
   const cfgRoot = getConfig().workspaceRoot

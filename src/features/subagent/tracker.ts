@@ -4,8 +4,25 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import type { AgyEvent } from '../../common/types.ts'
+import {
+  extractQuotaErrorModel,
+  isTransientBurstRateLimit,
+  looksLikeHardRateLimit,
+  looksLikeTosViolation,
+  parseResetDurationMs,
+  type AgyEvent,
+} from '../../common/types.ts'
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
+import { TaskActivityTracker } from './task-activity.ts'
+
+export interface SubagentQuotaExhaustedInfo {
+  source: 'subagent-transcript' | 'parent-system-message' | 'tool-step'
+  errorText: string
+  model?: string
+  resetMs?: number
+  role?: string
+  conversationId?: string
+}
 
 export interface SubagentTrackerOptions {
   conversationId?: string
@@ -17,6 +34,7 @@ export interface SubagentTrackerOptions {
    */
   resumed?: boolean
   onEvent: (event: AgyEvent) => void
+  onQuotaExhausted?: (info: SubagentQuotaExhaustedInfo) => void
   noteActivity?: () => void
   pollIntervalMs?: number
   /** Reports failures that are not ordinary file churn (a half-written row, a file being rotated). */
@@ -35,6 +53,80 @@ function noteFailure(log: ((message: string) => void) | undefined, what: string,
   log?.(`subagent tracker: ${what} — ${String(err)}`)
 }
 
+interface TranscriptCursor {
+  /** Bytes of `transcript.jsonl` already consumed. */
+  offset: number
+  /** Incremental UTF-8 decoder so split multi-byte characters never corrupt. */
+  decoder: StringDecoder
+  /** Trailing partial line from the last read (the file ends without a newline). */
+  rest: string
+}
+
+function createTranscriptCursor(offset = 0): TranscriptCursor {
+  return { offset, decoder: new StringDecoder('utf8'), rest: '' }
+}
+
+function fileSizeOrZero(logPath: string): number {
+  try {
+    const st = statSync(logPath)
+    return st.isFile() ? st.size : 0
+  } catch {
+    return 0
+  }
+}
+
+function readTranscriptDelta(logPath: string, cursor: TranscriptCursor): string[] {
+  let size: number
+  try {
+    const st = statSync(logPath)
+    if (!st.isFile()) return []
+    size = st.size
+  } catch {
+    return []
+  }
+  if (size < cursor.offset) {
+    cursor.offset = 0
+    cursor.decoder = new StringDecoder('utf8')
+    cursor.rest = ''
+  }
+  if (size === cursor.offset) return []
+
+  const length = size - cursor.offset
+  const buffer = Buffer.allocUnsafe(length)
+  let bytesRead = 0
+  try {
+    const fd = openSync(logPath, 'r')
+    try {
+      bytesRead = readSync(fd, buffer, 0, length, cursor.offset)
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return []
+  }
+  if (bytesRead <= 0) return []
+  cursor.offset += bytesRead
+
+  const chunk = cursor.rest + cursor.decoder.write(buffer.subarray(0, bytesRead))
+  const parts = chunk.split('\n')
+  cursor.rest = parts.pop() ?? ''
+  return parts.filter((line) => line.trim() !== '')
+}
+
+export function extractAuthoritativeSubagentQuotaError(text: string, fromParentSystemMessage: boolean): boolean {
+  if (!text) return false
+  if (!looksLikeHardRateLimit(text) || isTransientBurstRateLimit(text) || looksLikeTosViolation(text)) {
+    return false
+  }
+  if (fromParentSystemMessage) {
+    return /The subagent\b[\s\S]*?\bencountered an error/i.test(text)
+  }
+  if (/Command exited with code\b/i.test(text)) return false
+  return /image failed to generate|failed to generate content|cloudcode-pa\.googleapis\.com|RESOURCE_EXHAUSTED|QUOTA_EXHAUSTED|Individual quota reached|agent executor error/i.test(
+    text,
+  )
+}
+
 interface TrackedSubagent {
   conversationId: string
   role: string
@@ -44,12 +136,7 @@ interface TrackedSubagent {
   state?: string
   /** True once descriptor reached a non-active state (stop polling transcript). */
   terminal: boolean
-  /** Bytes of `transcript.jsonl` already consumed. */
-  offset: number
-  /** Incremental UTF-8 decoder so split multi-byte characters never corrupt. */
-  decoder: StringDecoder
-  /** Trailing partial line from the last read (the file ends without a newline). */
-  rest: string
+  cursor: TranscriptCursor
   /** Lines consumed so far — the fallback step index when a row carries none. */
   lines: number
 }
@@ -161,15 +248,19 @@ export class SubagentTracker {
   private brainDir: string | null = null
   private readonly trackedSubagents = new Map<string, TrackedSubagent>()
   private readonly seenStepKeys = new Set<string>()
+  private readonly taskActivity: TaskActivityTracker
   private timer: NodeJS.Timeout | null = null
   private active = false
   private polling = false
   private readonly pollIntervalMs: number
+  private parentCursor: TranscriptCursor = createTranscriptCursor()
+  private parentLines = 0
 
   constructor(private readonly opts: SubagentTrackerOptions) {
     this.conversationId = opts.conversationId ?? ''
     this.accountHome = opts.accountHome
     this.pollIntervalMs = opts.pollIntervalMs ?? 500
+    this.taskActivity = new TaskActivityTracker(opts.log)
   }
 
   /** Follow the conversation agy reported in its stream-json init/result envelope. */
@@ -178,6 +269,9 @@ export class SubagentTracker {
     this.conversationId = cid
     this.brainDir = null
     this.baselined = false
+    this.parentCursor = createTranscriptCursor()
+    this.parentLines = 0
+    this.taskActivity.reset()
     if (this.active) {
       if (this.opts.resumed === true) {
         this.baselined = true
@@ -207,6 +301,9 @@ export class SubagentTracker {
         this.brainDir = findBrainDir(this.conversationId, this.accountHome)
       }
       if (!this.brainDir) return
+      const parentLog = join(this.brainDir, '.system_generated', 'logs', 'transcript.jsonl')
+      this.parentCursor = createTranscriptCursor(fileSizeOrZero(parentLog))
+      this.taskActivity.baseline(this.brainDir)
       this.scanSubagentsForConv(this.conversationId, true)
       for (const cid of Array.from(this.trackedSubagents.keys())) {
         this.scanSubagentsForConv(cid, true)
@@ -217,16 +314,27 @@ export class SubagentTracker {
   }
 
   stop(): void {
-    this.active = false
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
+    try {
+      if (this.active && !this.polling && this.conversationId !== '') {
+        this.poll()
+      }
+    } finally {
+      this.active = false
+      if (this.timer) {
+        clearInterval(this.timer)
+        this.timer = null
+      }
     }
   }
 
-  /** Run one scan across known conversations and subagents. */
-  poll(): void {
-    if (this.polling || !this.active) return
+  /** Perform one final synchronous scan even after `stop()` halted the interval. */
+  flush(): void {
+    this.poll(true)
+  }
+
+  /** Run one scan across parent transcript, known conversations, and subagents. */
+  poll(force = false): void {
+    if (this.polling || (!this.active && !force)) return
     if (!this.conversationId) return
     this.polling = true
     try {
@@ -234,6 +342,11 @@ export class SubagentTracker {
         this.brainDir = findBrainDir(this.conversationId, this.accountHome)
       }
       if (!this.brainDir) return
+
+      this.pollParentTranscript()
+      this.taskActivity.poll(this.brainDir, (ev) => {
+        this.emitSubagentEvent(ev.stepKey, ev.text, ev.raw)
+      })
 
       // Collect directories to inspect for subagents
       const convsToScan = [this.conversationId, ...Array.from(this.trackedSubagents.keys())]
@@ -250,6 +363,42 @@ export class SubagentTracker {
       noteFailure(this.opts.log, 'poll', err)
     } finally {
       this.polling = false
+    }
+  }
+
+  private pollParentTranscript(): void {
+    if (!this.brainDir) return
+    const logPath = join(this.brainDir, '.system_generated', 'logs', 'transcript.jsonl')
+    for (const line of readTranscriptDelta(logPath, this.parentCursor)) {
+      try {
+        const o = JSON.parse(line) as {
+          step_index?: unknown
+          source?: unknown
+          type?: unknown
+          content?: unknown
+        }
+        this.parentLines += 1
+        if (o.source !== 'SYSTEM' || o.type !== 'SYSTEM_MESSAGE' || typeof o.content !== 'string') continue
+        if (!extractAuthoritativeSubagentQuotaError(o.content, true)) continue
+        const stepIdx = typeof o.step_index === 'number' ? o.step_index : this.parentLines
+        const qKey = `parent-quota-${stepIdx}`
+        if (this.seenStepKeys.has(qKey)) continue
+        const roleMatch = o.content.match(/The subagent\s+(.+?)\s+(?:\([^)]+\)\s+)?(?:with id|encountered an error)/i)
+        const role = roleMatch?.[1]?.trim()
+        const model = extractQuotaErrorModel(o.content)
+        const resetMs = parseResetDurationMs(o.content)
+        const prefix = role ? `[子代理 · ${role}]` : '[子代理]'
+        this.emitSubagentEvent(qKey, `${prefix} 额度已用尽，正在准备切换账号...\n`, o)
+        this.opts.onQuotaExhausted?.({
+          source: 'parent-system-message',
+          errorText: o.content,
+          ...(role ? { role } : {}),
+          ...(model ? { model } : {}),
+          ...(resetMs !== undefined ? { resetMs } : {}),
+        })
+      } catch {
+        // skip malformed line
+      }
     }
   }
 
@@ -315,16 +464,8 @@ export class SubagentTracker {
 
         const subBrainDir = findBrainDir(subId, this.accountHome) ?? join(bDir, '..', subId)
         const active = isActiveSubagentState(rawState)
-        let initialOffset = 0
-        if (baselineOnly || !active) {
-          try {
-            const logPath = join(subBrainDir, '.system_generated', 'logs', 'transcript.jsonl')
-            const st = statSync(logPath)
-            if (st.isFile()) initialOffset = st.size
-          } catch {
-            initialOffset = 0
-          }
-        }
+        const logPath = join(subBrainDir, '.system_generated', 'logs', 'transcript.jsonl')
+        const initialOffset = baselineOnly ? fileSizeOrZero(logPath) : 0
         const tracked: TrackedSubagent = {
           conversationId: subId,
           role,
@@ -332,9 +473,7 @@ export class SubagentTracker {
           brainDir: subBrainDir,
           state: rawState,
           terminal: !active,
-          offset: initialOffset,
-          decoder: new StringDecoder('utf8'),
-          rest: '',
+          cursor: createTranscriptCursor(initialOffset),
           lines: 0,
         }
         this.trackedSubagents.set(subId, tracked)
@@ -347,6 +486,10 @@ export class SubagentTracker {
           this.emitSubagentEvent(spawnKey, `[子代理 · ${role}] 已启动协同专员 (${typeName})\n`, obj)
         } else {
           this.seenStepKeys.add(spawnKey)
+          // Even a subagent that terminated before the first poll can leave an
+          // authoritative 429 quota error in this turn's transcript; scan once
+          // in quota-only mode without emitting stale tool/chat chatter.
+          this.pollSubagentTranscript(tracked, true)
           if (rawState !== undefined) {
             this.emitSubagentEvent(
               `subagent-state-${subId}-${rawState}`,
@@ -361,56 +504,9 @@ export class SubagentTracker {
     }
   }
 
-  /**
-   * Read the transcript lines appended since the last poll.
-   *
-   * agy rewrites nothing and only appends, so the tracker keeps a byte offset
-   * instead of re-reading (and re-splitting) a transcript that grows to hundreds
-   * of kilobytes: each poll costs one bounded read of the new bytes.
-   */
-  private readNewLines(sub: TrackedSubagent): string[] {
+  private pollSubagentTranscript(sub: TrackedSubagent, quotaOnly = false): void {
     const logPath = join(sub.brainDir, '.system_generated', 'logs', 'transcript.jsonl')
-    let size: number
-    try {
-      const st = statSync(logPath)
-      if (!st.isFile()) return []
-      size = st.size
-    } catch {
-      return []
-    }
-    // A shrunk file means the conversation was recreated; start over.
-    if (size < sub.offset) {
-      sub.offset = 0
-      sub.decoder = new StringDecoder('utf8')
-      sub.rest = ''
-    }
-    if (size === sub.offset) return []
-
-    const length = size - sub.offset
-    const buffer = Buffer.allocUnsafe(length)
-    let bytesRead = 0
-    try {
-      const fd = openSync(logPath, 'r')
-      try {
-        bytesRead = readSync(fd, buffer, 0, length, sub.offset)
-      } finally {
-        closeSync(fd)
-      }
-    } catch {
-      return []
-    }
-    if (bytesRead <= 0) return []
-    sub.offset += bytesRead
-
-    // The tail may end mid-line or mid-UTF-8 codepoint while the writer appends.
-    const chunk = sub.rest + sub.decoder.write(buffer.subarray(0, bytesRead))
-    const parts = chunk.split('\n')
-    sub.rest = parts.pop() ?? ''
-    return parts.filter((line) => line.trim() !== '')
-  }
-
-  private pollSubagentTranscript(sub: TrackedSubagent): void {
-    for (const line of this.readNewLines(sub)) {
+    for (const line of readTranscriptDelta(logPath, sub.cursor)) {
       try {
         const o = JSON.parse(line) as {
           step_index?: unknown
@@ -424,22 +520,46 @@ export class SubagentTracker {
         const stepIdx = typeof o.step_index === 'number' ? o.step_index : sub.lines
         const baseKey = `subagent-${sub.conversationId}-${stepIdx}`
 
-        if (Array.isArray(o.tool_calls) && o.tool_calls.length > 0) {
-          for (let tcIdx = 0; tcIdx < o.tool_calls.length; tcIdx++) {
-            const tc = o.tool_calls[tcIdx]!
-            const toolName = typeof tc?.name === 'string' ? tc.name : ''
-            if (toolName === '') continue
-            const msg = formatSubagentAction(sub.role, toolName, tc.args)
-            this.emitSubagentEvent(`${baseKey}-tc-${tcIdx}`, `${msg}\n`, o)
-          }
-        } else if (o.type === 'PLANNER_RESPONSE' && typeof o.content === 'string' && o.content.trim() !== '') {
-          const firstLine = o.content.trim().split('\n')[0]!.replace(/^#+\s*/, '').slice(0, 100)
-          if (firstLine !== '') {
-            this.emitSubagentEvent(`${baseKey}-content`, `[子代理 · ${sub.role}] 阶段进展: ${firstLine}\n`, o)
+        if (!quotaOnly) {
+          if (Array.isArray(o.tool_calls) && o.tool_calls.length > 0) {
+            for (let tcIdx = 0; tcIdx < o.tool_calls.length; tcIdx++) {
+              const tc = o.tool_calls[tcIdx]!
+              const toolName = typeof tc?.name === 'string' ? tc.name : ''
+              if (toolName === '') continue
+              const msg = formatSubagentAction(sub.role, toolName, tc.args)
+              this.emitSubagentEvent(`${baseKey}-tc-${tcIdx}`, `${msg}\n`, o)
+            }
+          } else if (o.type === 'PLANNER_RESPONSE' && typeof o.content === 'string' && o.content.trim() !== '') {
+            const firstLine = o.content.trim().split('\n')[0]!.replace(/^#+\s*/, '').slice(0, 100)
+            if (firstLine !== '') {
+              this.emitSubagentEvent(`${baseKey}-content`, `[子代理 · ${sub.role}] 阶段进展: ${firstLine}\n`, o)
+            }
           }
         }
         if (isTerminalTranscriptStatus(o.status)) {
-          this.emitSubagentEvent(`${baseKey}-status`, `[子代理 · ${sub.role}] 执行异常/中止 (${o.status})\n`, o)
+          if (!quotaOnly) {
+            this.emitSubagentEvent(`${baseKey}-status`, `[子代理 · ${sub.role}] 执行异常/中止 (${o.status})\n`, o)
+          }
+          if (
+            /^(ERROR|FAILED)$/i.test(o.status.trim())
+            && typeof o.content === 'string'
+            && extractAuthoritativeSubagentQuotaError(o.content, false)
+          ) {
+            const qKey = `subagent-quota-${sub.conversationId}-${stepIdx}`
+            if (!this.seenStepKeys.has(qKey)) {
+              const model = extractQuotaErrorModel(o.content)
+              const resetMs = parseResetDurationMs(o.content)
+              this.emitSubagentEvent(qKey, `[子代理 · ${sub.role}] 额度已用尽，正在准备切换账号...\n`, o)
+              this.opts.onQuotaExhausted?.({
+                source: 'subagent-transcript',
+                errorText: o.content,
+                role: sub.role,
+                conversationId: sub.conversationId,
+                ...(model ? { model } : {}),
+                ...(resetMs !== undefined ? { resetMs } : {}),
+              })
+            }
+          }
         }
       } catch {
         // skip malformed line

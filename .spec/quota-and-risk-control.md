@@ -18,7 +18,7 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
    - `agyFetch(url, init, proxyUrl, accountScope)` 按 `accountScope@@effectiveProxy` 隔离 Undici `ProxyAgent` / 连接池（上限 32 LRU，退出时统一关闭），确保共享同一代理出口的不同 Google 账号绝不复用同一条上游 Keep-Alive TCP/TLS 会话。
 4. **启动序列严格串行定锚与按出口错峰**：
    - 启动时先完成 `agy --version` 版本探测，填充真实版本号并同步给 OAuth 模块后，再允许后续 `QuotaService` 发起请求。
-   - 手动与 CLI 全池配额刷新（`refreshAllQuotas(true)`）同样跳过已停用（`!acc.enabled`）与 `TOS_VIOLATION` 终态封禁账号；按有效出口代理分组（不同代理组间并行）。**同一代理/直连出口内：后台自动轮询强制串行（并发 1），用户手动刷新允许有界并发 2（`QUOTA_FORCE_CONCURRENCY`），且每次账号 START 之间仍插入 `400~850ms` 随机抖动**——「串行到底」曾让 5 号同出口的池子点一次刷新耗掉约 55 秒（2026-11-19 实测），而并发上限 2 + 起点抖动既压掉大部分等待，又不产生同 IP 瞬时多号爆发。调度实现见 `src/features/quota/sweep.ts`（`sweepAccountsByEgress` / `runStaggered`），Windows 分支因凭据槽互斥保持完全串行。
+   - 手动与 CLI 全池配额刷新（`refreshAllQuotas(true)`）同样跳过已停用（`!acc.enabled`）与 `TOS_VIOLATION` 终态封禁账号；按有效出口代理分组（不同代理组间并行）。**同一代理/直连出口内：后台自动轮询强制串行（并发 1），用户手动刷新允许有界并发 2（`QUOTA_FORCE_CONCURRENCY`），且每次账号 START 之间仍插入 `400~850ms` 随机抖动**——「串行到底」曾让 5 号同出口的池子点一次刷新耗掉约 55 秒（2026-11-19 实测），而并发上限 2 + 起点抖动既压掉大部分等待，又不产生同 IP 瞬时多号爆发。调度实现见 `src/features/quota/sweep.ts`（`sweepAccountsByEgress` / `runStaggered`）；Windows 下隔离 REST 账号不再套用全局 `serializeWin32` 锁，同样享受同出口有界并发 2，且 Win32 Credential Manager 读写通过 `stateDir()/bin` 下缓存编译的轻量 `.NET` 辅助程序（`csc.exe` 懒编译，写密钥走 stdin，失败自动回退 `powershell.exe`）完成，避免每次逐号拉起 PowerShell 编译。
    - `AgyAdapter` 请求频率与账号/出口启动间隔采用 **TAT（理论到达时间）** 同步预占算法，防止多并发会话在 `await` 后同时唤醒形成惊群，并在共享出口跨号切换时保持 `350~650ms` 最小安全间隔。
 
 ## 2. 配额采集：CLI 优先 + 按需最小化 REST 降级
@@ -42,7 +42,8 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
 
 5. **REST 降级采用「按需补充，避免冗余三并发」**：
    - 先请求 `retrieveUserQuotaSummary` 与 `fetchAvailableModels`；仅当 `fetchAvailableModels` 未携带模型级 `quotaInfo` 时才回退请求 `retrieveUserQuota`（保留 issue #48 修正过期 5h 占位符能力的同时，消除稳态下每次轮询多余的第 3 个内部端点请求）。
-   - 后台自动轮询严格跳过已禁用、冷却中、终态封禁账号（`shouldPollAccount`），账号间保持 `2000~3500ms` 随机抖动间隔（`staggerJitterMs`）。
+   - 后台自动轮询通过 `shouldPollAccount` 跳过已禁用、终态封禁以及**全族冷却（`isAccountFullyCooling`）**的账号；单模型族冷却（例如仅 Gemini 处于 429/本地冷却而 Argon/Claude/GPT 仍健康）绝不阻断其余模型族的轮询与调度；账号间保持 `2000~3500ms` 随机抖动间隔（`staggerJitterMs`）。
+   - 预热规划（`planWarmupTargets` / `WarmupService`）按**模型族粒度**判定冷却与激活资格（`isFamilyCooling`）：点击一键预热默认使用 `force: false, ignoreFailureBackoff: true`，只激活已过期且健康的配额窗口，不强探周期中（mid-cycle）窗口、不触碰冷却中的模型族，且整号跳过时不插入账号间休眠延迟。
 
 ## 3. Proto3 零值省略与耗尽态解析
 
@@ -106,3 +107,22 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - CLI 优先路径拿到 families 后**提前 return**，早于拥有 `clearQuotaUnavailable` 的汇总分支——于是接口故障期间写入的 `unreachable` 会一直残留，面板持续显示旧时间戳，而存储额度其实在推进。
 - 规则：**谁证明数据是新鲜的，谁负责清标记**。CLI 成功 → clear；汇总权威 → clear；只有「什么都拿不到」才保留/写入。
 - 锚点：`test/issue137-free-tier-summary.test.ts`（CLI 成功后清除；CLI 无数据时不动标记）。
+
+## 6. 全路径额度耗尽统一自动切号对齐（主代理 / 子代理 / 辅助路由 / 工具）
+
+所有请求入口（主会话 `AgyAdapter`、内嵌子代理、辅助路由 `isAux`、`runAgyOnce`/`agy_ask`、`ImageService`/`agy_image`、`TranslationService` 与 `runAcpAttempt`）必须遵守同一套「硬配额耗尽即冷却并切向下一个健康账号」契约，同时严格保留 `TOS_VIOLATION` 终态防连坐熔断：
+
+1. **带部分输出（partial response）的硬配额失败绝不可吞成成功**：
+   - 当 `agy`（CLI `-p` 或 `acp`）在输出过部分文本/工具后返回 `status: ERROR` 且 `error`/`response` 匹配 `isHardQuotaResultError`（如 `RESOURCE_EXHAUSTED (code 429): Individual quota reached`），`EventMapper`、`RunRecording`（`hasConsumableResult` / `hasFinishableEventFrom`）、`classifyRun()` 与 `driveAcpPrompt()` 必须判定为**不可消费失败**并映射为 `Err.RATE_LIMIT`，冷却当前账号（优先解析精确重置时长）并切号重试，严禁调用 `recordSuccess()` 或以 `stop` 结束。
+   - 非配额类的工具报错但带有效答复（如 `Find command timed out.`）保持既有软收尾（`stop` + `[agy finished with error]`）。
+2. **`agy` 内部子代理与图像/委派工具实时配额熔断切号（`SubagentTracker` + `src/provider/quota-failover.ts`）**：
+   - 严禁从普通终端命令输出（如 `Command exited with code 1`）或未核验正文中误判 429；仅当满足可信来源约束（父对话 `transcript.jsonl` 来自 `SYSTEM` 的 `The subagent ... encountered an error` 通知、子代理 `transcript.jsonl` 终态 `ERROR`/`FAILED` 中包含权威 Google Cloud Code / `image failed to generate` / `agent executor error` 配额信号，或 `generate_image`/`invoke_subagent` 工具调用错误）且排除 ≤30s 瞬时 QPS 突发（`isTransientBurstRateLimit`，如 `RATE_LIMIT_EXCEEDED` `1s`）与 `TOS_VIOLATION` 时，才判定为硬配额耗尽。
+   - 实时检测到硬配额耗尽后，立即对耗尽的模型族（若错误信息指定了 model 则优先归属该模型所属族）执行 `pool.recordFailure(..., serverResetTime)`，并检查池内是否还存在满足主模型及耗尽族资格的替代账号：若存在则 `proc.kill('quota')`（保留非 aborted/timeout 状态以映射为 `RATE_LIMIT`），让上层立刻在替代账号重放；若不存在替代账号，仅记录冷却而不强杀仍在运行的主进程。
+   - `handleAttemptOutcome()` 必须先 `await finalizeAttempt(...)` 完成冷却与切号落盘，再 `rec.settle(failure)` 唤醒上层消费方。
+3. **重试深度跟随池容量并覆盖非 `llm-retry` 路径**：
+   - `providerRetryPolicyFor()` 按 `Math.min(Math.max(1, enabledAccounts - 1), 16)` 放开 `poolHops`，不再硬截断在 2 跳导致多号池提前放弃。
+   - `streamWithEffortRetry()` 对不经过 `@deepseek-ai/dsh-llm-retry` 的 `isAux` 辅助路由在未产出任何实质输出前遇到 `Err.RATE_LIMIT` 时，在池内按 `enabledAccounts - 1`（上限 16）自动切号重放（绝不重放 `TOS_VIOLATION`）。
+   - `runAgyOnce()`（`agy_ask` / `/agy ask`）、`ImageService`（`agy_image` 含工具级 429 `QUOTA_EXHAUSTED` 检测与独立 `quotaHops` 预算）与 `TranslationService`（按 `poolQuotaHops` 放开 `RATE_LIMIT`/`QUOTA` 重试上限，非配额错误仍受 `translateRetries` 约束）均接入统一冷却与切号循环；全池无可用账号时明确报错，**严禁**回退到 `account = undefined` 悄悄消耗系统主账号。
+4. **单模型粒度主动让路（`isQuotaBenched`）**：
+   - 当某族缓存配额的 `models` 列表包含匹配请求模型（`modelMatches`）的条目且**所有匹配条目**的剩馀比例均 `<= LOW_QUOTA_WEEKLY`（0.05）且处于有效重置窗口内时，即使该族宏观均值仍高于 `0.10`，预选阶段也直接判定该账号对该模型进入配额让路（`quotaGateClearedAt` 覆盖规则不变）。
+- **验证锚点**：`test/quota-failover-alignment.test.ts`。

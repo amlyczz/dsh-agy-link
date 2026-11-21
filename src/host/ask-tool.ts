@@ -120,7 +120,19 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
       },
       mode: {
         type: 'string',
-        description: 'agy execution mode: plan (read-only) or accept-edits. Defaults to the bridge permission mode.',
+        description: 'agy execution mode: plan (read-only), auto (approve safe ops), accept-edits, or skip. Defaults to the bridge permission mode.',
+      },
+      agent: {
+        type: 'string',
+        description: 'Optional custom agent name passed via agy --agent.',
+      },
+      sandbox: {
+        type: 'boolean',
+        description: 'Optional OS terminal sandbox override passed via agy --sandbox.',
+      },
+      settings: {
+        type: 'string',
+        description: 'Optional inline JSON object or path passed via agy --settings.',
       },
       timeoutMinutes: {
         type: 'number',
@@ -171,6 +183,9 @@ export function defineAgyAskTool(deps: OneShotDeps & { catalog: () => Catalog })
           model: model === '' ? undefined : model,
           effort,
           mode: args.mode,
+          agent: typeof args.agent === 'string' && args.agent.trim() !== '' ? args.agent.trim() : undefined,
+          ...(typeof args.sandbox === 'boolean' ? { sandbox: args.sandbox } : {}),
+          ...(typeof args.settings === 'string' && args.settings.trim() !== '' ? { agySettings: args.settings.trim() } : {}),
           timeoutMs: args.timeoutMinutes ? args.timeoutMinutes * 60_000 : undefined,
           signal: exec.signal,
           readPaths,

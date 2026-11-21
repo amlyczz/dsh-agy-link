@@ -15,15 +15,41 @@
 // as before; thinking-only turns stay token-annotated because agy print
 // mode never streams the thoughts themselves.
 import type { LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { AgyEvent, RawUsage } from '../../common/types.ts'
+import { isNonConsumableResultError, type AgyEvent, type RawUsage } from '../../common/types.ts'
 import { type CompactionNotice, renderCompactionMarker } from '../../common/compaction.ts'
 import { type GoalContext, buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock } from '../../host/dsh-goal.ts'
 import { unwrapMcpTool } from '../../host/mirror-tool.ts'
 import { composeThinkingText } from './thoughts.ts'
-import { normalizeFileLinks, rewriteImageMarkdown, suffixDelta } from './text.ts'
+import { normalizeFileLinks, rewriteAgentEmbeds, rewriteImageMarkdown, splitPendingEmbedFragment, suffixDelta } from './text.ts'
 import { buildToolCallBlock } from './tool-block.ts'
 import { usageFromRaw } from './usage.ts'
 import type { ToolCallState } from './tool-calls.ts'
+
+function formatRunningToolFallback(toolName: string, rawArgs: unknown): string {
+  const unwrapped = unwrapMcpTool(toolName, rawArgs)
+  const a = unwrapped.input
+  const str = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = a[k]
+      if (typeof v === 'string' && v.trim() !== '') return v.trim()
+      if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+    }
+    return ''
+  }
+  if (unwrapped.tool === 'schedule') {
+    const cron = str('CronExpression', 'cron_expression')
+    const dur = str('DurationSeconds', 'duration_seconds')
+    const prompt = str('Prompt', 'prompt')
+    const timing = cron ? `cron ${cron}` : dur ? `${dur}s timer` : 'schedule'
+    return prompt ? `Schedule active (${timing}): ${prompt}` : `Schedule active (${timing})`
+  }
+  const cmd = str('CommandLine', 'command_line', 'command', 'cmd')
+  const taskId = str('TaskId', 'taskId', 'task_id', 'bgTaskId')
+  if (cmd !== '') {
+    return `Tool is running as a background task${taskId ? ` (${taskId})` : ''}: ${cmd}`
+  }
+  return taskId ? `Tool is running as a background task (${taskId})` : 'Tool is running as a background task'
+}
 
 export interface EventMapperOptions {
   /** Run whose event indices mint mirror callIds. */
@@ -100,6 +126,7 @@ export class EventMapper {
   private sawTextStep: boolean
   private finished = false
   private totalTextOutput = ''
+  private pendingEmbedFrag = ''
   private readonly toolCallStates = new Map<string, ToolCallState>()
   private emittedCompactionNotice = false
 
@@ -112,8 +139,27 @@ export class EventMapper {
     return this.finished
   }
 
+  private formatAssistantText(text: string): string {
+    const embedBase = this.opts.mediaBaseUrl ? this.opts.mediaBaseUrl.replace(/\/media\/?$/, '/embed') : undefined
+    const withEmbeds = rewriteAgentEmbeds(text, embedBase)
+    const withImages = this.opts.mediaBaseUrl ? rewriteImageMarkdown(withEmbeds, this.opts.mediaBaseUrl) : withEmbeds
+    return normalizeFileLinks(withImages)
+  }
+
+  private *flushPendingEmbed(): Generator<StreamChunk> {
+    if (this.pendingEmbedFrag === '') return
+    const raw = this.pendingEmbedFrag
+    this.pendingEmbedFrag = ''
+    yield* this.ensureBlock('text')
+    const d = this.appendDelta(this.formatAssistantText(raw))
+    if (d) yield d
+  }
+
   private *ensureBlock(type: 'text' | 'reasoning'): Generator<StreamChunk> {
     if (this.openType === type) return
+    if (this.openType === 'text' && type !== 'text') {
+      yield* this.flushPendingEmbed()
+    }
     const close = this.closeOpen()
     if (close) yield close
     this.openType = type
@@ -256,15 +302,21 @@ export class EventMapper {
         }
         this.sawTextStep = true
         yield* this.ensureBlock('text')
-        let d: StreamChunk | null
-        const processedText = normalizeFileLinks(this.opts.mediaBaseUrl ? rewriteImageMarkdown(ev.text, this.opts.mediaBaseUrl) : ev.text)
+        let d: StreamChunk | null = null
         if (ev.fragment === true) {
-          // Sequential fragment (text_delta): append in arrival order.
-          const acc = (this.emittedByKey.get(ev.stepKey) ?? '') + processedText
-          this.emittedByKey.set(ev.stepKey, acc)
-          d = this.appendDelta(processedText)
+          // Sequential fragment (text_delta): hold incomplete <agent-embed> across chunk boundaries.
+          const combined = this.pendingEmbedFrag + ev.text
+          const { ready, pending } = splitPendingEmbedFragment(combined)
+          this.pendingEmbedFrag = pending
+          if (ready !== '') {
+            const processedText = this.formatAssistantText(ready)
+            const acc = (this.emittedByKey.get(ev.stepKey) ?? '') + processedText
+            this.emittedByKey.set(ev.stepKey, acc)
+            d = this.appendDelta(processedText)
+          }
         } else {
           // Cumulative snapshot: emit only the grown suffix.
+          const processedText = this.formatAssistantText(ev.text)
           const prev = this.emittedByKey.get(ev.stepKey) ?? ''
           const delta = suffixDelta(prev, processedText)
           this.emittedByKey.set(ev.stepKey, processedText)
@@ -350,13 +402,14 @@ export class EventMapper {
           }
           return
         }
-        if (ev.state === 'RUNNING' && ev.tool.output === undefined) {
-          ev.tool.output = ev.text !== '' ? ev.text : 'Tool is running as a background task'
+        if (ev.state === 'RUNNING' && (ev.tool.output === undefined || ev.tool.output === '')) {
+          ev.tool.output = ev.text !== '' ? ev.text : formatRunningToolFallback(ev.tool.name, ev.tool.args)
         }
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)
         if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
         yield* this.flushBannerOnlyThoughts()
+        yield* this.flushPendingEmbed()
         // Cut the span: close any open block, then one tool-call block.
         const close = this.closeOpen()
         if (close) yield close
@@ -383,11 +436,11 @@ export class EventMapper {
     if (!ev.ok) {
       // agy reports status=ERROR even when a usable response exists (e.g. a
       // tool timed out mid-run or network closed after generation). Keep the answer,
-      // surface the error as a reasoning annotation, and finish normally. A bare error
-      // with no response stays passive here — the adapter owns terminal failures
-      // (auth / process / invalid-output) and reads the envelope error from the parser.
-      if (ev.response === '') return
-      const respText = normalizeFileLinks(ev.response)
+      // surface the error as a reasoning annotation, and finish normally. However,
+      // hard quota / policy refusals (e.g. RESOURCE_EXHAUSTED with partial text)
+      // must stay passive here so the adapter cools down & rotates accounts.
+      if (ev.response === '' || isNonConsumableResultError(ev.ok, ev.error, ev.response)) return
+      const respText = this.formatAssistantText(ev.response)
       if (!this.sawTextStep) {
         yield* this.ensureBlock('text')
         const d = this.appendDelta(respText)
@@ -400,10 +453,11 @@ export class EventMapper {
       }
     } else if (!this.sawTextStep && ev.response !== '') {
       yield* this.ensureBlock('text')
-      const d = this.appendDelta(normalizeFileLinks(ev.response))
+      const d = this.appendDelta(this.formatAssistantText(ev.response))
       if (d) yield d
     }
     yield* this.flushBannerOnlyThoughts()
+    yield* this.flushPendingEmbed()
     const close = this.closeOpen()
     if (close) yield close
     yield { type: 'usage', usage: usageFromRaw(this.opts.usage?.finalUsage(ev.usage) ?? ev.usage) }
@@ -464,6 +518,7 @@ export class EventMapper {
     retryAfterMs?: number,
   ): Generator<StreamChunk> {
     if (this.finished) return
+    yield* this.flushPendingEmbed()
     const close = this.closeOpen()
     if (close) yield close
     const tracked = this.opts.usage?.finalUsage({})

@@ -28,7 +28,7 @@ const noopHandlers = {
   clearCooldown: async () => {},
 }
 
-test('quota-benched account without local 429 cooldown renders amber status, banner, and hides setActive', () => {
+test('per-family cooling isolates card dot color, renders unified cooldown actions, and preserves healthy family controls', () => {
   const t = ((k: string) => k) as never
   const now = Date.now()
   const benchedAcc = {
@@ -70,18 +70,65 @@ test('quota-benched account without local 429 cooldown renders amber status, ban
     setEditingAliasId: () => {},
     expandedModels: {},
     toggleExpand: () => {},
-    optimisticActiveId: null,
+    optimisticActiveByFamily: {},
+    warmupState: null,
     handlers: noopHandlers,
   }))
 
-  assert.ok(tree.includes('#f59e0b'), 'quota-benched account must render amber dot instead of green')
-  assert.ok(tree.includes('status.quotaLimited'), 'quota-benched account must display rate-limited badge')
-  assert.ok(tree.includes('account.cooldown'), 'quota-benched account must show rate-limit banner')
-  assert.ok(tree.includes('account.clearCooldown'), 'quota-benched account must expose clear-cooldown action')
-  assert.equal(tree.includes('account.setActive'), false, 'setActive must be hidden while Google is quota-benched')
+  // Google is cooling, but Argon is 100% healthy -> card remains available (green), not amber.
+  assert.ok(tree.includes('#10b981'), 'account with healthy Argon stays green even when Gemini is cooling')
+  assert.equal(tree.includes('#f59e0b') && !tree.includes('rgba(245, 158, 11'), false)
+  assert.ok(tree.includes('status.cooldown'), 'cooling family renders unified cooldown badge')
+  assert.ok(tree.includes('account.clearCooldown'), 'cooling family exposes clear-cooldown action')
+  assert.ok(tree.includes('account.setActive'), 'healthy Argon family still exposes per-family setActive')
+  assert.equal(tree.includes('status.quotaLimited'), false, 'redundant account-level quotaLimited badge removed')
+  assert.equal(tree.includes('account.cooldown'), false, 'redundant account-level cooldown banner removed')
+  assert.equal(tree.includes('"AGY"'), false, 'redundant static [AGY] badge removed')
 
-  const barTree = JSON.stringify(renderFamilyQuotaBar(t, 'Gemini', 'google', benchedAcc as never, false))
-  assert.ok(barTree.includes('account.quotaLimitedNote'), '5h quota bar must carry rate-limited note')
+  const fullyCoolingAcc = {
+    ...benchedAcc,
+    quotas: {
+      google: benchedAcc.quotas.google,
+      argon: {
+        weeklyFraction: 0,
+        weeklyResetTime: new Date(now + 7 * 86_400_000).toISOString(),
+        updatedAt: now,
+      },
+    },
+  }
+  const fullTree = JSON.stringify(AccountsPanel({
+    t,
+    pool: { mode: 'sequential', accounts: [fullyCoolingAcc], primaryAccountId: 'acc_other' } as never,
+    accounts: [fullyCoolingAcc] as never,
+    loadingAction: null,
+    proxyInputs: {},
+    setProxyInputs: () => {},
+    editingProxyId: null,
+    setEditingProxyId: () => {},
+    aliasInputs: {},
+    setAliasInputs: () => {},
+    editingAliasId: null,
+    setEditingAliasId: () => {},
+    expandedModels: {},
+    toggleExpand: () => {},
+    optimisticActiveByFamily: {},
+    warmupState: null,
+    handlers: noopHandlers,
+  }))
+  assert.ok(fullTree.includes('#f59e0b'), 'account where ALL known families are cooling renders amber dot')
+  assert.equal(fullTree.includes('account.setActive'), false, 'setActive hidden across all cooling families')
+
+  const barTree = JSON.stringify(renderFamilyQuotaBar(t, 'Gemini', 'google', benchedAcc as never, false, {
+    isActive: false,
+    canSetActive: true,
+    onSetActive: () => {},
+    onClearCooldown: () => {},
+  }))
+  assert.ok(barTree.includes('status.cooldown'), 'cooling family header displays status.cooldown')
+  assert.ok(barTree.includes('account.clearCooldown'), 'cooling family header exposes clearCooldown')
+  assert.equal(barTree.includes('account.quotaLimitedNote'), false, 'redundant quotaLimitedNote suffix removed')
+  assert.equal(barTree.includes('account.localCooldown'), false, 'redundant localCooldown suffix removed')
+  assert.equal(barTree.includes('account.setActive'), false, 'setActive hidden for cooling family')
 
   // Once the user clears the quota gate, the warning and bench clear immediately.
   const clearedAcc = {
@@ -103,15 +150,16 @@ test('quota-benched account without local 429 cooldown renders amber status, ban
     setEditingAliasId: () => {},
     expandedModels: {},
     toggleExpand: () => {},
-    optimisticActiveId: null,
+    optimisticActiveByFamily: {},
+    warmupState: null,
     handlers: noopHandlers,
   }))
   assert.ok(clearedTree.includes('#10b981'), 'cleared quota gate restores green dot')
-  assert.equal(clearedTree.includes('status.quotaLimited'), false)
+  assert.equal(clearedTree.includes('status.cooldown'), false)
   assert.ok(clearedTree.includes('account.setActive'), 'setActive returns once quota gate is cleared')
 })
 
-test('SessionStatus turns amber when active/all accounts are quota-benched', () => {
+test('SessionStatus turns amber when google/all accounts are cooling, and stays green if only non-google cools', () => {
   const testLocale = { subscribe: () => () => {}, bind: () => (k: string) => k }
   const Badge = createSessionStatus(testLocale as never, () => null)
   const prevOpen = agyModalStore.open
@@ -144,6 +192,38 @@ test('SessionStatus turns amber when active/all accounts are quota-benched', () 
     } as never)
     const html = renderToStaticMarkup(R.createElement(Badge, null) as never)
     assert.ok(html.includes('#f59e0b'), 'header badge dot must turn amber when pool is quota-benched')
+
+    publishStatusSnapshot({
+      pool: {
+        mode: 'sequential',
+        primaryAccountId: 'acc_1',
+        activeAccountId: 'acc_1',
+        resolvedActiveAccountIds: { google: 'acc_1' },
+        accounts: [{
+          id: 'acc_1',
+          alias: 'god',
+          dir: '',
+          enabled: true,
+          createdAt: 1,
+          cooldowns: {},
+          quotas: {
+            google: {
+              remainingFraction: 1,
+              resetTime: new Date(now + 10 * 60_000).toISOString(),
+              updatedAt: now,
+            },
+            anthropic: {
+              remainingFraction: 0,
+              resetTime: new Date(now + 10 * 60_000).toISOString(),
+              updatedAt: now,
+            },
+          },
+        }],
+      },
+    } as never)
+    const healthyGoogleHtml = renderToStaticMarkup(R.createElement(Badge, null) as never)
+    assert.ok(healthyGoogleHtml.includes('#10b981'), 'header badge dot stays green when google is healthy and only anthropic cools')
+    assert.equal(healthyGoogleHtml.includes('#f59e0b'), false)
   } finally {
     agyModalStore.setOpen(prevOpen)
     modalHostManager.activeId = prevActive
@@ -186,7 +266,7 @@ test('setActiveAccount rejects cooldown/quota-benched accounts consistently with
       { pool: () => pool, cfg: () => ({}) as never } as never,
       { sub: 'pool', arg: '', raw: '/agy pool' } as never,
     )
-    assert.ok((poolRes.text ?? '').includes('Quota-limited'), `/agy pool should flag quota-limited account: ${poolRes.text ?? ''}`)
+    assert.ok((poolRes.text ?? '').includes('Gemini cooling'), `/agy pool should flag cooling family: ${poolRes.text ?? ''}`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

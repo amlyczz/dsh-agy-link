@@ -11,6 +11,7 @@ import { installAgyToolView } from './toolview.ts';
 import { installMermaidRendering } from './mermaid.ts';
 import { installAutoExpandReasoning } from './reasoning.ts';
 import { installImageEnhancer, setClientContext } from './images.ts';
+import { installAgentEmbedRenderer } from './embed.ts';
 import { installDecisionChips } from './decisions.ts';
 import { installTranslationUi } from './translate.ts';
 import { installCompactionCard } from './compaction.ts';
@@ -202,6 +203,9 @@ export function apply(ctx: ClientContext): void {
 
 	// Local image display + fullscreen lightbox + native right-sidebar file opener.
 	ctx.effect(() => installImageEnhancer(ctx));
+
+	// Generative UI (<agent-embed>) sandboxed HTML widget renderer.
+	ctx.effect(() => installAgentEmbedRenderer());
 
 	// Interactive user decision & choice chips (recovered working tree).
 	ctx.effect(() => installDecisionChips());

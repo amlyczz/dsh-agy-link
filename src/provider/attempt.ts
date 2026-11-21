@@ -11,7 +11,8 @@
 // The async outcome closure lives in ./attempt-outcome.ts (it also drives the
 // credential-slot dispatch); the adapter calls runAgyAttempt from there.
 import { LlmError, type Message } from '@deepseek-ai/dsh-llm'
-import type { AgyEvent, PluginConfig } from '../common/types.ts'
+import type { AgyEvent, AgyTransportMode, PluginConfig } from '../common/types.ts'
+import type { AgyGenerateOptions } from '../common/protocol.ts'
 import { createToolWatchdog, type ToolWatchdog } from './tool-watchdog.ts'
 import { Err, looksLikeTosViolation } from '../common/types.ts'
 import type { ManagedAccount, ModelFamily } from '../common/pool-types.ts'
@@ -35,6 +36,11 @@ import type { SpawnLimiter } from './spawn-limiter.ts'
 import { resolveModelSlug } from '../host/models.ts'
 import type { RunTelemetry } from './finalize.ts'
 import { SubagentTracker } from '../features/subagent/tracker.ts'
+import {
+  createLiveQuotaController,
+  reportDirectToolQuota,
+  type LiveQuotaFailoverState,
+} from './quota-failover.ts'
 import { AGY_PROMPT_SAFE_BYTES, trimToUtf8Bytes, utf8Bytes } from './prompt-text.ts'
 
 export function brief(s: string): string {
@@ -67,6 +73,8 @@ export interface AttemptDeps {
   lastAccountSpawnTime: Map<string, number>
   minSpawnIntervalMs: number
   spawnLimiter?: SpawnLimiter
+  /** Optional persistent ACP attempt driver injected by host. */
+  runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
 }
 
 /** Everything one attempt needs. Values are produced by streamAttempt. */
@@ -93,6 +101,32 @@ export interface AttemptInput {
   family: ModelFamily
   signal: AbortSignal | undefined
   agyOnEvent: ((ev: AgyEvent) => void) | undefined
+  agent?: string
+  agySettings?: string
+  jsonSchema?: string
+  sandbox?: boolean
+  transport?: AgyTransportMode
+}
+
+function serializeOpt(v: string | Record<string, unknown> | undefined): string | undefined {
+  if (typeof v === 'string') return v.trim() !== '' ? v.trim() : undefined
+  if (v && typeof v === 'object') return JSON.stringify(v)
+  return undefined
+}
+
+export function resolveAttemptOverrides(options: AgyGenerateOptions, cfg: PluginConfig): Pick<AttemptInput, 'agent' | 'agySettings' | 'jsonSchema' | 'sandbox' | 'transport'> {
+  const agent = typeof options.agyAgent === 'string' ? options.agyAgent.trim() : cfg.agent.trim()
+  const agySettings = serializeOpt(options.agySettings) ?? serializeOpt(cfg.agySettings)
+  const jsonSchema = serializeOpt(options.agyJsonSchema)
+  const sandbox = options.agySandbox ?? cfg.sandbox
+  const transport = options.agyTransport ?? cfg.transport
+  return {
+    ...(agent !== '' ? { agent } : {}),
+    ...(agySettings !== undefined ? { agySettings } : {}),
+    ...(jsonSchema !== undefined ? { jsonSchema } : {}),
+    sandbox,
+    transport,
+  }
 }
 
 /** Pure argv builder for one agy call (same body as AgyAdapter.buildArgs). */
@@ -108,11 +142,19 @@ export function buildAgyArgs(opts: {
   printTimeoutMinutes?: number
   /** Omit `-p <prompt>` and add `--input-format stream-json` (prompt rides stdin). */
   promptViaStdin?: boolean
+  sandbox?: boolean
+  agent?: string
+  agySettings?: string
+  jsonSchema?: string
 }): string[] {
   const ptMins = opts.printTimeoutMinutes ?? Math.max(1, Math.ceil(opts.timeoutMs / 60_000))
   const args: string[] = ['--output-format', 'stream-json', '--print-timeout', ptMins + 'm']
   if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
   else args.push('--mode', opts.permissionMode)
+  if (opts.sandbox === true) args.push('--sandbox')
+  if (opts.agent && opts.agent.trim() !== '') args.push('--agent', opts.agent.trim())
+  if (opts.agySettings && opts.agySettings.trim() !== '') args.push('--settings', opts.agySettings.trim())
+  if (opts.jsonSchema && opts.jsonSchema.trim() !== '') args.push('--json-schema', opts.jsonSchema.trim())
   const effectiveModel = resolveModelSlug(opts.model)
   if (effectiveModel !== '') args.push('--model', effectiveModel)
   // Claude 5.5 accepts --effort on its base slug (verified against agy 1.5.3);
@@ -167,6 +209,10 @@ export function buildSpawnArgs(
     printTimeoutMinutes,
     extraArgs: input.cfg.extraArgs,
     addDirs: input.addDirs,
+    sandbox: input.sandbox ?? input.cfg.sandbox,
+    ...((input.agent ?? input.cfg.agent).trim() !== '' ? { agent: (input.agent ?? input.cfg.agent).trim() } : {}),
+    ...((input.agySettings ?? input.cfg.agySettings).trim() !== '' ? { agySettings: (input.agySettings ?? input.cfg.agySettings).trim() } : {}),
+    ...(input.jsonSchema && input.jsonSchema.trim() !== '' ? { jsonSchema: input.jsonSchema.trim() } : {}),
   }
   const argsBase = buildAgyArgs(base)
   // Decide transport: keep `-p <prompt>` for normal turns; switch to stdin
@@ -185,36 +231,56 @@ export interface AttemptRecorder {
   streamCid: string | null
   printTimeoutMinutes: number
   attachProcess: (proc: RunningProcess) => void
+  startTracker?: () => void
   feedLine: (line: string, onEvent: ((ev: AgyEvent) => void) | undefined, onFirstEvent: (() => void) | undefined) => void
   drain: (onEvent: ((ev: AgyEvent) => void) | undefined) => void
+  flushTracker: () => void
   stop: () => void
+  quotaFailover: () => LiveQuotaFailoverState | null
+  cooledInLiveFamilies: () => ReadonlySet<ModelFamily>
   conversationId: () => string | null
 }
 
 /** Create the recording, parser, HOME snapshot and tool watchdog for one run. */
-export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, account: ManagedAccount | undefined, initialConversationId?: string, trackSubagents = true): AttemptRecorder {
+export function createAttemptRecorder(
+  deps: AttemptDeps,
+  cfg: PluginConfig,
+  account: ManagedAccount | undefined,
+  initialConversationId?: string,
+  trackSubagents = true,
+  quotaCtx?: { family: ModelFamily; activeModel: string },
+): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
-  // The fallback conversation-id discovery must watch the SAME HOME the child
-  // runs under: an isolated pool account's conversation DB lives in its own
-  // HOME and the system-HOME snapshot never sees it.
   const conversationsDir = conversationsDirFor(rec.accountHome)
   const before = snapshotConversations(conversationsDir)
   const parser = new StreamJsonParser()
   deps.onParser?.(parser)
   const watchdog = createToolWatchdog(deps.log, cfg)
+  let attachedProc: RunningProcess | null = null
+  let pendingQuotaKill = false
+  const quotaCtrl = quotaCtx
+    ? createLiveQuotaController({
+        pool: deps.pool,
+        account,
+        inputFamily: quotaCtx.family,
+        activeModel: quotaCtx.activeModel,
+        emitNotice: (stepKey, text) => rec.append({ kind: 'step', stepKey, stepKind: 'subagent', text, raw: {} }),
+        onTriggerKill: () => {
+          if (attachedProc) attachedProc.kill('quota')
+          else pendingQuotaKill = true
+        },
+      })
+    : null
   const tracker = trackSubagents
     ? new SubagentTracker({
         conversationId: initialConversationId,
         resumed: Boolean(initialConversationId),
         accountHome: rec.accountHome,
         log: deps.log,
-        onEvent: (ev) => {
-          rec.append(ev)
-        },
-        noteActivity: () => {
-          watchdog.markEvent()
-        },
+        onEvent: (ev) => rec.append(ev),
+        ...(quotaCtrl ? { onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info) } : {}),
+        noteActivity: () => watchdog.markEvent(),
       })
     : undefined
   const state: AttemptRecorder = {
@@ -225,9 +291,14 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
     streamCid: initialConversationId ?? null,
     printTimeoutMinutes: watchdog.printTimeoutMinutes,
     attachProcess: (proc) => {
+      attachedProc = proc
       watchdog.attach(proc)
       tracker?.start()
+      if (pendingQuotaKill) proc.kill('quota')
       void proc.outcome.finally(() => tracker?.stop())
+    },
+    startTracker: () => {
+      tracker?.start()
     },
     feedLine: (line, onEvent, onFirstEvent) => {
       watchdog.markEvent()
@@ -245,6 +316,7 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
         }
         watchdog.trackStep(ev)
         rec.append(ev)
+        reportDirectToolQuota(quotaCtrl, ev)
         if (typeof onEvent === 'function') {
           try {
             onEvent(ev)
@@ -270,10 +342,15 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
         }
       }
     },
+    flushTracker: () => {
+      tracker?.flush()
+    },
     stop: () => {
       watchdog.stop()
       tracker?.stop()
     },
+    quotaFailover: () => quotaCtrl?.failoverState() ?? null,
+    cooledInLiveFamilies: () => quotaCtrl?.cooledFamilies() ?? new Set<ModelFamily>(),
     conversationId: () => state.streamCid ?? diffConversations(before, conversationsDir).conversationId,
   }
   return state

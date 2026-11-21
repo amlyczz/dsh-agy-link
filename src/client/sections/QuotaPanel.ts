@@ -4,12 +4,23 @@
 // quota visuals from one implementation.
 
 import type { ManagedAccount } from '../../common/pool-types.ts';
-import { is5hQuotaBenched, isWeeklyQuotaBenched } from '../../common/quota-bench.ts';
+import { isFamilyCooling, isFamilyInCooldown } from '../../common/quota-bench.ts';
 import { computeQuotaPacing } from '../../common/quota-pacing.ts';
 import type { AgyLocaleKey } from '../locales.ts';
 import { h } from '../react.ts';
 import { brandIcon, FAMILY_BRAND, uiIcon } from '../icons.ts';
 import { S } from '../styles.ts';
+import { Button } from '../ui/Button.ts';
+import { Spinner } from '../ui/Spinner.ts';
+
+export interface FamilyBarActions {
+	isActive?: boolean;
+	canSetActive?: boolean;
+	settingActive?: boolean;
+	clearingCooldown?: boolean;
+	onSetActive?: () => void;
+	onClearCooldown?: () => void;
+}
 
 /**
  * Format reset timestamp into readable date/time + relative countdown.
@@ -199,10 +210,106 @@ const renderLine = (
 	);
 };
 
+function formatCooldownTip(
+	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
+	familyKey: 'google' | 'argon' | 'anthropic' | 'openai',
+	acc: ManagedAccount,
+	now: number,
+): string {
+	const cd = acc.cooldowns[familyKey];
+	if (cd && cd.cooldownUntil > now) {
+		const mins = Math.max(1, Math.ceil((cd.cooldownUntil - now) / 60_000));
+		const hours = Math.floor(mins / 60);
+		const rem = mins % 60;
+		const left = hours > 0 ? `${hours}${t('duration.hour')} ${rem}${t('duration.minute')}` : `${mins}${t('duration.minute')}`;
+		return `${cd.reason} · ${left}`;
+	}
+	return t('status.cooldown');
+}
+
+function renderFamilyHeaderActions(
+	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
+	cooling: boolean,
+	cooldownTip: string,
+	familyActions?: FamilyBarActions,
+): unknown {
+	if (cooling) {
+		return h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0 } },
+			h('span', {
+				key: 'cd-badge',
+				title: cooldownTip,
+				style: {
+					...S.badgeTag!,
+					background: 'rgba(245, 158, 11, 0.15)',
+					color: '#f59e0b',
+					borderColor: 'rgba(245, 158, 11, 0.4)',
+					gap: '3px',
+					fontSize: '10px',
+					padding: '1px 5px',
+					fontWeight: 700,
+					whiteSpace: 'nowrap',
+				},
+			}, uiIcon('alert', 10, '#f59e0b'), t('status.cooldown')),
+			familyActions?.onClearCooldown ? h(Button, {
+				key: 'clear-cd',
+				variant: 'default',
+				size: 'sm',
+				className: 'agy-btn',
+				style: {
+					color: 'var(--agy-warn-btn-text)',
+					borderColor: 'var(--agy-warn-btn-border)',
+					background: 'var(--agy-warn-btn-bg)',
+					gap: '3px',
+					fontSize: '10.5px',
+					padding: '1px 6px',
+					height: '20px',
+				},
+				disabled: familyActions.clearingCooldown,
+				onClick: familyActions.onClearCooldown,
+			}, ...(familyActions.clearingCooldown
+				? [Spinner(), t('account.clearCooldown')]
+				: [uiIcon('zap', 10, 'var(--agy-warn-btn-text)'), ` ${t('account.clearCooldown')}`])) : null,
+		);
+	}
+	if (familyActions?.isActive) {
+		return h('span', {
+			key: 'fam-active',
+			title: t('status.inUse'),
+			style: {
+				...S.badgeTag!,
+				background: 'rgba(16, 185, 129, 0.12)',
+				color: '#10b981',
+				borderColor: 'rgba(16, 185, 129, 0.45)',
+				gap: '3px',
+				fontSize: '10px',
+				padding: '1px 5px',
+				fontWeight: 700,
+				whiteSpace: 'nowrap',
+				flexShrink: 0,
+			},
+		}, uiIcon('zap', 10, '#10b981'), t('status.inUse'));
+	}
+	if (familyActions?.canSetActive && familyActions.onSetActive) {
+		return h(Button, {
+			key: 'fam-set-active',
+			variant: 'default',
+			size: 'sm',
+			className: 'agy-btn',
+			style: { gap: '3px', fontSize: '10.5px', padding: '1px 6px', height: '20px', flexShrink: 0 },
+			title: t('account.setActive'),
+			disabled: familyActions.settingActive,
+			onClick: familyActions.onSetActive,
+		}, ...(familyActions.settingActive
+			? [Spinner(), t('account.settingActive')]
+			: [uiIcon('zap', 10), ` ${t('account.setActive')}`]));
+	}
+	return null;
+}
+
 /**
- * One family's quota block: brand mark + 5h/weekly bars with reset countdowns
- * and cooldown notes. Module-level so the settings section and the Plugins-page
- * dashboard render IDENTICAL quota visuals from one implementation.
+ * One family's quota block: brand mark, per-family active/cooling controls,
+ * and 5h/weekly bars with reset countdowns. Module-level so the settings
+ * section and the Plugins-page dashboard render IDENTICAL quota visuals.
  */
 export function renderFamilyQuotaBar(
 	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
@@ -210,39 +317,64 @@ export function renderFamilyQuotaBar(
 	familyKey: 'google' | 'argon' | 'anthropic' | 'openai',
 	acc: ManagedAccount,
 	isRefreshing = false,
+	familyActions?: FamilyBarActions,
 ): unknown {
 	const info = acc.quotas[familyKey];
-	const cd = acc.cooldowns[familyKey];
 	const now = Date.now();
-	const inCooldown = Boolean(cd && cd.cooldownUntil > now);
-	const clearedAt = acc.quotaGateClearedAt?.[familyKey];
-	const benched5h = !inCooldown && is5hQuotaBenched(info, clearedAt, now);
-	const benchedWeekly = !inCooldown && isWeeklyQuotaBenched(info, clearedAt, now);
+	const cooling = isFamilyCooling(acc, familyKey, now);
+	const inLocalCooldown = isFamilyInCooldown(acc, familyKey, now);
+	const cooldownTip = inLocalCooldown ? formatCooldownTip(t, familyKey, acc, now) : t('status.cooldown');
 
 	// 5-Hour limit
 	const has5h = typeof info?.remainingFraction === 'number' && Number.isFinite(info.remainingFraction);
 	const pct5h = has5h ? Math.max(0, Math.min(100, Math.round(info!.remainingFraction! * 100))) : -1;
-	const cdNote5h = inCooldown ? t('account.localCooldown') : benched5h ? t('account.quotaLimitedNote') : '';
 	const w5h = formatQuotaWindow(t, info?.resetTime);
 	const expiredFull5h = w5h.expired && has5h && pct5h >= 100;
 
 	// Weekly limit
 	const hasWeekly = typeof info?.weeklyFraction === 'number' && Number.isFinite(info.weeklyFraction);
 	const pctWeekly = hasWeekly ? Math.max(0, Math.min(100, Math.round(info!.weeklyFraction! * 100))) : -1;
-	const cdNoteWeekly = benchedWeekly ? t('account.quotaLimitedNote') : '';
 	const wWeekly = formatQuotaWindow(t, info?.weeklyResetTime);
 	const expiredFullWeekly = wWeekly.expired && hasWeekly && pctWeekly >= 100;
 
 	const c5h = getQuotaColors(pct5h);
 	const cWeekly = getQuotaColors(pctWeekly);
 
-	const note5h = w5h.resetText ? w5h.resetText + cdNote5h : expiredFull5h ? t('quota.windowReset') + cdNote5h : cdNote5h.replace(/^ · /, '');
-	const noteWeekly = wWeekly.resetText ? wWeekly.resetText + cdNoteWeekly : expiredFullWeekly ? t('quota.windowReset') + cdNoteWeekly : cdNoteWeekly.replace(/^ · /, '');
+	const note5h = w5h.resetText ? w5h.resetText : expiredFull5h ? t('quota.windowReset') : '';
+	const noteWeekly = wWeekly.resetText ? wWeekly.resetText : expiredFullWeekly ? t('quota.windowReset') : '';
+	const isActive = Boolean(!cooling && familyActions?.isActive);
+	const borderColor = isActive
+		? 'var(--dsw-alias-state-business-primary, #3b82f6)'
+		: cooling
+			? 'rgba(245, 158, 11, 0.45)'
+			: 'var(--agy-border-box)';
 
-	return h('div', { style: { margin: '4px 0', padding: '5px 8px', background: 'var(--agy-bg-subbox)', borderRadius: '6px', border: '1px solid var(--agy-border-box)' } },
-		h('div', { style: { display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 700, fontSize: '12px', marginBottom: '3px', color: 'var(--agy-text-primary)' } },
-			brandIcon(FAMILY_BRAND[familyKey], 13),
-			h('span', null, label),
+	return h('div', {
+		style: {
+			margin: '4px 0',
+			padding: '5px 8px',
+			background: 'var(--agy-bg-subbox)',
+			borderRadius: '6px',
+			border: `1px solid ${borderColor}`,
+		},
+	},
+		h('div', {
+			style: {
+				display: 'flex',
+				alignItems: 'center',
+				justifyContent: 'space-between',
+				gap: '6px',
+				fontWeight: 700,
+				fontSize: '12px',
+				marginBottom: '3px',
+				color: 'var(--agy-text-primary)',
+			},
+		},
+			h('div', { style: { display: 'flex', alignItems: 'center', gap: '5px' } },
+				brandIcon(FAMILY_BRAND[familyKey], 13),
+				h('span', null, label),
+			),
+			renderFamilyHeaderActions(t, cooling, cooldownTip, familyActions),
 		),
 		(familyKey !== 'argon' || has5h) ? renderLine(t, t('quota.fiveHour'), pct5h, c5h, note5h, FIVE_H_MS, info?.remainingFraction, info?.resetTime, isRefreshing) : null,
 		renderLine(t, t('quota.weekly'), pctWeekly, cWeekly, noteWeekly, SEVEN_D_MS, info?.weeklyFraction, info?.weeklyResetTime, isRefreshing),

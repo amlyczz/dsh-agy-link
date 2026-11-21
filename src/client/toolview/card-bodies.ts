@@ -16,8 +16,10 @@ import {
 import { clip, diffStat, relativize, tr, trimTrailingBlankLines, type Translate } from './format.ts';
 import { hx, react } from './runtime.ts';
 import type { MirrorCardModel } from './types.ts';
+import { ExtendedCardBody } from './extended-cards.ts';
 import { ImageCardBody } from './image-card.ts';
 import { QuestionCardBody } from './question-card.ts';
+import { toolIconFor } from './icons.ts';
 
 // ---- Copy button component ------------------------------------------------
 
@@ -188,6 +190,16 @@ function imageCard(model: MirrorCardModel, inspectNode: unknown): unknown {
 	], hx(CopyButton, { text: model.prompt || (model.raw ?? '') }), hx(ImageCardBody, { model }), inspectNode);
 }
 
+function extendedCard(model: MirrorCardModel, t: Translate | undefined, inspectNode: unknown): unknown {
+	const copyText = model.output !== undefined && model.output !== ''
+		? model.output
+		: (model.brief ?? model.raw ?? '');
+	return cardShell([
+		toolIconFor(model.kind, 13),
+		hx('span', { className: 'agy-tv-card-path' }, model.title),
+	], hx(CopyButton, { text: copyText, t }), hx(ExtendedCardBody, { model, t }), inspectNode);
+}
+
 function genericCard(model: MirrorCardModel, t: Translate | undefined, inspectNode: unknown): unknown {
 	const copyText = model.output !== undefined && model.output !== '' ? model.output : (model.raw ?? '');
 	const rawBody = model.output !== undefined && model.output !== ''
@@ -223,6 +235,13 @@ export function CardBody({ model, openFile, cwd, home, inspect, t }: {
 			return questionCard(model, inspectNode);
 		case 'image':
 			return imageCard(model, inspectNode);
+		case 'swarm':
+		case 'workflow':
+		case 'schedule':
+		case 'task':
+		case 'subagent':
+		case 'browser':
+			return extendedCard(model, t, inspectNode);
 		default:
 			return genericCard(model, t, inspectNode);
 	}

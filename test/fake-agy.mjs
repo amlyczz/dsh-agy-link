@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Fake agy CLI for offline tests. Modes via FAKE_AGY_MODE env:
 //   ok | auth | auth-network | noise | exit12 | exit-error | real | real-error | real-quota
+//   real-quota-partial | subagent-quota-live | tos-violation
 //   real-fail (soft capacity) | real-bare (deterministic bare result error)
 //   quota-once (account-scoped failure on the FIRST invocation only, then succeeds)
 //   location-denied — result envelope with the real "User location is not supported" refusal, exit 3
@@ -280,11 +281,62 @@ if (mode === 'slow-init') {
   process.exit(0)
 }
 
+// Live subagent quota exhaustion: writes a subagent descriptor + 429 QUOTA_EXHAUSTED
+// transcript under HOME/.gemini/antigravity-cli/brain/<conv> and waits briefly before finishing.
+if (mode === 'subagent-quota-live') {
+  const cid = conv || 'conv-sub-live-' + invocation
+  const home = process.env.FAKE_AGY_BRAIN_HOME || process.env.HOME || process.env.USERPROFILE || ''
+  emit({ event: 'init', conversation_id: cid, model: 'gemini-3-7-flash' })
+  emit({ event: 'step_update', idx: 1, step_type: 'thinking', text: 'Delegating to subagent...' })
+  if (home !== '' && invocation === 0) {
+    const subId = 'sub-live-' + invocation
+    const mainSubDir = join(home, '.gemini', 'antigravity-cli', 'brain', cid, '.system_generated', 'subagents')
+    const subLogDir = join(home, '.gemini', 'antigravity-cli', 'brain', subId, '.system_generated', 'logs')
+    mkdirSync(mainSubDir, { recursive: true })
+    mkdirSync(subLogDir, { recursive: true })
+    writeFileSync(
+      join(mainSubDir, `${subId}.json`),
+      JSON.stringify({ conversationId: subId, subagentDescriptor: { typeName: 'image-generator', role: 'Sprite Illustrator' }, state: 'SUBAGENT_STATE_ALIVE' }),
+    )
+    writeFileSync(
+      join(subLogDir, 'transcript.jsonl'),
+      JSON.stringify({
+        step_index: 2,
+        type: 'GENERIC',
+        status: 'ERROR',
+        content: 'Encountered error in step execution: image failed to generate: failed to generate content: 429 Too Many Requests, body: {"error":{"code":429,"message":"You have exhausted your capacity on this model. Your quota will reset after 4h58m46s.","status":"RESOURCE_EXHAUSTED","details":[{"reason":"QUOTA_EXHAUSTED","metadata":{"model":"gemini-3.1-flash-image","quotaResetDelay":"4h58m46.43s"}}]}}',
+      }) + '\n',
+    )
+    await sleep(Number(process.env.FAKE_AGY_SUBAGENT_WAIT_MS ?? 1800))
+    emit({ event: 'result', result: { conversation_id: cid, status: 'DONE', response: 'finished without failover', duration_seconds: 1.8, num_turns: 1, usage: { input_tokens: 50, output_tokens: 10 } } })
+    process.exit(0)
+  }
+  emit({ event: 'step_update', idx: 2, step_type: 'text', text: 'answered on healthy account' })
+  emit({ event: 'result', result: { conversation_id: cid, status: 'DONE', response: 'answered on healthy account', duration_seconds: 0.2, num_turns: 1, usage: { input_tokens: 40, output_tokens: 10 } } })
+  process.exit(0)
+}
+
+if (mode === 'tos-violation') {
+  emit({
+    event: 'result',
+    result: {
+      conversation_id: '',
+      status: 'ERROR',
+      response: 'This service has been disabled in this account for violation of Terms of Service (TOS_VIOLATION).',
+      error: 'PERMISSION_DENIED (code 403): TOS_VIOLATION: This service has been disabled in this account.',
+      duration_seconds: 0.1,
+      num_turns: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  })
+  process.exit(1)
+}
+
 if (mode === 'noise') {
   process.stdout.write('\u26a0 fetching model catalog\n')
   emit({ event: 'init', conversation_id: conv, model: 'gemini-3-6-flash' })
   process.stdout.write('some progress noise\n')
-} else if (mode === 'real' || mode === 'real-error' || mode === 'real-denied' || mode === 'real-fail' || mode === 'real-quota' || mode === 'real-bare' || mode === 'quota-once') {
+} else if (mode === 'real' || mode === 'real-error' || mode === 'real-denied' || mode === 'real-fail' || mode === 'real-quota' || mode === 'real-quota-partial' || mode === 'real-bare' || mode === 'quota-once') {
   // Shapes captured from a live agy 1.1.15 binary
   // (`--output-format stream-json --mode plan --model ... --effort ...`).
   emit({ event: 'init', conversation_id: conv, init: { model: 'gemini-3-7-flash', cwd: '/tmp', tools: ['run_command', 'read_file'] } })
@@ -315,6 +367,9 @@ if (mode === 'noise') {
     // Real server hard-quota refusal (observed live): the account is spent, so
     // the adapter must cool it down and let the retry use another account.
     emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: '', error: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h54m14s.', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 100, output_tokens: 0 } } })
+  } else if (mode === 'real-quota-partial') {
+    // Live shape where agy streams partial text/tool output before hitting 429 quota exhaustion.
+    emit({ event: 'result', result: { conversation_id: conv, status: 'ERROR', response: 'There are 2 files, 6 words total.', error: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h43m38s.', duration_seconds: 5, num_turns: 1, usage: { input_tokens: 100, output_tokens: 12 } } })
   } else if (mode === 'quota-once' && invocation === 0) {
     // First invocation spends the account AFTER a tool step, so the failure
     // surfaces in a tool-continuation span (the shape that used to replay the

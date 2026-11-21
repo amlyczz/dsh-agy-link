@@ -16,7 +16,7 @@ runtime/     process and platform I/O (agy runner/parser/mapper, proxy/env)
 provider/    the LlmAdapter pipeline (call context, purpose policy, prompt,
              account selection, failure classification, attempt/finalize)
   ↑
-features/    translation, image, warmup, diagnostics, commands
+features/    acp, ecosystem, translation, image, warmup, diagnostics, commands
   ↑
 transport/   HTTP routes, respond helpers, tool registration
   ↑
@@ -48,9 +48,9 @@ effort-refusal replay. `prepareCall()` binds model metadata for newer hosts.
 
 ## HTTP surface
 
-29 routes are registered by `transport/http/router.ts` from six modules
-(status, pool, auth, config, translate, media). Route paths, methods and JSON
-shapes are frozen and covered by `test/http-contract.test.ts`.
+35 routes are registered by `transport/http/router.ts` from eight modules
+(status, pool, auth, config, translate, media, embed, ecosystem). Route paths,
+methods and JSON shapes are frozen and covered by `test/http-contract.test.ts`.
 
 ## Client
 

@@ -503,16 +503,13 @@ export class QuotaService {
       this.cliDeps.forceStaggerMs?.() ??
       (process.env.NODE_TEST_CONTEXT !== undefined ? 0 : 400 + Math.floor(Math.random() * 450))
 
-    // Windows serializes default manual sweeps across the whole pool so CLI
-    // usage fallback cannot contend on the single OS Credential Manager slot
-    // (PR #69). Callers that inject `forceConcurrency` opt into bounded
-    // per-egress concurrency directly.
-    const serializeWin32 = process.platform === 'win32' && this.cliDeps.forceConcurrency === undefined
-    const concurrency = serializeWin32
-      ? 1
-      : Math.max(1, Math.floor(this.cliDeps.forceConcurrency?.() ?? QUOTA_FORCE_CONCURRENCY))
+    // Isolated accounts run pure REST calls and never touch the Windows OS
+    // Credential Manager slot; only the single `systemHome` account uses
+    // `credentialSlotMutex` inside `readCliUsageFamilies`. Keep bounded
+    // per-egress concurrency across all platforms to avoid slow serial sweeps.
+    const concurrency = Math.max(1, Math.floor(this.cliDeps.forceConcurrency?.() ?? QUOTA_FORCE_CONCURRENCY))
     await sweepAccountsByEgress(accounts, {
-      egressOf: serializeWin32 ? () => '__win32_serial__' : (acc) => this.proxyFor(acc) || '__direct__',
+      egressOf: (acc) => this.proxyFor(acc) || '__direct__',
       run: async (acc) => {
         await this.refreshAccountQuota(acc, force).catch(() => null)
       },

@@ -15,11 +15,11 @@ export function atomicTmpPath(file: string): string {
 }
 
 /** Write `data` to `file` atomically; on any failure remove the temp file. */
-export function writeFileAtomicSync(file: string, data: string, mode = 0o600): void {
+export function writeFileAtomicSync(file: string, data: string | Uint8Array, mode = 0o600): void {
   const tmp = atomicTmpPath(file)
   try {
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(tmp, data, { encoding: 'utf8', mode })
+    writeFileSync(tmp, data, typeof data === 'string' ? { encoding: 'utf8', mode } : { mode })
     renameSync(tmp, file)
   } catch (err) {
     try {

@@ -1,7 +1,7 @@
 // TranslationService: target resolution, chunking, caching, bounded retry and
 // optional durable record. The model call and record append are injected, so
 // account selection/rotation stays in the adapter and every branch is testable.
-import { Err } from '../../common/types.ts'
+import { Err, looksLikeTosViolation } from '../../common/types.ts'
 import { cacheKey, buildTranslationRecord } from './records.ts'
 import {
   buildTranslationPrompt,
@@ -310,9 +310,13 @@ export class TranslationService {
     retries: number,
     signal?: AbortSignal,
   ): Promise<TranslationRunnerResult> {
-    const max = Math.max(0, Math.round(retries))
+    const maxNonQuota = Math.max(0, Math.round(retries))
+    const maxQuota = Math.max(maxNonQuota, Math.min(Math.max(0, Math.round(this.deps.poolQuotaHops?.() ?? 0)), 16))
+    let nonQuotaErrors = 0
+    let quotaErrors = 0
+    let attempt = 0
     let last: TranslationRunnerResult = { ok: false, text: '', error: 'translation was never attempted', code: Err.AGY_ERROR }
-    for (let attempt = 0; attempt <= max; attempt++) {
+    for (;;) {
       if (signal?.aborted === true) {
         last = { ok: false, text: '', error: 'aborted', code: 'ABORTED' }
         break
@@ -323,11 +327,22 @@ export class TranslationService {
         last = { ok: false, text: '', error: e instanceof Error ? e.message : String(e), code: Err.AGY_ERROR }
       }
       if (last.ok) return last
-      if (last.code === 'ABORTED' || (last.code !== undefined && !RETRYABLE_CODES.has(last.code))) break
+      if (last.code === 'ABORTED' || looksLikeTosViolation(last.error) || (last.code !== undefined && !RETRYABLE_CODES.has(last.code))) {
+        break
+      }
+      const isQuota = last.code === Err.RATE_LIMIT || last.code === Err.QUOTA
+      if (isQuota) {
+        quotaErrors++
+        if (quotaErrors > maxQuota) break
+      } else {
+        nonQuotaErrors++
+        if (nonQuotaErrors > maxNonQuota) break
+      }
       // An empty candidate is not a queue/account stall, so a token delay would
       // just re-ask into the same flake: give the model a beat before retrying.
       const pause = last.code === Err.EMPTY_RESPONSE ? 900 * (attempt + 1) : 150 * (attempt + 1)
-      if (attempt < max) await delay(pause, signal)
+      attempt++
+      await delay(pause, signal)
     }
     return last
   }

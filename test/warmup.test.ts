@@ -468,3 +468,109 @@ test('pickWarmupModelForFamily dynamically resolves per-account available Claude
 
   assert.equal(pickWarmupModelForFamily('anthropic', [], accWithClaude46), 'claude-sonnet-4-6')
 })
+
+test('WarmupService.status() tracks live progress + lastRun, retries backoff with ignoreFailureBackoff, respects per-family cooling, and skips without sleep', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'warmup-status-family-'))
+  try {
+    const now = Date.now()
+    const dueReset = new Date(now + 7 * 86400 * 1000).toISOString()
+    const midCycleReset = new Date(now + 3 * 86400 * 1000).toISOString()
+
+    // Account 1: google is in 429 cooldown, argon is due; recent argon failure exists in history.
+    const partialCoolingAcc: ManagedAccount = {
+      id: 'acc-partial',
+      alias: 'Partial',
+      dir: '',
+      enabled: true,
+      createdAt: now - 20 * 86400 * 1000,
+      cooldowns: {
+        google: { cooldownUntil: now + 60_000, reason: '429 Rate Limit', consecutiveFailures: 1 },
+      },
+      quotas: {
+        google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: dueReset, updatedAt: now },
+        argon: { weeklyFraction: 1, weeklyResetTime: dueReset, updatedAt: now },
+      },
+    }
+    // Account 2: mid-cycle everywhere -> completely skipped (must add 0 inter-account sleep).
+    const skippedAcc: ManagedAccount = {
+      id: 'acc-mid-skip',
+      alias: 'MidSkip',
+      dir: '',
+      enabled: true,
+      createdAt: now - 20 * 86400 * 1000,
+      cooldowns: {},
+      quotas: {
+        google: { remainingFraction: 1, weeklyFraction: 1, weeklyResetTime: midCycleReset, updatedAt: now },
+      },
+    }
+
+    const history = new WarmupHistoryStore(join(dir, 'history.json'))
+    // Stamp recent argon failure backoff for partialCoolingAcc.
+    history.record('acc-partial:argon:failed', now - 1000)
+
+    let releaseProbe: (() => void) | null = null
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve
+    })
+    const probed: string[] = []
+
+    const service = new WarmupService(
+      { getAccounts: () => [skippedAcc, partialCoolingAcc] } as unknown as AccountPoolManager,
+      {} as unknown as QuotaService,
+      () => '',
+      () => null,
+      () => ({ autoWarmup: true, warmupModels: ['gemini-3.8-flash', 'gemini-4-argon'] } as unknown as PluginConfig),
+      () => undefined,
+      history,
+      {
+        bin: () => '/usr/local/bin/agy',
+        runCliProbe: async (_acc, model) => {
+          probed.push(model)
+          await probeGate
+          return { code: 0, stdout: 'ok', stderr: '', durationMs: 5 }
+        },
+      },
+    )
+
+    // Initially idle.
+    assert.equal(service.isRunning(), false)
+    assert.equal(service.status().running, false)
+    assert.equal(service.status().lastRun, null)
+
+    const startMs = Date.now()
+    const runPromise = service.warmupAllAccounts({ force: false, ignoreFailureBackoff: true })
+    // Wait until skippedAcc finishes instantaneously and partialCoolingAcc enters runCliProbe.
+    for (let i = 0; i < 20 && probed.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    const midStatus = service.status()
+    assert.equal(service.isRunning(), true)
+    assert.equal(midStatus.running, true)
+    assert.equal(midStatus.scope, 'all')
+    assert.equal(midStatus.total, 2)
+    assert.equal(midStatus.currentAccountId, partialCoolingAcc.id)
+    assert.deepEqual(midStatus.activeAccountIds, [skippedAcc.id, partialCoolingAcc.id])
+
+    releaseProbe!()
+    const results = await runPromise
+    const elapsedMs = Date.now() - startMs
+
+    // Must not sleep warmupDelayMs (~15s+) after skippedAcc.
+    assert.ok(elapsedMs < 3000, `skipped account must not trigger inter-account sleep (elapsed=${elapsedMs}ms)`)
+    // Only healthy due argon was probed; cooling google & mid-cycle skippedAcc were skipped.
+    assert.deepEqual(probed, ['gemini-4-argon'])
+    assert.equal(results.some((r) => r.accountId === skippedAcc.id && r.skipped === true), true)
+    assert.equal(results.some((r) => r.accountId === partialCoolingAcc.id && r.model === 'gemini-4-argon' && r.success === true), true)
+
+    const finalStatus = service.status()
+    assert.equal(service.isRunning(), false)
+    assert.equal(finalStatus.running, false)
+    assert.ok(finalStatus.lastRun !== null)
+    assert.equal(finalStatus.lastRun!.succeeded, 1)
+    assert.equal(finalStatus.lastRun!.skipped, 1)
+    assert.equal(finalStatus.lastRun!.failed, 0)
+    assert.equal(finalStatus.lastRun!.accounts.length, 2)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

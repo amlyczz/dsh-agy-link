@@ -12,7 +12,7 @@ import type { Message } from '@deepseek-ai/dsh-llm'
 import { PROVIDER_ID } from '../common/types.ts'
 import { stateDir } from '../common/config.ts'
 import { stripNulBytes } from '../host/runner.ts'
-import { sweepDir, type ImageRefLike } from '../host/media.ts'
+import { sweepDir, mediaKindFor, type ImageRefLike, type MediaRefLike } from '../host/media.ts'
 
 export type ForeignSource = { source?: { kind?: string; provider?: string; callId?: string; replayState?: unknown } }
 
@@ -24,6 +24,12 @@ export type UnknownBlock = {
   toolCallId?: unknown
   attachment?: unknown
   attachmentId?: unknown
+  mediaType?: unknown
+  mimeType?: unknown
+  name?: unknown
+  path?: unknown
+  bytes?: unknown
+  data?: unknown
 }
 
 /**
@@ -195,6 +201,34 @@ export function latestUserMessageAny(messages: readonly Message[]): string {
   return ''
 }
 
+const MULTIMODAL_BLOCK_TYPES = new Set(['image', 'file', 'document', 'pdf', 'audio', 'video', 'attachment'])
+
+function mediaRefFromBlock(b: UnknownBlock): MediaRefLike | null {
+  const att = b.attachment && typeof b.attachment === 'object' ? (b.attachment as Record<string, unknown>) : null
+  const src = att ?? (b as Record<string, unknown>)
+  const rawType = typeof src.mediaType === 'string' ? src.mediaType : (typeof src.mimeType === 'string' ? src.mimeType : '')
+  const fallbackType = b.type === 'pdf' ? 'application/pdf' : ''
+  const mediaType = rawType || fallbackType
+  if (mediaType === '' || mediaKindFor(mediaType) === null) return null
+  const rawPath = typeof src.path === 'string' ? src.path : undefined
+  const rawName = typeof src.name === 'string' ? src.name : undefined
+  const id = typeof src.attachmentId === 'string' && src.attachmentId !== ''
+    ? src.attachmentId
+    : (rawPath ?? (rawName ? `${rawName}:${mediaType}` : ''))
+  if (id === '') return null
+  const out: MediaRefLike = {
+    attachmentId: id,
+    mediaType,
+    ...(typeof src.bytes === 'number' ? { bytes: src.bytes } : {}),
+    ...(typeof src.width === 'number' ? { width: src.width } : {}),
+    ...(typeof src.height === 'number' ? { height: src.height } : {}),
+    ...(rawName !== undefined ? { name: rawName } : {}),
+    ...(rawPath !== undefined ? { path: rawPath } : {}),
+    ...(src.data instanceof Uint8Array || typeof src.data === 'string' ? { data: src.data } : {}),
+  }
+  return out
+}
+
 /** Collect image refs from a message, walking nested tool-result payloads. */
 function collectImageRefs(m: Message, out: ImageRefLike[]): void {
   const walk = (blocks: readonly unknown[] | undefined): void => {
@@ -215,9 +249,54 @@ function collectImageRefs(m: Message, out: ImageRefLike[]): void {
   walk(m.content as readonly unknown[] | undefined)
 }
 
+function collectMediaRefs(m: Message, out: MediaRefLike[]): void {
+  const walk = (blocks: readonly unknown[] | undefined): void => {
+    for (const raw of blocks ?? []) {
+      const b = raw as UnknownBlock | undefined
+      if (b === undefined) continue
+      if (b.type === 'tool-result' && Array.isArray(b.content)) {
+        walk(b.content)
+      } else if (typeof b.type === 'string' && MULTIMODAL_BLOCK_TYPES.has(b.type)) {
+        const ref = mediaRefFromBlock(b)
+        if (ref !== null) out.push(ref)
+      }
+    }
+  }
+  walk(m.content as readonly unknown[] | undefined)
+}
+
 function digestLabel(m: Message): string {
   if (isToolResultMessage(m)) return 'Tool result: '
   return m.role === 'user' ? 'User: ' : 'Assistant: '
+}
+
+export function collectUnsentMediaRefs(
+  messages: readonly Message[],
+  trailingUser: readonly Message[],
+  fromIdx: number,
+  sentIds: readonly string[],
+): MediaRefLike[] {
+  const sent = new Set(sentIds)
+  const seen = new Set<string>()
+  const out: MediaRefLike[] = []
+  const push = (m: Message): void => {
+    const refs: MediaRefLike[] = []
+    collectMediaRefs(m, refs)
+    for (const r of refs) {
+      const id = r.attachmentId
+      if (typeof id !== 'string' || id === '' || sent.has(id) || seen.has(id)) continue
+      seen.add(id)
+      out.push(r)
+    }
+  }
+  for (const m of trailingUser) push(m)
+  const start = Math.max(0, Math.min(fromIdx, messages.length))
+  for (let i = start; i < messages.length; i++) {
+    const m = messages[i]
+    if (m === undefined || m.role !== 'user' || isToolResultMessage(m)) continue
+    push(m)
+  }
+  return out
 }
 
 /**

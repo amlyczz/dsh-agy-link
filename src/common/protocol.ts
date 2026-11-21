@@ -7,7 +7,7 @@
 // internally. Before this file every access was an `options as { agyX?: ... }`
 // cast (six of them in the adapter alone).
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
-import type { AgyEvent, PermissionMode } from './types.ts'
+import type { AgyEvent, AgyTransportMode, PermissionMode } from './types.ts'
 
 export type AgyPurpose = 'compaction' | 'session-title' | 'translation' | 'image'
 
@@ -29,6 +29,11 @@ export type AgyGenerateOptions = Omit<GenerateOptions, 'purpose'> & {
   agyTranslateSession?: AgyTranslateSession
   agyImagePrompt?: string
   agyPermissionMode?: PermissionMode
+  agyAgent?: string
+  agySettings?: string | Record<string, unknown>
+  agyJsonSchema?: string | Record<string, unknown>
+  agySandbox?: boolean
+  agyTransport?: AgyTransportMode
   agyOnEvent?: (ev: AgyEvent) => void
   agyOnAccount?: (info: AgyAccountInfo) => void
 }

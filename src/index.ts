@@ -13,10 +13,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PROVIDER_ID } from './common/types.ts'
 import { defineAgyAskTool } from './host/ask-tool.ts'
+import { defineAgyImageTool } from './host/image-tool.ts'
 import { agyCommandDefinition } from './host/commands.ts'
 import { tslCommandDefinition } from './host/tsl-command.ts'
 import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool } from './host/mirror-tool.ts'
+import { runAgyOnce } from './host/oneshot.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess } from './host/runner.ts'
 import { agyNotInstalledMessage } from './provider/call-context.ts'
@@ -37,7 +39,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   const services = createHostServices(ctx, entryConfig)
   const {
     getConfig, log, bin, version, store, pool, quota, warmup, catalog, auth, poolAuth, runs,
-    adapter, translation, setOverride, notifyPicker, readEffortUnsupported, rememberEffortUnsupported,
+    adapter, acpPool, ecosystem, imageService, translation, setOverride, notifyPicker, readEffortUnsupported, rememberEffortUnsupported,
     sessionsSvc, sessionAuto, mediaDir, bridgeState, webServerPort,
   } = services
 
@@ -150,6 +152,18 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       poolAuth: () => poolAuth,
       quota: () => quota,
       lastRun: () => services.lastRun,
+      imageService: () => imageService,
+      acpStatus: () => acpPool.status(),
+      ecosystem: () => ecosystem,
+      runOnce: (req) => runAgyOnce({
+        cfg: getConfig,
+        bin,
+        pool: () => pool,
+        acquire: (sig) => services.semaphore.acquire(sig),
+        log,
+        effortUnsupported: () => readEffortUnsupported(),
+        onEffortUnsupported: (model) => rememberEffortUnsupported(model),
+      }, req),
       setOverride,
       notifyPicker,
       sessions: () => sessionsSvc(),
@@ -225,6 +239,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // failing with `unknown tool "agy_tool"`.
   const toolsSvcRef: { current: { register: (t: unknown) => unknown } | null } = { current: null }
   const askToolDispose = { current: null as null | (() => void) }
+  const imageToolDispose = { current: null as null | (() => void) }
   const mirrorToolDispose = { current: null as null | (() => void) }
   const preExecuteDispose = { current: null as null | (() => void) }
   const syncAskTool = (): void => {
@@ -248,6 +263,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       askToolDispose.current = null
     }
   }
+  const syncImageTool = (): void => {
+    const want = getConfig().enabled && getConfig().imageTool && bin() !== null
+    if (want && imageToolDispose.current === null && toolsSvcRef.current) {
+      const reg = toolsSvcRef.current.register(
+        defineAgyImageTool({
+          imageService: () => imageService,
+          log,
+        }),
+      ) as unknown as () => void
+      imageToolDispose.current = typeof reg === 'function' ? reg : null
+    } else if (!want && imageToolDispose.current !== null) {
+      imageToolDispose.current()
+      imageToolDispose.current = null
+    }
+  }
   // The mirror rides the agent loop for native tool-card rendering: the
   // adapter's spans cut on completed agy tool steps with finish:tool-calls
   // addressed here, and the loop's dispatch writes the real tool/call +
@@ -266,6 +296,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   ctx.inject(['tools'], (sub) => {
     toolsSvcRef.current = sub.get('tools') as { register: (t: unknown) => unknown }
     syncAskTool()
+    syncImageTool()
     syncMirrorTool()
     // Bypass auto-review and permission prompt gates for the synthetic agy_tool mirror:
     // agy_tool only replays in-memory stdout already executed by agy in the previous step.
@@ -288,6 +319,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       preExecuteDispose.current = null
       if (askToolDispose.current !== null) askToolDispose.current()
       askToolDispose.current = null
+      if (imageToolDispose.current !== null) imageToolDispose.current()
+      imageToolDispose.current = null
       if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
       mirrorToolDispose.current = null
       toolsSvcRef.current = null
@@ -301,6 +334,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     void value
     syncAdapterRegistration()
     syncAskTool()
+    syncImageTool()
     syncMirrorTool()
     syncMcpBridge()
   }
@@ -452,9 +486,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     return () => {
       bridgeDisposed = true
       services.translationWorkers?.dispose()
+      acpPool.dispose()
       auth.dispose()
       void poolAuth.cancel()
       if (askToolDispose.current !== null) askToolDispose.current()
+      if (imageToolDispose.current !== null) imageToolDispose.current()
       if (mirrorToolDispose.current !== null) mirrorToolDispose.current()
       void teardownBridgeState(bridgeState)
       void closeProxyAgents()

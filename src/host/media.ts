@@ -5,7 +5,7 @@
 // path, sweep on a TTL. No bytes ever leave the machine except through
 // agy itself.
 
-import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** Structural subset of ImageAttachmentRef (no package import needed). */
@@ -18,8 +18,23 @@ export interface ImageRefLike {
   name?: string
 }
 
-/** Byte reader seam — index.ts injects ctx.attachments.readImage. */
+export type MediaKind = 'image' | 'pdf' | 'audio' | 'video'
+
+/** Generalized attachment reference covering image, PDF, audio, and video. */
+export interface MediaRefLike {
+  attachmentId: string
+  mediaType: string
+  bytes?: number
+  width?: number
+  height?: number
+  name?: string
+  path?: string
+  data?: Uint8Array | string
+}
+
+/** Byte reader seam — index.ts injects ctx.attachments.readImage / readAttachment. */
 export type ImageReader = (ref: ImageRefLike) => Promise<Uint8Array | null>
+export type MediaReader = (ref: MediaRefLike) => Promise<Uint8Array | null>
 
 export interface StagedImage {
   path: string
@@ -28,6 +43,54 @@ export interface StagedImage {
   height: number
   bytes: number
   attachmentId: string
+  kind?: MediaKind
+  mediaType?: string
+}
+
+const MIME_ALIASES: Record<string, string> = {
+  'image/jpg': 'image/jpeg',
+  'audio/wave': 'audio/wav',
+  'audio/x-wav': 'audio/wav',
+  'audio/x-m4a': 'audio/mp4',
+  'audio/m4a': 'audio/mp4',
+  'audio/mp3': 'audio/mpeg',
+}
+
+const EXT_BY_MIME: Record<string, { ext: string; kind: MediaKind }> = {
+  'image/png': { ext: 'png', kind: 'image' },
+  'image/jpeg': { ext: 'jpg', kind: 'image' },
+  'image/webp': { ext: 'webp', kind: 'image' },
+  'image/gif': { ext: 'gif', kind: 'image' },
+  'image/bmp': { ext: 'bmp', kind: 'image' },
+  'image/avif': { ext: 'avif', kind: 'image' },
+  'application/pdf': { ext: 'pdf', kind: 'pdf' },
+  'audio/mpeg': { ext: 'mp3', kind: 'audio' },
+  'audio/wav': { ext: 'wav', kind: 'audio' },
+  'audio/mp4': { ext: 'm4a', kind: 'audio' },
+  'audio/aac': { ext: 'aac', kind: 'audio' },
+  'audio/flac': { ext: 'flac', kind: 'audio' },
+  'audio/opus': { ext: 'opus', kind: 'audio' },
+  'audio/ogg': { ext: 'ogg', kind: 'audio' },
+  'audio/webm': { ext: 'webm', kind: 'audio' },
+  'video/mp4': { ext: 'mp4', kind: 'video' },
+  'video/webm': { ext: 'webm', kind: 'video' },
+  'video/quicktime': { ext: 'mov', kind: 'video' },
+  'video/x-matroska': { ext: 'mkv', kind: 'video' },
+  'video/ogg': { ext: 'ogv', kind: 'video' },
+}
+
+/** Normalize parameterized MIME types (e.g. `audio/webm; codecs=opus`) and aliases. */
+export function normalizeMediaType(raw: string): string {
+  const base = raw.split(';')[0]?.trim().toLowerCase() ?? ''
+  return MIME_ALIASES[base] ?? base
+}
+
+export function mediaKindFor(mediaType: string): MediaKind | null {
+  return EXT_BY_MIME[normalizeMediaType(mediaType)]?.kind ?? null
+}
+
+function mediaExtFor(mediaType: string): string {
+  return EXT_BY_MIME[normalizeMediaType(mediaType)]?.ext ?? 'bin'
 }
 
 export interface StageResult {
@@ -38,13 +101,6 @@ export interface StageResult {
   stagedIds: string[]
   /** Number of images skipped (over cap, over size, unreadable). */
   skipped: number
-}
-
-const EXT: Record<ImageRefLike['mediaType'], string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
 }
 
 /**
@@ -66,15 +122,109 @@ function idFragment(attachmentId: string): string {
  * the same picture always lands on the same file, so a continuation that
  * legitimately re-references it overwrites instead of accumulating copies.
  */
-export function stagedPath(dir: string, key: string, attachmentId: string, mediaType: ImageRefLike['mediaType']): string {
-  const ext = EXT[mediaType] ?? 'png'
+export function stagedPath(dir: string, key: string, attachmentId: string, mediaType: string): string {
+  const ext = mediaExtFor(mediaType)
   return join(dir, key + '-' + idFragment(attachmentId) + '.' + ext)
+}
+
+async function resolveMediaBytes(ref: MediaRefLike, readMedia?: MediaReader): Promise<Uint8Array | null> {
+  if (ref.data instanceof Uint8Array) return ref.data
+  if (typeof ref.data === 'string' && ref.data !== '') {
+    try {
+      return Buffer.from(ref.data.replace(/^data:[^;]+;base64,/, ''), 'base64')
+    } catch {
+      return null
+    }
+  }
+  if (readMedia) {
+    try {
+      const data = await readMedia(ref)
+      if (data) return data
+    } catch {
+      // fall through
+    }
+  }
+  if (typeof ref.path === 'string' && ref.path !== '') {
+    try {
+      return await readFile(ref.path)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/**
+ * Stage up to `maxItems` (or `maxImages`) attachments (images, PDF, audio,
+ * video) into `dir`, returning prompt lines that reference them by absolute path.
+ */
+export async function stageMedia(opts: {
+  dir: string
+  key: string
+  items: readonly MediaRefLike[]
+  readMedia?: MediaReader
+  maxItems?: number
+  maxImageBytes: number
+  maxFileBytes: number
+}): Promise<StageResult> {
+  const staged: StagedImage[] = []
+  const stagedIds: string[] = []
+  const lines: string[] = []
+  let skipped = 0
+  const budget = Math.max(0, opts.maxItems ?? 8)
+  if (budget > 0 && opts.items.length > 0) {
+    await mkdir(opts.dir, { recursive: true })
+    for (const ref of opts.items) {
+      if (staged.length >= budget) {
+        skipped += opts.items.length - staged.length - skipped
+        break
+      }
+      const normType = normalizeMediaType(ref.mediaType)
+      const kind = mediaKindFor(normType)
+      const label = ref.name ?? ref.attachmentId
+      if (kind === null) {
+        skipped++
+        lines.push('[attachment skipped: "' + label + '" unsupported type ' + ref.mediaType + ']')
+        continue
+      }
+      const cap = kind === 'image' ? opts.maxImageBytes : opts.maxFileBytes
+      const capLabel = kind === 'image' ? 'mediaMaxBytes' : 'mediaMaxFileBytes'
+      if (typeof ref.bytes === 'number' && ref.bytes > cap) {
+        skipped++
+        lines.push('[' + kind + ' skipped: "' + label + '" exceeds ' + capLabel + ']')
+        continue
+      }
+      const data = await resolveMediaBytes(ref, opts.readMedia)
+      if (!data) {
+        skipped++
+        lines.push('[' + kind + ' unavailable: "' + label + '" could not be read from attachment storage]')
+        continue
+      }
+      if (data.byteLength > cap) {
+        skipped++
+        lines.push('[' + kind + ' skipped: "' + label + '" exceeds ' + capLabel + ']')
+        continue
+      }
+      const path = stagedPath(opts.dir, opts.key, ref.attachmentId, normType)
+      await writeFile(path, data)
+      const w = ref.width ?? 0
+      const h = ref.height ?? 0
+      const bytes = ref.bytes ?? data.byteLength
+      staged.push({ path, name: label, width: w, height: h, bytes, attachmentId: ref.attachmentId, kind, mediaType: normType })
+      stagedIds.push(ref.attachmentId)
+      if (kind === 'image') {
+        lines.push('[image attached: "' + label + '" — staged at ' + path + ' (' + w + 'x' + h + ', ' + bytes + ' bytes). Inspect it using the view_file tool with AbsolutePath: "' + path + '"]')
+      } else {
+        lines.push('[' + kind + ' attached: "' + label + '" (' + normType + ', ' + bytes + ' bytes) — staged at ' + path + '. Inspect it using read_file with Path: "' + path + '"]')
+      }
+    }
+  }
+  return { promptSuffix: lines.join('\n'), staged, stagedIds, skipped }
 }
 
 /**
  * Stage up to `maxImages` images into `dir`, returning prompt lines that
- * reference them by absolute path. Deterministic names mean a retried or
- * replayed turn overwrites the same file instead of accumulating copies.
+ * reference them by absolute path.
  */
 export async function stageImages(opts: {
   dir: string
@@ -84,47 +234,15 @@ export async function stageImages(opts: {
   maxImages: number
   maxBytes: number
 }): Promise<StageResult> {
-  const staged: StagedImage[] = []
-  const stagedIds: string[] = []
-  const lines: string[] = []
-  let skipped = 0
-  const budget = Math.max(0, opts.maxImages)
-  if (budget > 0 && opts.images.length > 0) {
-    await mkdir(opts.dir, { recursive: true })
-    let i = 0
-    for (const ref of opts.images) {
-      if (staged.length >= budget) {
-        skipped += opts.images.length - staged.length - skipped
-        break
-      }
-      const label = ref.name ?? ref.attachmentId
-      if (ref.bytes > opts.maxBytes) {
-        skipped++
-        lines.push('[image skipped: "' + label + '" exceeds mediaMaxBytes]')
-        i++
-        continue
-      }
-      let data: Uint8Array | null = null;
-      try {
-        data = await opts.readImage(ref)
-      } catch {
-        data = null;
-      }
-      if (!data) {
-        skipped++
-        lines.push('[image unavailable: "' + label + '" could not be read from attachment storage]')
-        i++;
-        continue;
-      }
-      const path = stagedPath(opts.dir, opts.key, ref.attachmentId, ref.mediaType)
-      await writeFile(path, data);
-      staged.push({ path, name: label, width: ref.width, height: ref.height, bytes: ref.bytes, attachmentId: ref.attachmentId });
-      stagedIds.push(ref.attachmentId);
-      lines.push('[image attached: "' + label + '" — staged at ' + path + ' (' + ref.width + 'x' + ref.height + ', ' + ref.bytes + ' bytes). Inspect it using the view_file tool with AbsolutePath: "' + path + '"]');
-      i++;
-    }
-  }
-  return { promptSuffix: lines.join('\n'), staged, stagedIds, skipped }
+  return stageMedia({
+    dir: opts.dir,
+    key: opts.key,
+    items: opts.images,
+    readMedia: (r) => opts.readImage(r as ImageRefLike),
+    maxItems: opts.maxImages,
+    maxImageBytes: opts.maxBytes,
+    maxFileBytes: opts.maxBytes,
+  })
 }
 
 /**

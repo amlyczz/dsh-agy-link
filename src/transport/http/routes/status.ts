@@ -22,7 +22,7 @@ function selectableModels(
 }
 
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
-  const { getConfig, bin, store, pool, quota, catalog, auth, poolAuth, adapter, translation, lastRun } = services
+  const { getConfig, bin, store, pool, quota, warmup, catalog, auth, poolAuth, adapter, acpPool, translation, lastRun } = services
   const { version: versionCache, dormantReason } = services.status
       runRoute(res, async () => {
         const cfg = getConfig()
@@ -72,6 +72,13 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           dormantReason,
           enabled: cfg.enabled,
           permissionMode: cfg.permissionMode,
+          sandbox: cfg.sandbox,
+          agent: cfg.agent,
+          agySettings: cfg.agySettings,
+          transport: cfg.transport,
+          acpStatus: typeof acpPool?.status === 'function' ? acpPool.status() : null,
+          imageTool: cfg.imageTool,
+          syncAccountCustomizations: cfg.syncAccountCustomizations,
           workspaceRoot: cfg.workspaceRoot,
           defaultModel: cfg.defaultModel,
           defaultEffort: cfg.defaultEffort,
@@ -83,6 +90,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           // its own click, which cleared the moment the route answered — so a
           // ~55s serial cascade showed no progress at all.
           quotaRefreshing: typeof quota?.refreshingAccounts === 'function' ? quota.refreshingAccounts() : [],
+          warmupState: typeof warmup?.status === 'function' ? warmup.status() : null,
           catalog: { source: activeCat.source, count: catalogCount, lastError: activeCat.lastError ?? cat.lastError ?? null },
           // Dynamically reflects models supported by the currently active account (e.g. hides Argon when active lacks Argon)
           catalogModels: sanitizedCatalogModels,

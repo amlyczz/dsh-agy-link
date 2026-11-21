@@ -26,8 +26,10 @@ import {
   explainIneligibility,
   isAccountEligible,
   orderByExpiry,
+  resolveEligibleActiveAccountId,
   type AccountIneligibilityReason,
 } from '../domain/accounts/selection.ts'
+import { QUOTA_FAMILIES, normalizeModelFamily } from '../common/quota-bench.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { ensureIsolatedKeychain } from './runner.ts'
 
@@ -128,8 +130,25 @@ export class AccountPoolManager {
 
   getPoolData(defaultProxy?: string): Readonly<AccountPoolData> {
     const sysProxy = defaultProxy || detectSystemProxy()
+    const now = Date.now()
+    const resolvedActiveAccountIds: Partial<Record<ModelFamily, string>> = {}
+    const source = {
+      hasDedicatedGroup: (id: string, fam: ModelFamily) => this.hasDedicatedGroup(id, fam),
+      isModelSupported: (acc: ManagedAccount, model: string) => this.isModelSupported(acc, model),
+    }
+    for (const fam of QUOTA_FAMILIES) {
+      const resolved = resolveEligibleActiveAccountId(
+        this.data.accounts,
+        this.data.activeAccountIds,
+        fam,
+        source,
+        now,
+      )
+      if (resolved) resolvedActiveAccountIds[fam] = resolved
+    }
     return {
       ...this.data,
+      resolvedActiveAccountIds,
       activeAccountId: this.getActiveAccountId('google'),
       ...(sysProxy ? { systemProxy: sysProxy } : {}),
     }
@@ -355,11 +374,15 @@ export class AccountPoolManager {
         // override is only meant to bridge the gap until fresher data arrives.
         const clearedAt = acc.quotaGateClearedAt?.[famKey]
         const gateCleared = clearedAt !== undefined && (info.updatedAt ?? 0) <= clearedAt
-        if (!gateCleared && (this.data.activeAccountIds?.[famKey] === id || this.data.lastActiveAccountId === id)) {
+        const famPinned = this.data.activeAccountIds?.[famKey]
+        const ownsFamily = famPinned === id || (famPinned === undefined && this.data.lastActiveAccountId === id)
+        if (!gateCleared && ownsFamily) {
           this.advanceAccount(id, famKey)
         }
         // Folded/shared Argon pool rides the Gemini bucket when no dedicated argon row exists.
-        if (!gateCleared && famKey === 'google' && !acc.quotas?.argon && this.data.activeAccountIds?.argon === id) {
+        const argonPinned = this.data.activeAccountIds?.argon
+        const ownsArgon = argonPinned === id || (argonPinned === undefined && this.data.lastActiveAccountId === id)
+        if (!gateCleared && famKey === 'google' && !acc.quotas?.argon && ownsArgon) {
           this.advanceAccount(id, 'argon')
         }
       }
@@ -456,12 +479,13 @@ export class AccountPoolManager {
    */
   clearCooldown(id?: string, family?: ModelFamily, includeQuotaBench = false): void {
     const now = Date.now()
+    const targetFamily = family ? (normalizeModelFamily(family) ?? family) : undefined
     const clearOne = (acc: ManagedAccount): void => {
       acc.cooldowns ??= {}
-      if (family) delete acc.cooldowns[family]
+      if (targetFamily) delete acc.cooldowns[targetFamily]
       else acc.cooldowns = {}
       if (!includeQuotaBench) return
-      const families = family ? [family] : (Object.keys(acc.quotas ?? {}) as ModelFamily[])
+      const families = targetFamily ? [targetFamily] : (Object.keys(acc.quotas ?? {}) as ModelFamily[])
       if (families.length === 0) return
       acc.quotaGateClearedAt ??= {}
       for (const fam of families) {
@@ -498,7 +522,9 @@ export class AccountPoolManager {
         const prevId = this.data.activeAccountIds?.[family]
         if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
         this.data.activeAccountIds[family] = picked.id
-        this.data.lastActiveAccountId = picked.id
+        if (family === 'google' || !this.data.lastActiveAccountId) {
+          this.data.lastActiveAccountId = picked.id
+        }
         this.persist()
         if (prevId && prevId !== picked.id) {
           this.onAccountSwitch?.(picked.id, family)
@@ -513,7 +539,7 @@ export class AccountPoolManager {
     if (activeId) {
       const activeCandidate = candidates.find((a) => a.id === activeId)
       if (activeCandidate) {
-        if (this.data.lastActiveAccountId !== activeCandidate.id) {
+        if ((family === 'google' || !this.data.lastActiveAccountId) && this.data.lastActiveAccountId !== activeCandidate.id) {
           this.data.lastActiveAccountId = activeCandidate.id
           this.persist()
         }
@@ -528,7 +554,9 @@ export class AccountPoolManager {
 
     if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
     this.data.activeAccountIds[family] = nextAccount.id
-    this.data.lastActiveAccountId = nextAccount.id
+    if (family === 'google' || !this.data.lastActiveAccountId) {
+      this.data.lastActiveAccountId = nextAccount.id
+    }
     this.persist()
     if (activeId && activeId !== nextAccount.id) {
       this.onAccountSwitch?.(nextAccount.id, family)

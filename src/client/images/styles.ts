@@ -410,6 +410,58 @@ const IMAGE_CSS = `
   color: #94a3b8;
   line-height: 1.5;
 }
+
+.agy-chip-audio {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.28);
+}
+.agy-chip-audio:hover {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #34d399;
+}
+.agy-audio-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 8px 10px;
+  max-width: 420px;
+  border-radius: 10px;
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.25));
+  background: var(--dsw-alias-markdown-code-block, rgba(127, 127, 127, 0.06));
+}
+.agy-audio-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.agy-audio-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, #334155);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agy-audio-card-open {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.25));
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #64748b);
+  cursor: pointer;
+}
+.agy-audio-card-open:hover {
+  color: var(--dsw-alias-label-primary, #0f172a);
+}
+.agy-audio-player {
+  width: 100%;
+  height: 34px;
+}
 `;
 
 export function injectStyles(): void {

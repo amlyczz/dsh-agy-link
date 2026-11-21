@@ -60,6 +60,13 @@ export function runBootHygiene(services: HostServices): void {
   if (swept > 0) log('swept ' + swept + ' stale staging dir(s)')
   const logsSwept = pool.sweepOldLogs(getConfig().logRetentionDays)
   if (logsSwept > 0) log('swept ' + logsSwept + ' old log file(s)')
+  if (getConfig().syncAccountCustomizations) {
+    try {
+      services.ecosystem?.syncAll()
+    } catch {
+      // best-effort ecosystem mirror
+    }
+  }
   // Provision per-account login keychains for isolated pool homes (macOS):
   // without one, agy's keyring save pops the system "create login keychain"
   // password dialog on every token refresh. Idempotent; pre-existing homes

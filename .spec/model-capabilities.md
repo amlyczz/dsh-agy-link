@@ -50,9 +50,14 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
    - **OAuth 登录 / 重登 / 导入必刷新**：`PoolAuthFlow.finishWithCode`（全部三个分支：新账号、重认证、主账号）与 `importRefreshToken` 完成后均触发目录刷新与 `notifyPicker()`。
    - **配置与 CLI 命令同步**：`/config` 修改影响可见模型集合的键（`hiddenModels`、`poolWideCatalog`、`enabled`，其中 `enabled` 通过 `AdapterRegistrationHandle.replace()` 动态挂载/卸载路由）以及 `/agy` 账号管理子命令（含 `/agy use <id>`、`/agy effort`）均同步调用 `notifyPicker()`；不影响 `listModels()` 列表集合的键（如 `defaultEffort`、`translateModel`）保持静默（遵循 `test/http-contract.test.ts` 与 `test/lifecycle.test.ts` 契约）。
 
-### 4.3 手动切号优先于旧会话粘性（`manualPinAt`）
-- `AccountPoolData.manualPinAt` 记录用户显式切号（UI「设为当前使用」、设为主账号、重排、`/agy use`）的时间戳。
-- `selectSessionAccount()` 中：若用户显式切号发生在旧会话绑定更新时间之后（`manualPinAt > binding.updatedAt`），该会话**立即跟随用户新选账号**，而不再被 `stickyAccount` 拉回旧账号；且 `stickyAccount` 命中旧会话亲和时**绝不反向覆写全局 `activeAccountIds`**（仅调用 `markAccountActive`）。
+### 4.3 按模型族作用域与手动切号优先于同族旧会话粘性（`manualPinAtByFamily`）
+- 账号池活跃指针、冷却与预热严格按**模型族**（`google` Gemini / `argon` Argon / `anthropic` Claude / `openai` GPT-OSS）隔离：
+  - `setActiveAccount(id, family)` 与 `/pool/set-active` 仅修改目标模型族指针（并更新 `AccountPoolData.manualPinAtByFamily[family]`），绝不越界覆盖其他模型族的当前账号；`/agy use <id> [family]` 支持指定模型族（默认 `google`）。
+  - `recordFailure()` / `advanceAccount()` / `updateAccountQuotas()` 对主动指针的轮换或自愈均按模型族边界校验（`lastActiveAccountId` 仅服务 `google` 族兜底，绝不跨族劫持 `argon` / `anthropic` / `openai`）。
+  - `getPoolData().resolvedActiveAccountIds` 预计算每个模型族当前真正命中的可用账号 ID，UI 将「当前使用」「设为当前」「冷却中」「清除冷却」直接嵌入对应模型族分组内，消除账号级冗余状态标签与横幅。
+- `selectSessionAccount()` 中：
+  - `stickyAccount()` 仅在会话上次绑定模型属于同一 `modelFamilyOf(b.model)` 时复用同族粘性账号（例如会话 A 选 `gemini-pro-orchestrator-neon` 在 `google` 池内轮换，会话 B 选 `gemini-4-argon` 在 `argon` 池内独立轮换，互不串扰）。
+  - 若用户对该模型族显式切号发生在旧会话绑定更新时间之后（`Math.max(manualPinAt, manualPinAtByFamily[family]) > binding.updatedAt`），该同族会话**立即跟随用户新选账号**，不再被旧会话亲和拉回；且 `stickyAccount` 命中旧会话亲和时**绝不反向覆写全局其他族的 `activeAccountIds`**（`lastActiveAccountId` 亦受 `family === 'google' || !lastActiveAccountId` 守卫）。
 - `syncSessionModel()` 兼容 `dsh-agent` 真实接口 `(await ctx.agents.resolve(sessionId))?.model?.select(...)` 与持久事件追加。
 
 ## 5. `--effort` 档位拒绝自愈（issue #67 / #115）

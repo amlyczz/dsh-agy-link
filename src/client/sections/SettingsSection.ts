@@ -1,11 +1,8 @@
-// The Antigravity settings console: header status card, toast banner, the
-// add-account OAuth form, the account pool, and the runtime configuration rows
-// (pool mode, auto-warmup, auto-translate, image generation, default effort,
-// model visibility). All state/handlers live here; child panels stay
-// presentational so the DOM and every i18n key remain exactly as shipped.
+// Antigravity settings console: header, OAuth form, account pool, and runtime controls.
 
 import { win, WRITE_TIMEOUT_MS } from '../api.ts';
 import type { AccountPoolData } from '../../common/pool-types.ts';
+import type { QuotaFamily } from '../../common/quota-bench.ts';
 import { catalogEfforts, geminiCatalogModels, translateEffortOptions, translateModelOptions, type EffortLabels } from '../config-options.ts';
 import { effortLabel } from '../../common/reasoning.ts';
 import type { CatalogModelView } from '../status.ts';
@@ -25,17 +22,15 @@ import { Select } from '../ui/Select.ts';
 import { Spinner } from '../ui/Spinner.ts';
 import { Toast, type ToastNotice, type ToastType } from '../ui/Toast.ts';
 import { AccountsPanel } from './AccountsPanel.ts';
+import { EcosystemPanel } from './EcosystemPanel.ts';
 import { ModelsPanel } from './ModelsPanel.ts';
+import { RuntimeControlsSection } from './RuntimeControlsRows.ts';
+import { IMAGE_CLI_SAMPLE, renderImageRow } from './ImageSettingsRows.ts';
+import { WarmupStatusBar } from './WarmupStatusBar.ts';
 import { renderVisibilityRows } from './VisibilityRows.ts';
 import { renderPoolWideCatalogRow } from './CatalogRows.ts';
 
-/**
- * BUSY-STATE WATCHDOG. Every action sets a busy flag and clears it when its
- * request settles. A host route with no .catch, a 20s `agy /usage` spawn, or a
- * browser fetch with no timeout each used to leave "同步中" spinning forever.
- * The request layer now bounds those; this is the final invariant — no busy
- * flag may outlive BUSY_TIMEOUT_MS.
- */
+/** Bound any action busy flag so a stalled fetch never leaves a spinner stuck. */
 function useBusyAction(): [string | null, (value: string | null) => void] {
 	const [loadingAction, setLoadingAction] = useState<string | null>(null);
 	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -52,10 +47,6 @@ function useBusyAction(): [string | null, (value: string | null) => void] {
 	}, []);
 	return [loadingAction, set];
 }
-
-// Shown (and copyable) in Settings: image generation is a CLI feature, so the
-// panel documents the exact command instead of pretending to run it in-page.
-const IMAGE_CLI_SAMPLE = 'dsh-agy-image -p "…" -a 16:9 -o ./image.jpg';
 
 /** Slightly longer than a bounded write, so a normal failure still shows its own toast. */
 const BUSY_TIMEOUT_MS = WRITE_TIMEOUT_MS + 5_000;
@@ -93,7 +84,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const [aliasInputs, setAliasInputs] = useState<Record<string, string>>({});
 		const [editingAliasId, setEditingAliasId] = useState<string | null>(null);
 		const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
-		const [optimisticActiveId, setOptimisticActiveId] = useState<string | null>(null);
+		const [optimisticActiveByFamily, setOptimisticActiveByFamily] = useState<Partial<Record<QuotaFamily, string>>>({});
 
 		useEffect(() => {
 			return acquireOverlaySuspend();
@@ -112,7 +103,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const config = useConfig({ status, refresh, showToast, setLoadingAction, t });
 		const accountActions = useAccounts({
 			status, refresh, showToast, setLoadingAction, t,
-			proxyInputs, setEditingProxyId, aliasInputs, setEditingAliasId, setOptimisticActiveId,
+			proxyInputs, setEditingProxyId, aliasInputs, setEditingAliasId, setOptimisticActiveByFamily,
 		});
 
 		const copyImageCommand = (): void => {
@@ -138,6 +129,8 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const accounts = pool?.accounts ?? [];
 		const isAuthed = authPhase === 'ok' || accounts.length > 0;
 		const isBusy = loadingAction !== null;
+		const isWarmupAllBusy = loadingAction === 'warmup:all' || status?.warmupState?.running === true;
+		const isRefreshAllBusy = loadingAction === 'refresh:all' || (status?.quotaRefreshing?.length ?? 0) > 0;
 
 		if (status === null) {
 			return h('div', { style: { ...S.container!, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
@@ -146,23 +139,26 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		}
 
 		return h('div', { className: 'agy-console', style: S.container },
-			renderHeader(t, isAuthed, auth.addingAccount, isBusy, loadingAction, {
+			renderHeader(t, isAuthed, auth.addingAccount, isBusy, isWarmupAllBusy, isRefreshAllBusy, {
 				onAdd: () => auth.setAddingAccount(true),
 				onWarmupAll: () => void accountActions.warmupAccount(),
 				onRefreshAll: () => void accountActions.refreshQuota(),
 			}),
 			h(Toast, { toast, onClose: () => setToast(null), t }),
 			renderAddAccountSection(t, auth, pool, isBusy, loadingAction),
-			h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', padding: '0 2px' } },
+			h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', padding: '0 2px', gap: '8px', flexWrap: 'wrap' } },
 				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-					h('span', { style: { fontWeight: 700, fontSize: '12.5px', color: 'var(--agy-text-primary)' } }, `账号池 (${accounts.length})`),
+					h('span', { style: { fontWeight: 700, fontSize: '12.5px', color: 'var(--agy-text-primary)' } }, t('account.poolHeading', { count: accounts.length })),
 				),
+				h(WarmupStatusBar, { t, warmupState: status.warmupState ?? null, accounts }),
 			),
 			h(AccountsPanel, {
-				t, pool, accounts, accountModels: status.accountModels, loadingAction, quotaRefreshing: status.quotaRefreshing ?? [],
+				t, pool, accounts, accountModels: status.accountModels, loadingAction,
+				quotaRefreshing: status.quotaRefreshing ?? [],
+				warmupState: status.warmupState ?? null,
 				proxyInputs, setProxyInputs, editingProxyId, setEditingProxyId,
 				aliasInputs, setAliasInputs, editingAliasId, setEditingAliasId,
-				expandedModels, toggleExpand, optimisticActiveId,
+				expandedModels, toggleExpand, optimisticActiveByFamily,
 				handlers: { ...accountActions, beginReauth: auth.handleBeginReauth },
 			}),
 			renderRuntimeConfig(t, status, pool, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, {
@@ -170,6 +166,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				setMode: config.setMode,
 				setSelectedModels: config.setSelectedModels,
 				copyImageCommand,
+				showToast,
 			}),
 		);
 	};
@@ -180,7 +177,8 @@ function renderHeader(
 	isAuthed: boolean,
 	addingAccount: boolean,
 	isBusy: boolean,
-	loadingAction: string | null,
+	isWarmupAllBusy: boolean,
+	isRefreshAllBusy: boolean,
 	actions: { onAdd: () => void; onWarmupAll: () => void; onRefreshAll: () => void },
 ): unknown {
 	return h('div', { style: S.headerCard },
@@ -198,15 +196,15 @@ function renderHeader(
 			h(Button, {
 				variant: 'default', size: 'sm', className: 'agy-btn',
 				style: { gap: '4px', height: '24px', padding: '2px 8px', fontSize: '11.5px' },
-				disabled: isBusy,
+				disabled: isBusy || isWarmupAllBusy,
 				onClick: actions.onWarmupAll,
-			}, ...(loadingAction === 'warmup:all' ? [Spinner(), t('header.warmingUp')] : [uiIcon('flame', 12, '#f97316'), ` ${t('header.warmup')}`])),
+			}, ...(isWarmupAllBusy ? [Spinner(), t('header.warmingUp')] : [uiIcon('flame', 12, '#f97316'), ` ${t('header.warmup')}`])),
 			h(Button, {
 				variant: 'default', size: 'sm', className: 'agy-btn',
 				style: { gap: '4px', height: '24px', padding: '2px 8px', fontSize: '11.5px' },
-				disabled: isBusy,
+				disabled: isBusy || isRefreshAllBusy,
 				onClick: actions.onRefreshAll,
-			}, ...(loadingAction === 'refresh:all' ? [Spinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`])),
+			}, ...(isRefreshAllBusy ? [Spinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`])),
 		),
 	);
 }
@@ -411,9 +409,10 @@ function renderRuntimeConfig(
 		setMode: (mode: string) => Promise<void>;
 		setSelectedModels: (ids: ReadonlyArray<string>) => Promise<void>;
 		copyImageCommand: () => void;
+		showToast: (text: string, type?: ToastType) => void;
 	},
 ): unknown {
-	const { setCfg, setMode, setSelectedModels, copyImageCommand } = actions;
+	const { setCfg, setMode, setSelectedModels, copyImageCommand, showToast } = actions;
 	const caption = (text: string, desc?: string): unknown => h('div', { style: { display: 'flex', flexDirection: 'column' } },
 		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, text),
 		desc !== undefined ? h('span', { style: S.muted }, desc) : null,
@@ -491,10 +490,12 @@ function renderRuntimeConfig(
 					}),
 				),
 			}),
-			renderImageRow(t, status, catalogModels, loadingAction, setCfg, copyImageCommand),
+			renderImageRow(t, status, catalogModels, loadingAction, setCfg, copyImageCommand, effortLabels(t)),
 			renderVisibilityRows({ t, status, loadingAction, setCfg }),
 			renderPoolWideCatalogRow({ t, status, loadingAction, setCfg }),
 			renderDefaultEffortRow(t, status, catalogModels, loadingAction, setCfg),
+			h(RuntimeControlsSection, { t, status, loadingAction, setCfg }),
+			h(EcosystemPanel, { t, currentAgent: status.agent ?? '', loadingAction, setCfg, showToast }),
 			h(ModelsPanel, { t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels }),
 		),
 	);
@@ -539,58 +540,4 @@ function renderDefaultEffortRow(
 			}, labels.level(level))),
 		]),
 	});
-}
-
-function renderImageRow(
-	t: Translator,
-	status: NonNullable<ReturnType<typeof useAgyStatus>['status']>,
-	catalogModels: ReadonlyArray<CatalogModelView>,
-	loadingAction: string | null,
-	setCfg: (key: string, value: unknown) => Promise<void>,
-	copyImageCommand: () => void,
-): unknown {
-	return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-		h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
-			h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
-				h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.image')),
-				h('span', { style: S.muted }, t('config.imageDesc')),
-			),
-			h('div', { style: S.cfgRowRight },
-				h(Select, {
-					value: status.imageModel ?? '',
-					ariaLabel: t('config.imageModel'),
-					title: t('config.imageModelDesc'),
-					disabled: loadingAction === 'config:imageModel',
-					onChange: (e: { target?: { value?: string } }) => void setCfg('imageModel', e?.target?.value ?? ''),
-					options: translateModelOptions(status.imageModel ?? '', geminiCatalogModels(catalogModels), t('config.translateModelAuto')),
-				}),
-				h(Select, {
-					value: status.imageEffort ?? '',
-					ariaLabel: t('config.imageEffort'),
-					title: t('config.imageEffortDesc'),
-					style: { minWidth: '78px', maxWidth: '110px' },
-					disabled: loadingAction === 'config:imageEffort',
-					onChange: (e: { target?: { value?: string } }) => void setCfg('imageEffort', e?.target?.value ?? ''),
-					options: translateEffortOptions(status.imageEffort ?? '', effortLabels(t), status.imageModel ?? '', catalogModels),
-				}),
-			),
-		),
-		h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
-			h('code', {
-				style: {
-					flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-					fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '11px',
-					color: 'var(--agy-text-secondary)', background: 'var(--agy-bg-subbox)',
-					border: '1px solid var(--agy-border-subbox)', borderRadius: '5px', padding: '3px 7px',
-				},
-			}, IMAGE_CLI_SAMPLE),
-			// Same secondary small-button recipe as every other row here
-			// (variant default + size sm === the original {...S.btnSm, ...}).
-			h(Button, {
-				variant: 'default', size: 'sm', className: 'agy-btn',
-				style: { flex: '0 0 auto', whiteSpace: 'nowrap' },
-				onClick: copyImageCommand,
-			}, t('config.imageCopy')),
-		),
-	);
 }

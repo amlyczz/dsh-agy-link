@@ -9,6 +9,8 @@ import { register as registerAuth } from './routes/auth.ts'
 import { register as registerConfig } from './routes/config.ts'
 import { register as registerTranslate } from './routes/translate.ts'
 import { register as registerMedia } from './routes/media.ts'
+import { register as registerEmbed } from './routes/embed.ts'
+import { register as registerEcosystem } from './routes/ecosystem.ts'
 
 export type { WebServerLike, Route, RouteHandler, RouteRegistrar } from './respond.ts'
 
@@ -24,6 +26,8 @@ export function registerRoutes(webServer: WebServerLike, services: HostServices)
   registerConfig(reg, services)
   registerTranslate(reg, services)
   registerMedia(reg, services)
+  registerEmbed(reg, services)
+  registerEcosystem(reg, services)
   return () => {
     for (const d of disposers) {
       try {

@@ -22,6 +22,7 @@ import { Button } from '../src/client/ui/Button.ts'
 import { segGroup } from '../src/client/ui/SegGroup.ts'
 import { agyModalStore, modalHostManager } from '../src/client/ui/Modal.ts'
 import { AccountsPanel } from '../src/client/sections/AccountsPanel.ts'
+import { WarmupStatusBar } from '../src/client/sections/WarmupStatusBar.ts'
 import { renderFamilyQuotaBar } from '../src/client/sections/QuotaPanel.ts'
 import { createSessionStatus } from '../src/client/sections/SessionStatus.ts'
 import { getGitHeadContentAsync } from '../src/provider/mirror/git-head.ts'
@@ -633,4 +634,143 @@ test('resolveSessionGoal tracks edit operations and resolveSessionPlanMode track
   assert.equal(resolveSessionPlanMode(planCtx, 'active-only'), true)
   assert.equal(resolveSessionPlanMode(planCtx, 'off'), false)
   assert.equal(resolveSessionPlanMode(planCtx, 'missing'), undefined)
+})
+
+test('AccountsPanel shows collapsed cooling hint, host-synced spinners, explicit-only proxy pill, and WarmupStatusBar states', () => {
+  const t = ((k: string, vars?: Record<string, string | number>) =>
+    vars ? `${k}:${JSON.stringify(vars)}` : k) as never
+  const now = Date.now()
+  const baseHandlers = {
+    moveAccount: async () => {},
+    setActiveAccount: async () => {},
+    beginReauth: async () => {},
+    removeAccount: async () => {},
+    toggleAccountEnabled: async () => {},
+    refreshQuota: async () => {},
+    warmupAccount: async () => {},
+    saveProxy: async () => {},
+    saveAlias: async () => {},
+    clearCooldown: async () => {},
+  }
+
+  // 1. Account with only global pool.systemProxy (no acc.proxyUrl) and cooling Claude while collapsed.
+  const accInheritedProxy = {
+    id: 'acc_inh',
+    alias: 'inh',
+    dir: '/tmp/inh',
+    enabled: true,
+    createdAt: 1,
+    cooldowns: { anthropic: { cooldownUntil: now + 60_000, reason: '429', consecutiveFailures: 1 } },
+    quotas: {
+      google: { remainingFraction: 1, resetTime: new Date(now + 60_000).toISOString(), updatedAt: now },
+      anthropic: { remainingFraction: 0, resetTime: new Date(now + 60_000).toISOString(), updatedAt: now },
+    },
+  }
+  // 2. Account with explicit per-account proxyUrl and healthy quotas.
+  const accExplicitProxy = {
+    id: 'acc_exp',
+    alias: 'exp',
+    dir: '/tmp/exp',
+    enabled: true,
+    proxyUrl: 'socks5://127.0.0.1:7891',
+    createdAt: 2,
+    cooldowns: {},
+    quotas: {
+      google: { remainingFraction: 1, resetTime: new Date(now + 60_000).toISOString(), updatedAt: now },
+    },
+  }
+
+  const runningWarmup = {
+    running: true,
+    scope: 'all',
+    activeAccountIds: ['acc_exp'],
+    currentAccountId: 'acc_exp',
+    startedAt: now - 1000,
+    completed: 0,
+    total: 2,
+    lastRun: null,
+  }
+
+  const treeNoExplicit = JSON.stringify(AccountsPanel({
+    t,
+    pool: { mode: 'sequential', accounts: [accInheritedProxy], primaryAccountId: 'acc_inh', systemProxy: 'http://sys:8080' } as never,
+    accounts: [accInheritedProxy] as never,
+    loadingAction: null,
+    quotaRefreshing: ['acc_inh'],
+    warmupState: runningWarmup,
+    proxyInputs: {},
+    setProxyInputs: () => {},
+    editingProxyId: null,
+    setEditingProxyId: () => {},
+    aliasInputs: {},
+    setAliasInputs: () => {},
+    editingAliasId: null,
+    setEditingAliasId: () => {},
+    expandedModels: {},
+    toggleExpand: () => {},
+    optimisticActiveByFamily: {},
+    handlers: baseHandlers,
+  }))
+  assert.ok(treeNoExplicit.includes('account.collapsedCoolingHint'), 'collapsed card must hint when Claude/GPT-OSS is cooling')
+  assert.ok(treeNoExplicit.includes('Claude'), 'collapsed hint must name cooling collapsed family')
+  assert.equal(treeNoExplicit.includes('status.proxy'), false, 'global systemProxy must not render redundant [status.proxy] badge')
+  assert.ok(treeNoExplicit.includes('agy-shimmer-track'), 'quotaRefreshing keeps host-synced spinner/shimmer across modal reopen when loadingAction is null')
+
+  const treeExplicit = JSON.stringify(AccountsPanel({
+    t,
+    pool: { mode: 'sequential', accounts: [accExplicitProxy], primaryAccountId: 'acc_exp', systemProxy: 'http://sys:8080' } as never,
+    accounts: [accExplicitProxy] as never,
+    loadingAction: null,
+    quotaRefreshing: [],
+    warmupState: runningWarmup,
+    proxyInputs: {},
+    setProxyInputs: () => {},
+    editingProxyId: null,
+    setEditingProxyId: () => {},
+    aliasInputs: {},
+    setAliasInputs: () => {},
+    editingAliasId: null,
+    setEditingAliasId: () => {},
+    expandedModels: {},
+    toggleExpand: () => {},
+    optimisticActiveByFamily: {},
+    handlers: baseHandlers,
+  }))
+  assert.ok(treeExplicit.includes('status.proxy'), 'explicit per-account proxyUrl renders [status.proxy] pill')
+  assert.ok(treeExplicit.includes('warmup.progress') || treeExplicit.includes('agy-spinner') || treeExplicit.includes('Spinner') || treeExplicit.includes('"disabled":true'), 'host-reported warmupState keeps warmup button busy/spinning when loadingAction is null')
+
+  const runningBar = JSON.stringify(WarmupStatusBar({
+    t,
+    warmupState: runningWarmup,
+    accounts: [accInheritedProxy, accExplicitProxy] as never,
+  }))
+  assert.ok(runningBar.includes('warmup.progressCurrent'), 'WarmupStatusBar shows live progressCurrent while running')
+  assert.ok(runningBar.includes('exp'), 'WarmupStatusBar includes current account alias')
+
+  const finishedBar = JSON.stringify(WarmupStatusBar({
+    t,
+    warmupState: {
+      running: false,
+      scope: 'all',
+      activeAccountIds: [],
+      currentAccountId: null,
+      startedAt: null,
+      completed: 0,
+      total: 0,
+      lastRun: {
+        scope: 'all',
+        startedAt: now - 5000,
+        finishedAt: now,
+        succeeded: 1,
+        skipped: 1,
+        failed: 0,
+        accounts: [
+          { accountId: 'acc_inh', alias: 'inh', probed: 0, succeeded: 0, skipped: 1, failed: 0 },
+          { accountId: 'acc_exp', alias: 'exp', probed: 1, succeeded: 1, skipped: 0, failed: 0 },
+        ],
+      },
+    },
+    accounts: [accInheritedProxy, accExplicitProxy] as never,
+  }))
+  assert.ok(finishedBar.includes('warmup.lastRun'), 'WarmupStatusBar displays lastRun summary once idle')
 })

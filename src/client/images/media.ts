@@ -36,14 +36,14 @@ export function isImageFile(pathOrUrl: string): boolean {
 export function isVideoFile(pathOrUrl: string): boolean {
   if (!pathOrUrl || typeof pathOrUrl !== 'string') return false;
   const clean = pathOrUrl.split(/[?#]/)[0] ?? '';
-  return /\.(mp4|webm|mov|mkv)$/i.test(clean);
+  return /\.(mp4|webm|mov|mkv|ogv)$/i.test(clean);
 }
 
 /** Check if a URL or path is an audio file */
 export function isAudioFile(pathOrUrl: string): boolean {
   if (!pathOrUrl || typeof pathOrUrl !== 'string') return false;
   const clean = pathOrUrl.split(/[?#]/)[0] ?? '';
-  return /\.(mp3|wav|ogg|m4a|aac)$/i.test(clean);
+  return /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(clean);
 }
 
 /** Check if a URL or path is visual media (image or video) */

@@ -355,6 +355,18 @@ export function shouldPollAccount(account: ManagedAccount): boolean {
   // quota data; probing it every hour only repeats the refusal. A free-tier
   // account is only summary-refused and keeps polling (#137).
   if (accountPollSuppressed(account, now)) return false
+  const quotaFamilies = Object.entries(account.quotas ?? {})
+    .filter(([, q]) => q !== undefined)
+    .map(([fam]) => fam as ModelFamily)
+  if (quotaFamilies.length > 0) {
+    // Only skip polling when EVERY known quota family has an active 429 cooldown:
+    // cooling Gemini must not stop healthy Argon/Claude/GPT families from refreshing.
+    const allCooling = quotaFamilies.every((fam) => {
+      const cd = account.cooldowns?.[fam]
+      return Boolean(cd && cd.cooldownUntil > now)
+    })
+    return !allCooling
+  }
   for (const cd of Object.values(account.cooldowns ?? {})) {
     if (cd && cd.cooldownUntil > now) return false
   }
@@ -433,6 +445,10 @@ export interface AccountPoolData {
   lastActiveAccountId?: string
   /** Timestamp of the most recent explicit user account switch/pin (overrides older session stickiness) */
   manualPinAt?: number
+  /** Per-family explicit pin timestamps so pinning one family never disrupts other families' session stickiness. */
+  manualPinAtByFamily?: Partial<Record<ModelFamily, number>>
+  /** Side-effect-free resolved active account ID per family, computed for UI readouts. */
+  resolvedActiveAccountIds?: Partial<Record<ModelFamily, string>>
   /** Authoritative currently active account ID computed by the pool scheduler */
   activeAccountId?: string
   /** Detected system-wide or plugin-configured default proxy URL */

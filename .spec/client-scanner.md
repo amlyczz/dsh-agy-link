@@ -8,9 +8,11 @@
 
 | 子任务 | 幂等标记 | 快速路径 |
 | --- | --- | --- |
-| 链接增强（图片 / 视频 / 本地文件） | `data-agy-link-scanned` + 各自的 `*-enhanced` | 选择器直接排除已访问链接，单趟分派 |
+| 链接增强（图片 / 视频 / 音频 / 本地文件） | `data-agy-link-scanned` + 各自的 `*-enhanced`（含 `data-agy-audio-enhanced`） | 选择器直接排除已访问链接；`/plugins/agy-link/embed` 链接显式跳过，交由 `embed.ts` 处理 |
 | markdown 图片 alt span | `data-agy-alt-scanned` / `data-agy-enhanced` | 无未处理 span 时立即返回 |
 | media origin 改写 | `data-agy-origin-rewritten` | 仅查询未改写的 `img[src*="/plugins/agy-link/media"]` |
+| Generative UI 微件（`<agent-embed>`） | `data-agy-embed-scanned` | `embed.ts` 将 `/plugins/agy-link/embed` 链接升级为 `<iframe sandbox="allow-scripts">` 卡片，按 `id` + `ev.source === frame.contentWindow` 校验证 `agy-embed-resize` 自动高度（80–800px）并同步 DSH 深浅主题变量 |
+| 扩展工具镜像卡片 | — | `extended-model.ts` / `extended-cards.ts` 为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理生命周期、`browser`/`chrome-devtools` 提供结构化标签与输出卡片；`invoke_subagent(image-generator)` 路由至图片卡片 |
 
 ## 2. 流式跳过可恢复不变式（PR #110 / v0.6.25）
 
@@ -30,3 +32,4 @@
 
 - `test/client-dom.test.ts`：单趟幂等标记与流式文本增长后本地图片卡片恢复。
 - `test/modal-overlay-isolation.test.ts` / `test/scroll-guard.test.ts`：禁用 `backdrop-filter`/`contain`/`will-change`、滚动锁、非 passive 滚轮拦截、扫描器门控与卸载清理。
+- `test/issue153-client-locale.test.ts` / `test/extended-ui-and-embed.test.ts`：所有新增 DOM 增强器（`embed.ts`、`audio.ts`、`extended-cards.ts`、`image-card.ts`）通过 `i18n-bridge.ts` 遵循宿主语言且无硬编码中文，且 `installAgentEmbedRenderer()` 在缺省 `window.addEventListener` 环境下安全无操作退化。

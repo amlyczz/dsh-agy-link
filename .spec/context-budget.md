@@ -29,13 +29,17 @@
 - **散文永不省略**：`Assistant:` / `User:` 行只受 `maxLineBytes`（调用点传 40,000）与整体 `maxChars` 约束——线索靠它们延续。
 - **最新任务行保留**（`includeTaskLine`，自动模式默认 true）：任何截断都从**最旧**的行开始丢。
 
-## 3. 图片
+## 3. 多模态附件（图片 / PDF / 音频 / 视频）
 
-未发送过的图片引用按水位去重后随回合投递（`collectUnsentImageRefs` / `mergeSentImageIds`）；历史截图不会被重复附上，超量时按最新优先、`maxSentImageIds` 截断。
+未发送过的媒体引用按水位去重后随回合投递（`collectUnsentMediaRefs` / `mergeSentImageIds`）；历史附件不会被重复附上，超量时按最新优先、`maxSentImageIds` 截断：
+
+- 支持 `image/*`（走 `view_file`）、`application/pdf`、`audio/*`（自动剥离 `; codecs=...` 参数与常见别名）、`video/*`（三者均走 `read_file`）。
+- 体积上限隔离：图片受 `mediaMaxBytes`（默认 10 MiB）约束；PDF / 音频 / 视频受 `mediaMaxFileBytes`（`DSH_AGY_MEDIA_MAX_FILE_BYTES`，默认 20 MiB，对齐 `agy` 原生附件上限）约束。
+- 仅含图片附件时保留精确提示 `[Please inspect the attached image(s) using view_file and assist the user.]`；含 PDF/音频/视频时使用 `[Please inspect the attached file(s) using view_file / read_file and assist the user.]`。
 
 ## 4. 测试锚点
 
-`test/adapter.test.ts`：`buildDigest` 的字节上限与"最新回合优先"、live task 不被工具输出挤掉（issue #35）、`elideMiddle` 的字节上限与 CJK 不切断码点、工具行默认省略而散文不省略、`trimToUtf8Bytes` 不产生非法码点。
+`test/adapter.test.ts` / `test/extended-ui-and-embed.test.ts`：`buildDigest` 的字节上限与"最新回合优先"、live task 不被工具输出挤掉（issue #35）、`elideMiddle` 的字节上限与 CJK 不切断码点、工具行默认省略而散文不省略、`trimToUtf8Bytes` 不产生非法码点、PDF/音频/视频落盘与 `mediaMaxFileBytes` 截断。
 
 ## 5. 已知取舍
 

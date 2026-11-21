@@ -399,3 +399,39 @@ test('QuotaService exposes the account ids currently refreshing', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('refreshAllQuotas(true) keeps bounded parallelism on win32 without global serializeWin32 lock', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-win32-sweep-'))
+  const origDesc = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+  try {
+    const pool = new AccountPoolManager(dir)
+    pool.setAccountEnabled('acc_primary', false)
+    for (const label of ['w1', 'w2', 'w3', 'w4']) {
+      const acc = pool.createAccountSlot(label)
+      pool.clearAuthRequired(acc.id, true)
+      pool.setAccountProxy(acc.id, 'http://127.0.0.1:7890')
+    }
+
+    let active = 0
+    let peak = 0
+    class RecordingQuota extends QuotaService {
+      override async refreshAccountQuota(): Promise<null> {
+        active++
+        peak = Math.max(peak, active)
+        await sleep(40)
+        active--
+        return null
+      }
+    }
+    // No forceConcurrency override: relies directly on QuotaService default on win32.
+    const qs = new RecordingQuota(pool, () => '', () => '1.5.12', { forceStaggerMs: () => 15 })
+    await qs.refreshAllQuotas(true)
+
+    assert.ok(peak >= 2, `win32 isolated REST sweep should run with bounded parallelism, saw peak=${peak}`)
+    assert.ok(peak <= 2, `win32 sweep concurrency must stay bounded to 2, saw peak=${peak}`)
+  } finally {
+    if (origDesc) Object.defineProperty(process, 'platform', origDesc)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

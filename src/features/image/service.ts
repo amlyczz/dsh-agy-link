@@ -4,7 +4,14 @@
 // unchanged, only decomposed into smaller private steps.
 import { existsSync } from 'node:fs'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
-import { Err, type PluginConfig } from '../../common/types.ts'
+import {
+  Err,
+  extractQuotaErrorModel,
+  isTransientBurstRateLimit,
+  looksLikeHardRateLimit,
+  looksLikeTosViolation,
+  type PluginConfig,
+} from '../../common/types.ts'
 import {
   buildImageAgentPrompt,
   normalizeAspectRatio,
@@ -21,12 +28,40 @@ import {
 } from './artifacts.ts'
 import {
   SUPPORTED_ASPECT_RATIOS,
+  type ImageAgentResult,
   type ImageFailureCode,
   type ImageRequest,
   type ImageResult,
   type ImageServiceDeps,
   type ImageTarget,
 } from './types.ts'
+
+function isHardQuotaErrorText(text: string | undefined): text is string {
+  return Boolean(
+    text
+    && text.trim() !== ''
+    && looksLikeHardRateLimit(text)
+    && !isTransientBurstRateLimit(text)
+    && !looksLikeTosViolation(text),
+  )
+}
+
+function detectHardQuotaError(res: ImageAgentResult, replyError?: string): string | null {
+  if (!res.ok) {
+    const err = res.error ?? ''
+    if (looksLikeTosViolation(err)) return null
+    if (res.code === Err.RATE_LIMIT || res.code === Err.QUOTA || isHardQuotaErrorText(err)) {
+      return isTransientBurstRateLimit(err) ? null : (err || 'Antigravity quota exhausted')
+    }
+    return null
+  }
+  const toolHit = res.toolCalls.find(
+    (t) => (t.name === 'generate_image' || t.name === 'invoke_subagent') && isHardQuotaErrorText(t.error),
+  )
+  if (toolHit?.error) return toolHit.error
+  if (isHardQuotaErrorText(replyError)) return replyError
+  return null
+}
 
 export function emptyImageResult(req: ImageRequest, model: string, effort: string): ImageResult {
   return {
@@ -96,7 +131,7 @@ export class ImageService {
   }
 
   target(override?: { model?: string; effort?: string }): ImageTarget {
-    return resolveImageTarget(this.deps.cfg(), override)
+    return resolveImageTarget(this.deps.cfg(), override, this.deps.catalog?.())
   }
 
   private cacheKey(req: ImageRequest, target: ImageTarget): string {
@@ -186,6 +221,8 @@ export class ImageService {
     // request dies on a flag instead of generating).
     let effort = target.effort
     let effortFallbackUsed = false
+    let quotaHopsUsed = 0
+    const maxQuotaHops = Math.min(Math.max(0, Math.round(this.deps.poolQuotaHops?.() ?? 0)), 16)
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = this.now()
       last.effort = effort
@@ -198,9 +235,28 @@ export class ImageService {
         imagePaths: refs,
         ...(signal === undefined ? {} : { signal }),
       })
-      last.attempts = attempt
+      last.attempts = attempt + quotaHopsUsed
       last.durationMs = this.now() - startedAt
       if (res.conversationId !== undefined) last.conversationId = res.conversationId
+
+      if (!res.ok && looksLikeTosViolation(res.error)) {
+        return { ...last, ok: false, code: 'AGY_ERROR', error: res.error ?? 'account suspended (TOS_VIOLATION)' }
+      }
+
+      const reply = res.ok ? parseImageReply(res.text) : { error: undefined }
+      const quotaErr = detectHardQuotaError(res, reply.error)
+      if (quotaErr !== null) {
+        last = { ...last, ok: false, code: 'NO_ACCOUNT', error: quotaErr }
+        const errModel = extractQuotaErrorModel(quotaErr) ?? target.model
+        const canSwitch = this.deps.onQuotaExhausted ? this.deps.onQuotaExhausted(res.accountId, errModel, quotaErr) : true
+        if (canSwitch && quotaHopsUsed < maxQuotaHops) {
+          quotaHopsUsed++
+          attempt--
+          continue
+        }
+        if (canSwitch && attempt < maxAttempts) continue
+        return last
+      }
 
       if (!res.ok) {
         const failure = res.error ?? ''
@@ -229,7 +285,6 @@ export class ImageService {
         if (attempt < maxAttempts) continue
         return last
       }
-      const reply = parseImageReply(res.text)
       if (reply.error !== undefined) {
         last = { ...last, ok: false, code: 'IMAGE_TOOL_ERROR', error: reply.error }
         if (attempt < maxAttempts) continue
