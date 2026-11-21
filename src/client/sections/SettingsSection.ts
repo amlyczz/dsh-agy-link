@@ -132,6 +132,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const pool = status?.pool;
 		const catalogModels = status?.catalogModels ?? [];
 		const hiddenModelSet = new Set(status?.hiddenModels ?? []);
+		const selectedModelSet = new Set(status?.selectedModels ?? []);
 		const accounts = pool?.accounts ?? [];
 		const isAuthed = authPhase === 'ok' || accounts.length > 0;
 		const isBusy = loadingAction !== null;
@@ -161,10 +162,10 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				expandedModels, toggleExpand, optimisticActiveId,
 				handlers: { ...accountActions, beginReauth: auth.handleBeginReauth },
 			}),
-			renderRuntimeConfig(t, status, pool, catalogModels, hiddenModelSet, loadingAction, {
+			renderRuntimeConfig(t, status, pool, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, {
 				setCfg: config.setCfg,
 				setMode: config.setMode,
-				toggleModelHidden: config.toggleModelHidden,
+				setSelectedModels: config.setSelectedModels,
 				copyImageCommand,
 			}),
 		);
@@ -400,15 +401,16 @@ function renderRuntimeConfig(
 	pool: NonNullable<ReturnType<typeof useAgyStatus>['status']>['pool'] | undefined,
 	catalogModels: ReadonlyArray<CatalogModelView>,
 	hiddenModelSet: Set<string>,
+	selectedModelSet: Set<string>,
 	loadingAction: string | null,
 	actions: {
 		setCfg: (key: string, value: unknown) => Promise<void>;
 		setMode: (mode: string) => Promise<void>;
-		toggleModelHidden: (id: string, hide: boolean) => Promise<void>;
+		setSelectedModels: (ids: ReadonlyArray<string>) => Promise<void>;
 		copyImageCommand: () => void;
 	},
 ): unknown {
-	const { setCfg, setMode, toggleModelHidden, copyImageCommand } = actions;
+	const { setCfg, setMode, setSelectedModels, copyImageCommand } = actions;
 	const caption = (text: string, desc?: string): unknown => h('div', { style: { display: 'flex', flexDirection: 'column' } },
 		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, text),
 		desc !== undefined ? h('span', { style: S.muted }, desc) : null,
@@ -490,7 +492,7 @@ function renderRuntimeConfig(
 			renderVisibilityRows({ t, status, loadingAction, setCfg }),
 			renderPoolWideCatalogRow({ t, status, loadingAction, setCfg }),
 			renderDefaultEffortRow(t, status, catalogModels, loadingAction, setCfg),
-			h(ModelsPanel, { t, catalogModels, hiddenModelSet, loadingAction, toggleModelHidden }),
+			h(ModelsPanel, { t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels }),
 		),
 	);
 }

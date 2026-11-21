@@ -9,6 +9,12 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'hiddenModels must be an array of model ids'
   }
+  if (key === 'selectedModels') {
+    // Allow-list of model ids; an empty array means "no restriction".
+    return Array.isArray(value) && value.every((x) => typeof x === 'string')
+      ? null
+      : 'selectedModels must be an array of model ids'
+  }
   if (key === 'warmupModels') {
     return Array.isArray(value) && value.every((x) => typeof x === 'string')
       ? null
@@ -35,7 +41,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'enabled', 'permissionMode', 'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
-          'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog',
+          'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })
@@ -48,9 +54,13 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         }
         setOverride(key, body.value)
         onConfigWritten(key, body.value)
-        // Keys that change the visible model set must broadcast immediately so
-        // DSH's picker stays synchronized with the console.
-        if (key === 'hiddenModels' || key === 'poolWideCatalog' || key === 'enabled') {
+        // Both keys change the model set DSH's picker must display:
+        // `hiddenModels`/`selectedModels` change visibility, `poolWideCatalog`
+        // switches between the active account's catalog and the pool-wide union
+        // (issue #107/#108). Without this event the cached picker keeps the old
+        // list until a restart, so ticking a checkbox looked like "it did
+        // nothing".
+        if (key === 'hiddenModels' || key === 'selectedModels' || key === 'poolWideCatalog' || key === 'enabled') {
           notifyPicker()
         }
         sendJson(res as RawRes, 200, { ok: true, key, value: body.value })

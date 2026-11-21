@@ -46,11 +46,20 @@ export interface StatusPayload {
 		code?: string;
 	};
 	catalog?: { source: string; count: number; lastError: string | null };
-	/** The catalog exactly as the host's model picker sees it (id, label, supported efforts). */
+	/**
+	 * Every model the settings panel can offer a tick for.
+	 *
+	 * NOT filtered by `selectedModels`/`hiddenModels`: unticking must stay
+	 * reversible, so the full universe ships with the current selection
+	 * alongside it. Includes models only the account's quota snapshot knows
+	 * about (hosts without the agy CLI have no discovered catalog, issue #131).
+	 */
 	catalogModels?: ReadonlyArray<CatalogModelView>;
 	/** Per-account discovered catalog models, keyed by account id. */
 	accountModels?: Readonly<Record<string, ReadonlyArray<CatalogModelView>>>;
 	hiddenModels?: readonly string[];
+	/** Model ids ticked in the settings panel; empty means "show everything". */
+	selectedModels?: readonly string[];
 	autoWarmup?: boolean;
 	warmupModels?: readonly string[];
 	autoTranslate?: boolean;

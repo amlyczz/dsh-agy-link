@@ -71,6 +71,19 @@ test('hiddenModels accepts string arrays, drops junk, and env wins as a comma li
   assert.deepEqual(fromEnv.hiddenModels, ['env-model', 'second'])
 })
 
+test('selectedModels accepts string arrays, drops junk, and env wins as a comma list (issue #131)', () => {
+  // Empty by default: "no selection" means "show everything".
+  assert.deepEqual(defaultConfig().selectedModels, [])
+  const fromOverrides = resolveConfig({}, {}, { selectedModels: ['gemini-3.7-flash', '  ', 'gemini-3.7-flash', 42, 'claude-sonnet-4-6'] })
+  assert.deepEqual(fromOverrides.selectedModels, ['gemini-3.7-flash', 'claude-sonnet-4-6'])
+  assert.deepEqual(resolveConfig({ selectedModels: 'gemini-3.7-flash' }, {}, {}).selectedModels, [])
+  assert.deepEqual(resolveConfig({ selectedModels: ['entry-model'] }, {}, {}).selectedModels, ['entry-model'])
+  const fromEnv = resolveConfig({ selectedModels: ['entry-model'] }, { DSH_AGY_SELECTED_MODELS: ' env-model , second, ,' }, {})
+  assert.deepEqual(fromEnv.selectedModels, ['env-model', 'second'])
+  // A blank env list must NOT wipe the whitelist down to "show everything".
+  assert.deepEqual(resolveConfig({ selectedModels: ['entry-model'] }, { DSH_AGY_SELECTED_MODELS: ' , ' }, {}).selectedModels, ['entry-model'])
+})
+
 test('showHeaderBadge and showTranslateAction default to true, accept overrides and env (issue #105)', () => {
   assert.equal(defaultConfig().showHeaderBadge, true)
   assert.equal(defaultConfig().showTranslateAction, true)

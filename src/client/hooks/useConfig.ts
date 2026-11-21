@@ -19,11 +19,14 @@ export interface ConfigDeps {
 export interface ConfigActions {
 	setCfg: (key: string, value: unknown) => Promise<void>;
 	toggleModelHidden: (id: string, hide: boolean) => Promise<void>;
+	/** Replace the whole picker-facing allow-list in one write. */
+	setSelectedModels: (ids: ReadonlyArray<string>) => Promise<void>;
 	setMode: (mode: string) => Promise<void>;
 }
 
 export function useConfig({ status, refresh, showToast, setLoadingAction, t }: ConfigDeps): ConfigActions {
 	const hiddenPendingRef = useRef<Set<string> | null>(null);
+	const selectedPendingRef = useRef<ReadonlyArray<string> | null>(null);
 
 	const actionFailed = (): void => {
 		showToast(t('api.genericError'), 'error');
@@ -55,6 +58,28 @@ export function useConfig({ status, refresh, showToast, setLoadingAction, t }: C
 		}
 	};
 
+	/**
+	 * Replace the picker-facing allow-list in ONE write.
+	 *
+	 * An EMPTY list means "no restriction" (every model shows) — that is the
+	 * shipped default, and it is also why the panel computes the whole next set
+	 * itself instead of toggling one id at a time: leaving "no restriction"
+	 * state requires knowing what was implicitly visible.
+	 *
+	 * The PENDING array is written before the request and read by rapid
+	 * follow-up clicks, so two fast clicks compose instead of the second
+	 * overwriting the first with a stale snapshot.
+	 */
+	const setSelectedModels = async (ids: ReadonlyArray<string>): Promise<void> => {
+		const next = [...ids];
+		selectedPendingRef.current = next;
+		try {
+			await setCfg('selectedModels', next);
+		} finally {
+			if (selectedPendingRef.current === next) selectedPendingRef.current = null;
+		}
+	};
+
 	const setMode = async (mode: string): Promise<void> => {
 		setLoadingAction(`mode:${mode}`);
 		const res = await postPool('mode', { mode });
@@ -67,5 +92,5 @@ export function useConfig({ status, refresh, showToast, setLoadingAction, t }: C
 		setLoadingAction(null);
 	};
 
-	return { setCfg, toggleModelHidden, setMode };
+	return { setCfg, toggleModelHidden, setSelectedModels, setMode };
 }
