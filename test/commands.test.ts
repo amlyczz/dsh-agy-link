@@ -451,7 +451,13 @@ test('agy goal delegates to GoalService (1:1 semantics, 0-redundancy & idempoten
   assert.match((await def.handler({ rawInput: 'mode' } as never)).text ?? '', /Current permission mode/)
   assert.match((await def.handler({ rawInput: 'effort' } as never)).text ?? '', /Current default effort/)
   assert.match((await def.handler({ rawInput: 'effort invalid_tier' } as never)).text ?? '', /usage:/)
-  assert.match((await def.handler({ rawInput: 'workspace C:\\My Projects\\dsh agy' } as never)).text ?? '', /C:\\My Projects\\dsh agy/)
-  assert.equal(overrides.workspaceRoot, 'C:\\My Projects\\dsh agy')
+  // The intent is "a workspace path containing spaces survives intact", not
+  // "a Windows path is absolute everywhere": the validator uses node:path's
+  // platform-aware isAbsolute(), so `C:\\...` is only absolute on Windows. Pin
+  // the intent with a path that is absolute on the host running the tests.
+  const spacedWorkspace = process.platform === 'win32' ? 'C:\\My Projects\\dsh agy' : '/tmp/My Projects/dsh agy'
+  const spacedReply = (await def.handler({ rawInput: 'workspace ' + spacedWorkspace } as never)).text ?? ''
+  assert.ok(spacedReply.includes(spacedWorkspace), 'the spaced path must be echoed back intact: ' + spacedReply)
+  assert.equal(overrides.workspaceRoot, spacedWorkspace)
 })
 
