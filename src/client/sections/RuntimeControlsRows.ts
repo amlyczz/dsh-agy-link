@@ -178,6 +178,15 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		boolRow({
+			t,
+			title: t('config.backgroundWakeup'),
+			desc: t('config.backgroundWakeupDesc'),
+			cfgKey: 'backgroundWakeup',
+			value: status.backgroundWakeup !== false,
+			loadingAction,
+			setCfg,
+		}),
 		renderAgentRow({ ...props, draft: agentDraft, setDraft: setAgentDraft }),
 	);
 }

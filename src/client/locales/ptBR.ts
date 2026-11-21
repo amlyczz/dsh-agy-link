@@ -202,6 +202,8 @@ export const ptBR: AgyDictionary = {
   'config.imageToolDesc': 'Registra agy_image para qualquer modelo gerar ou editar imagens via agy',
   'config.syncCustomizations': 'Sincronização de ecossistema multi-conta',
   'config.syncCustomizationsDesc': 'Espelha Plugins, MCP, Skills, Rules e Agents da conta principal para contas isoladas do pool',
+  'config.backgroundWakeup': 'Despertar automático em segundo plano',
+  'config.backgroundWakeupDesc': 'Reativa sessões ociosas do DSH quando um timer vence ou uma tarefa/ACP termina',
   'config.agent': 'Agente personalizado (--agent)',
   'config.agentDesc': 'Nome do agente Markdown personalizado; deixe em branco para usar o padrão',
   'config.agentPlaceholder': 'Nome do agente (vazio = padrão)',

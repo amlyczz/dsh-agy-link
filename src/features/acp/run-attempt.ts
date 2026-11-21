@@ -145,6 +145,19 @@ async function driveAcpPrompt(opts: {
     slot.releaseOnce()
     deps.clearInFlightPrompt(sessionKey, input.prompt)
     recorder.rec.settle(terminalFailure)
+    if (!input.isAux && sessionKey !== '') {
+      deps.backgroundObserver?.onAttemptSettled?.({
+        sessionKey,
+        conversationId: sid,
+        ...(recorder.rec.accountHome === undefined ? {} : { accountHome: recorder.rec.accountHome }),
+        transport: 'acp',
+        recording: recorder.rec,
+        failure: terminalFailure,
+        superseded: deps.isSuperseded(sessionKey, recorder.rec),
+        acpProcess: proc,
+        acpSessionId: sid,
+      })
+    }
   }
 }
 

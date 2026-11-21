@@ -253,6 +253,16 @@ export interface PluginConfig {
   imageOutputDir: string
   /** Extra attempts after a retryable image failure (default 1). */
   imageRetries: number
+  /**
+   * Wake idle DSH sessions across turns when an agy `schedule` timer,
+   * detached background task/subagent, or persistent ACP update finishes
+   * after the turn ends (default true).
+   */
+  backgroundWakeup: boolean
+  /** Max lifetime (minutes) to retain post-turn background watches/timers (default 30). */
+  backgroundWakeupTtlMinutes: number
+  /** Max automatic background wakeups per session between real human turns (default 12). */
+  backgroundWakeupMaxPerSession: number
 }
 
 // The offline/signed-out lineup lives in `common/model-lineup.ts` — the single
@@ -373,5 +383,8 @@ export function defaultConfig(): PluginConfig {
     imageMaxBytes: 20 * 1024 * 1024,
     imageOutputDir: '',
     imageRetries: 1,
+    backgroundWakeup: true,
+    backgroundWakeupTtlMinutes: 30,
+    backgroundWakeupMaxPerSession: 12,
   }
 }
