@@ -107,3 +107,22 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - CLI 优先路径拿到 families 后**提前 return**，早于拥有 `clearQuotaUnavailable` 的汇总分支——于是接口故障期间写入的 `unreachable` 会一直残留，面板持续显示旧时间戳，而存储额度其实在推进。
 - 规则：**谁证明数据是新鲜的，谁负责清标记**。CLI 成功 → clear；汇总权威 → clear；只有「什么都拿不到」才保留/写入。
 - 锚点：`test/issue137-free-tier-summary.test.ts`（CLI 成功后清除；CLI 无数据时不动标记）。
+
+## 6. 全路径额度耗尽统一自动切号对齐（主代理 / 子代理 / 辅助路由 / 工具）
+
+所有请求入口（主会话 `AgyAdapter`、内嵌子代理、辅助路由 `isAux`、`runAgyOnce`/`agy_ask`、`ImageService`/`agy_image`、`TranslationService` 与 `runAcpAttempt`）必须遵守同一套「硬配额耗尽即冷却并切向下一个健康账号」契约，同时严格保留 `TOS_VIOLATION` 终态防连坐熔断：
+
+1. **带部分输出（partial response）的硬配额失败绝不可吞成成功**：
+   - 当 `agy`（CLI `-p` 或 `acp`）在输出过部分文本/工具后返回 `status: ERROR` 且 `error`/`response` 匹配 `isHardQuotaResultError`（如 `RESOURCE_EXHAUSTED (code 429): Individual quota reached`），`EventMapper`、`RunRecording`（`hasConsumableResult` / `hasFinishableEventFrom`）、`classifyRun()` 与 `driveAcpPrompt()` 必须判定为**不可消费失败**并映射为 `Err.RATE_LIMIT`，冷却当前账号（优先解析精确重置时长）并切号重试，严禁调用 `recordSuccess()` 或以 `stop` 结束。
+   - 非配额类的工具报错但带有效答复（如 `Find command timed out.`）保持既有软收尾（`stop` + `[agy finished with error]`）。
+2. **`agy` 内部子代理与图像/委派工具实时配额熔断切号（`SubagentTracker` + `src/provider/quota-failover.ts`）**：
+   - 严禁从普通终端命令输出（如 `Command exited with code 1`）或未核验正文中误判 429；仅当满足可信来源约束（父对话 `transcript.jsonl` 来自 `SYSTEM` 的 `The subagent ... encountered an error` 通知、子代理 `transcript.jsonl` 终态 `ERROR`/`FAILED` 中包含权威 Google Cloud Code / `image failed to generate` / `agent executor error` 配额信号，或 `generate_image`/`invoke_subagent` 工具调用错误）且排除 ≤30s 瞬时 QPS 突发（`isTransientBurstRateLimit`，如 `RATE_LIMIT_EXCEEDED` `1s`）与 `TOS_VIOLATION` 时，才判定为硬配额耗尽。
+   - 实时检测到硬配额耗尽后，立即对耗尽的模型族（若错误信息指定了 model 则优先归属该模型所属族）执行 `pool.recordFailure(..., serverResetTime)`，并检查池内是否还存在满足主模型及耗尽族资格的替代账号：若存在则 `proc.kill('quota')`（保留非 aborted/timeout 状态以映射为 `RATE_LIMIT`），让上层立刻在替代账号重放；若不存在替代账号，仅记录冷却而不强杀仍在运行的主进程。
+   - `handleAttemptOutcome()` 必须先 `await finalizeAttempt(...)` 完成冷却与切号落盘，再 `rec.settle(failure)` 唤醒上层消费方。
+3. **重试深度跟随池容量并覆盖非 `llm-retry` 路径**：
+   - `providerRetryPolicyFor()` 按 `Math.min(Math.max(1, enabledAccounts - 1), 16)` 放开 `poolHops`，不再硬截断在 2 跳导致多号池提前放弃。
+   - `streamWithEffortRetry()` 对不经过 `@deepseek-ai/dsh-llm-retry` 的 `isAux` 辅助路由在未产出任何实质输出前遇到 `Err.RATE_LIMIT` 时，在池内按 `enabledAccounts - 1`（上限 16）自动切号重放（绝不重放 `TOS_VIOLATION`）。
+   - `runAgyOnce()`（`agy_ask` / `/agy ask`）、`ImageService`（`agy_image` 含工具级 429 `QUOTA_EXHAUSTED` 检测与独立 `quotaHops` 预算）与 `TranslationService`（按 `poolQuotaHops` 放开 `RATE_LIMIT`/`QUOTA` 重试上限，非配额错误仍受 `translateRetries` 约束）均接入统一冷却与切号循环；全池无可用账号时明确报错，**严禁**回退到 `account = undefined` 悄悄消耗系统主账号。
+4. **单模型粒度主动让路（`isQuotaBenched`）**：
+   - 当某族缓存配额的 `models` 列表包含匹配请求模型（`modelMatches`）的条目且**所有匹配条目**的剩馀比例均 `<= LOW_QUOTA_WEEKLY`（0.05）且处于有效重置窗口内时，即使该族宏观均值仍高于 `0.10`，预选阶段也直接判定该账号对该模型进入配额让路（`quotaGateClearedAt` 覆盖规则不变）。
+- **验证锚点**：`test/quota-failover-alignment.test.ts`。

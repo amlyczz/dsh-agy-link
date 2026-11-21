@@ -4,8 +4,9 @@
 // The adapter keeps the public overrides as thin delegates so behaviour and
 // signatures are unchanged.
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
-import { Err, NETWORK_RETRY_DELAYS_MS } from '../common/types.ts'
+import { Err, looksLikeTosViolation, NETWORK_RETRY_DELAYS_MS } from '../common/types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import { parseEffortUnsupported, parseModelNotRecognized } from './effort-policy.ts'
 
@@ -44,13 +45,13 @@ export function providerRetryPolicyFor(pool: AccountPoolManager | undefined) {
   if (enabledAccounts >= 2) retryableCodes.push(Err.AUTH)
   // Two budgets in one number:
   //  - the pool needs one hop per spare account (a spent/expired account must
-  //    not dead-end the turn while a healthy one sits idle),
+  //    not dead-end the turn while a healthy one sits idle), capped at 16 to
+  //    preserve single-account fallback (1) while scaling with pool depth,
   //  - transport failures need enough hops to survive the 5s/15s/30s schedule
-  //    stated as providerRetryAfterMs. A 14-minute egress outage (live
-  //    2026-10-21 16:43) exhausted the old 2-hop/4s budget instantly.
+  //    stated as providerRetryAfterMs.
   // Whichever is larger wins; every extra hop is bounded (pool depth for the
   // account-scoped codes, the fixed schedule for NETWORK).
-  const poolHops = enabledAccounts >= 3 ? 2 : 1
+  const poolHops = Math.min(Math.max(1, enabledAccounts - 1), 16)
   return {
     mode: 'normal' as const,
     maxRetries: Math.max(poolHops, NETWORK_RETRY_DELAYS_MS.length),
@@ -69,6 +70,36 @@ export interface EffortRetryDeps {
   /** True when the live discovered catalog says this model accepts efforts. */
   catalogAdvertisesEffort?: (model: string) => boolean
   onModelUnsupported?: (model: string) => void
+  pool?: AccountPoolManager
+  defaultModel?: () => string
+}
+
+function isAuxCall(options: AgyGenerateOptions): boolean {
+  return ((options.purpose as string | undefined) ?? 'chat') !== 'chat'
+    || (typeof options.system === 'string' && options.system.includes('REVIEW_POLICY'))
+}
+
+function canRetryAuxQuota(
+  deps: EffortRetryDeps,
+  options: AgyGenerateOptions,
+  emitted: boolean,
+  finish: StreamChunk & { type: 'finish' },
+  quotaHops: number,
+  rawMsg: string,
+): boolean {
+  if (!isAuxCall(options) || emitted || options.signal?.aborted) return false
+  if (finish.reason.kind !== 'error' || looksLikeTosViolation(rawMsg)) return false
+  const failure = (finish.reason as { failure?: { code?: string } }).failure
+  const code = failure?.code
+  if (code !== Err.RATE_LIMIT && code !== Err.ELIGIBILITY && code !== Err.AUTH) return false
+  const pool = deps.pool
+  if (!pool) return false
+  const enabledCount = pool.getAccounts().filter((a) => a.enabled).length
+  const maxHops = Math.min(Math.max(0, enabledCount - 1), 16)
+  if (quotaHops >= maxHops) return false
+  const model = options.model || deps.defaultModel?.() || 'gemini'
+  const fam = modelFamilyOf(model)
+  return pool.selectAccount(fam, model) !== null
 }
 
 /**
@@ -82,20 +113,32 @@ export interface EffortRetryDeps {
  * becomes one extra spawn. The refusal text itself is the evidence that WE
  * passed the flag, so the replay does not depend on who requested the effort
  * (an explicit request, `defaultEffort`, or the aux channel's pinning).
+ *
+ * Also rotates across spare pool accounts for auxiliary routes (`isAux`) that
+ * bypass `dsh-llm-retry`, and switches accounts when a model is unrecognized.
  */
 export async function* streamWithEffortRetry(
   deps: EffortRetryDeps,
   options: AgyGenerateOptions,
 ): AsyncIterable<StreamChunk> {
-  for (let attempt = 0; ; attempt++) {
+  let suppressEffort = false
+  let effortSelfHealed = false
+  let modelSelfHealed = false
+  let quotaHops = 0
+  const isAux = isAuxCall(options)
+  const poolEnabled = deps.pool ? deps.pool.getAccounts().filter((a) => a.enabled).length : 0
+  const maxAuxHops = Math.min(Math.max(0, poolEnabled - 1), 16)
+  for (;;) {
     // A refused attempt emits a bare `usage` chunk before its error finish
     // (measured on agy 1.4.6). Usage is telemetry, not output: hold it back so
     // a replayed attempt cannot double-count tokens, and treat only real
     // content as "the caller has already seen something".
     let emitted = false
+    const bufferAux = isAux && quotaHops < maxAuxHops
+    const buffered: StreamChunk[] = []
     const telemetry: StreamChunk[] = []
-    let finish: StreamChunk | null = null
-    for await (const chunk of deps.streamAttempt(options, attempt > 0)) {
+    let finish: (StreamChunk & { type: 'finish' }) | null = null
+    for await (const chunk of deps.streamAttempt(options, suppressEffort)) {
       if (chunk.type === 'finish') {
         // Hold the finish back one step: a refusal must not reach the caller
         // when the replay is about to succeed.
@@ -106,34 +149,58 @@ export async function* streamWithEffortRetry(
         telemetry.push(chunk)
         continue
       }
+      if (bufferAux) {
+        buffered.push(chunk)
+        continue
+      }
       emitted = true
       yield chunk
     }
     if (finish === null) {
+      for (const chunk of buffered) yield chunk
       for (const chunk of telemetry) yield chunk
       return
     }
-    if (attempt === 0 && !emitted && finish.reason.kind === 'error') {
+    if (!emitted && finish.reason.kind === 'error') {
       const failure = (finish.reason as { failure?: { message?: string } }).failure
       const rawMsg = String(failure?.message ?? '')
-      const refused = parseEffortUnsupported(rawMsg)
-      if (refused !== null) {
-        // A refusal that CONTRADICTS the live discovered catalog is transient,
-        // not a capability fact: agy emits the same text when its model-config
-        // fetch fails. Replay without --effort (the #67 invariant) but do NOT
-        // persist — persisting hides the model's effort row forever and makes
-        // DSH reject later turns with UNSUPPORTED_REASONING_EFFORT (issue #115).
-        if (deps.catalogAdvertisesEffort?.(refused) !== true) {
-          deps.learnEffortUnsupported(refused)
+      if (buffered.length === 0) {
+        const refused = parseEffortUnsupported(rawMsg)
+        if (!effortSelfHealed && refused !== null) {
+          effortSelfHealed = true
+          suppressEffort = true
+          // A refusal that CONTRADICTS the live discovered catalog is transient,
+          // not a capability fact: agy emits the same text when its model-config
+          // fetch fails. Replay without --effort (the #67 invariant) but do NOT
+          // persist — persisting hides the model's effort row forever and makes
+          // DSH reject later turns with UNSUPPORTED_REASONING_EFFORT (issue #115).
+          if (deps.catalogAdvertisesEffort?.(refused) !== true) {
+            deps.learnEffortUnsupported(refused)
+          }
+          continue
         }
-        continue
+        const unrecog = parseModelNotRecognized(rawMsg)
+        if (!modelSelfHealed && unrecog !== null) {
+          modelSelfHealed = true
+          if (deps.onModelUnsupported) {
+            deps.onModelUnsupported(unrecog)
+            continue
+          }
+          if (deps.pool) {
+            const fam = modelFamilyOf(unrecog)
+            const currentId = deps.pool.getActiveAccountId(fam)
+            if (currentId) deps.pool.markModelUnsupported(currentId, unrecog)
+            deps.pool.selectAccount(fam, unrecog)
+            continue
+          }
+        }
       }
-      const unrecog = parseModelNotRecognized(rawMsg)
-      if (unrecog !== null && deps.onModelUnsupported) {
-        deps.onModelUnsupported(unrecog)
+      if (canRetryAuxQuota(deps, options, emitted, finish, quotaHops, rawMsg)) {
+        quotaHops++
         continue
       }
     }
+    for (const chunk of buffered) yield chunk
     for (const chunk of telemetry) yield chunk
     yield finish
     return

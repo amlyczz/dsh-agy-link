@@ -76,7 +76,7 @@ export function extractAuthUrl(text: string): string | undefined {
  */
 export function looksLikeHardRateLimit(text?: string): boolean {
   if (!text) return false
-  return /RESOURCE_EXHAUSTED|code[ :]?429\b|status[ :]?429\b|HTTP[ :]?429\b|too many requests|individual quota reached|quota (?:exceeded|reached|exhausted|limit)|rate[ -]?limit(?:ed)? (?:exceeded|reached|hit)?|exceeded (?:your |the )?quota|has been exhausted|exhausted your (?:quota|capacity)|out of quota|check quota|insufficient quota|usage limit reached/i.test(
+  return /RESOURCE_EXHAUSTED|\bQUOTA_EXHAUSTED\b|"?code"?\s*[:=]\s*429\b|"?status"?\s*[:=]\s*429\b|HTTP(?:\/[\d.]+)?[ :]?429\b|too many requests|individual quota reached|quota (?:exceeded|reached|exhausted|limit)|rate[ -]?limit(?:ed)? (?:exceeded|reached|hit)?|exceeded (?:your |the )?quota|has been exhausted|exhausted your (?:quota|capacity)|out of quota|check quota|insufficient quota|usage limit reached/i.test(
     text,
   )
 }
@@ -116,20 +116,23 @@ export function looksLikeRateLimit(text?: string): boolean {
 
 /**
  * Parse reset duration in milliseconds from rate-limit / quota-exhausted error strings.
- * Supports compact formats ("Resets in 21m25s", "Resets in 2h26m6s", "Resets in 45s"),
- * verbose formats ("Resets in 15 minutes", "retry after 30 seconds"), and ISO timestamps.
+ * Supports compact formats ("Resets in 21m25s", "reset after 4h58m46s",
+ * `"quotaResetDelay": "4h58m46.438s"`), verbose formats ("Resets in 15 minutes",
+ * "retry after 30 seconds"), and ISO timestamps.
  */
 export function parseResetDurationMs(text?: string): number | undefined {
   if (!text) return undefined
 
-  // 1. Compact: "Resets in 2h26m6s", "resets in 21m25s", "resets in 45s"
-  const compactMatch = text.match(/resets?\s+in\s+((?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?)/i)
-  if (compactMatch && compactMatch[1]?.trim()) {
+  // 1. Compact: "Resets in 2h26m6s", "reset after 4h58m46s", "quotaResetDelay": "4h58m46.438s"
+  const compactMatch = text.match(
+    /(?:resets?\s+(?:in|after)|"(?:quotaResetDelay|retryDelay)"\s*:\s*")\s*((?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?)/i,
+  )
+  if (compactMatch && (compactMatch[2] || compactMatch[3] || compactMatch[4])) {
     const hours = parseInt(compactMatch[2] || '0', 10)
     const minutes = parseInt(compactMatch[3] || '0', 10)
-    const seconds = parseInt(compactMatch[4] || '0', 10)
-    const totalMs = (hours * 3600 + minutes * 60 + seconds) * 1000
-    if (totalMs > 0) return totalMs
+    const seconds = parseFloat(compactMatch[4] || '0')
+    const totalMs = Math.round((hours * 3600 + minutes * 60 + seconds) * 1000)
+    if (Number.isFinite(totalMs) && totalMs > 0) return totalMs
   }
 
   // 2. Word-based: "Resets in 15 minutes", "resets in 2 hours", "retry after 30 seconds"
@@ -152,4 +155,51 @@ export function parseResetDurationMs(text?: string): number | undefined {
   }
 
   return undefined
+}
+
+const TRANSIENT_BURST_CAP_MS = 30_000
+
+/**
+ * True when a 429 error represents a short transient per-minute/per-second QPS burst
+ * (`reason: RATE_LIMIT_EXCEEDED` with reset <= 30s) rather than window quota exhaustion.
+ * Must NOT trigger long account cooldown or kill a running parent conversation.
+ */
+export function isTransientBurstRateLimit(text?: string): boolean {
+  if (!text) return false
+  if (!/\bRATE_LIMIT_EXCEEDED\b/i.test(text)) return false
+  if (/\bQUOTA_EXHAUSTED\b|individual quota reached/i.test(text)) return false
+  const resetMs = parseResetDurationMs(text)
+  return resetMs !== undefined && resetMs > 0 && resetMs <= TRANSIENT_BURST_CAP_MS
+}
+
+/** Extract Google RPC error metadata model slug (e.g. "gemini-3.1-flash-image"), if present. */
+export function extractQuotaErrorModel(text?: string): string | undefined {
+  if (!text) return undefined
+  const m = text.match(/"model"\s*:\s*"([A-Za-z0-9._:/-]+)"/i)
+  return m?.[1]
+}
+
+/**
+ * True when a failed result envelope carries a hard quota refusal (meaning the
+ * attempt must rotate accounts rather than soft-finish on any partial text).
+ */
+export function isHardQuotaResultError(ok: boolean, error?: string, response?: string): boolean {
+  if (ok) return false
+  if (error && error.trim() !== '') {
+    return looksLikeHardRateLimit(error) && !isTransientBurstRateLimit(error)
+  }
+  return Boolean(response && looksLikeHardRateLimit(response) && !isTransientBurstRateLimit(response))
+}
+
+/**
+ * True when a failed result envelope represents a non-consumable account/policy
+ * failure even when partial response text was already buffered before the error.
+ */
+export function isNonConsumableResultError(ok: boolean, error?: string, response?: string): boolean {
+  if (ok) return false
+  if (isHardQuotaResultError(ok, error, response)) return true
+  if (looksLikeTosViolation(error) || looksLikeTosViolation(response)) return true
+  if (looksLikeValidationRequired(error) || looksLikeValidationRequired(response)) return true
+  if (error && (looksLikeEligibilityFailure(error) || looksLikeAuthFailure(error))) return true
+  return false
 }

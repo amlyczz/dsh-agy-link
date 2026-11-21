@@ -8,6 +8,7 @@
 import { LlmError, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
   Err,
+  isHardQuotaResultError,
   isTransportFailure,
   looksLikeAuthFailure,
   looksLikeAuthVerificationJitter,
@@ -17,6 +18,7 @@ import {
   type AgyEvent,
   type PluginConfig,
 } from '../common/types.ts'
+import type { LiveQuotaFailoverState } from './quota-failover.ts'
 import { readAgyRunLogText, type AgyLogSnapshot } from '../host/agy-log.ts'
 import { IDLE_GRACE_NO_REPLY_NOTICE, recoverFinalReply } from './idle-grace-reply.ts'
 import type { RunRecording } from '../host/recording.ts'
@@ -275,11 +277,12 @@ function classifyRun(input: {
   rec: RunRecording
   runLogHome: string
   runLogsBefore: AgyLogSnapshot
+  quotaFailover: LiveQuotaFailoverState | null
 }): { failure: AttemptFailure | null; rawErrText: string; runLogText: string; silentTimeout: boolean } {
-  const { cfg, outcome, parser, rec, runLogHome, runLogsBefore } = input
+  const { cfg, outcome, parser, rec, runLogHome, runLogsBefore, quotaFailover } = input
   // A result envelope the mapper will finish on: ok, or an error that still
-  // carries a usable response (unless the text is a terminal TOS_VIOLATION
-  // suspension with 0 tokens, which must enter classifyFailure to quarantine).
+  // carries a usable response (excluding terminal TOS_VIOLATION and hard quota
+  // refusals, which must enter classifyFailure to cool down & rotate).
   const r = rec.getResultEvent()
   const u = rec.lastUsage ?? rec.finalUsage({})
   const zeroUsageTos =
@@ -288,24 +291,32 @@ function classifyRun(input: {
     && (u?.output_tokens ?? 0) === 0
     && looksLikeTosViolation(r.response)
   const errorResponseTos = r !== null && !r.ok && looksLikeTosViolation(r.response)
-  const consumable = r !== null && (r.ok || r.response !== '') && !zeroUsageTos && !errorResponseTos
-  // Error classification scans ONLY stderr and the result envelope's error
-  // field (plus non-consumable error responses). stdout is model prose + event
-  // JSON: a run whose streamed text merely MENTIONED "rate limit"/"quota" (or
-  // contained a hash with "429") used to be misclassified as a quota failure.
+  const errorResponseHardQuota = r !== null && isHardQuotaResultError(r.ok, r.error, r.response)
+  const liveQuota = quotaFailover !== null
+  const consumable =
+    !liveQuota && r !== null && (r.ok || r.response !== '') && !zeroUsageTos && !errorResponseTos && !errorResponseHardQuota
+  const runLogText = readAgyRunLogText(runLogHome, runLogsBefore)
+  const logQuotaHint =
+    !consumable && !liveQuota
+      ? runLogText
+          .split(/\r?\n/)
+          .filter((l) => /(?:errorreport\.go|session\.go).*?(?:RESOURCE_EXHAUSTED|Individual quota reached|QUOTA_EXHAUSTED)/i.test(l))
+          .slice(-2)
+          .join(' ')
+      : ''
+  // Error classification scans ONLY stderr, result error fields, non-consumable
+  // error responses, live quota triggers, and narrow errorreport/session log lines.
   const rawErrText = [
     outcome.stderrTail,
     parser.stats.lastResultError,
-    !consumable && r && (!r.ok || zeroUsageTos) ? r.response : '',
+    !consumable && r && (!r.ok || zeroUsageTos) ? (r.error ?? r.response) : '',
+    liveQuota ? quotaFailover.rawErrorText : '',
+    logQuotaHint,
   ]
     .filter(Boolean)
     .join(' ')
-  const isRateLimit = looksLikeRateLimit(rawErrText)
-  const runLogText = readAgyRunLogText(runLogHome, runLogsBefore)
+  const isRateLimit = liveQuota || looksLikeRateLimit(rawErrText)
   const keyringJitter = looksLikeAuthVerificationJitter(runLogText)
-  // One pure decision seam (issue #71): the wide transport regex used to miss
-  // the run log, so a proxy blip that agy logs as "token validation failed due
-  // to network error" was classified AUTH and quarantined a healthy account.
   const transportFailure = isTransportFailure({
     rawErrText,
     authFailureText: parser.stats.authFailureText ?? '',
@@ -313,21 +324,23 @@ function classifyRun(input: {
     stdoutHead: outcome.stdout,
     runLogText,
   })
-  // A timeout that never produced a single stdout event is an account-level
-  // black hole (unreachable Google / wedged credential), not a long tool.
-  const silentTimeout = outcome.timedOut === true && outcome.stdout.trim() === ''
+  const silentTimeout = !liveQuota && outcome.timedOut === true && outcome.stdout.trim() === ''
+  const effOutcome = liveQuota ? { ...outcome, capped: false, timedOut: false, idleGraceTerminated: false } : outcome
   const failure = classifyFailure({
     cfg,
-    outcome,
+    outcome: effOutcome,
     parser,
-    sawAuthFailure: sawAuthFailure(parser, outcome),
+    sawAuthFailure: liveQuota ? false : sawAuthFailure(parser, outcome),
     consumable,
-    transportFailure,
-    keyringJitter,
+    transportFailure: liveQuota ? false : transportFailure,
+    keyringJitter: liveQuota ? false : keyringJitter,
     rawErrText,
     isRateLimit,
     silentTimeout,
   })
+  if (failure && liveQuota && failure.code === Err.RATE_LIMIT && parser.stats.lastResultError === undefined && outcome.stderrTail === '') {
+    failure.message = 'Google Antigravity quota / rate limit reached (subagent/tool): ' + quotaFailover.errorText
+  }
   return { failure, rawErrText, runLogText, silentTimeout }
 }
 
@@ -359,12 +372,15 @@ export async function handleAttemptOutcome(
   const { cfg, sessionKey } = input
   const outcome = await ctx.proc.outcome
   slot.releaseOnce()
+  recorder.flushTracker()
   recorder.stop()
   deps.unregisterActiveRun(sessionKey, rec)
   deps.clearInFlightPrompt(sessionKey, spawn.prompt)
   recorder.drain(input.agyOnEvent)
+  const quotaFailover = recorder.quotaFailover()
+  const cooledInLiveFamilies = recorder.cooledInLiveFamilies()
   const conversationId = recorder.conversationId()
-  if (!rec.hasConsumableResult && outcome.idleGraceTerminated) {
+  if (!rec.hasConsumableResult && outcome.idleGraceTerminated && quotaFailover === null) {
     // The idle reaper can end a turn whose answer agy already wrote to its own
     // transcript but had not flushed as a stdout step — or agy may flush an
     // empty error `result` (`ok: false, response: ''`) on SIGTERM, which
@@ -391,6 +407,7 @@ export async function handleAttemptOutcome(
     rec,
     runLogHome,
     runLogsBefore,
+    quotaFailover,
   })
   // Transport failures carry their own backoff. DSH's generic schedule
   // (2s, doubling) cannot outlast an egress outage: the streak resets on
@@ -403,39 +420,41 @@ export async function handleAttemptOutcome(
       deps.clearNetworkStreak(sessionKey)
     }
   }
-  rec.settle(failure)
-  // A newer run may already own this session (steer preemption whose bounded
-  // settle wait expired). Its own handler writes the authoritative binding —
-  // letting this stale closure write afterwards used to regress
-  // lastMessageCount/sentImageIds and re-digest or re-attach old images.
+  // Finalize cooldowns, account rotation, and bindings BEFORE waking driveSpan via rec.settle().
   const superseded = deps.isSuperseded(sessionKey, rec)
-  await finalizeAttempt({
-    rec,
-    outcome,
-    failure,
-    store: deps.store,
-    ...(deps.pool === undefined ? {} : { pool: deps.pool }),
-    ...(input.account === undefined ? {} : { account: input.account }),
-    family: input.family,
-    persistBinding: input.persistBinding,
-    sessionAccountKey: input.sessionAccountKey,
-    ...(input.binding === undefined ? {} : { binding: input.binding }),
-    conversationId,
-    messages: input.messages,
-    model: input.model,
-    activeModel: input.activeModel,
-    superseded,
-    newlySentImageIds: input.newlySentImageIds,
-    rawErrText,
-    runLogText,
-    silentTimeout,
-    sessionKey,
-    clearNetworkStreak: (key) => deps.clearNetworkStreak(key),
-    dropFailoverBudget: (key) => deps.dropFailoverBudget(key),
-    clearRateLimitFailover: (key) => deps.clearRateLimitFailover(key),
-    sharesSingleEgress: () => deps.sharesSingleEgress(),
-    ...(deps.onRun === undefined ? {} : { onRun: deps.onRun }),
-  })
+  try {
+    await finalizeAttempt({
+      rec,
+      outcome,
+      failure,
+      store: deps.store,
+      ...(deps.pool === undefined ? {} : { pool: deps.pool }),
+      ...(input.account === undefined ? {} : { account: input.account }),
+      family: input.family,
+      persistBinding: input.persistBinding,
+      sessionAccountKey: input.sessionAccountKey,
+      ...(input.binding === undefined ? {} : { binding: input.binding }),
+      conversationId,
+      messages: input.messages,
+      model: input.model,
+      activeModel: input.activeModel,
+      superseded,
+      newlySentImageIds: input.newlySentImageIds,
+      rawErrText,
+      runLogText,
+      silentTimeout,
+      sessionKey,
+      quotaFailover,
+      cooledInLiveFamilies,
+      clearNetworkStreak: (key) => deps.clearNetworkStreak(key),
+      dropFailoverBudget: (key) => deps.dropFailoverBudget(key),
+      clearRateLimitFailover: (key) => deps.clearRateLimitFailover(key),
+      sharesSingleEgress: () => deps.sharesSingleEgress(),
+      ...(deps.onRun === undefined ? {} : { onRun: deps.onRun }),
+    })
+  } finally {
+    rec.settle(failure)
+  }
 }
 
 /**
@@ -447,7 +466,10 @@ export async function* runAgyAttempt(
   deps: AttemptDeps,
   input: AttemptInput,
 ): AsyncGenerator<StreamChunk, RunRecording, void> {
-  const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId)
+  const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId, true, {
+    family: input.family,
+    activeModel: input.activeModel,
+  })
   // Build the argv (and tail-trim an over-budget prompt) BEFORE waiting for
   // the slot, exactly as the former inline block did — the trim warning is
   // logged even when the dispatch later aborts.

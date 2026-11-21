@@ -31,6 +31,7 @@ import { AccountPoolManager } from '../host/pool.ts'
 import { RunRegistry } from '../host/recording.ts'
 import { SessionStore } from '../host/sessions.ts'
 import { resolveAgyBin } from '../host/runner.ts'
+import { createPoolQuotaHooks } from '../provider/quota-failover.ts'
 
 const USAGE = `dsh-agy-image — 用 agy 内置的 generate_image 生成图片（无需交互式会话）
 
@@ -247,6 +248,7 @@ export function createImageAdapter(
   cfg: ReturnType<typeof resolveConfig>,
   log?: (m: string) => void,
   catalog: ModelCatalog = createImageCatalog(cfg),
+  pool: AccountPoolManager = new AccountPoolManager(),
 ): AgyAdapter {
   return new AgyAdapter({
     getConfig: () => cfg,
@@ -254,7 +256,7 @@ export function createImageAdapter(
     // avoids spawning `agy models` while still letting auto mode spot Hydrogen.
     catalog,
     store: new SessionStore(join(stateDir(), 'cli-image-sessions.json')),
-    pool: new AccountPoolManager(),
+    pool,
     bin: () => resolveAgyBin(cfg),
     acquire: () => Promise.resolve(() => undefined),
     runs: new RunRegistry(),
@@ -296,12 +298,15 @@ export function createDefaultImageService(
   if (cfg.workspaceRoot === '') cfg.workspaceRoot = process.cwd()
   const bin = resolveAgyBin(cfg)
   const catalog = createImageCatalog(cfg)
-  const adapter = createImageAdapter(cfg, args.quiet ? undefined : (m) => writeErr('[agy] ' + m + '\n'), catalog)
+  const pool = new AccountPoolManager()
+  const adapter = createImageAdapter(cfg, args.quiet ? undefined : (m) => writeErr('[agy] ' + m + '\n'), catalog, pool)
+  const quotaHooks = createPoolQuotaHooks(pool)
   return new ImageService({
     cfg: () => cfg,
     bin: () => bin,
     run: (call) => runViaAdapter(adapter, call),
     catalog: () => catalog.get(),
+    ...quotaHooks,
     ...(args.quiet ? {} : { log: (m: string) => writeErr('[image] ' + m + '\n') }),
   })
 }

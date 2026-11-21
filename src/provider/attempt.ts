@@ -36,6 +36,11 @@ import type { SpawnLimiter } from './spawn-limiter.ts'
 import { resolveModelSlug } from '../host/models.ts'
 import type { RunTelemetry } from './finalize.ts'
 import { SubagentTracker } from '../features/subagent/tracker.ts'
+import {
+  createLiveQuotaController,
+  reportDirectToolQuota,
+  type LiveQuotaFailoverState,
+} from './quota-failover.ts'
 import { AGY_PROMPT_SAFE_BYTES, trimToUtf8Bytes, utf8Bytes } from './prompt-text.ts'
 
 export function brief(s: string): string {
@@ -228,34 +233,53 @@ export interface AttemptRecorder {
   attachProcess: (proc: RunningProcess) => void
   feedLine: (line: string, onEvent: ((ev: AgyEvent) => void) | undefined, onFirstEvent: (() => void) | undefined) => void
   drain: (onEvent: ((ev: AgyEvent) => void) | undefined) => void
+  flushTracker: () => void
   stop: () => void
+  quotaFailover: () => LiveQuotaFailoverState | null
+  cooledInLiveFamilies: () => ReadonlySet<ModelFamily>
   conversationId: () => string | null
 }
 
 /** Create the recording, parser, HOME snapshot and tool watchdog for one run. */
-export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, account: ManagedAccount | undefined, initialConversationId?: string, trackSubagents = true): AttemptRecorder {
+export function createAttemptRecorder(
+  deps: AttemptDeps,
+  cfg: PluginConfig,
+  account: ManagedAccount | undefined,
+  initialConversationId?: string,
+  trackSubagents = true,
+  quotaCtx?: { family: ModelFamily; activeModel: string },
+): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
-  // The fallback conversation-id discovery must watch the SAME HOME the child
-  // runs under: an isolated pool account's conversation DB lives in its own
-  // HOME and the system-HOME snapshot never sees it.
   const conversationsDir = conversationsDirFor(rec.accountHome)
   const before = snapshotConversations(conversationsDir)
   const parser = new StreamJsonParser()
   deps.onParser?.(parser)
   const watchdog = createToolWatchdog(deps.log, cfg)
+  let attachedProc: RunningProcess | null = null
+  let pendingQuotaKill = false
+  const quotaCtrl = quotaCtx
+    ? createLiveQuotaController({
+        pool: deps.pool,
+        account,
+        inputFamily: quotaCtx.family,
+        activeModel: quotaCtx.activeModel,
+        emitNotice: (stepKey, text) => rec.append({ kind: 'step', stepKey, stepKind: 'subagent', text, raw: {} }),
+        onTriggerKill: () => {
+          if (attachedProc) attachedProc.kill('quota')
+          else pendingQuotaKill = true
+        },
+      })
+    : null
   const tracker = trackSubagents
     ? new SubagentTracker({
         conversationId: initialConversationId,
         resumed: Boolean(initialConversationId),
         accountHome: rec.accountHome,
         log: deps.log,
-        onEvent: (ev) => {
-          rec.append(ev)
-        },
-        noteActivity: () => {
-          watchdog.markEvent()
-        },
+        onEvent: (ev) => rec.append(ev),
+        ...(quotaCtrl ? { onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info) } : {}),
+        noteActivity: () => watchdog.markEvent(),
       })
     : undefined
   const state: AttemptRecorder = {
@@ -266,8 +290,10 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
     streamCid: initialConversationId ?? null,
     printTimeoutMinutes: watchdog.printTimeoutMinutes,
     attachProcess: (proc) => {
+      attachedProc = proc
       watchdog.attach(proc)
       tracker?.start()
+      if (pendingQuotaKill) proc.kill('quota')
       void proc.outcome.finally(() => tracker?.stop())
     },
     feedLine: (line, onEvent, onFirstEvent) => {
@@ -286,6 +312,7 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
         }
         watchdog.trackStep(ev)
         rec.append(ev)
+        reportDirectToolQuota(quotaCtrl, ev)
         if (typeof onEvent === 'function') {
           try {
             onEvent(ev)
@@ -311,10 +338,15 @@ export function createAttemptRecorder(deps: AttemptDeps, cfg: PluginConfig, acco
         }
       }
     },
+    flushTracker: () => {
+      tracker?.flush()
+    },
     stop: () => {
       watchdog.stop()
       tracker?.stop()
     },
+    quotaFailover: () => quotaCtrl?.failoverState() ?? null,
+    cooledInLiveFamilies: () => quotaCtrl?.cooledFamilies() ?? new Set<ModelFamily>(),
     conversationId: () => state.streamCid ?? diffConversations(before, conversationsDir).conversationId,
   }
   return state

@@ -193,15 +193,22 @@ export function acpPromptResultToAgyEvent(
   accumulatedText: string,
 ): AgyEvent {
   const stopReason = typeof result.stopReason === 'string' ? result.stopReason : 'end_turn'
-  const ok = stopReason !== 'error' && stopReason !== 'refusal'
+  const rawErr = result.error
+  const errObj = asObj(rawErr)
+  const extractedErr =
+    typeof rawErr === 'string' && rawErr !== ''
+      ? rawErr
+      : typeof errObj?.message === 'string' && errObj.message !== ''
+        ? errObj.message
+        : undefined
+  const ok = stopReason !== 'error' && stopReason !== 'refusal' && extractedErr === undefined
   const usage = acpUsageToRawUsage(result.usage)
-  const errMsg = !ok && typeof result.error === 'string' ? result.error : undefined
   return {
     kind: 'result',
     conversationId: sessionId,
     ok,
     response: accumulatedText,
-    ...(errMsg ? { error: errMsg } : {}),
+    ...(!ok && extractedErr ? { error: extractedErr } : {}),
     usage,
     raw: result,
   }

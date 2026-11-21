@@ -442,7 +442,7 @@ export class PoolAdmin {
     // Only advance if this account currently owns this specific family pointer
     // (or if this family has no pin yet and it is the fallback lastActiveAccountId).
     const famPinned = data.activeAccountIds?.[family]
-    if (famPinned === id || (famPinned === undefined && data.lastActiveAccountId === id)) {
+    if (famPinned === id || (famPinned === undefined && (data.lastActiveAccountId === id || data.lastActiveAccountId === undefined))) {
       this.advanceAccount(id, family)
     }
     this.deps.persist()

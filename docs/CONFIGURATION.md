@@ -13,7 +13,12 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `enabled` | `DSH_AGY_ENABLED` | `true` | Master switch |
 | `agyBin` | `DSH_AGY_BIN` | `''` (auto-detect) | Path to the `agy` binary |
 | `extraArgs` | `DSH_AGY_EXTRA_ARGS` | `[]` | Extra argv appended to every `agy` spawn (space separated in the env var) |
-| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` / `plan` / `accept-edits`. `DSH_AGY_SKIP_PERMISSIONS` maps `true`→`skip`, `false`→`plan` |
+| `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` / `auto` / `plan` / `accept-edits`. `DSH_AGY_SKIP_PERMISSIONS` maps `true`→`skip`, `false`→`plan` |
+| `sandbox` | `DSH_AGY_SANDBOX` | `false` | Run `agy` with OS terminal sandboxing (`--sandbox`) |
+| `agent` | `DSH_AGY_AGENT` | `''` (agy default) | Default custom Markdown agent name (`--agent`) |
+| `agySettings` | `DSH_AGY_SETTINGS` | `''` | Inline JSON object or file path passed to `agy --settings` |
+| `transport` | `DSH_AGY_TRANSPORT` | `cli` | `cli` (short-lived `-p`) or `acp` (persistent `agy acp` stdio session pool with automatic pre-stream CLI fallback) |
+| `syncAccountCustomizations` | `DSH_AGY_SYNC_CUSTOMIZATIONS` | `true` | Mirror primary `plugins`, `skills`, `rules`, `agents`, and MCP config into isolated pool accounts (credentials/keychains never touched) |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | `''` (session cwd) | Workspace root passed to agy |
 
 ## Models and effort
@@ -47,8 +52,8 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 
 | Key | Environment | Default | Description |
 | --- | --- | --- | --- |
-| `contextWindowDefault` | `—` | `1048576` | Context window advertised when agy does not report one |
-| `maxTokensDefault` | `—` | `65536` | Max output tokens advertised when agy does not report one |
+| `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | Context window advertised when agy does not report one |
+| `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | Max output tokens advertised when agy does not report one |
 | `forwardSystemPrompt` | `—` | `false` | Forward the DSH system prompt to agy |
 | `digestMaxChars` | `—` | `8000` | Budget for the history digest sent each turn |
 | `contextTransferMaxChars` | `—` | `660000` | Character cap for the transferred context block |
@@ -62,9 +67,10 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 
 | Key | Environment | Default | Description |
 | --- | --- | --- | --- |
-| `mediaDir` | `DSH_AGY_MEDIA_DIR` | `''` (plugin data dir) | Staging directory for multimodal images |
-| `mediaTtlMs` | `DSH_AGY_MEDIA_TTL_MS` | `86400000` | Staged image lifetime |
+| `mediaDir` | `DSH_AGY_MEDIA_DIR` | `''` (plugin data dir) | Staging directory for multimodal attachments (images, PDF, audio, video) |
+| `mediaTtlMs` | `DSH_AGY_MEDIA_TTL_MS` | `86400000` | Staged attachment lifetime |
 | `mediaMaxBytes` | `—` | `10485760` | Per-image size cap |
+| `mediaMaxFileBytes` | `DSH_AGY_MEDIA_MAX_FILE_BYTES` | `20971520` | Per-file byte cap for non-image multimodal attachments (PDF, audio, video; 20 MiB) |
 | `mediaMaxImages` | `—` | `8` | Images per turn |
 
 ## MCP and tools
@@ -94,42 +100,42 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `autoTranslate` | `DSH_AGY_AUTO_TRANSLATE` | `false` | Translate every completed turn |
 | `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | Translate model, with catalog fallback |
-| `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `medium` | Reasoning effort for the translate model (`low` faster, `high` more rigorous) |
+| `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `low` | Reasoning effort for the translate model (`low` faster, `medium` / `high` more rigorous) |
 | `translateTargetLanguage` | `DSH_AGY_TRANSLATE_LANG` | `中文（简体）` | Target language wording in the prompt |
 | `translateMaxChars` | `—` | `8000` | Source truncation limit |
 | `translateMaxTokens` | `—` | `4096` | Output token cap |
 | `translateTimeoutMs` | `—` | `120000` | Per-translation timeout |
 | `translateRetries` | `—` | `2` | Retries on retryable failures (account stall, empty answer) |
-
 | `translateSkipSameModel` | `—` | `true` | Skip translation when the reply already came from the translate model |
 | `translateBindConversation` | `—` | `true` | One agy conversation per DSH session, persona sent once |
 | `translateMinIntervalMs` | `—` | `3000` | Minimum spacing between automatic translations |
 
 `translateModel` and `translateEffort` are also editable in **DSH Settings → Antigravity**, on the auto-translate row (two dropdowns next to the on/off control). Leaving them on their default option hands the choice back to the fallback chain above.
 
-## Image generation (`dsh-agy-image`)
+## Image generation (`agy_image` / `/agy image` / `dsh-agy-image`)
 
 | Key | Environment | Default | Description |
 | --- | --- | --- | --- |
-| `imageModel` | `DSH_AGY_IMAGE_MODEL` | (empty) | Chat model that drives the `generate_image` call; empty → `defaultModel` → `gemini-3.8-flash` |
-| `imageEffort` | `DSH_AGY_IMAGE_EFFORT` | `low` | Reasoning effort for that hop (the image model does the real work) |
+| `imageTool` | `DSH_AGY_IMAGE_TOOL` | `true` | Register the `agy_image` DSH tool so any DSH model can generate or edit images via Antigravity |
+| `imageModel` | `DSH_AGY_IMAGE_MODEL` | (empty) | Chat model that drives the `generate_image` / `image-generator` call; empty → `defaultModel` → `gemini-4-hydrogen` (when discovered) → `gemini-3.8-flash` |
+| `imageEffort` | `DSH_AGY_IMAGE_EFFORT` | `medium` | Reasoning effort for prompt planning and visual self-review (balanced quality and latency) |
 | `imageTimeoutMs` | `DSH_AGY_IMAGE_TIMEOUT_MS` | `240000` | Wall-clock cap for one image generation |
 | `imageMaxBytes` | `DSH_AGY_IMAGE_MAX_BYTES` | `20971520` | Largest artifact the plugin accepts (20 MiB) |
 | `imageOutputDir` | `DSH_AGY_IMAGE_OUTPUT_DIR` | (empty) | Default directory to copy finished images into |
 | `imageRetries` | `DSH_AGY_IMAGE_RETRIES` | `1` | Extra attempts after a retryable failure (each may pick another account) |
 
-The CLI is installed with the plugin as `dsh-agy-image`:
+Image generation is exposed across three entry points — the in-chat **`agy_image`** DSH tool, the **`/agy image`** (`/agy img`) slash command, and the **`dsh-agy-image`** CLI (`image-generator` subagent steps also render as inline image preview cards):
 
 ```bash
 dsh-agy-image -p "一只柴犬，扁平插画风" -a 16:9 -o ./dog.jpg
 dsh-agy-image -p "把背景换成夜晚" -i ./day.png --json
 ```
 
-There is no HTTP endpoint. Settings → Antigravity exposes `imageModel` / `imageEffort` and a copyable
+There is no HTTP endpoint. Settings → Antigravity exposes `imageModel` / `imageEffort`, the `imageTool` toggle, and a copyable
 `dsh-agy-image` command next to the translation row.
 
-The CLI instantiates the plugin's real `AgyAdapter` with
-`purpose:'image'`, so account selection, quota cooldown/rotation, proxy, failure
+All three entry points use the plugin's real `AgyAdapter` (`ImageService` with
+`purpose:'image'`), so account selection, quota cooldown/rotation, proxy, failure
 classification and the retry-on-effort-refusal all come from the same code path a
 normal turn uses. `--json` returns the validated artifact (`path`, `mime`,
 `width`, `height`, `bytes`, `aspectRatio`, `accountId`) or a stable failure `code`.

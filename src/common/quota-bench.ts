@@ -1,7 +1,7 @@
 // Pure quota-bench, cooldown, and auth-quarantine predicates shared across
 // domain scheduling, host commands, and client UI so every surface derives
 // account availability from a single source of truth.
-import type { FamilyQuotaInfo, ManagedAccount, ModelFamily } from './pool-types.ts'
+import { modelMatches, type FamilyQuotaInfo, type ManagedAccount, type ModelFamily } from './pool-types.ts'
 
 /** Proactive rotation thresholds: bench accounts at or below these remaining fractions until reset. */
 export const LOW_QUOTA_5H = 0.10
@@ -65,13 +65,18 @@ export function isWeeklyQuotaBenched(
  * `updatedAt` of the snapshot it overrode; the gate stays off only while the
  * cached row is no newer than that stamp, so a fresh poll always re-arms it.
  */
-export function isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
+export function isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number, model?: string): boolean {
   // Argon falls back to the plain Gemini row once the backend folds it into
   // the shared Gemini group (agy >= 1.5.5 stops emitting a dedicated group).
   const quota = acc.quotas?.[family] ?? (family === 'argon' ? acc.quotas?.google : undefined)
   if (!quota) return false
   const clearedAt = acc.quotaGateClearedAt?.[family]
-  return is5hQuotaBenched(quota, clearedAt, now) || isWeeklyQuotaBenched(quota, clearedAt, now)
+  if (is5hQuotaBenched(quota, clearedAt, now) || isWeeklyQuotaBenched(quota, clearedAt, now)) return true
+  if (!model || model.trim() === '' || !Array.isArray(quota.models)) return false
+  if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) return false
+  const matched = quota.models.filter((m) => modelMatches(model, m.modelId))
+  if (matched.length === 0) return false
+  return matched.every((m) => isWindowBenched(m.remainingFraction, m.resetTime ?? quota.resetTime, LOW_QUOTA_WEEKLY, now))
 }
 
 /** True when any family on the account has an active local 429 cooldown timer. */

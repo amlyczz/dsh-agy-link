@@ -1,8 +1,20 @@
 // One-shot text runner shared by the agy_ask tool: spawn agy, collect the
 // final response text (streamed text steps, else the result envelope), and
 // surface the conversation id so the caller can continue later.
-import { looksLikeAuthFailure, type PluginConfig } from '../common/types.ts'
-import { modelFamilyOf, type ManagedAccount } from '../common/pool-types.ts'
+import {
+  extractQuotaErrorModel,
+  isHardQuotaResultError,
+  isNonConsumableResultError,
+  isTransientBurstRateLimit,
+  looksLikeAuthFailure,
+  looksLikeEligibilityFailure,
+  looksLikeHardRateLimit,
+  looksLikeTosViolation,
+  parseResetDurationMs,
+  shouldMarkAuthRequired,
+  type PluginConfig,
+} from '../common/types.ts'
+import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { acquireCredentialSlot } from './credential-slot.ts'
 import { detectSystemProxy } from './wincred.ts'
@@ -116,6 +128,184 @@ export interface OneShotDeps {
   onEffortUnsupported?: (model: string) => void
 }
 
+type SingleOneShotAttemptOutcome =
+  | { kind: 'done'; result: OneShotResult }
+  | { kind: 'retry'; error: string; durationMs: number }
+
+async function runSingleOneShotAttempt(opts: {
+  deps: OneShotDeps
+  cfg: PluginConfig
+  bin: string
+  baseArgs: readonly string[]
+  prompt: string
+  conversationId?: string
+  timeoutMs: number
+  signal?: AbortSignal
+  pool?: AccountPoolManager
+  account?: ManagedAccount
+  family: ModelFamily
+  model?: string
+  canRetry: boolean
+}): Promise<SingleOneShotAttemptOutcome> {
+  const { deps, cfg, bin, baseArgs, prompt, conversationId: reqCid, timeoutMs, signal, pool, account, family, model, canRetry } = opts
+  const args = [...baseArgs]
+  if (reqCid && reqCid.trim() !== '') args.push('--conversation', reqCid.trim())
+  args.push('-p', prompt)
+  let stdinPayload: string | undefined
+  if (shouldUsePromptStdin(args)) {
+    args.splice(args.length - 2, 2)
+    args.push('--input-format', 'stream-json')
+    stdinPayload = buildStreamInputLine(prompt)
+  }
+
+  let releaseSem: (() => void) | undefined
+  let slotLease: { release(): void } | undefined
+  try {
+    if (deps.acquire) releaseSem = await deps.acquire(signal)
+    if (process.platform === 'win32' && process.env.NODE_TEST_CONTEXT === undefined && pool && account) {
+      slotLease = await acquireCredentialSlot(account, pool, {
+        baseDir: pool.dir,
+        proxyUrl: account.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined,
+        log: deps.log,
+        signal,
+        dispatchTimeoutMs: cfg.dispatchTimeoutMinutes > 0 ? cfg.dispatchTimeoutMinutes * 60_000 : 60_000,
+        parallel: cfg.parallelSameAccount,
+      })
+    }
+
+    const parser = new StreamJsonParser()
+    let streamedText = ''
+    let prevWasStepText = false
+    let resultText = ''
+    let resultOk: boolean | null = null
+    let resultError: string | undefined
+    let conversationId: string | null = null
+    const appendTextEv = (text: string, fragment?: boolean) => {
+      if (text === '') return
+      if (fragment) {
+        streamedText += text
+        prevWasStepText = false
+      } else {
+        if (streamedText !== '' && prevWasStepText && !streamedText.endsWith('\n')) {
+          streamedText += '\n'
+        }
+        streamedText += text
+        prevWasStepText = true
+      }
+    }
+    const handleEv = (ev: ReturnType<StreamJsonParser['feed']>[number]) => {
+      if (ev.kind === 'init' && ev.conversationId) conversationId = ev.conversationId
+      if (ev.kind === 'step' && ev.stepKind === 'text') appendTextEv(ev.text, ev.fragment)
+      if (ev.kind === 'result') {
+        if (ev.conversationId !== '') conversationId = ev.conversationId
+        resultOk = ev.ok
+        resultText = ev.response
+        resultError = ev.error
+      }
+    }
+    const proc = startAgyProcess({
+      bin,
+      args,
+      cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
+      timeoutMs,
+      signal,
+      env: buildAgyEnv({ ...(account ? { account } : {}), cfg }),
+      stdinPayload,
+      preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
+      onLine: (line) => {
+        for (const ev of parser.feed(line + '\n')) handleEv(ev)
+      },
+    })
+    const outcome = await proc.outcome
+    for (const ev of parser.flush()) handleEv(ev)
+
+    if (outcome.aborted) {
+      return { kind: 'done', result: { ok: false, text: '', conversationId, error: 'aborted', durationMs: outcome.durationMs } }
+    }
+    if (outcome.timedOut) {
+      return { kind: 'done', result: { ok: false, text: '', conversationId, error: 'timed out after ' + timeoutMs + 'ms', durationMs: outcome.durationMs } }
+    }
+
+    const joined = streamedText.trim()
+    const text = joined !== '' ? joined : resultText
+    const rawErr = [
+      resultError,
+      parser.stats.lastResultError,
+      outcome.stderrTail,
+      resultOk === false ? resultText : '',
+    ]
+      .filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+      .join(' ')
+      .trim()
+
+    if (looksLikeTosViolation(rawErr) || looksLikeTosViolation(resultText)) {
+      if (pool && account) pool.markAuthRequired(account.id, rawErr || resultText)
+      return {
+        kind: 'done',
+        result: { ok: false, text: '', conversationId, error: rawErr || resultText || 'TOS_VIOLATION', durationMs: outcome.durationMs },
+      }
+    }
+
+    const hardQuota =
+      isHardQuotaResultError(resultOk !== false, resultError, resultText)
+      || (looksLikeHardRateLimit(rawErr) && !isTransientBurstRateLimit(rawErr))
+    if (hardQuota) {
+      const errModel = extractQuotaErrorModel(rawErr)
+      const modelFam = errModel ? modelFamilyOf(errModel) : undefined
+      const targetFam: ModelFamily = modelFam && modelFam !== 'unknown' ? modelFam : family
+      const resetMs = parseResetDurationMs(rawErr)
+      const resetIso = resetMs && resetMs > 0 ? new Date(Date.now() + resetMs).toISOString() : undefined
+      if (pool && account) {
+        pool.recordFailure(account.id, targetFam, rawErr || 'quota exhausted', resetIso)
+        if (targetFam !== family) pool.advanceAccount(account.id, family, model)
+      }
+      const errMsg = rawErr || 'Antigravity quota / rate limit reached'
+      if (canRetry && pool && pool.selectAccount(family, model) !== null) {
+        return { kind: 'retry', error: errMsg, durationMs: outcome.durationMs }
+      }
+      return { kind: 'done', result: { ok: false, text: '', conversationId, error: errMsg, durationMs: outcome.durationMs } }
+    }
+
+    const nonConsumable = resultOk === false && isNonConsumableResultError(false, resultError, resultText)
+    if (nonConsumable || text === '') {
+      if (looksLikeEligibilityFailure(rawErr)) {
+        if (pool && account) pool.advanceAccount(account.id, family, model)
+        if (canRetry && pool && pool.selectAccount(family, model) !== null) {
+          return { kind: 'retry', error: rawErr, durationMs: outcome.durationMs }
+        }
+        return { kind: 'done', result: { ok: false, text: '', conversationId, error: rawErr, durationMs: outcome.durationMs } }
+      }
+      if (looksLikeAuthFailure(rawErr) || parser.stats.sawAuthFailure) {
+        if (pool && account && shouldMarkAuthRequired('AUTH', rawErr)) {
+          pool.noteAuthFailure(account.id, rawErr)
+          pool.advanceAccount(account.id, family, model)
+        }
+        if (canRetry && pool && pool.selectAccount(family, model) !== null) {
+          return { kind: 'retry', error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs }
+        }
+        return { kind: 'done', result: { ok: false, text: '', conversationId, error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs } }
+      }
+      if (nonConsumable) {
+        return { kind: 'done', result: { ok: false, text: '', conversationId, error: rawErr || resultText, durationMs: outcome.durationMs } }
+      }
+    }
+
+    if (outcome.code !== 0 && text === '') {
+      const envelopeError = parser.stats.lastResultError ?? ''
+      const detail = envelopeError !== '' ? envelopeError : outcome.stderrTail.slice(-300)
+      return { kind: 'done', result: { ok: false, text: '', conversationId, error: 'agy exited with code ' + outcome.code + ': ' + detail, durationMs: outcome.durationMs } }
+    }
+    if (text !== '') {
+      if (pool && account) pool.recordSuccess(account.id, family)
+      return { kind: 'done', result: { ok: true, text, conversationId, durationMs: outcome.durationMs } }
+    }
+    return { kind: 'done', result: { ok: false, text: '(no output)', conversationId, durationMs: outcome.durationMs } }
+  } finally {
+    slotLease?.release()
+    releaseSem?.()
+  }
+}
+
 export async function runAgyOnce(
   deps: OneShotDeps,
   req: {
@@ -137,21 +327,20 @@ export async function runAgyOnce(
   const bin = deps.bin()
   if (!bin) return { ok: false, text: '', conversationId: null, error: 'agy binary not found', durationMs: 0 }
   const timeoutMs = req.timeoutMs ?? cfg.timeoutMs
-  const args: string[] = [
+  const baseArgs: string[] = [
     '--output-format', 'stream-json',
     '--print-timeout', Math.max(1, Math.ceil(timeoutMs / 60_000)) + 'm',
   ]
   const mode = req.mode ?? cfg.permissionMode
-  if (mode === 'skip') args.push('--dangerously-skip-permissions')
-  else args.push('--mode', mode)
-  if (req.sandbox ?? cfg.sandbox) args.push('--sandbox')
+  if (mode === 'skip') baseArgs.push('--dangerously-skip-permissions')
+  else baseArgs.push('--mode', mode)
+  if (req.sandbox ?? cfg.sandbox) baseArgs.push('--sandbox')
   const agent = (req.agent ?? cfg.agent).trim()
-  if (agent !== '') args.push('--agent', agent)
+  if (agent !== '') baseArgs.push('--agent', agent)
   const agySettings = (req.agySettings ?? cfg.agySettings).trim()
-  if (agySettings !== '') args.push('--settings', agySettings)
-  if (req.conversationId && req.conversationId.trim() !== '') args.push('--conversation', req.conversationId.trim())
-  if (req.model) args.push('--model', req.model)
-  if (req.effort) args.push('--effort', req.effort)
+  if (agySettings !== '') baseArgs.push('--settings', agySettings)
+  if (req.model) baseArgs.push('--model', req.model)
+  if (req.effort) baseArgs.push('--effort', req.effort)
   let prompt = req.prompt
   if (req.readPaths && req.readPaths.length > 0) {
     prompt = await inlineFiles(prompt, req.readPaths, cfg.workspaceRoot !== '' ? cfg.workspaceRoot : process.cwd())
@@ -160,105 +349,71 @@ export async function runAgyOnce(
 
   const pool = deps.pool?.()
   const family = modelFamilyOf(req.model || cfg.defaultModel || 'gemini')
-  const account: ManagedAccount | undefined = pool?.selectAccount(family, req.model) ?? undefined
+  const enabledCount = pool ? pool.getAccounts().filter((a) => a.enabled).length : 0
+  const maxAttempts = pool ? Math.min(Math.max(1, enabledCount), 17) : 1
+  const triedAccounts = new Set<string>()
+  let totalDurationMs = 0
+  let lastError = ''
 
   let cleanup: (() => Promise<void>) | null = null
-  let releaseSem: (() => void) | undefined
-  let slotLease: { release(): void } | undefined
   try {
     if (req.schema !== undefined && req.schema !== null) {
       const sa = await schemaArgs(req.schema)
-      args.push(...sa.args)
+      baseArgs.push(...sa.args)
       cleanup = sa.cleanup
     }
-    args.push('-p', prompt)
-    let stdinPayload: string | undefined
-    if (shouldUsePromptStdin(args)) {
-      args.splice(args.length - 2, 2)
-      args.push('--input-format', 'stream-json')
-      stdinPayload = buildStreamInputLine(prompt)
-    }
 
-    if (deps.acquire) {
-      releaseSem = await deps.acquire(req.signal)
-    }
-    if (process.platform === 'win32' && process.env.NODE_TEST_CONTEXT === undefined && pool && account) {
-      slotLease = await acquireCredentialSlot(account, pool, {
-        baseDir: pool.dir,
-        proxyUrl: account.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined,
-        log: deps.log,
-        signal: req.signal,
-        dispatchTimeoutMs: cfg.dispatchTimeoutMinutes > 0 ? cfg.dispatchTimeoutMinutes * 60_000 : 60_000,
-        parallel: cfg.parallelSameAccount,
-      })
-    }
-
-    const parser = new StreamJsonParser()
-    let streamedText = ''
-    let prevWasStepText = false
-    let resultText = ''
-    let conversationId: string | null = null
-    const appendTextEv = (text: string, fragment?: boolean) => {
-      if (text === '') return
-      if (fragment) {
-        streamedText += text
-        prevWasStepText = false
-      } else {
-        if (streamedText !== '' && prevWasStepText && !streamedText.endsWith('\n')) {
-          streamedText += '\n'
-        }
-        streamedText += text
-        prevWasStepText = true
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (req.signal?.aborted) {
+        return { ok: false, text: '', conversationId: null, error: 'aborted', durationMs: totalDurationMs }
       }
-    }
-    const proc = startAgyProcess({
-      bin,
-      args,
-      cwd: cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined,
-      timeoutMs,
-      signal: req.signal,
-      env: buildAgyEnv({ ...(account ? { account } : {}), cfg }),
-      stdinPayload,
-      preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
-      onLine: (line) => {
-        for (const ev of parser.feed(line + '\n')) {
-          if (ev.kind === 'init' && ev.conversationId) conversationId = ev.conversationId
-          if (ev.kind === 'step' && ev.stepKind === 'text') appendTextEv(ev.text, ev.fragment)
-          if (ev.kind === 'result') {
-            if (ev.conversationId !== '') conversationId = ev.conversationId
-            resultText = ev.response
+      let account: ManagedAccount | undefined
+      if (pool && pool.getAccounts().length > 0) {
+        const selected = pool.selectAccount(family, req.model)
+        if (!selected || triedAccounts.has(selected.id)) {
+          return {
+            ok: false,
+            text: '',
+            conversationId: null,
+            error: lastError || 'All Antigravity accounts are currently unavailable (cooling down, quota exhausted, or disabled)',
+            durationMs: totalDurationMs,
           }
         }
-      },
-    })
-    const outcome = await proc.outcome
-    for (const ev of parser.flush()) {
-      if (ev.kind === 'step' && ev.stepKind === 'text') appendTextEv(ev.text, ev.fragment)
-      if (ev.kind === 'result') {
-        if (ev.conversationId !== '') conversationId = ev.conversationId
-        resultText = ev.response
+        account = selected
+        triedAccounts.add(selected.id)
       }
+
+      const out = await runSingleOneShotAttempt({
+        deps,
+        cfg,
+        bin,
+        baseArgs,
+        prompt,
+        ...(attempt === 0 && req.conversationId !== undefined ? { conversationId: req.conversationId } : {}),
+        timeoutMs,
+        ...(req.signal !== undefined ? { signal: req.signal } : {}),
+        ...(pool !== undefined ? { pool } : {}),
+        ...(account !== undefined ? { account } : {}),
+        family,
+        ...(req.model !== undefined ? { model: req.model } : {}),
+        canRetry: attempt + 1 < maxAttempts,
+      })
+      if (out.kind === 'retry') {
+        totalDurationMs += out.durationMs
+        lastError = out.error
+        continue
+      }
+      return { ...out.result, durationMs: totalDurationMs + out.result.durationMs }
     }
-    if (outcome.aborted) {
-      return { ok: false, text: '', conversationId, error: 'aborted', durationMs: outcome.durationMs }
+
+    return {
+      ok: false,
+      text: '',
+      conversationId: null,
+      error: lastError || 'All Antigravity accounts are currently unavailable',
+      durationMs: totalDurationMs,
     }
-    if (outcome.timedOut) {
-      return { ok: false, text: '', conversationId, error: 'timed out after ' + timeoutMs + 'ms', durationMs: outcome.durationMs }
-    }
-    const joined = streamedText.trim()
-    const text = joined !== '' ? joined : resultText
-    if (text === '' && (looksLikeAuthFailure(outcome.stderrTail) || parser.stats.sawAuthFailure)) {
-      return { ok: false, text: '', conversationId, error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs }
-    }
-    if (outcome.code !== 0 && text === '') {
-      const envelopeError = parser.stats.lastResultError ?? ''
-      const detail = envelopeError !== '' ? envelopeError : outcome.stderrTail.slice(-300)
-      return { ok: false, text: '', conversationId, error: 'agy exited with code ' + outcome.code + ': ' + detail, durationMs: outcome.durationMs }
-    }
-    return { ok: text !== '', text: text === '' ? '(no output)' : text, conversationId, durationMs: outcome.durationMs }
   } finally {
-    slotLease?.release()
-    releaseSem?.()
     if (cleanup) void cleanup().catch(() => {})
   }
 }

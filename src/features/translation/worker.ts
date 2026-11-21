@@ -10,6 +10,7 @@ import type { Writable, Readable } from 'node:stream'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../../common/pool-types.ts'
 import {
   Err,
+  isTransientBurstRateLimit,
   looksLikeAuthFailure,
   looksLikeAuthVerificationJitter,
   looksLikeEligibilityFailure,
@@ -531,7 +532,7 @@ export class TranslationWorkerPool {
     if (looksLikeValidationRequired(errText)) {
       return { ok: false, text: '', code: Err.AGY_ERROR, error: errText, ...accountPatch, durationMs }
     }
-    if (looksLikeHardRateLimit(errText)) {
+    if (looksLikeHardRateLimit(errText) && !isTransientBurstRateLimit(errText)) {
       if (account && pool) {
         const resetMs = parseResetDurationMs(errText)
         const resetIso = resetMs ? new Date(this.now() + resetMs).toISOString() : undefined

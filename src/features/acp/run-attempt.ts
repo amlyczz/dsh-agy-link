@@ -1,7 +1,13 @@
 // Execute one AttemptInput over the persistent `agy acp` session pool,
 // populating the same RunRecording + finalizeAttempt lifecycle as the CLI path.
-import type { ManagedAccount } from '../../common/pool-types.ts'
-import { Err, isTransportFailure, looksLikeAuthFailure, looksLikeRateLimit } from '../../common/types.ts'
+import type { ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
+import {
+  Err,
+  isNonConsumableResultError,
+  isTransportFailure,
+  looksLikeAuthFailure,
+  looksLikeRateLimit,
+} from '../../common/types.ts'
 import { agyHomeDirFor, readAgyRunLogText, snapshotAgyLogs, type AgyLogSnapshot } from '../../host/agy-log.ts'
 import { StreamJsonParser } from '../../host/parser.ts'
 import type { RunRecording } from '../../host/recording.ts'
@@ -11,6 +17,12 @@ import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { createAttemptRecorder, type AttemptDeps, type AttemptInput, type AttemptSlot } from '../../provider/attempt.ts'
 import { classifyFailure, type AttemptFailure } from '../../provider/failure.ts'
 import { finalizeAttempt } from '../../provider/finalize.ts'
+import {
+  createLiveQuotaController,
+  reportDirectToolQuota,
+  type LiveQuotaFailoverState,
+} from '../../provider/quota-failover.ts'
+import { SubagentTracker } from '../subagent/tracker.ts'
 import type { AcpProcess } from './client.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
@@ -27,9 +39,14 @@ async function settleAcpOutcome(opts: {
   rawErrText: string
   runLogText: string
   silentTimeout: boolean
+  quotaFailover?: LiveQuotaFailoverState | null
+  cooledInLiveFamilies?: ReadonlySet<ModelFamily>
   outcomeOverride?: RunOutcome
 }): Promise<void> {
-  const { deps, input, rec, account, sid, failure, durationMs, stderr, rawErrText, runLogText, silentTimeout, outcomeOverride } = opts
+  const {
+    deps, input, rec, account, sid, failure, durationMs, stderr, rawErrText, runLogText, silentTimeout,
+    quotaFailover, cooledInLiveFamilies, outcomeOverride,
+  } = opts
   const outcome: RunOutcome = outcomeOverride ?? {
     code: failure ? 1 : 0,
     signal: null,
@@ -61,6 +78,8 @@ async function settleAcpOutcome(opts: {
     runLogText,
     silentTimeout,
     sessionKey: input.sessionKey,
+    ...(quotaFailover === undefined ? {} : { quotaFailover }),
+    ...(cooledInLiveFamilies === undefined ? {} : { cooledInLiveFamilies }),
     clearNetworkStreak: (k) => deps.clearNetworkStreak(k),
     dropFailoverBudget: (k) => deps.dropFailoverBudget(k),
     clearRateLimitFailover: (k) => deps.clearRateLimitFailover(k),
@@ -85,8 +104,31 @@ async function driveAcpPrompt(opts: {
   const streamState = createAcpStreamState()
   let emittedAny = false
   let terminalFailure: AttemptFailure | null = null
+  let quotaCancelled = false
+  const quotaCtrl = createLiveQuotaController({
+    pool: deps.pool,
+    account,
+    inputFamily: input.family,
+    activeModel: input.activeModel,
+    emitNotice: (stepKey, text) => recorder.rec.append({ kind: 'step', stepKey, stepKind: 'subagent', text, raw: {} }),
+    onTriggerKill: () => {
+      quotaCancelled = true
+      proc.cancelSession(sid)
+    },
+  })
+  const subTracker = !input.isAux && sid !== ''
+    ? new SubagentTracker({
+        conversationId: sid,
+        resumed: Boolean(input.binding?.conversationId),
+        accountHome: recorder.rec.accountHome,
+        log: deps.log,
+        onEvent: (ev) => recorder.rec.append(ev),
+        onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info),
+      })
+    : null
 
   try {
+    subTracker?.start()
     const idleMs = cfg.timeoutMs
     const longToolIdleMs = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes * 60_000 : 0
     const maxTurnMs = cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : 0
@@ -103,43 +145,54 @@ async function driveAcpPrompt(opts: {
           emittedAny = true
           recorder.rec.append(ev)
           input.agyOnEvent?.(ev)
+          reportDirectToolQuota(quotaCtrl, ev)
         }
       },
     })
+    subTracker?.flush()
+    const liveQf = quotaCtrl.failoverState()
+    if (liveQf !== null) {
+      throw new Error(liveQf.rawErrorText)
+    }
     const resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText)
     recorder.rec.append(resEv)
     input.agyOnEvent?.(resEv)
-    if (resEv.kind === 'result' && !resEv.ok && resEv.response === '') {
+    if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
       throw new Error(resEv.error ?? 'ACP prompt returned error without response')
     }
     await settleAcpOutcome({
       deps, input, rec: recorder.rec, account, sid,
       failure: null, durationMs: Date.now() - startedAt,
       stderr: proc.stderr, rawErrText: '', runLogText: '', silentTimeout: false,
+      cooledInLiveFamilies: quotaCtrl.cooledFamilies(),
     })
   } catch (err) {
+    subTracker?.flush()
+    const liveQf = quotaCtrl.failoverState()
     const msg = err instanceof Error ? err.message : String(err)
-    const rawErrText = `${msg} ${proc.stderr}`.trim()
+    const rawErrText = [msg, proc.stderr, liveQf?.rawErrorText].filter(Boolean).join(' ').trim()
     const runLogText = readAgyRunLogText(runLogHome, runLogsBefore)
-    const timedOut = /timed out/i.test(msg)
-    const aborted = Boolean(input.signal?.aborted) || /aborted/i.test(msg)
+    const timedOut = liveQf === null && /timed out/i.test(msg)
+    const aborted = !quotaCancelled && liveQf === null && (Boolean(input.signal?.aborted) || /aborted/i.test(msg))
     const outcome: RunOutcome = {
       code: 1, signal: null, timedOut, aborted,
       capped: false, stdout: '', stderrTail: proc.stderr, durationMs: Date.now() - startedAt,
     }
     terminalFailure = classifyFailure({
       cfg, outcome, parser: new StreamJsonParser(),
-      sawAuthFailure: looksLikeAuthFailure(rawErrText),
+      sawAuthFailure: liveQf === null && looksLikeAuthFailure(rawErrText),
       consumable: false,
-      transportFailure: isTransportFailure({ rawErrText, authFailureText: '', stderrTail: proc.stderr, stdoutHead: '', runLogText }),
-      keyringJitter: false, rawErrText, isRateLimit: looksLikeRateLimit(rawErrText), silentTimeout: timedOut && !emittedAny,
+      transportFailure: liveQf === null && isTransportFailure({ rawErrText, authFailureText: '', stderrTail: proc.stderr, stdoutHead: '', runLogText }),
+      keyringJitter: false, rawErrText, isRateLimit: liveQf !== null || looksLikeRateLimit(rawErrText), silentTimeout: timedOut && !emittedAny,
     }) ?? { kind: aborted ? 'aborted' : 'error', code: Err.AGY_ERROR, message: msg }
     await settleAcpOutcome({
       deps, input, rec: recorder.rec, account, sid,
       failure: terminalFailure, durationMs: outcome.durationMs, stderr: proc.stderr, rawErrText, runLogText,
-      silentTimeout: timedOut && !emittedAny, outcomeOverride: outcome,
+      silentTimeout: timedOut && !emittedAny, quotaFailover: liveQf,
+      cooledInLiveFamilies: quotaCtrl.cooledFamilies(), outcomeOverride: outcome,
     })
   } finally {
+    subTracker?.stop()
     recorder.stop()
     deps.unregisterActiveRun(sessionKey, recorder.rec)
     slot.releaseOnce()

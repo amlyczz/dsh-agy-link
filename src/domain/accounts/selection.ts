@@ -60,7 +60,7 @@ export function explainIneligibility(
   }
   const cd = acc.cooldowns?.[family]
   if (cd && cd.cooldownUntil > now) return 'cooldown'
-  if (isQuotaBenched(acc, family, now)) return 'quota'
+  if (isQuotaBenched(acc, family, now, model)) return 'quota'
   return null
 }
 

@@ -69,6 +69,14 @@ export async function runViaAdapter(adapter: AdapterLike, call: ImageAgentCall):
     agyImagePrompt: call.prompt,
     agyPermissionMode: call.permissionMode,
     agyOnAccount: (info: { id?: string; home?: string }) => {
+      if (accountId !== undefined && typeof info.id === 'string' && info.id !== accountId) {
+        toolCalls.length = 0
+        subagents.length = 0
+        textParts.length = 0
+        responseText = ''
+        conversationId = undefined
+        failure = null
+      }
       if (typeof info.id === 'string') accountId = info.id
       if (typeof info.home === 'string' && info.home !== '') home = info.home
     },
