@@ -233,8 +233,9 @@ export async function runAcpAttempt(
     return settleEarlyAbort(deps, input, slot, sid, 'request aborted after ACP session opened')
   }
 
-  const recorder = createAttemptRecorder(deps, cfg, account, sid, false)
+  const recorder = createAttemptRecorder(deps, cfg, account, sid, !input.isAux)
   recorder.streamCid = sid
+  recorder.startTracker?.()
   recorder.rec.requestAbort = () => proc.cancelSession(sid)
   if (!input.isAux && sessionKey !== '') {
     deps.registerActiveRun(sessionKey, recorder.rec)

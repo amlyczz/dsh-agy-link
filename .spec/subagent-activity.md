@@ -16,7 +16,8 @@ createAttemptRecorder(deps, cfg, account, initialConversationId)   src/provider/
               → rec.append(ev) + watchdog.markEvent()（真实进度喂狗）
 ```
 
-`EventMapper` 把 `stepKind:'subagent'` 收敛成一条 `[agy subagent]` 横幅 + 逐行进度，避免每个子代理各起一个 reasoning 块。
+- `EventMapper` 把 `stepKind:'subagent'` 收敛成一条 `[agy subagent]` 横幅 + 逐行进度，避免每个子代理各起一个 reasoning 块；来自 `TaskActivityTracker` 的 `[后台任务 · <taskId>]` / `[后台通知 · <sender>]` 事件走同一通道并喂活看门狗。
+- `SubagentTracker` 现在同时委托 `TaskActivityTracker`（`src/features/subagent/task-activity.ts`）增量 tail 主会话 `.system_generated/tasks/*.log` 与 `.system_generated/messages/{,undelivered/}*.json`，并在 `runAcpAttempt` 与 `runAgyAttempt` 两条传输路径统一启用；`RUNNING` 工具卡片在 `presentMirrorResult` 与 `EventMapper` 保留可结束切卡语义的同时补充后台任务日志/定时器提示。
 
 ## 2. 不变式
 
