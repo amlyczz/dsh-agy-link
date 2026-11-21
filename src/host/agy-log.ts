@@ -77,6 +77,32 @@ function readFileTailFromOffset(filePath: string, offset: number, maxBytes: numb
   }
 }
 
+/** Size of one log file in bytes (0 when absent) — the offset to start from. */
+export function logSize(file: string | null | undefined): number {
+  if (!file) return 0
+  try {
+    return statSync(file).size
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Bytes appended to ONE log file since `offset`, capped at MAX_LOG_BYTES.
+ * Used for the ACP transport, where `agy acp --log-file` writes a single known
+ * file: a silent turn (empty end_turn, no stderr, no JSON-RPC error) leaves the
+ * real cause — proxy connect failures, executor construction — only here.
+ */
+export function readLogSlice(file: string | null | undefined, offset: number): string {
+  if (!file) return ''
+  try {
+    if (!existsSync(file)) return ''
+    return readFileTailFromOffset(file, Math.max(0, offset), MAX_LOG_BYTES)
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Concatenated text of the log bytes THIS run created (new files or bytes
  * appended past `before`), newest first. Returns '' when the run wrote no

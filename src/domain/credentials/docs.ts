@@ -20,6 +20,12 @@ export interface CredentialDoc {
   accessToken?: string
   refreshToken?: string
   expiryMs?: number
+  /**
+   * Account identity carried by agy's own slot document (`id_token_email`).
+   * The Windows credential slot is machine-wide, so this is the only reliable
+   * way to tell WHOSE token currently sits in it without a network round-trip.
+   */
+  email?: string
 }
 
 /** Parse either agy's nested `{token:{…}}` shape or a flat `{access_token}` doc. */
@@ -52,10 +58,22 @@ export function parseCredentialDoc(raw: string | null | undefined): CredentialDo
     const parsedMs = Date.parse(rawExpiry)
     if (!Number.isNaN(parsedMs)) expiryMs = parsedMs
   }
+  // agy writes the identity it loaded the token for next to (not inside) the
+  // token object, so the outer document is consulted as well.
+  const emailOf = (): string | undefined => {
+    for (const k of ['id_token_email', 'idTokenEmail', 'email']) {
+      for (const src of [inner, outer]) {
+        const v = src[k]
+        if (typeof v === 'string' && v.trim() !== '') return v.trim()
+      }
+    }
+    return undefined
+  }
   return {
     accessToken: str('access_token', 'accessToken'),
     refreshToken: str('refresh_token', 'refreshToken'),
     expiryMs,
+    email: emailOf(),
   }
 }
 

@@ -73,6 +73,30 @@ export interface AttemptDeps {
   runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
   /** Cross-turn background wake observer (tracks schedule timers & background tasks). */
   backgroundObserver?: BackgroundTurnObserver
+  /**
+   * Surface a user-visible ACP notice in the session (session reset, forced
+   * session rebuild). Host-injected: the features layer cannot reach the
+   * session service on its own.
+   */
+  appendAcpNotice?: (sessionKey: string, notice: AcpSessionNotice) => void
+  /**
+   * Rewrite the Windows credential slot with the account this attempt must run
+   * as. Host-injected: the features layer may not touch host credential code.
+   * Returns false when the slot cannot be written (non-Windows, unreadable
+   * credential), which turns an identity mismatch into a hard failure.
+   */
+  reinstallCredentialSlot?: (account: ManagedAccount) => boolean
+}
+
+/** One user-visible ACP channel notice. */
+export interface AcpSessionNotice {
+  /**
+   * acp-reset: the persisted session vanished and was rebuilt from a digest.
+   * acp-drain-aborted: a background task was cut short (account switch / eviction).
+   */
+  kind: 'acp-reset' | 'acp-drain-aborted'
+  /** Markdown text shown in the conversation. */
+  text: string
 }
 
 /** Everything one attempt needs. Values are produced by streamAttempt. */
@@ -422,7 +446,9 @@ function persistBindingOnResult(
   ) {
     return
   }
-  const finalId = input.binding !== undefined ? input.binding.conversationId : (ev.conversationId || recorder.streamCid)
+  // Same precedence as finalize.writeSuccessBinding: the conversation this run
+  // actually wrote to beats the binding we entered with.
+  const finalId = ev.conversationId || recorder.streamCid || input.binding?.conversationId
   if (!finalId) return
   const mergedImages =
     input.binding?.sentImageIds || input.newlySentImageIds.length > 0

@@ -114,7 +114,12 @@ function applySuccess(input: FinalizeInput): void {
 }
 
 function writeSuccessBinding(input: FinalizeInput): void {
-  const finalId = input.binding !== undefined ? input.binding.conversationId : input.conversationId
+  // The run's OWN conversation id wins over the binding we entered with: an
+  // ACP turn whose persisted session had to be rebuilt (session/resume and
+  // session/load both produced nothing) starts a NEW agy conversation, and
+  // writing the old id back would point the next turn at a session that no
+  // longer exists — the exact "silently opens an empty page" failure.
+  const finalId = input.conversationId ?? input.binding?.conversationId
   if (!finalId) return
   const inputTokens = resolveInputTokens(input.rec, input.binding)
   input.store.set(input.sessionAccountKey, {
@@ -242,7 +247,10 @@ function persistFailureBinding(input: FinalizeInput, failure: AttemptFailure): v
     // Persisting it here is what lets the next hop continue instead of
     // starting a fresh conversation with a digest-only prompt
     // (issue #35 root cause ②: "aborted 分支永远存不下来").
-    const finalId = input.binding !== undefined ? input.binding.conversationId : input.conversationId
+    // Same precedence as writeSuccessBinding: the conversation this run actually
+    // reached beats the one we entered with, otherwise a rebuilt ACP session
+    // writes its dead id back and the next turn resumes nothing.
+    const finalId = input.conversationId ?? input.binding?.conversationId
     if (!finalId) return
     const inputTokens = resolveInputTokens(input.rec, input.binding)
     input.store.set(input.sessionAccountKey, {

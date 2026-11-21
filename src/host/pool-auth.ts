@@ -86,6 +86,13 @@ export interface PoolAuthFlowDeps {
   refreshTokens?: typeof refreshTokens
   onUpdate?: () => void
   onIsolatedAccountCommitted?: (account: ManagedAccount) => void
+  /**
+   * Injectable Windows credential-slot writer. Defaults to the real slot, but
+   * tests MUST override it: the machine-wide slot is shared with the running
+   * app, so a fake login written from a unit test would silently break the
+   * real account (and every ACP turn with it).
+   */
+  writeSlot?: (raw: string) => boolean
 }
 
 export class PoolAuthFlow {
@@ -98,6 +105,7 @@ export class PoolAuthFlow {
   private readonly refresh: typeof refreshTokens
   private readonly onUpdate?: () => void
   private readonly onIsolatedAccountCommitted?: (account: ManagedAccount) => void
+  private readonly writeSlot: (raw: string) => boolean
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -111,6 +119,7 @@ export class PoolAuthFlow {
     this.refresh = deps.refreshTokens ?? refreshTokens
     this.onUpdate = deps.onUpdate
     this.onIsolatedAccountCommitted = deps.onIsolatedAccountCommitted
+    this.writeSlot = deps.writeSlot ?? ((raw) => writeWindowsCredentialRaw(raw, 'gemini:antigravity'))
   }
 
   status(): PoolAuthStatus {
@@ -264,7 +273,7 @@ export class PoolAuthFlow {
             // Same document the on-disk writer produces — crucially WITH an
             // `expiry`, so a missing field cannot be read as "valid forever".
             const docStr = buildAgyCredentialDoc(tokens)
-            writeWindowsCredentialRaw(docStr, 'gemini:antigravity')
+            this.writeSlot(docStr)
             writePrimaryCredential({ raw: docStr, email, savedAt: Date.now() }, this.pool.dir)
           } catch {
             // best effort
@@ -399,7 +408,7 @@ export class PoolAuthFlow {
       if (flow.primary && process.platform === 'win32') {
         try {
           const raw = readFileSync(tokenFile, 'utf8')
-          writeWindowsCredentialRaw(raw, 'gemini:antigravity')
+          this.writeSlot(raw)
         } catch {
           // best-effort
         }

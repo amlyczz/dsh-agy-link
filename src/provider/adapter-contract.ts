@@ -4,6 +4,7 @@
 // orchestrator. The adapter re-exports this type, so `import type {
 // AgyAdapterDeps } from '.../adapter.ts'` keeps working for hosts and tests.
 import type { BackgroundTurnObserver } from '../common/background-types.ts'
+import type { ManagedAccount } from '../common/pool-types.ts'
 import type { PluginConfig } from '../common/types.ts'
 import type { ModelCatalog } from '../host/models.ts'
 import type { SessionStore } from '../host/sessions.ts'
@@ -11,7 +12,7 @@ import type { AccountPoolManager } from '../host/pool.ts'
 import type { RunRecording, RunRegistry } from '../host/recording.ts'
 import type { StreamJsonParser } from '../host/parser.ts'
 import type { ImageRefLike } from '../host/media.ts'
-import type { AttemptDeps, AttemptInput, AttemptSlot } from './attempt.ts'
+import type { AcpSessionNotice, AttemptDeps, AttemptInput, AttemptSlot } from './attempt.ts'
 
 export interface AgyAdapterDeps {
   getConfig: () => PluginConfig
@@ -80,4 +81,16 @@ export interface AgyAdapterDeps {
   runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
   /** Cross-turn background wake observer (tracks schedule timers & background tasks). */
   backgroundObserver?: BackgroundTurnObserver
+  /**
+   * Persist a user-visible ACP notice (session reset / rebuild) into the
+   * conversation. The client half renders it as a chat card, so it never enters
+   * the model-visible surface and never splits the answer's text block.
+   */
+  appendAcpNotice?: (sessionKey: string, notice: AcpSessionNotice) => void
+  /**
+   * Rewrite the machine-wide Windows credential slot with one account's
+   * credential. Used by gate 2 after agy reports a different identity than the
+   * account we dispatched.
+   */
+  reinstallCredentialSlot?: (account: ManagedAccount) => boolean
 }

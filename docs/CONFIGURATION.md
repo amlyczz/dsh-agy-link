@@ -15,6 +15,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `extraArgs` | `DSH_AGY_EXTRA_ARGS` | `[]` | Extra argv appended to every `agy` spawn (space separated in the env var) |
 | `permissionMode` | `DSH_AGY_MODE` | `skip` | `skip` / `plan` / `accept-edits`. `DSH_AGY_SKIP_PERMISSIONS` maps `true`→`skip`, `false`→`plan` |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | `''` (session cwd) | Workspace root passed to agy |
+| `transport` | `DSH_AGY_TRANSPORT` | `acp` | `acp` keeps one persistent `agy acp` process per account and session, so background commands, subagents and timers keep running after a turn ends and report back on their own; `cli` runs one-shot `agy -p` per turn (background work dies with the process). `/agy transport cli|acp` and the settings page switch it at runtime. A pre-stream ACP failure and a no-output ACP turn fall back to `cli` automatically |
 
 ## Models and effort
 

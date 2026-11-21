@@ -6,6 +6,8 @@
 // domain/accounts/admin.ts. This class owns the in-memory cache and delegates,
 // keeping every public method signature unchanged.
 import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { stateDir } from '../common/config.ts'
 import {
   accountHasArgon,
   baseModelSlug,
@@ -186,7 +188,10 @@ export class AccountPoolManager {
    * as well as the primary system ~/.gemini/antigravity-cli/log directory.
    */
   sweepOldLogs(maxDays = 7): number {
-    return sweepOldAgyLogs(this.data.accounts, homedir(), maxDays)
+    // The ACP transport passes --log-file and writes per-process logs into the
+    // plugin state dir; they follow the same retention window as agy's own
+    // cli-*.log files, otherwise a long-lived session accumulates them forever.
+    return sweepOldAgyLogs(this.data.accounts, homedir(), maxDays, Date.now(), [join(stateDir(), 'logs')])
   }
 
   /** Create a new isolated account slot and prepare its filesystem home. */

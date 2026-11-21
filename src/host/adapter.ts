@@ -548,6 +548,8 @@ export class AgyAdapter extends LlmAdapter {
       spawnLimiter: this.spawnLimiter,
       ...(this.deps.runAcp === undefined ? {} : { runAcp: this.deps.runAcp }),
       ...(this.deps.backgroundObserver === undefined ? {} : { backgroundObserver: this.deps.backgroundObserver }),
+      ...(this.deps.appendAcpNotice === undefined ? {} : { appendAcpNotice: this.deps.appendAcpNotice }),
+      ...(this.deps.reinstallCredentialSlot === undefined ? {} : { reinstallCredentialSlot: this.deps.reinstallCredentialSlot }),
     }
     const attemptInput: AttemptInput = {
       cfg,

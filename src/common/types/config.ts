@@ -280,7 +280,12 @@ export function defaultConfig(): PluginConfig {
     sandbox: false,
     agent: '',
     agySettings: '',
-    transport: 'cli',
+    // ACP is the default transport: it keeps one `agy acp` process per account
+    // and session, so background commands, subagents and timers survive the end
+    // of a turn and report back on their own. `DSH_AGY_TRANSPORT=cli`, `/agy`
+    // and the settings page switch back to the one-shot `-p` transport, and a
+    // pre-stream failure falls back automatically.
+    transport: 'acp',
     imageTool: true,
     syncAccountCustomizations: true,
     mediaMaxFileBytes: 20 * 1024 * 1024,

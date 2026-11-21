@@ -48,6 +48,20 @@ function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
+/** ACP tool statuses that end a tool's lifecycle (anything else is still live). */
+const ACP_TERMINAL_STATUSES = new Set(['completed', 'failed', 'error', 'cancelled', 'canceled'])
+
+/**
+ * True when an ACP tool status is terminal. agy 1.5.x only ever reports
+ * `in_progress`, `pending` (transient) and `completed`; `failed`/`cancelled`
+ * are accepted defensively. An absent status is NOT terminal — the first
+ * `tool_call` for a background command carries no status at all.
+ */
+export function isAcpTerminalStatus(rawStatus: string | undefined): boolean {
+  if (rawStatus === undefined || rawStatus === '') return false
+  return ACP_TERMINAL_STATUSES.has(rawStatus)
+}
+
 export function extractAcpToolOutput(update: Record<string, unknown>): string | undefined {
   const rawOutput = update.rawOutput
   if (typeof rawOutput === 'string') return rawOutput
@@ -128,6 +142,10 @@ export function acpUpdateToAgyEvents(
   if (kind === 'usage_update') {
     const used = num(update.used)
     if (used !== undefined) state.lastUsage.input_tokens = used
+    // Cache-read tokens tell a replayed conversation apart from a fresh one:
+    // a resumed session that actually rehydrated history reports them.
+    const cachedRead = num(update.cachedReadTokens) ?? num(update.cache_read_tokens) ?? num(update.cached_read_tokens)
+    if (cachedRead !== undefined) state.lastUsage.cache_read_tokens = cachedRead
     return []
   }
   if (kind === 'tool_call' || kind === 'tool_call_update') {
@@ -154,6 +172,7 @@ export function acpUpdateToAgyEvents(
       stepKey: callId,
       stepKind: 'tool',
       state: stepState,
+      ...(rawStatus !== '' ? { rawStatus } : {}),
       text: output ?? '',
       conversationId: sessionId,
       tool: {

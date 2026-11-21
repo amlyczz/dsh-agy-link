@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.56 (2026-11-22)
+
+### English
+
+- **ACP is now the default transport, and the persistent channel is hardened end to end.**
+  - **Background work is detected by the status ACP actually reports.** ACP never sends `RUNNING`; a tool call still `pending`/`in_progress` when the turn ends is background work, and a call whose terminal update already arrived is never reported twice. A session that only holds a `schedule` timer now stays retained too, so the timer cannot be reaped by pool eviction.
+  - **Autonomous reports are presented instead of re-run (scheme A).** Post-turn `agent_message_chunk` text is merged over a silence window (700 ms after the last chunk, 350 ms after `usage_update`) and written into the transcript as a plugin record rendered as a card — no extra turn, no extra quota, no duplicate wakeup racing a `tool_call_update`. Only an armed Goal or a silent (text-free) completion still wakes the session.
+  - **Session restore is proven, not assumed.** `session/load` succeeds for ids that do not exist, so a restore now requires replayed events or cached-read tokens; otherwise the binding is dropped, the full history digest is delivered to a new session, and the transcript shows a reset notice. Binding writes prefer the run's own conversation id, so a rebuilt session never leaves the next turn pointing at a dead id.
+  - **Empty turns and dead proxies are failures.** Each turn records a stderr offset and a `--log-file` offset before prompting; a turn that emits nothing is classified from that slice only (network / auth) and, when nothing was produced, the process is discarded and the turn retried on `cli -p`. `keyringJitter` is now judged from the real log evidence instead of a hardcoded `false`.
+  - **Windows credential-slot guards.** The slot document's `id_token_email` is verified before the fast path and after every install; the identity agy prints in its own log is checked after the process starts (one reinstall-and-retry, then a hard refusal); pool eviction drains processes that still own background sessions instead of killing them, and the primary credential is re-asserted once draining ends. `/plugins/agy-link/status` reports `drainingProcesses`, `slotOverwriteDetectedCount` and `lastSlotRecoveryAt`.
+
+### 中文
+
+- **ACP 成为默认通道，常驻链路全面加固。**
+  - **按 ACP 真实状态识别后台任务**：ACP 从不发送 `RUNNING`；回合结束时仍是 `pending`/`in_progress` 的工具才算后台任务，已收到终态更新的工具不会重复上报。仅有 `schedule` 定时器的会话现在也会保留，不再被池淘汰回收。
+  - **自主汇报直接呈现，不再重复跑一轮（方案 A）**：回合后的 `agent_message_chunk` 文本按静默窗口合并（末片后 700ms，或 `usage_update` 后 350ms），作为插件记录写入会话并由聊天渲染成卡片——不额外消耗回合与额度，也不会和 `tool_call_update` 撞车重复唤醒。只有已武装 Goal 或完全无文本的静默完成才真正唤醒会话。
+  - **会话恢复必须被证明**：`session/load` 对不存在的 ID 也会成功，因此只有回放了事件或上报了缓存读取才算恢复；否则丢弃绑定、把完整历史摘要投递给新会话，并在会话里显示重置提示。绑定写入优先采用本轮真实会话 ID，重建后不会把下一轮指向失效 ID。
+  - **空回合与断网都算失败**：每轮 prompt 前记录 stderr 偏移与 `--log-file` 偏移，零产出回合只用本轮切片分类（网络/认证）；确实零产出时销毁坏进程并用 `cli -p` 重跑。`keyringJitter` 改为按真实日志证据判定，不再硬编码 `false`。
+  - **Windows 凭据槽三道门禁**：槽文档里的 `id_token_email` 在快路径前与每次安装后都会核对；进程启动后核对 agy 自己日志里的身份（一次重装重试，仍不符则硬失败）；池淘汰改为排干仍持有后台会话的进程而不是直接杀掉，排干结束后自动恢复主账号凭据。`/plugins/agy-link/status` 新增 `drainingProcesses`、`slotOverwriteDetectedCount`、`lastSlotRecoveryAt`。
+
 ## 0.6.55 (2026-11-21)
 
 ### English

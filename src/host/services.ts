@@ -32,7 +32,7 @@ import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
-import { acquireCredentialSlot } from './credential-slot.ts'
+import { acquireCredentialSlot, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
 import {
   Semaphore,
   findSessionLogFile,
@@ -165,6 +165,47 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     return appendPluginRecordPromise
   }
 
+  /**
+   * Persist one plugin-owned session record (never model-visible, never part of
+   * the agy text stream). Returns the record seq, or null when the host cannot
+   * write records at all — callers must then fall back to a followup wake.
+   */
+  const appendPluginRecordTo = async (sessionId: string, type: string, data: unknown): Promise<number | null> => {
+    const session = sessionsSvc()?.get(sessionId)
+    if (session === undefined) return null
+    const append = await loadAppendPluginRecord()
+    if (append !== null) {
+      try {
+        const res = append(session, type, data)
+        if (typeof res === 'number') return res
+      } catch (e) {
+        log('failed to append ' + type + ' via appendPluginRecord: ' + String(e))
+      }
+    }
+    try {
+      if (typeof session.append === 'function') {
+        const res = session.append(type, data)
+        if (typeof res === 'number') return res
+        if (res !== null && typeof res === 'object' && typeof (res as { seq?: unknown }).seq === 'number') {
+          return (res as { seq: number }).seq
+        }
+        return 0
+      }
+    } catch (e) {
+      log('failed to append ' + type + ' via session.append: ' + String(e))
+    }
+    return null
+  }
+
+  const ACP_REPORT_RECORD_TYPE = 'plugin:agy-link/acp-report'
+  const ACP_NOTICE_RECORD_TYPE = 'plugin:agy-link/acp-notice'
+
+  /** Best-effort user-visible ACP notice; never throws into the run path. */
+  const appendAcpNotice = (sessionKey: string, notice: { kind: string; text: string }): void => {
+    if (sessionKey === '') return
+    void appendPluginRecordTo(sessionKey, ACP_NOTICE_RECORD_TYPE, { ...notice, at: Date.now() }).catch(() => null)
+  }
+
   const status = {
     get version(): string | null { return versionCache },
     set version(v: string | null) { versionCache = v },
@@ -286,7 +327,66 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   })
   const runs = new RunRegistry()
   const webServerPort: { current?: number } = {}
-  const acpPool = new AcpSessionPool({ bin, cfg: getConfig, log })
+  // Gate 3: an account switch (or a crashed secondary) can leave the machine-wide
+  // Windows credential slot holding another account's login. Once no run holds it
+  // any more, put the primary back — otherwise the user's next turn silently
+  // authenticates as someone else and spends their quota.
+  let restoringSlot = false
+  const restorePrimarySlot = async (trigger: string): Promise<void> => {
+    if (restoringSlot || process.platform !== 'win32') return
+    restoringSlot = true
+    try {
+      const res = await recoverPrimaryCredential(pool, {
+        baseDir: pool.dir,
+        log,
+        ...(getConfig().proxyUrl?.trim() ? { proxyUrl: getConfig().proxyUrl.trim() } : {}),
+      })
+      if (res.reason === 'restored') {
+        acpPool.noteSlotRecovery()
+        log('[agy-link] restored the primary credential in the Windows slot (' + trigger + ')')
+      }
+    } catch (e) {
+      log('credential slot recovery failed (' + trigger + '): ' + String(e))
+    } finally {
+      restoringSlot = false
+    }
+  }
+  const acpPool = new AcpSessionPool({
+    bin,
+    cfg: getConfig,
+    log,
+    // A drained process that ran out of budget is killed mid-flight; say so in
+    // the conversation instead of letting the background task vanish silently.
+    onDrainExpired: (info) => {
+      for (const sid of info.sessions) {
+        appendAcpNotice(sid, {
+          kind: 'acp-drain-aborted',
+          text:
+            '因账号切换，旧账号上仍在运行的后台任务已被中止。' +
+            '\nBackground tasks on the previous account were stopped because the credential slot switched accounts.',
+        })
+      }
+    },
+    // Gate 3: once the last process of the OLD account is gone, nothing else can
+    // legitimately own the machine-wide slot — put the primary back so the next
+    // interactive turn authenticates as the user's own account.
+    onDrainClosed: (info) => {
+      if (info.sessions.length > 0) {
+        for (const sid of info.sessions) {
+          appendAcpNotice(sid, {
+            kind: 'acp-drain-aborted',
+            text:
+              '因账号切换，旧账号上仍在运行的后台任务已结束。' +
+              '\nBackground work on the previous account has finished because the credential slot switched accounts.',
+          })
+        }
+      }
+      void restorePrimarySlot('drain-closed')
+    },
+    onIdle: () => {
+      void restorePrimarySlot('idle')
+    },
+  })
   let adapter!: AgyAdapter
   const backgroundWakeup = new BackgroundWakeWatcher({
     getConfig,
@@ -309,6 +409,11 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       }
       return false
     },
+    // 方案 A: the ACP turn already produced its own report; write it straight
+    // into the transcript so no model turn is spent repeating it.
+    presentAcpReport: async (sessionId, text) =>
+      (await appendPluginRecordTo(sessionId, ACP_REPORT_RECORD_TYPE, { text, at: Date.now() })) !== null,
+    hasArmedGoal: (sessionId) => resolveSessionGoal(ctx, sessionId) != null,
     resolveAgent: async (sessionId) => {
       try {
         const agents = safeCtxGet<{ get?: (id: unknown) => unknown }>(ctx, 'agents')
@@ -358,6 +463,17 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     readImage: (ref) => readSessionImage(ctx, dshHome(), ref),
     runAcp: (attemptDeps, attemptInput, slot) => runAcpAttempt(acpPool, attemptDeps, attemptInput, slot),
     backgroundObserver: backgroundWakeup,
+    appendAcpNotice,
+    // Gate 2 recovery: agy proved it loaded a different account than the one we
+    // dispatched, so the slot must be rewritten before the single retry.
+    reinstallCredentialSlot: (account) => {
+      if (process.platform !== 'win32') return false
+      const raw = account.dir ? readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log) : null
+      if (raw === null || raw === '') return false
+      const ok = reinstallCredential(raw, { baseDir: pool.dir, log }, account.alias || account.id)
+      if (ok) acpPool.noteSlotOverwrite()
+      return ok
+    },
   })
 
   const translationWorkers = new TranslationWorkerPool({
