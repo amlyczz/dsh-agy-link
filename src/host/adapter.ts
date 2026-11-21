@@ -75,6 +75,11 @@ export class AgyAdapter extends LlmAdapter {
     return this.effortPolicy.unsupportedModels()
   }
 
+  /** Live in-flight recording for `sessionKey`, if any. */
+  getActiveRun(sessionKey: string): RunRecording | undefined {
+    return this.activeRuns.get(sessionKey)
+  }
+
   /** True when `--effort` must not be passed to this model. */
   isEffortUnsupported(model: string): boolean {
     return this.effortPolicy.isUnsupported(model)
@@ -261,17 +266,8 @@ export class AgyAdapter extends LlmAdapter {
     const continuation = detectContinuation(options.messages)
     if (continuation !== null) {
       const rec = this.deps.runs.get(continuation.runId)
-      // A SETTLED recording that ended in an ACCOUNT-scoped failure must not be
-      // re-driven: DSH re-issues the same step (same trailing tool result), so
-      // resuming it merely replays the identical failure. That is why quota
-      // exhaustion AFTER a tool call used to dead-end the turn while a healthy
-      // account sat idle — the fix is to forget the dead run and fall through,
-      // which re-assembles the prompt and re-selects an account.
-      //
-      // Only account-scoped codes qualify, and only up to the pool's spare
-      // depth: a deterministic failure (or a pool with nothing left to try)
-      // must still surface as the turn's error instead of re-running the work
-      // forever on rotating accounts.
+      // Do not re-drive a settled recording that failed account-scoped or lacks finishable events:
+      // forget it so prompt assembly can rotate accounts or retry cleanly.
       const deadFailure = rec !== undefined && rec.isSettled ? rec.failureInfo : null
       const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport)
       if (rec !== undefined && !deadNoResult && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
@@ -444,16 +440,7 @@ export class AgyAdapter extends LlmAdapter {
       const runLive = liveRun !== undefined && !liveRun.isSettled
       const samePrompt = prevPrompt !== undefined && prevPrompt.prompt === prompt
       if (runLive && samePrompt) {
-        // RESCUE before BUSY: an identical prompt for a session whose run is
-        // still alive is normally a continuation span — but when the trailing
-        // mirror result failed to parse as one (malformed callId, harness-side
-        // re-send after a mirror dispatch hiccup), full prompt assembly lands
-        // here and the old behaviour threw BUSY, killing a mid-flight agentic
-        // turn that was perfectly healthy (2026-10-10 23:0x incident). If the
-        // live recording has already cut a span we know exactly where DSH's
-        // consumption stopped: re-drive it from there. Without a cut point
-        // (first span still streaming, nothing consumed yet) a duplicate
-        // really is a duplicate → BUSY stands.
+        // Rescue an identical prompt if the live run already cut a span instead of failing BUSY.
         const rescueFrom = liveRun.lastCutIndex !== null ? liveRun.lastCutIndex + 1 : null
         if (rescueFrom !== null) {
           this.deps.log?.(
@@ -537,11 +524,13 @@ export class AgyAdapter extends LlmAdapter {
       this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
     }
 
-    // ---- spawn + parse + outcome: delegated to provider/attempt-outcome.ts ----
-    // The attempt machinery owns argv/transport, the credential-slot dispatch,
-    // child spawn, parser feed and the detached outcome closure. The adapter
-    // injects its private state as callbacks so it stays the single owner of
-    // activeRuns, failover budgets and network streaks.
+    // Dispatch to attempt-outcome.ts. Inject private state callbacks so adapter owns activeRuns/failover.
+    if (!isAux && sessionKey !== '') {
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user') as { source?: { kind?: unknown; plugin?: unknown; form?: unknown } } | undefined
+      const isWakeNotice = lastUser?.source?.kind === 'plugin' && lastUser?.source?.plugin === 'agy-link' && lastUser?.source?.form === 'notice'
+      if (!isWakeNotice) this.deps.backgroundObserver?.onHumanTurn?.(sessionKey)
+      this.deps.backgroundObserver?.onAttemptStart?.(sessionKey)
+    }
     const attemptDeps: AttemptDeps = {
       acquire: (signal?: AbortSignal) => this.deps.acquire(signal),
       pool: this.deps.pool,
@@ -566,6 +555,7 @@ export class AgyAdapter extends LlmAdapter {
       minSpawnIntervalMs: this.minSpawnIntervalMs,
       spawnLimiter: this.spawnLimiter,
       ...(this.deps.runAcp === undefined ? {} : { runAcp: this.deps.runAcp }),
+      ...(this.deps.backgroundObserver === undefined ? {} : { backgroundObserver: this.deps.backgroundObserver }),
     }
     const attemptInput: AttemptInput = {
       cfg,

@@ -22,7 +22,7 @@ function selectableModels(
 }
 
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
-  const { getConfig, bin, store, pool, quota, warmup, catalog, auth, poolAuth, adapter, acpPool, translation, lastRun } = services
+  const { getConfig, bin, store, pool, quota, warmup, catalog, auth, poolAuth, adapter, acpPool, backgroundWakeup, translation, lastRun } = services
   const { version: versionCache, dormantReason } = services.status
       runRoute(res, async () => {
         const cfg = getConfig()
@@ -77,6 +77,10 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           agySettings: cfg.agySettings,
           transport: cfg.transport,
           acpStatus: typeof acpPool?.status === 'function' ? acpPool.status() : null,
+          backgroundWakeup: cfg.backgroundWakeup,
+          backgroundWakeupTtlMinutes: cfg.backgroundWakeupTtlMinutes,
+          backgroundWakeupMaxPerSession: cfg.backgroundWakeupMaxPerSession,
+          backgroundWakeState: typeof backgroundWakeup?.status === 'function' ? backgroundWakeup.status() : null,
           imageTool: cfg.imageTool,
           syncAccountCustomizations: cfg.syncAccountCustomizations,
           workspaceRoot: cfg.workspaceRoot,

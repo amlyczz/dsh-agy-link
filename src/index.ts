@@ -154,6 +154,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       lastRun: () => services.lastRun,
       imageService: () => imageService,
       acpStatus: () => acpPool.status(),
+      backgroundStatus: () => services.backgroundWakeup.status(),
       ecosystem: () => ecosystem,
       runOnce: (req) => runAgyOnce({
         cfg: getConfig,
@@ -485,6 +486,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   ctx.effect(() => {
     return () => {
       bridgeDisposed = true
+      services.backgroundWakeup.dispose()
       services.translationWorkers?.dispose()
       acpPool.dispose()
       auth.dispose()

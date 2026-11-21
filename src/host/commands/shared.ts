@@ -10,6 +10,7 @@ import type { PoolAuthFlow } from '../pool-auth.ts'
 import type { QuotaService } from '../quota.ts'
 import type { OneShotResult } from '../oneshot.ts'
 import type { EcosystemService } from '../../features/ecosystem/index.ts'
+import type { BackgroundWakeStatus } from '../../common/background-types.ts'
 
 export interface GoalViewLike {
   id: string
@@ -58,6 +59,7 @@ export interface CommandDeps {
   agents?: () => { get(id: unknown): unknown } | undefined
   imageService?: () => import('../image.ts').ImageService
   acpStatus?: () => { activeProcesses: number; sessions: number; keys: readonly string[] }
+  backgroundStatus?: () => BackgroundWakeStatus
   ecosystem?: () => EcosystemService
   runOnce?: (req: {
     prompt: string
@@ -119,6 +121,7 @@ export const HELP = [
   '- `/agy agent [name|off]` — select default custom Markdown agent (`--agent`)',
   '- `/agy settings [show|<json-or-path>|clear]` — set per-session `agy --settings` override',
   '- `/agy transport [cli|acp|status]` — switch between CLI `-p` and persistent `agy acp`',
+  '- `/agy wakeup [on|off|status]` — toggle cross-turn background timer/task wakeup or inspect active watches',
   '- `/agy effort <low|medium|high|xhigh|max|default>` — default reasoning effort',
   '- `/agy dispatch [minutes|off]` — credential-slot wait cap per attempt (omit to inspect; `off` = unlimited)',
   '- `/agy dispatch-retries <n>` — extra dispatch attempts after the cap',

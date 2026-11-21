@@ -27,6 +27,7 @@ export interface StatusPayload {
 	agySettings?: string;
 	transport?: 'cli' | 'acp';
 	acpStatus?: { activeProcesses: number; sessions: number; keys: readonly string[] } | null;
+	backgroundWakeup?: boolean;
 	imageTool?: boolean;
 	syncAccountCustomizations?: boolean;
 	workspaceRoot?: string;

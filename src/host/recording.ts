@@ -287,6 +287,11 @@ export class RunRecording {
     return this.events[index]
   }
 
+  /** Arrival timestamp (ms) of the event at `index`, when recorded. */
+  eventTimestampAt(index: number): number | undefined {
+    return this.eventTimes[index]
+  }
+
   /** Number of recorded events so far. */
   get length(): number {
     return this.events.length

@@ -436,6 +436,17 @@ export async function handleAttemptOutcome(
     sharesSingleEgress: () => deps.sharesSingleEgress(),
     ...(deps.onRun === undefined ? {} : { onRun: deps.onRun }),
   })
+  if (!input.isAux && sessionKey !== '') {
+    deps.backgroundObserver?.onAttemptSettled?.({
+      sessionKey,
+      conversationId,
+      ...(rec.accountHome === undefined ? {} : { accountHome: rec.accountHome }),
+      transport: 'cli',
+      recording: rec,
+      failure,
+      superseded,
+    })
+  }
 }
 
 /**

@@ -59,6 +59,22 @@ export class AcpProcess extends EventEmitter {
   isAlive(): boolean { return this.alive && this.child !== null }
   get sessionCount(): number { return this.openSessions.size }
   get stderr(): string { return this.stderrTail }
+  hasOpenSession(sessionId: string): boolean { return this.openSessions.has(sessionId) }
+
+  subscribeSession(sessionId: string, listener: (u: Record<string, unknown>) => void): () => void {
+    let set = this.sessionListeners.get(sessionId)
+    if (!set) {
+      set = new Set()
+      this.sessionListeners.set(sessionId, set)
+    }
+    set.add(listener)
+    return () => {
+      const current = this.sessionListeners.get(sessionId)
+      if (!current) return
+      current.delete(listener)
+      if (current.size === 0) this.sessionListeners.delete(sessionId)
+    }
+  }
 
   private ensureStarted(): void {
     if (this.child !== null) return
