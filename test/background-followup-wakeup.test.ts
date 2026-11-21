@@ -300,6 +300,9 @@ describe('cross-turn background wakeup (PR 2)', () => {
     const watcher = new BackgroundWakeWatcher({
       getConfig: () => cfg,
       coalesceMs: 25,
+      // Scheme A: a completed tool call waits out the autonomous-report grace
+      // window before it is allowed to wake the session.
+      acpToolGraceMs: 40,
       retainAcpSession: (sid) => pool.retainSession(sid),
       resolveAgent: async () => ({
         status: 'idle',
@@ -312,7 +315,10 @@ describe('cross-turn background wakeup (PR 2)', () => {
       const rec = new RunRecording()
       rec.append({
         kind: 'step',
-        stepKey: 'acp-bg',
+        // In the ACP transport the step key IS the tool call id (protocol.ts
+        // maps tool_call/tool_call_update to stepKey = update.toolCallId), so
+        // the terminal update below must carry the same id to retire it.
+        stepKey: 'tc-bg-1',
         stepKind: 'tool',
         state: 'RUNNING',
         text: 'Running in background',
@@ -335,9 +341,10 @@ describe('cross-turn background wakeup (PR 2)', () => {
       assert.equal(pool.evictIdle(10_000), 0)
       assert.equal(closed, false)
 
-      // Post-turn ACP notification arrives -> wakes session and releases retention
+      // Post-turn ACP notification arrives -> held for the grace window, then
+      // delivered once and the retention is released.
       listener?.({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-bg-1', title: 'dev server', status: 'completed' })
-      await new Promise((r) => setTimeout(r, 120))
+      await new Promise((r) => setTimeout(r, 300))
       assert.equal(followups.length, 1)
       assert.ok(followups[0]?.includes('dev server (completed)'))
       assert.equal(pool.evictIdle(10_000), 1, 'released session can now be evicted once idle')
