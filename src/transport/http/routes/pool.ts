@@ -176,6 +176,41 @@ function handlePoolProxy(services: HostServices, req: unknown, res: unknown): vo
       })
 }
 
+/** Longest alias we accept: it is a display label on a card, not free text. */
+const MAX_ALIAS_LEN = 64
+
+function handlePoolAlias(services: HostServices, req: unknown, res: unknown): void {
+  const { pool } = services
+      runRoute(res, async () => {
+        if (methodOf(req) !== 'POST') {
+          sendJson(res as RawRes, 405, { error: 'POST only' })
+          return
+        }
+        const body = await readBody(req)
+        const id = typeof body.id === 'string' ? body.id.trim() : ''
+        const alias = typeof body.alias === 'string' ? body.alias.trim() : ''
+        if (id === '') {
+          sendJson(res as RawRes, 400, { ok: false, error: 'id is required' })
+          return
+        }
+        // An empty alias would leave the card with no label at all: the UI's
+        // "reset to default" path sends the old value back instead.
+        if (alias === '') {
+          sendJson(res as RawRes, 400, { ok: false, error: 'alias must not be empty' })
+          return
+        }
+        if (alias.length > MAX_ALIAS_LEN) {
+          sendJson(res as RawRes, 400, { ok: false, error: 'alias is too long (max ' + MAX_ALIAS_LEN + ')' })
+          return
+        }
+        if (!pool.setAccountAlias(id, alias)) {
+          sendJson(res as RawRes, 404, { ok: false, error: 'account not found' })
+          return
+        }
+        sendJson(res as RawRes, 200, { ok: true, pool: pool.getPoolData() })
+      })
+}
+
 function handlePoolPrimary(services: HostServices, req: unknown, res: unknown): void {
   const { pool, catalog, notifyPicker } = services
       runRoute(res, async () => {
@@ -442,6 +477,7 @@ export function register(reg: RouteRegistrar, services: HostServices): void {
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/remove', handler: (req, res) => handlePoolRemove(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/enable', handler: (req, res) => handlePoolEnable(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/proxy', handler: (req, res) => handlePoolProxy(services, req, res) })
+  reg({ kind: 'exact', path: '/plugins/agy-link/pool/alias', handler: (req, res) => handlePoolAlias(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/primary', handler: (req, res) => handlePoolPrimary(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/mode', handler: (req, res) => handlePoolMode(services, req, res) })
   reg({ kind: 'exact', path: '/plugins/agy-link/pool/refresh-quota', handler: (req, res) => handlePoolRefreshQuota(services, req, res) })

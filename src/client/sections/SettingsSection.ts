@@ -90,6 +90,8 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const [loadingAction, setLoadingAction] = useBusyAction();
 		const [proxyInputs, setProxyInputs] = useState<Record<string, string>>({});
 		const [editingProxyId, setEditingProxyId] = useState<string | null>(null);
+		const [aliasInputs, setAliasInputs] = useState<Record<string, string>>({});
+		const [editingAliasId, setEditingAliasId] = useState<string | null>(null);
 		const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
 		const [optimisticActiveId, setOptimisticActiveId] = useState<string | null>(null);
 
@@ -110,7 +112,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const config = useConfig({ status, refresh, showToast, setLoadingAction, t });
 		const accountActions = useAccounts({
 			status, refresh, showToast, setLoadingAction, t,
-			proxyInputs, setEditingProxyId, setOptimisticActiveId,
+			proxyInputs, setEditingProxyId, aliasInputs, setEditingAliasId, setOptimisticActiveId,
 		});
 
 		const copyImageCommand = (): void => {
@@ -159,6 +161,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 			h(AccountsPanel, {
 				t, pool, accounts, accountModels: status.accountModels, loadingAction, quotaRefreshing: status.quotaRefreshing ?? [],
 				proxyInputs, setProxyInputs, editingProxyId, setEditingProxyId,
+				aliasInputs, setAliasInputs, editingAliasId, setEditingAliasId,
 				expandedModels, toggleExpand, optimisticActiveId,
 				handlers: { ...accountActions, beginReauth: auth.handleBeginReauth },
 			}),

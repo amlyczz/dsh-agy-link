@@ -16,6 +16,8 @@ export interface AccountsDeps {
 	t: Translator;
 	proxyInputs: Record<string, string>;
 	setEditingProxyId: (id: string | null) => void;
+	aliasInputs: Record<string, string>;
+	setEditingAliasId: (id: string | null) => void;
 	setOptimisticActiveId: (id: string | null) => void;
 }
 
@@ -28,6 +30,7 @@ export interface AccountActions {
 	refreshQuota: (id?: string) => Promise<void>;
 	warmupAccount: (id?: string) => Promise<void>;
 	saveProxy: (id: string) => Promise<void>;
+	saveAlias: (id: string) => Promise<void>;
 	clearCooldown: (id?: string) => Promise<void>;
 }
 
@@ -138,8 +141,30 @@ function lifecycleActions(
 function quotaActions(
 	deps: AccountsDeps,
 	actionFailed: () => void,
-): Pick<AccountActions, 'refreshQuota' | 'warmupAccount' | 'saveProxy' | 'clearCooldown'> {
-	const { refresh, showToast, setLoadingAction, t, proxyInputs, setEditingProxyId } = deps;
+): Pick<AccountActions, 'refreshQuota' | 'warmupAccount' | 'saveProxy' | 'saveAlias' | 'clearCooldown'> {
+	const { refresh, showToast, setLoadingAction, t, proxyInputs, setEditingProxyId, aliasInputs, setEditingAliasId } = deps;
+
+	const saveAlias = async (id: string): Promise<void> => {
+		const alias = (aliasInputs[id] ?? '').trim();
+		if (alias === '') {
+			// An empty label would leave the card nameless; keep the editor open.
+			showToast(t('account.renameEmpty'), 'error');
+			return;
+		}
+		setLoadingAction(`alias:${id}`);
+		try {
+			const res = await postPool('alias', { id, alias });
+			if (res === null || res?.ok === false) {
+				actionFailed();
+				return;
+			}
+			await refresh();
+			setEditingAliasId(null);
+			showToast(t('account.renamed'), 'success');
+		} finally {
+			setLoadingAction(null);
+		}
+	};
 
 	const refreshQuota = async (id?: string): Promise<void> => {
 		setLoadingAction(id ? `refresh:${id}` : 'refresh:all');
@@ -226,5 +251,5 @@ function quotaActions(
 		showToast(t('account.clearCooldown'), 'success');
 	};
 
-	return { refreshQuota, warmupAccount, saveProxy, clearCooldown };
+	return { refreshQuota, warmupAccount, saveProxy, saveAlias, clearCooldown };
 }

@@ -49,6 +49,7 @@ const EXPECTED_ROUTES: ReadonlyArray<readonly [kind: string, path: string]> = [
   ['exact', '/plugins/agy-link/pool/remove'],
   ['exact', '/plugins/agy-link/pool/enable'],
   ['exact', '/plugins/agy-link/pool/proxy'],
+  ['exact', '/plugins/agy-link/pool/alias'],
   ['exact', '/plugins/agy-link/pool/primary'],
   ['exact', '/plugins/agy-link/pool/mode'],
   ['exact', '/plugins/agy-link/pool/refresh-quota'],
@@ -81,6 +82,7 @@ const POST_ONLY_ROUTES = [
   '/plugins/agy-link/pool/remove',
   '/plugins/agy-link/pool/enable',
   '/plugins/agy-link/pool/proxy',
+  '/plugins/agy-link/pool/alias',
   '/plugins/agy-link/pool/primary',
   '/plugins/agy-link/pool/mode',
   '/plugins/agy-link/pool/refresh-quota',
@@ -345,7 +347,7 @@ function setup(overrides: Overrides = {}, config: ConfigOverrides = {}) {
 // Surface + happy paths
 // ---------------------------------------------------------------------------
 
-test('registerRoutes exposes exactly the frozen 29-route surface', () => {
+test('registerRoutes exposes exactly the frozen route surface', () => {
   const webServer = fakeWebServer()
   const dispose = registerRoutes(webServer, fakeServices())
   assert.equal(webServer.routes.length, EXPECTED_ROUTES.length, 'route count changed')

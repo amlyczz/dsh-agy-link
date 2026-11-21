@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.56 (2026-11-21)
+
+### English
+
+- **Feat(accounts): a pool account's label is now editable from the console (fixes #152, part 1).** `pool.setAccountAlias()` existed but nothing exposed it — the alias could only be set while adding an account, so a typo or a renamed Google account left a stale label forever.
+  - **New route `POST /plugins/agy-link/pool/alias`** (`{ id, alias }`) with the validations the UI relies on: non-empty, ≤64 chars, and a 404 for an unknown id. A successful rename clears `defaultAlias`, which is what makes the card stop rendering the generated "Backup Google account N" label and show the typed one.
+  - **Inline rename in the card**: a "Rename" action opens an input under the card, saving through the host and refreshing the pool. The proxy editor and this one were the same layout twice, so both now share `src/client/sections/inline-editor.ts` (which also keeps `AccountsPanel.ts` inside the file-size budget).
+- **Test(dx): the SIGKILL-escalation test no longer asserts a wall-clock upper bound.** `durationMs` spans spawn→exit, so on a saturated host it read **16 minutes** during a full coverage run while the escalation itself was correct. The lower bound (must wait out the 3s window) and the semantic `signal === 'SIGKILL'` assertion stay; "hangs forever" is covered by the race guard, which reaps the child.
+
+### 中文
+
+- **特性(账号)：池账号的显示名称现在可在控制台直接编辑（修复 #152 第一部分）。** `pool.setAccountAlias()` 早就存在，但没有任何入口暴露它——别名只能在添加账号时设定，于是打错字或 Google 账号改名后，卡片上的旧名字会一直留着。
+  - **新增路由 `POST /plugins/agy-link/pool/alias`**（`{ id, alias }`），带 UI 依赖的校验：非空、≤64 字符、未知 id 返回 404。改名成功会清除 `defaultAlias`，这正是让卡片不再渲染自动生成的「备用 Google 账号 N」、改为显示用户输入的关键。
+  - **卡片内联重命名**：一个「重命名」动作在卡片下展开输入框，经宿主保存后刷新池。代理编辑器与它原本是同一套布局写了两遍，现在共用 `src/client/sections/inline-editor.ts`（同时让 `AccountsPanel.ts` 保持在文件行数预算内）。
+- **测试(开发体验)：SIGKILL 升级用例不再断言墙钟上界。** `durationMs` 是 spawn→exit 的跨度，在饱和的宿主上于一次完整覆盖率运行中读到 **16 分钟**，而升级本身是正确的。保留了下界（必须等过 3 秒窗口）与语义断言 `signal === 'SIGKILL'`；「是否永久挂住」由带回收的 race 守卫覆盖。
+
 ## 0.6.54 (2026-11-21)
 
 ### English

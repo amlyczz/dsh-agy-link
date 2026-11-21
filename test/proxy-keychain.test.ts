@@ -369,10 +369,13 @@ test('Stop button: SIGTERM-ignoring children still die via SIGKILL escalation', 
     assert.equal(outcome!.aborted, true)
     if (process.platform !== 'win32') {
       assert.equal(outcome!.signal, 'SIGKILL', `expected SIGKILL escalation, got ${outcome!.signal}`)
+      // Lower bound: the escalation must actually have waited out the 3s SIGTERM
+      // window instead of SIGKILLing immediately.
       assert.ok(outcome!.durationMs >= 2500, `escalated too early: ${outcome!.durationMs}ms`)
-      // durationMs spans spawn→exit, so it includes the child's cold start. Keep
-      // the "did not hang" bound generous rather than machine-dependent.
-      assert.ok(outcome!.durationMs < 20000, `escalated too late: ${outcome!.durationMs}ms`)
+      // No upper bound: durationMs spans spawn→exit, so on a saturated host it can
+      // read minutes without the escalation being wrong (measured at 16 minutes
+      // under a full coverage run). "Did it hang forever" is already covered by
+      // the race guard above, which reaps the child on overrun.
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })

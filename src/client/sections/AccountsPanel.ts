@@ -20,6 +20,7 @@ import { S } from '../styles.ts';
 import { uiIcon } from '../icons.ts';
 import { Button } from '../ui/Button.ts';
 import { Spinner } from '../ui/Spinner.ts';
+import { renderInlineEditor } from './inline-editor.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import { formatQuotaWindow, renderFamilyQuotaBar, renderQuotaUnavailableNote } from './QuotaPanel.ts';
 
@@ -32,6 +33,7 @@ export interface AccountsPanelHandlers {
 	refreshQuota: (id?: string) => Promise<void>;
 	warmupAccount: (id?: string) => Promise<void>;
 	saveProxy: (id: string) => Promise<void>;
+	saveAlias: (id: string) => Promise<void>;
 	clearCooldown: (id?: string) => Promise<void>;
 }
 
@@ -47,6 +49,10 @@ export interface AccountsPanelProps {
 	setProxyInputs: (next: Record<string, string>) => void;
 	editingProxyId: string | null;
 	setEditingProxyId: (id: string | null) => void;
+	aliasInputs: Record<string, string>;
+	setAliasInputs: (next: Record<string, string>) => void;
+	editingAliasId: string | null;
+	setEditingAliasId: (id: string | null) => void;
 	expandedModels: Record<string, boolean>;
 	toggleExpand: (accId: string) => void;
 	optimisticActiveId: string | null;
@@ -56,7 +62,8 @@ export interface AccountsPanelProps {
 export function AccountsPanel(props: AccountsPanelProps): unknown {
 	const {
 		t, pool, accounts, accountModels, loadingAction, quotaRefreshing = [], proxyInputs, setProxyInputs,
-		editingProxyId, setEditingProxyId, expandedModels, toggleExpand,
+		editingProxyId, setEditingProxyId, aliasInputs, setAliasInputs,
+		editingAliasId, setEditingAliasId, expandedModels, toggleExpand,
 		optimisticActiveId, handlers,
 	} = props;
 
@@ -95,6 +102,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		const isInUse = Boolean(acc.enabled && !isAuthRequired && activeAccountId !== undefined && activeAccountId === acc.id);
 		const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : isRateLimited ? '#f59e0b' : '#10b981';
 		const isEditingProxy = editingProxyId === acc.id;
+		const isEditingAlias = editingAliasId === acc.id;
 		const isExpanded = expandedModels[acc.id] ?? false;
 		const accIndex = accounts.indexOf(acc);
 
@@ -123,8 +131,8 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			style: cardStyle,
 		},
 			renderCardHeader(t, acc, {
-				isPrimary, isAuthRequired, hasCooldown, hasQuotaBench, isGoogleEligible, isInUse, dotColor, isEditingProxy,
-				displayAlias, accIndex, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId,
+				isPrimary, isAuthRequired, hasCooldown, hasQuotaBench, isGoogleEligible, isInUse, dotColor, isEditingProxy, isEditingAlias,
+				displayAlias, accIndex, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId,
 			}),
 			// Body: Always directly visible, showing quota
 			h('div', { key: 'agy-body', style: S.quotaBox },
@@ -153,6 +161,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 				) : null,
 			),
 			isRateLimited ? renderCooldownBanner(t, acc, loadingAction, accountActionBusy, handlers) : null,
+			isEditingAlias ? renderAliasEditor(t, acc, aliasInputs, setAliasInputs, setEditingAliasId, displayAlias, loadingAction, accountActionBusy, handlers) : null,
 			isEditingProxy ? renderProxyEditor(t, acc, pool, proxyInputs, setProxyInputs, setEditingProxyId, loadingAction, accountActionBusy, handlers) : null,
 		);
 	});
@@ -167,6 +176,7 @@ interface CardHeaderCtx {
 	isInUse: boolean;
 	dotColor: string;
 	isEditingProxy: boolean;
+	isEditingAlias: boolean;
 	displayAlias: string;
 	accIndex: number;
 	accounts: ManagedAccount[];
@@ -175,6 +185,7 @@ interface CardHeaderCtx {
 	accountActionBusy: (acc: ManagedAccount, action: string) => boolean;
 	handlers: AccountsPanelHandlers;
 	setEditingProxyId: (id: string | null) => void;
+	setEditingAliasId: (id: string | null) => void;
 }
 
 function extractActionUrl(text?: string): string | undefined {
@@ -354,7 +365,7 @@ function renderMetaRow(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): 
 
 function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
 	const {
-		isEditingProxy, isAuthRequired, isInUse, isGoogleEligible, displayAlias, accounts, loadingAction, accountActionBusy, handlers, setEditingProxyId,
+		isEditingProxy, isEditingAlias, isAuthRequired, isInUse, isGoogleEligible, displayAlias, accounts, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId,
 	} = ctx;
 	return h('div', {
 		className: 'agy-card-header',
@@ -377,7 +388,7 @@ function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx
 			},
 		},
 			renderHeaderBadges(t, acc, ctx),
-			renderActionButtons(t, acc, { isEditingProxy, isAuthRequired, isInUse, isGoogleEligible, displayAlias, showRemove: accounts.length > 1, loadingAction, accountActionBusy, handlers, setEditingProxyId }),
+			renderActionButtons(t, acc, { isEditingProxy, isEditingAlias, isAuthRequired, isInUse, isGoogleEligible, displayAlias, showRemove: accounts.length > 1, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId }),
 		),
 		renderMetaRow(t, acc, ctx),
 	);
@@ -385,6 +396,7 @@ function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx
 
 function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	isEditingProxy: boolean;
+	isEditingAlias: boolean;
 	isAuthRequired: boolean;
 	isInUse: boolean;
 	isGoogleEligible: boolean;
@@ -394,12 +406,19 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	accountActionBusy: (acc: ManagedAccount, action: string) => boolean;
 	handlers: AccountsPanelHandlers;
 	setEditingProxyId: (id: string | null) => void;
+	setEditingAliasId: (id: string | null) => void;
 }): unknown {
-	const { isEditingProxy, isAuthRequired, isInUse, isGoogleEligible, displayAlias, showRemove, loadingAction, accountActionBusy, handlers, setEditingProxyId } = ctx;
+	const { isEditingProxy, isEditingAlias, isAuthRequired, isInUse, isGoogleEligible, displayAlias, showRemove, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId } = ctx;
 	return h('div', {
 		className: 'agy-card-actions',
 		style: { display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 },
 	},
+		h(Button, {
+			variant: 'default', size: 'sm', className: 'agy-btn',
+			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
+			title: t('account.renameTitle'),
+			onClick: () => setEditingAliasId(isEditingAlias ? null : acc.id),
+		}, ` ${t('account.rename')}`),
 		h(Button, {
 			variant: acc.enabled ? 'default' : 'primary', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
@@ -519,6 +538,31 @@ function renderCooldownBanner(
 	);
 }
 
+function renderAliasEditor(
+	t: Translator,
+	acc: ManagedAccount,
+	aliasInputs: Record<string, string>,
+	setAliasInputs: (next: Record<string, string>) => void,
+	setEditingAliasId: (id: string | null) => void,
+	displayAlias: string,
+	loadingAction: string | null,
+	accountActionBusy: (acc: ManagedAccount, action: string) => boolean,
+	handlers: AccountsPanelHandlers,
+): unknown {
+	return renderInlineEditor(t, {
+		key: 'alias-body',
+		value: aliasInputs[acc.id] ?? displayAlias,
+		placeholder: t('account.renamePlaceholder'),
+		ariaLabel: t('aria.aliasInput'),
+		saveLabel: t('proxy.save'),
+		cancelLabel: t('cancel'),
+		busy: accountActionBusy(acc, 'alias'),
+		onChange: (next) => setAliasInputs({ ...aliasInputs, [acc.id]: next }),
+		onSave: () => void handlers.saveAlias(acc.id),
+		onCancel: () => setEditingAliasId(null),
+	});
+}
+
 function renderProxyEditor(
 	t: Translator,
 	acc: ManagedAccount,
@@ -530,33 +574,16 @@ function renderProxyEditor(
 	accountActionBusy: (acc: ManagedAccount, action: string) => boolean,
 	handlers: AccountsPanelHandlers,
 ): unknown {
-	return h('div', {
+	return renderInlineEditor(t, {
 		key: 'proxy-body',
-		style: {
-			marginTop: '8px',
-			padding: '10px 12px',
-			background: 'var(--agy-bg-subbox)',
-			borderRadius: '7px',
-			border: '1px solid var(--agy-border-subbox)',
-		},
-	},
-		h('div', { style: { display: 'flex', gap: '8px' } },
-			h('input', {
-				style: S.input,
-				value: proxyInputs[acc.id] !== undefined ? proxyInputs[acc.id] : (acc.proxyUrl ?? ''),
-				placeholder: pool?.systemProxy ? `${t('proxy.placeholder')} (${pool.systemProxy})` : t('proxy.placeholder'),
-				'aria-label': t('aria.proxyInput'),
-				onChange: (e: { target: { value: string } }) => setProxyInputs({ ...proxyInputs, [acc.id]: e.target.value }),
-			}),
-			h(Button, {
-				variant: 'primary', className: 'agy-btn',
-				disabled: accountActionBusy(acc, 'proxy'),
-				onClick: () => void handlers.saveProxy(acc.id),
-			}, ...(loadingAction === `proxy:${acc.id}` ? [Spinner(), t('proxy.save')] : [t('proxy.save')])),
-			h(Button, {
-				variant: 'default', className: 'agy-btn',
-				onClick: () => setEditingProxyId(null),
-			}, t('cancel')),
-		),
-	);
+		value: proxyInputs[acc.id] ?? acc.proxyUrl ?? '',
+		placeholder: pool?.systemProxy ? `${t('proxy.placeholder')} (${pool.systemProxy})` : t('proxy.placeholder'),
+		ariaLabel: t('aria.proxyInput'),
+		saveLabel: t('proxy.save'),
+		cancelLabel: t('cancel'),
+		busy: accountActionBusy(acc, 'proxy'),
+		onChange: (next) => setProxyInputs({ ...proxyInputs, [acc.id]: next }),
+		onSave: () => void handlers.saveProxy(acc.id),
+		onCancel: () => setEditingProxyId(null),
+	});
 }
