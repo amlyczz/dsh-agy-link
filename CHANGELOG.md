@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Feat(credentials): external credential leases.** On Windows every `agy.exe` reads one machine-wide credential (`gemini:antigravity`), and this plugin's slot coordination lived only in its own memory, so a process that launches the official `agy` itself (for example a long-job runner that must survive a DSH restart) could have the slot swapped under it and could never run as a pool secondary. New loopback routes `POST /plugins/agy-link/lease/acquire|renew|release` and `GET /plugins/agy-link/lease` let such a process hold the slot as one more ordinary holder: accounts are chosen by the same `selectAccount` (or pinned by `accountId` / `accountDir` so a continuation returns to the account that owns its conversation), the slot is taken through the same `acquireCredentialSlot`, and a reported failure settles the pool through the same classification the one-shot runner uses (now extracted into `src/host/run-settlement.ts`, behavior unchanged). Leases have a TTL (default 120 s, renewable), are swept when they expire, live in memory only (a host restart drops them), and are discoverable through `<pool dir>/.link-endpoint.json`. Cross-origin browser requests are refused. See the README section and `.spec/credential-lifecycle.md` §7.
+
+### 中文
+
+- **新增(凭据)：外部进程凭据租约。** Windows 上所有 `agy.exe` 共用一个机器级凭据（`gemini:antigravity`），而插件的凭据槽协调只存在于自身内存，自己启动官方 `agy` 的外部进程（例如要扛过 DSH 重启的长任务 runner）可能在运行中被插件切换槽位，也无法以池内备用账号身份运行。新增本机路由 `POST /plugins/agy-link/lease/acquire|renew|release` 与 `GET /plugins/agy-link/lease`，让这类进程作为一名普通持有者占用凭据槽：选号走同一个 `selectAccount`（或用 `accountId` / `accountDir` 钉住账号，保证续接对话回到拥有它的账号），取槽走同一个 `acquireCredentialSlot`，上报的失败按 one-shot 的同一套分类结算号池（该分类已抽到 `src/host/run-settlement.ts`，行为不变）。租约带 TTL（默认 120 秒，可续期），过期自动清扫，只存在内存（宿主重启即丢失），可通过 `<号池目录>/.link-endpoint.json` 发现端点；跨站浏览器请求一律拒绝。详见 README 对应章节与 `.spec/credential-lifecycle.md` 第 7 节。
+
 ## 0.6.66 (2026-11-22)
 
 ### English
