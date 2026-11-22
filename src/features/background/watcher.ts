@@ -1,9 +1,12 @@
-// Cross-turn background wakeup watcher: keeps one-shot `schedule` timers alive
+// Cross-turn background wakeup watcher: keeps one-shot `schedule` timers and
+// detached background work (task logs, completion messages, subagents) alive
 // past the end of a turn and wakes the idle DSH session when they fire, via
 // `sessionController.resolveAgent` + `agent.followup(createUserMessage(...))`.
 //
-// Slice 1 covers timers only. Detached task logs, brain messages, subagent
-// completions, and ACP session retention arrive in later slices.
+// Slice 1 armed one-shot timers. Slice 2 adds the filesystem side: a CLI `-p`
+// process exits while its detached commands, scheduled tasks, and subagents keep
+// running, and their outcome lands in the conversation's brain directory. ACP
+// session retention is slice 3.
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type {
   BackgroundAttemptSettledInfo,
@@ -11,6 +14,8 @@ import type {
   BackgroundWakeStatus,
 } from '../../common/background-types.ts'
 import type { PluginConfig } from '../../common/types.ts'
+import { findBrainDir } from '../../runtime/agy/db/paths.ts'
+import { baselineSessionBrain, pollSessionBrainDir, type WatchedTaskLog } from './brain-poll.ts'
 import {
   buildWakeupMessageText,
   extractAttemptBackgroundSignals,
@@ -31,6 +36,7 @@ export interface BackgroundWakeWatcherOptions {
   isArchived?: (sessionId: string) => boolean
   getActiveRun?: (sessionId: string) => { isSettled: boolean } | undefined
   log?: (msg: string) => void
+  pollIntervalMs?: number
   coalesceMs?: number
 }
 
@@ -47,6 +53,11 @@ interface SessionWatchState {
   wakesUsed: number
   activeTurn: boolean
   expiresAt: number
+  brainDir: string | null
+  hasActiveTasks: boolean
+  seenMessageKeys: Set<string>
+  knownTaskLogs: Map<string, WatchedTaskLog>
+  knownSubagents: Map<string, string>
   seenWakeKeys: Set<string>
   schedules: Map<string, PendingScheduleTimer>
   pendingNotices: WakeNoticeItem[]
@@ -57,10 +68,13 @@ interface SessionWatchState {
 
 export class BackgroundWakeWatcher implements BackgroundTurnObserver {
   private readonly sessions = new Map<string, SessionWatchState>()
+  private pollTimer: NodeJS.Timeout | null = null
   private disposed = false
+  private readonly pollIntervalMs: number
   private readonly coalesceMs: number
 
   constructor(private readonly opts: BackgroundWakeWatcherOptions) {
+    this.pollIntervalMs = Math.max(50, opts.pollIntervalMs ?? 2_500)
     this.coalesceMs = Math.max(20, opts.coalesceMs ?? 350)
   }
 
@@ -73,6 +87,11 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
         wakesUsed: 0,
         activeTurn: false,
         expiresAt: 0,
+        brainDir: null,
+        hasActiveTasks: false,
+        seenMessageKeys: new Set(),
+        knownTaskLogs: new Map(),
+        knownSubagents: new Map(),
         seenWakeKeys: new Set(),
         schedules: new Map(),
         pendingNotices: [],
@@ -96,8 +115,8 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
   /**
    * Feed one background notice into a session's queue.
    *
-   * Slice 1 only uses this for tests and for the TimerCondition cancel path;
-   * later slices call it from the task-log / brain / ACP watchers.
+   * Used by the TimerCondition cancel path and by the tests; slice 3 calls it
+   * from the ACP post-turn watcher.
    */
   noteNotice(sessionKey: string, item: WakeNoticeItem): void {
     if (this.disposed || sessionKey === '') return
@@ -141,17 +160,36 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
 
     const signals = extractAttemptBackgroundSignals(info.recording)
     if (signals.ignoredRecurringCron && info.transport === 'cli') {
-      this.opts.log?.(`[background-wakeup] session=${info.sessionKey}: recurring cron schedule does not persist across CLI -p exit; use one-shot DurationSeconds`)
+      this.opts.log?.(`[background-wakeup] session=${info.sessionKey}: recurring cron schedule does not persist across CLI -p exit; use one-shot DurationSeconds or ACP transport`)
     }
-    if (signals.schedules.length === 0) return
 
     const ttlMs = Math.max(1, cfg.backgroundWakeupTtlMinutes) * 60_000
+    const brainDir = info.conversationId ? findBrainDir(info.conversationId, info.accountHome) : null
+    if (brainDir) st.brainDir = brainDir
+
+    // Baseline first: only what appears after this point counts as new.
+    const aliveSubagents = brainDir ? baselineSessionBrain(st, brainDir) : false
+    const hasPendingTasks = signals.backgroundTools.length > 0 || aliveSubagents
     const maxScheduleDelay = signals.schedules.reduce((m, s) => Math.max(m, s.delayMs), 0)
-    st.expiresAt = Math.max(st.expiresAt, Date.now() + Math.min(ttlMs, Math.max(ttlMs, maxScheduleDelay + 5_000)))
+    const watchWindow = Math.min(ttlMs, Math.max(ttlMs, maxScheduleDelay + 5_000))
+
+    if (signals.schedules.length === 0 && !hasPendingTasks) {
+      if (st.schedules.size === 0 && !st.hasActiveTasks) {
+        this.clearSessionWatches(st)
+      }
+      return
+    }
+
+    st.expiresAt = Math.max(st.expiresAt, Date.now() + watchWindow)
+    st.hasActiveTasks = st.hasActiveTasks || hasPendingTasks
 
     const turnGen = st.generation
     for (const s of signals.schedules) {
       this.armScheduleTimer(st, turnGen, s.stepKey, Math.min(s.delayMs, ttlMs), s.prompt, s.timerCondition, info.transport)
+    }
+
+    if (hasPendingTasks && st.brainDir) {
+      this.ensurePollLoop()
     }
   }
 
@@ -183,6 +221,54 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     }, effectiveDelay)
     timer.unref?.()
     st.schedules.set(key, { key, prompt, timerCondition, timer })
+  }
+
+  private ensurePollLoop(): void {
+    if (this.pollTimer !== null || this.disposed) return
+    this.pollTimer = setInterval(() => this.pollAll(), this.pollIntervalMs)
+    this.pollTimer.unref?.()
+  }
+
+  private stopPollLoopIfIdle(): void {
+    const anyActive = Array.from(this.sessions.values()).some((s) => s.hasActiveTasks && !s.activeTurn)
+    if (!anyActive && this.pollTimer !== null) {
+      clearInterval(this.pollTimer)
+      this.pollTimer = null
+    }
+  }
+
+  /** Run one scan now (tests and the `/agy wakeup` command use it). */
+  pollNow(): void {
+    this.pollAll()
+  }
+
+  private pollAll(): void {
+    if (this.disposed) return
+    const cfg = this.opts.getConfig()
+    if (!cfg.enabled || !cfg.backgroundWakeup) return
+    const now = Date.now()
+    for (const st of Array.from(this.sessions.values())) {
+      if (this.opts.isArchived?.(st.sessionKey)) {
+        this.clearSessionWatches(st)
+        continue
+      }
+      if (st.expiresAt > 0 && now > st.expiresAt) {
+        this.clearSessionWatches(st)
+        continue
+      }
+      if (!st.hasActiveTasks || st.activeTurn || !st.brainDir) continue
+      this.pollSessionBrain(st, st.brainDir)
+    }
+    this.stopPollLoopIfIdle()
+  }
+
+  private pollSessionBrain(st: SessionWatchState, brainDir: string): void {
+    const res = pollSessionBrainDir(st, brainDir, (item) => this.enqueueWake(st, item))
+    if (res.stoppedByServer) {
+      // The language server restarted: its jobs are gone, so stop watching.
+      st.hasActiveTasks = false
+      this.clearSessionWatches(st)
+    }
   }
 
   private cancelMatchingScheduleTimers(st: SessionWatchState, item: WakeNoticeItem): void {
@@ -272,40 +358,52 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
         },
       })
       st.wakesUsed += 1
+      if (st.schedules.size === 0) {
+        st.hasActiveTasks = false
+      }
       agent.followup(msg)
       this.opts.log?.(`[background-wakeup] woken session=${sessionKey} (${summary})`)
     } finally {
       st.dispatching = false
+      this.stopPollLoopIfIdle()
     }
   }
 
   private clearSessionWatches(st: SessionWatchState): void {
+    st.hasActiveTasks = false
     st.expiresAt = 0
     st.pendingNotices = []
     for (const s of st.schedules.values()) clearTimeout(s.timer)
     st.schedules.clear()
     if (st.coalesceTimer !== null) { clearTimeout(st.coalesceTimer); st.coalesceTimer = null }
     if (st.deferTimer !== null) { clearTimeout(st.deferTimer); st.deferTimer = null }
+    this.stopPollLoopIfIdle()
   }
 
   status(): BackgroundWakeStatus {
     const cfg = this.opts.getConfig()
     let pendingTimers = 0
+    let pendingTasks = 0
     let activeWatches = 0
     for (const st of this.sessions.values()) {
-      if (st.schedules.size > 0) activeWatches += 1
+      if (st.schedules.size > 0 || st.hasActiveTasks) activeWatches += 1
       pendingTimers += st.schedules.size
+      if (st.hasActiveTasks) pendingTasks += 1
     }
     return {
       enabled: cfg.enabled && cfg.backgroundWakeup,
       activeWatches,
       pendingTimers,
-      pendingTasks: 0,
+      pendingTasks,
     }
   }
 
   dispose(): void {
     this.disposed = true
+    if (this.pollTimer !== null) {
+      clearInterval(this.pollTimer)
+      this.pollTimer = null
+    }
     for (const st of this.sessions.values()) {
       this.clearSessionWatches(st)
     }

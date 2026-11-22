@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
@@ -11,6 +11,7 @@ import { resolveConfig } from '../src/common/config.ts'
 import { defaultConfig } from '../src/common/types.ts'
 import { extractAttemptBackgroundSignals, isBackgroundWakeupNotice, matchesTimerCondition } from '../src/features/background/schedule-parse.ts'
 import { BackgroundWakeWatcher } from '../src/features/background/watcher.ts'
+import { setAgyDbDir } from '../src/runtime/agy/db/paths.ts'
 import { agyCommandDefinition } from '../src/host/commands.ts'
 import { createHostServices } from '../src/host/services.ts'
 import { RunRecording } from '../src/host/recording.ts'
@@ -415,3 +416,302 @@ describe('cross-turn background wakeup, slice 1: one-shot schedule timers', () =
     }
   })
 })
+
+describe('cross-turn background wakeup, slice 2: task logs, completion messages, subagents', () => {
+  const origDbDir = join(homedir(), '.gemini', 'antigravity-cli', 'conversations')
+
+  /** Build a throwaway conversation brain dir and point the resolver at it. */
+  function makeBrain(convId: string): { root: string; brain: string; cleanup: () => void } {
+    const root = mkdtempSync(join(tmpdir(), 'agy-brain-'))
+    setAgyDbDir(join(root, 'conversations'))
+    const brain = join(root, 'brain', convId)
+    mkdirSync(join(brain, '.system_generated', 'messages'), { recursive: true })
+    mkdirSync(join(brain, '.system_generated', 'tasks'), { recursive: true })
+    mkdirSync(join(brain, '.system_generated', 'subagents'), { recursive: true })
+    return { root, brain, cleanup: () => { rmSync(root, { recursive: true, force: true }); setAgyDbDir(origDbDir) } }
+  }
+
+  function liveBackgroundRecording(convId: string, state = 'RUNNING'): RunRecording {
+    const rec = new RunRecording()
+    rec.append({
+      kind: 'step',
+      stepKey: 'bg-1',
+      stepKind: 'tool',
+      state,
+      text: '',
+      tool: { name: 'run_command', args: { CommandLine: 'npm run build' } },
+    })
+    rec.append({ kind: 'result', ok: true, response: 'Started in the background.', conversationId: convId, usage: {}, raw: null })
+    rec.settle(null)
+    return rec
+  }
+
+  test('a live background call is detected in both the CLI and the ACP status vocabulary', () => {
+    const cli = liveBackgroundRecording('conv-cli')
+    assert.equal(extractAttemptBackgroundSignals(cli).backgroundTools.length, 1)
+
+    // The ACP transport reports pending / in_progress / completed and maps a
+    // live call to ACTIVE; only looking for RUNNING would silently miss it.
+    for (const state of ['ACTIVE', 'pending', 'in_progress']) {
+      assert.equal(extractAttemptBackgroundSignals(liveBackgroundRecording('conv-acp', state)).backgroundTools.length, 1, state)
+    }
+    // A call that already reported a terminal state was not left running.
+    for (const state of ['DONE', 'ERROR', 'CANCELED']) {
+      assert.equal(extractAttemptBackgroundSignals(liveBackgroundRecording('conv-done', state)).backgroundTools.length, 0, state)
+    }
+  })
+
+  test('a completion message written after the turn wakes the session exactly once', async () => {
+    const { brain, cleanup } = makeBrain('conv-msg')
+    const followups: string[] = []
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+    try {
+      // Present before the turn ended: baseline must swallow it.
+      writeFileSync(join(brain, '.system_generated', 'messages', 'old.json'), JSON.stringify({ id: 'old', content: 'stale news' }))
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-msg',
+        conversationId: 'conv-msg',
+        transport: 'cli',
+        recording: liveBackgroundRecording('conv-msg'),
+        failure: null,
+        superseded: false,
+      })
+      assert.equal(watcher.status().pendingTasks, 1)
+
+      writeFileSync(join(brain, '.system_generated', 'messages', 'new.json'), JSON.stringify({
+        id: 'new-1',
+        sender: 'conversations/conv-msg',
+        renderDetails: { messageTitle: 'Build finished' },
+        content: 'exit code 0',
+      }))
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 200))
+
+      assert.equal(followups.length, 1)
+      assert.ok(followups[0]?.includes('Build finished'))
+      assert.ok(!followups[0]?.includes('stale news'), 'the baseline message must not be replayed')
+
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(followups.length, 1, 'the same message must not wake twice')
+    } finally {
+      watcher.dispose()
+      cleanup()
+    }
+  })
+
+  test('the language-server restart notice never wakes the session', async () => {
+    const { brain, cleanup } = makeBrain('conv-ls')
+    const followups: string[] = []
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+    try {
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-ls',
+        conversationId: 'conv-ls',
+        transport: 'cli',
+        recording: liveBackgroundRecording('conv-ls'),
+        failure: null,
+        superseded: false,
+      })
+      writeFileSync(join(brain, '.system_generated', 'messages', 'restart.json'), JSON.stringify({
+        id: 'restart-1',
+        content: 'Language server stopped due to server restart',
+      }))
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 200))
+
+      assert.equal(followups.length, 0, 'an infrastructure restart is not user-actionable')
+      assert.equal(watcher.status().pendingTasks, 0, 'and it clears the watch instead of retrying forever')
+    } finally {
+      watcher.dispose()
+      cleanup()
+    }
+  })
+
+  test('a task log that reaches a terminal line wakes once, and a pre-existing one never does', async () => {
+    const { brain, cleanup } = makeBrain('conv-task')
+    const followups: string[] = []
+    const tasksDir = join(brain, '.system_generated', 'tasks')
+    writeFileSync(join(tasksDir, 'task-1.log'), 'already done\nThe command exited with code 0\n')
+    writeFileSync(join(tasksDir, 'task-2.log'), 'still running\n')
+
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+    try {
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-task',
+        conversationId: 'conv-task',
+        transport: 'cli',
+        recording: liveBackgroundRecording('conv-task'),
+        failure: null,
+        superseded: false,
+      })
+
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(followups.length, 0, 'task-1 finished before the turn ended')
+
+      appendFileSync(join(tasksDir, 'task-2.log'), 'The command exited with code 1\n')
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 200))
+      assert.equal(followups.length, 1)
+      assert.ok(followups[0]?.includes('task-2'))
+      assert.ok(followups[0]?.includes('exited with code 1'))
+
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(followups.length, 1, 'a terminal log is reported once')
+    } finally {
+      watcher.dispose()
+      cleanup()
+    }
+  })
+
+  test('a real completion message (task-<n> sender) wakes the session even though its log has no exit marker', async () => {
+    // Shape captured from agy 1.5.14 on this machine: the outcome is a message
+    // from "<conversation>/task-<n>"; the matching tasks/task-<n>.log holds only
+    // the command's own stdout and never contains "Command exited with code".
+    const { brain, cleanup } = makeBrain('conv-real')
+    const followups: string[] = []
+    const tasksDir = join(brain, '.system_generated', 'tasks')
+    writeFileSync(join(tasksDir, 'task-11.log'), 'No issues found!\n')
+
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+    try {
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-real',
+        conversationId: 'conv-real',
+        transport: 'cli',
+        recording: liveBackgroundRecording('conv-real'),
+        failure: null,
+        superseded: false,
+      })
+
+      writeFileSync(join(brain, '.system_generated', 'messages', 'done.json'), JSON.stringify({
+        id: 'done-1',
+        sender: 'conv-real/task-11',
+        renderDetails: { messageTitle: 'Dart analyze 8 touched files finished' },
+        content: 'Task id "conv-real/task-11" finished with result:\nCommand exited with code 0.\n\nCommand output:\nNo issues found!\n\nLog: file:///' + join(tasksDir, 'task-11.log').replace(/\\/g, '/'),
+      }))
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 200))
+
+      assert.equal(followups.length, 1)
+      assert.ok(followups[0]?.includes('Task task-11 finished'), 'the job id must be visible')
+      assert.ok(followups[0]?.includes('Command exited with code 0.'), 'the exit line comes from the message body')
+      assert.ok(followups[0]?.includes('task-11.log'), 'the log path is carried through')
+
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(followups.length, 1, 'a completion message wakes only once')
+    } finally {
+      watcher.dispose()
+      cleanup()
+    }
+  })
+
+  test('an alive subagent keeps the watch open and its transition wakes the session', async () => {
+    const { brain, cleanup } = makeBrain('conv-sub')
+    const followups: string[] = []
+    const subDir = join(brain, '.system_generated', 'subagents')
+    writeFileSync(join(subDir, 'a.json'), JSON.stringify({ conversationId: 'sub-a', state: 'SUBAGENT_STATE_ALIVE' }))
+
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+    try {
+      const rec = new RunRecording()
+      rec.append({ kind: 'result', ok: true, response: 'Delegated.', conversationId: 'conv-sub', usage: {}, raw: null })
+      rec.settle(null)
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-sub',
+        conversationId: 'conv-sub',
+        transport: 'cli',
+        recording: rec,
+        failure: null,
+        superseded: false,
+      })
+      // No background tool, but the subagent is still alive -> the watch must stay open.
+      assert.equal(watcher.status().pendingTasks, 1)
+
+      writeFileSync(join(subDir, 'a.json'), JSON.stringify({ conversationId: 'sub-a', state: 'SUBAGENT_STATE_DONE' }))
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 200))
+      assert.equal(followups.length, 1)
+      assert.ok(followups[0]?.includes('sub-a'))
+    } finally {
+      watcher.dispose()
+      cleanup()
+    }
+  })
+
+  test('wakeup stays off unless backgroundWakeup is enabled', async () => {
+    const { brain, cleanup } = makeBrain('conv-off')
+    const followups: string[] = []
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => defaultConfig(),
+      coalesceMs: 25,
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+    try {
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-off',
+        conversationId: 'conv-off',
+        transport: 'cli',
+        recording: liveBackgroundRecording('conv-off'),
+        failure: null,
+        superseded: false,
+      })
+      writeFileSync(join(brain, '.system_generated', 'messages', 'n.json'), JSON.stringify({ id: 'n', content: 'anything' }))
+      watcher.pollNow()
+      await new Promise((r) => setTimeout(r, 200))
+      assert.equal(followups.length, 0)
+      assert.equal(watcher.status().pendingTasks, 0)
+    } finally {
+      watcher.dispose()
+      cleanup()
+    }
+  })
+})
+

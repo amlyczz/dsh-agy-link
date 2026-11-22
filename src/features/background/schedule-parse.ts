@@ -1,7 +1,20 @@
 // Pure extraction and formatting helpers for post-turn background wakeups.
 import type { Message } from '@deepseek-ai/dsh-llm'
 import type { ReadableRecordingLike } from '../../common/background-types.ts'
-import { pick } from '../../provider/mirror/args.ts'
+import type { AgyEvent } from '../../common/types.ts'
+import { pick, unwrapMcpTool } from '../../provider/mirror/args.ts'
+
+const BACKGROUND_TOOL_NAMES = new Set([
+  'run_command',
+  'bash',
+  'execute_command',
+  'ops_bash',
+  'sh',
+  'shell',
+  'invoke_subagent',
+  'run_workflow',
+  'swarm',
+])
 
 export interface PendingScheduleSignal {
   readonly stepKey: string
@@ -12,8 +25,16 @@ export interface PendingScheduleSignal {
   readonly cronExpression?: string
 }
 
+export interface PendingBackgroundToolSignal {
+  readonly stepKey: string
+  readonly toolName: string
+  readonly taskId?: string
+  readonly summary: string
+}
+
 export interface ExtractedBackgroundSignals {
   readonly schedules: readonly PendingScheduleSignal[]
+  readonly backgroundTools: readonly PendingBackgroundToolSignal[]
   readonly ignoredRecurringCron: boolean
 }
 
@@ -43,6 +64,34 @@ function clipText(text: string, maxChars: number): string {
   return flat.slice(0, Math.max(0, maxChars - 1)) + '…'
 }
 
+/**
+ * True when the call had not finished when the turn ended — the signal that it
+ * was handed off to the background.
+ *
+ * `RUNNING` is what the CLI transport reports. The ACP transport only knows
+ * pending / in_progress / completed, and it maps a live call to `ACTIVE`, so a
+ * live state in either vocabulary counts. A call that already reported a
+ * terminal state is never treated as background, however live it looked earlier
+ * in the same turn.
+ */
+function isStillLive(state: string | undefined): boolean {
+  if (state === undefined || state === '') return false
+  const s = state.toLowerCase()
+  return s === 'running' || s === 'active' || s === 'pending' || s === 'in_progress'
+}
+
+/** Cheap pre-filter: could this call plausibly start a background job? */
+function hasBackgroundTaskHint(input: Record<string, unknown>, ev: Extract<AgyEvent, { kind: 'step' }>): boolean {
+  if (typeof input.bgTaskId === 'string') return true
+  const text = typeof ev.tool?.output === 'string' ? ev.tool.output : ev.text
+  if (/\b(task-\d+)\b/i.test(text)) return true
+  try {
+    return /\b(task-\d+)\b/i.test(JSON.stringify(input))
+  } catch {
+    return false
+  }
+}
+
 /** True when a user message was injected by dsh-agy-link's own background wake watcher. */
 export function isBackgroundWakeupNotice(msg: Message | undefined): boolean {
   if (!msg || msg.role !== 'user') return false
@@ -51,51 +100,85 @@ export function isBackgroundWakeupNotice(msg: Message | undefined): boolean {
 }
 
 /**
- * One-shot `schedule` timers still pending after the turn ended.
+ * Background work still pending after the turn ended.
  *
- * Recurring `CronExpression` schedules are ignored on purpose: a CLI `-p` turn
- * owns the timer, so it dies with the process and cannot be re-armed from here.
+ * Recurring `CronExpression` schedules are reported as `ignoredRecurringCron`
+ * instead of being armed: a CLI `-p` turn owns that timer, so it dies with the
+ * process and cannot be re-armed from here.
  */
 export function extractAttemptBackgroundSignals(
   rec: ReadableRecordingLike,
   now = Date.now(),
 ): ExtractedBackgroundSignals {
   const schedules: PendingScheduleSignal[] = []
+  const backgroundTools: PendingBackgroundToolSignal[] = []
   let ignoredRecurringCron = false
 
   // Track which tool steps had later substantial assistant/tool progress
   // well after the schedule call (indicating in-turn self-wakeup).
   const scheduleCandidates: Array<{ index: number; ts: number; item: PendingScheduleSignal }> = []
+  // Last event seen per tool call. The final state decides whether the call was
+  // a background job still running when the turn ended, so it must be judged
+  // after the whole recording has been read.
+  const toolCalls = new Map<string, {
+    toolName: string
+    name: string
+    input: Record<string, unknown>
+    event: Extract<AgyEvent, { kind: 'step' }>
+  }>()
 
   for (let i = 0; i < rec.length; i++) {
     const ev = rec.eventAt(i)
     if (!ev || ev.kind !== 'step' || ev.stepKind !== 'tool' || !ev.tool) continue
-    const name = ev.tool.name.toLowerCase()
-    const input = (ev.tool.args ?? {}) as Record<string, unknown>
-    if (name !== 'schedule') continue
+    const unwrapped = unwrapMcpTool(ev.tool.name, ev.tool.args)
+    const name = unwrapped.tool.toLowerCase()
+    const input = unwrapped.input
     const evTs = rec.eventTimestampAt?.(i) ?? now
-    const cron = pick(input, 'CronExpression', 'cron_expression')
-    const duration = numArg(input, 'DurationSeconds', 'duration_seconds')
-    const prompt = pick(input, 'Prompt', 'prompt') ?? 'Check scheduled task progress and continue.'
-    const cond = pick(input, 'TimerCondition', 'timer_condition') ?? 'never'
-    if (cron && (!duration || duration <= 0)) {
-      ignoredRecurringCron = true
+
+    if (name === 'schedule') {
+      const cron = pick(input, 'CronExpression', 'cron_expression')
+      const duration = numArg(input, 'DurationSeconds', 'duration_seconds')
+      const prompt = pick(input, 'Prompt', 'prompt') ?? 'Check scheduled task progress and continue.'
+      const cond = pick(input, 'TimerCondition', 'timer_condition') ?? 'never'
+      if (cron && (!duration || duration <= 0)) {
+        ignoredRecurringCron = true
+        continue
+      }
+      if (duration !== undefined && duration > 0 && !isTerminalState(ev.state)) {
+        scheduleCandidates.push({
+          index: i,
+          ts: evTs,
+          item: {
+            stepKey: ev.stepKey,
+            delayMs: Math.max(500, Math.round(duration * 1000)),
+            durationSeconds: duration,
+            prompt: clipText(prompt, 500),
+            timerCondition: cond,
+            ...(cron ? { cronExpression: cron } : {}),
+          },
+        })
+      }
       continue
     }
-    if (duration !== undefined && duration > 0 && ev.state !== 'ERROR' && ev.state !== 'CANCELED' && ev.state !== 'CANCELLED') {
-      scheduleCandidates.push({
-        index: i,
-        ts: evTs,
-        item: {
-          stepKey: ev.stepKey,
-          delayMs: Math.max(500, Math.round(duration * 1000)),
-          durationSeconds: duration,
-          prompt: clipText(prompt, 500),
-          timerCondition: cond,
-          ...(cron ? { cronExpression: cron } : {}),
-        },
-      })
+
+    if (BACKGROUND_TOOL_NAMES.has(name) || hasBackgroundTaskHint(input, ev)) {
+      toolCalls.set(ev.stepKey, { toolName: unwrapped.tool, name, input, event: ev })
     }
+  }
+
+  for (const call of toolCalls.values()) {
+    if (!isStillLive(call.event.state)) continue
+    const output = typeof call.event.tool?.output === 'string' ? call.event.tool.output : call.event.text
+    const taskMatch = /\b(task-\d+)\b/i.exec(output) ?? /\b(task-\d+)\b/i.exec(JSON.stringify(call.input))
+    const taskId = taskMatch?.[1] ?? (typeof call.input.bgTaskId === 'string' ? call.input.bgTaskId : undefined)
+    if (!BACKGROUND_TOOL_NAMES.has(call.name) && taskId === undefined) continue
+    const cmd = pick(call.input, 'CommandLine', 'command_line', 'command', 'cmd', 'Role', 'role', 'Description', 'description')
+    backgroundTools.push({
+      stepKey: call.event.stepKey,
+      toolName: call.toolName,
+      ...(taskId ? { taskId } : {}),
+      summary: cmd ? clipText(cmd, 120) : (taskId ?? call.toolName),
+    })
   }
 
   for (const cand of scheduleCandidates) {
@@ -121,7 +204,13 @@ export function extractAttemptBackgroundSignals(
     schedules.push({ ...cand.item, delayMs: remainingMs })
   }
 
-  return { schedules, ignoredRecurringCron }
+  return { schedules, backgroundTools, ignoredRecurringCron }
+}
+
+function isTerminalState(state: string | undefined): boolean {
+  if (state === undefined) return false
+  const s = state.toLowerCase()
+  return s === 'done' || s === 'error' || s === 'canceled' || s === 'cancelled' || s === 'failed'
 }
 
 export function matchesTimerCondition(condition: string, sender: string | undefined): boolean {
