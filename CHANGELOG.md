@@ -4,6 +4,18 @@
 
 ### English
 
+- **Fix(open): a stale path is never handed to the OS opener (merges PR #159).** On Windows `explorer.exe /select,<missing>` does not fail — it silently opens the Desktop folder, so clicking a link whose file had since moved looked like the plugin randomly opening the user's Desktop. `executeOpenInSystem()` now checks the target exists first and answers with a real error otherwise. The opener is also injectable, so the unit test no longer launches a real Explorer/Finder/xdg-open on the developer's machine during a test run.
+- **Fix(quota): never spawn `agy` with a token that is about to die (merges PR #160).** agy authenticates from the machine credential store at process start and gives that read a fixed 10s budget; when the stored access token is expired or expires inside that window the refresh can lose the race and agy falls back to **interactive OAuth** — it opens a browser and waits for a human. Measured on the reporter's machine: 9 of 375 hourly polls did this (2.4%), **every one with ≤60s of token life left**, and none of the 746 polls with ≥1min left. The hourly CLI poll now refreshes a comfortable margin ahead (`CLI_TOKEN_SAFETY_MS` = 2 minutes, far above both the observed failure band and the 1.5–5s refresh round-trip) and, when it cannot reach that window, **skips the CLI for that round and lets the REST path answer** — a skipped round costs nothing, a browser window costs the user's attention.
+
+### 中文
+
+- **修复(open)：过期路径不再交给系统打开器（合并 PR #159）。** Windows 上 `explorer.exe /select,<缺失>` 不会失败，而是**静默打开桌面文件夹**，于是点击一个文件已被移动的链接看起来像插件随机打开了用户的桌面。`executeOpenInSystem()` 现在先确认目标存在，否则返回真实错误。打开器也改为可注入，因此单元测试不再在开发者机器上真的拉起 Explorer/Finder/xdg-open。
+- **修复(配额)：绝不用即将失效的 token 去 spawn `agy`（合并 PR #160）。** agy 在进程启动时从系统凭证库取 token，该读取有固定 10 秒预算；当存储的 access token 已过期或在该窗口内过期时，刷新可能输掉这场竞争，agy 便回退到**交互式 OAuth**——弹浏览器等人来处理。报告者机器实测：375 次每小时轮询里 9 次发生（2.4%），**全部是 token 剩余寿命 ≤60 秒的情形**，而 746 次 ≥1 分钟的轮询一次都没有。现在每小时的 CLI 轮询会提前一个舒适边际刷新（`CLI_TOKEN_SAFETY_MS` = 2 分钟，远高于观察到的失败带与 1.5–5 秒的刷新往返），若无法进入该窗口则**跳过本轮 CLI、让 REST 路径作答**——跳过一轮没有代价，弹一个浏览器窗口要的是用户的注意力。
+
+## 0.6.59 (2026-11-22)
+
+### English
+
 - **Fix(quota): the hourly CLI quota poll can no longer make `agy` open the user's browser.** Every hour the plugin runs `agy -p /usage` for the account that owns the machine credential store. `agy` reads that store at startup with a FIXED 10s budget and runs the token refresh in a separate goroutine; when the stored access token was already dying the budget lost the race, `agy` fell back to INTERACTIVE OAuth and opened the system browser to wait for a human. Measured on one machine: **9 of 375 hourly polls (2.4%) opened a browser, every single one with at most 60s of token life left, and 0 of the 746 polls that had at least 1 minute left**.
   - **New pure module `src/features/quota/cli-token.ts`**: `CLI_TOKEN_SAFETY_MS = 120_000` (two minutes sits far outside the observed failure band and far above the measured 1.5-5s refresh round-trip), `tokenRemainingMs()`, `isTokenSafeForCli()` and `prepareCliToken()`. A credential with no known expiry counts as UNSAFE: `agy` would refresh at startup, which is exactly the browser-popping path, and "no expiry means valid forever" is the misreading that turned issue #112 into a permanent 401 loop.
   - **`QuotaService.readCliUsageFamilies` now brings the credential into the safety window before it spawns anything** (`src/host/quota.ts`): read the stored token, refresh once when it is dying, write the result into the OS store `agy` actually loads, re-read, and only then spawn. If any step fails the CLI stands down for that round and the REST path answers - a skipped round costs one quota sample an hour, a browser window costs the user their attention.

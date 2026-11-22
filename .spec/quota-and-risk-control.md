@@ -126,3 +126,12 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 4. **单模型粒度主动让路（`isQuotaBenched`）**：
    - 当某族缓存配额的 `models` 列表包含匹配请求模型（`modelMatches`）的条目且**所有匹配条目**的剩馀比例均 `<= LOW_QUOTA_WEEKLY`（0.05）且处于有效重置窗口内时，即使该族宏观均值仍高于 `0.10`，预选阶段也直接判定该账号对该模型进入配额让路（`quotaGateClearedAt` 覆盖规则不变）。
 - **验证锚点**：`test/quota-failover-alignment.test.ts`。
+
+## CLI 配额轮询不得使用即将失效的 token（PR #160）
+
+agy 启动时从凭证库取 token，该读取只有 10 秒预算。token 已过期或在该窗口内过期时，刷新会输掉竞争，agy 回退到**交互式 OAuth（弹浏览器等人）**。
+
+- 实测：375 次每小时轮询中 9 次触发交互登录（2.4%），**全部 token 寿命 ≤60 秒**；≥1 分钟的 746 次零触发。
+- 规则：CLI 轮询前要求 token 仍有 `CLI_TOKEN_SAFETY_MS`（2 分钟）寿命；不足则先刷新，仍不足则**跳过本轮 CLI，改用 REST**。跳过一轮无代价，弹浏览器窗口则以用户注意力为代价。
+- 不要把"几秒钟的聪明"引入每小时才跑一次的轮询——边际取得足够宽，比精确贴近失效点更重要。
+- 锚点：`test/quota-cli-token.test.ts`（121 行纯函数 + 226 行用例）。

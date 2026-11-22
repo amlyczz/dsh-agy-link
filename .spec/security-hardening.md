@@ -168,3 +168,11 @@ Each invariant below is enforced in code AND covered by a regression test.
 - 只按显式白名单从主账号 `~/.gemini/config` 同步 `plugins/`、`skills/`、`rules/`、`agents/` 与允许配置文件；**永不触碰**凭据、日志、对话或 Keychain。
 - 显式拒绝敏感文件名（`.env*`、`antigravity-oauth-token*`、`.primary-credential.json`、`id_rsa`、`id_ed25519`、`*.pem`、`*.key`），并拒绝指向 `primaryHome` 之外的符号链接。
 - `mergeMcpConfig()` 同步主账号其余 MCP 服务器时**严格保留目标账号自身的 `dsh-tools` 反向桥接配置**；`EcosystemService.setPluginEnabled()` 校验 `pluginId` 拒绝路径穿越；`inspectEcosystem()` 对 HTTP MCP URL 中的用户名/密码做脱敏。（测试：`test/ecosystem.test.ts`）
+
+## 系统打开器只接受确实存在的目标（PR #159）
+
+Windows 的 `explorer.exe /select,<路径>` 对**不存在的路径不报错**，而是打开桌面文件夹。因此把陈旧路径交给它，用户看到的是「插件莫名打开了我的桌面」。
+
+- `executeOpenInSystem()` 必须先 `existsSync(targetPath)`，缺失就直接返回 `{ ok:false, error:'target does not exist: …' }`，绝不下发打开请求。
+- 打开器（`spawnDetachedOpener`）必须可通过参数注入：测试只能用假打开器，**不得**在开发者机器上真的启动 Explorer/Finder/xdg-open（历史测试因为临时目录在 `finally` 被删，导致每次跑测试都会弹出窗口）。
+- 锚点：`test/media-route.test.ts`（缺失目标不下发、注入假打开器）。
