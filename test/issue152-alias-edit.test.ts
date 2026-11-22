@@ -4,8 +4,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = new URL('..', import.meta.url).pathname
+// fileURLToPath, not the pathname property: on Windows the latter yields
+// "/D:/..." and every join() below then resolves to D:\\D:\\...
+const root = fileURLToPath(new URL('..', import.meta.url))
 
 test('issue #152: the pool exposes an alias route with input validation', () => {
   const src = readFileSync(join(root, 'src/transport/http/routes/pool.ts'), 'utf8')

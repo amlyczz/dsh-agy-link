@@ -26,6 +26,7 @@ import { readPrimaryCredential, parseCredentialDoc, credentialFingerprint, write
 import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
 import { buildAgyEnvWithProxy, pickProxy } from '../runtime/net/account-env.ts'
 import { QUOTA_FORCE_CONCURRENCY } from '../common/timeouts.ts'
+import { CLI_TOKEN_SAFETY_MS, prepareCliToken as prepareCliTokenImpl } from '../features/quota/cli-token.ts'
 
 import {
   sameCredentialGrant,
@@ -159,6 +160,15 @@ export class QuotaService {
       forceStaggerMs?: () => number
       /** Same-egress parallelism for a manual sweep (default 2; tests use 1). */
       forceConcurrency?: () => number
+      /**
+       * Push a refreshed credential into the OS store `agy` actually loads.
+       * Wired by the host (it needs the credential-slot mutex, which this class
+       * already holds here). Left undefined by tests so no unit test can ever
+       * write the real machine slot.
+       */
+      syncSlot?: (account: ManagedAccount) => boolean
+      /** Diagnostic sink for the decisions below (the class is otherwise silent). */
+      log?: (msg: string) => void
     } = {},
   ) {}
 
@@ -250,6 +260,13 @@ export class QuotaService {
       if (!(await this.cliSlotHoldsAccount(account))) {
         return null
       }
+      // A spawn with a nearly-expired token makes agy lose its own 10s keyring
+      // race, fall back to INTERACTIVE OAuth and open the user's browser (9 of
+      // 375 hourly polls here, every one with <=60s of token life). Bring the
+      // credential into the safety window first; skip the CLI if that fails.
+      if (!(await this.prepareCliToken(account))) {
+        return null
+      }
       const env = buildAgyEnvWithProxy({
         account,
         proxy: pickProxy(account.proxyUrl, this.globalProxy()),
@@ -264,6 +281,28 @@ export class QuotaService {
     } finally {
       releaseMutex?.()
     }
+  }
+
+  /**
+   * Bring the credential `agy` would load into the safety window, or refuse.
+   *
+   * The CLI is only ever used for the slot owner, so a refresh here refreshes
+   * the identity that is about to run — no cross-account risk. On Windows the
+   * refreshed token also has to reach the Credential Manager slot, because that
+   * is what agy loads (the on-disk document is only a mirror); `syncSlot` does
+   * that and is wired by the host, which owns the mutex we are already holding.
+   */
+  private async prepareCliToken(account: ManagedAccount): Promise<boolean> {
+    const syncSlot = this.cliDeps.syncSlot;
+    return prepareCliTokenImpl({
+      readStored: () => this.getStoredToken(account, true),
+      // Ask for the SAME window the gate below enforces: the default 60s buffer
+      // would hand back a token that the re-read then rejects, wasting a
+      // refresh round-trip and skipping the CLI anyway.
+      refresh: async () => (await this.getValidAccessToken(account, CLI_TOKEN_SAFETY_MS)) !== null,
+      ...(syncSlot === undefined ? {} : { syncSlot: () => syncSlot(account) }),
+      ...(this.cliDeps.log === undefined ? {} : { log: this.cliDeps.log }),
+    })
   }
 
   /**
@@ -344,8 +383,8 @@ export class QuotaService {
    * used to race into duplicate refreshTokens for one account (double
    * risk-control exposure for the same outcome).
    */
-  async getValidAccessToken(account: ManagedAccount): Promise<string | null> {
-    return getValidAccessTokenImpl(this.tokenDeps(), account, this.tokenRefreshInFlight)
+  async getValidAccessToken(account: ManagedAccount, minValidityMs?: number): Promise<string | null> {
+    return getValidAccessTokenImpl(this.tokenDeps(), account, this.tokenRefreshInFlight, minValidityMs)
   }
 
   private isCurrentAccountGrant(account: ManagedAccount, refreshToken: string): boolean {

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.59 (2026-11-22)
+
+### English
+
+- **Fix(quota): the hourly CLI quota poll can no longer make `agy` open the user's browser.** Every hour the plugin runs `agy -p /usage` for the account that owns the machine credential store. `agy` reads that store at startup with a FIXED 10s budget and runs the token refresh in a separate goroutine; when the stored access token was already dying the budget lost the race, `agy` fell back to INTERACTIVE OAuth and opened the system browser to wait for a human. Measured on one machine: **9 of 375 hourly polls (2.4%) opened a browser, every single one with at most 60s of token life left, and 0 of the 746 polls that had at least 1 minute left**.
+  - **New pure module `src/features/quota/cli-token.ts`**: `CLI_TOKEN_SAFETY_MS = 120_000` (two minutes sits far outside the observed failure band and far above the measured 1.5-5s refresh round-trip), `tokenRemainingMs()`, `isTokenSafeForCli()` and `prepareCliToken()`. A credential with no known expiry counts as UNSAFE: `agy` would refresh at startup, which is exactly the browser-popping path, and "no expiry means valid forever" is the misreading that turned issue #112 into a permanent 401 loop.
+  - **`QuotaService.readCliUsageFamilies` now brings the credential into the safety window before it spawns anything** (`src/host/quota.ts`): read the stored token, refresh once when it is dying, write the result into the OS store `agy` actually loads, re-read, and only then spawn. If any step fails the CLI stands down for that round and the REST path answers - a skipped round costs one quota sample an hour, a browser window costs the user their attention.
+  - **The slot write-back is a host seam** (`syncSlot`): `persistRefreshedToken` only rewrites the on-disk document, which on Windows is a mirror - `agy` authenticates from Credential Manager. The host wires the write and it runs inside the `credentialSlotMutex` this read already holds. Left unwired in tests, so no unit test can write the real machine slot.
+  - **`getValidAccessToken` / `isAccessTokenFresh` take the required validity as a parameter** (`src/features/quota/token.ts`, default unchanged at 60s): an HTTP call needs 60s, but a child process spends seconds before its first request, so the CLI path asks for the full two minutes. Without this the refresh would return a token with 90s left that the gate then rejects - a wasted refresh round-trip and a skipped CLI anyway.
+  - Eleven new cases in `test/quota-cli-token.test.ts` pin the decision (expiry unknown, one second short, exactly at the boundary), the refresh window (90s is fresh for HTTP, not for a spawn) and the ordering (refresh, slot write, verification read, spawn).
+
+### 中文
+
+- **修复(配额)：每小时的 CLI 配额轮询不会再让 `agy` 打开用户的浏览器。** 插件每小时对「拥有系统凭据库」的账号执行一次 `agy -p /usage`。`agy` 启动时读该凭据库只有**固定的 10 秒预算**，而令牌刷新跑在另一个 goroutine 里；当已存的 access token 临近过期时，这 10 秒会输掉竞态，`agy` 于是回退到**交互式 OAuth**——打开系统浏览器等人操作。单机实测：**375 次每小时轮询中有 9 次（2.4%）弹出浏览器，全部落在令牌剩余不超过 60 秒的情况；而剩余至少 1 分钟的 746 次一次都没有**。
+  - **新增纯函数模块 `src/features/quota/cli-token.ts`**：`CLI_TOKEN_SAFETY_MS = 120_000`（两分钟远高于实测失败带，也远高于实测 1.5-5 秒的刷新往返），以及 `tokenRemainingMs()`、`isTokenSafeForCli()`、`prepareCliToken()`。**没有过期时间的凭据一律视为不安全**——`agy` 会在启动时刷新，那正是弹浏览器的路径；而「没有过期时间等于永久有效」这种误读，正是 issue #112 变成永久 401 循环的原因。
+  - **`QuotaService.readCliUsageFamilies` 在拉起任何进程之前先把凭据送进安全窗**（`src/host/quota.ts`）：读已存令牌，临期则刷新一次，把结果写进 `agy` 真正读取的系统凭据库，复读校验，才 spawn。任一步失败则本轮放弃 CLI、由 REST 兜底：少一次采样每小时只损失一个数据点，而一个浏览器窗口损失的是用户的注意力。
+  - **写槽是宿主侧的注入点**（`syncSlot`）：`persistRefreshedToken` 只改磁盘文档，而在 Windows 上磁盘只是镜像——`agy` 是从 Credential Manager 取凭据的。宿主负责这次写入，它跑在本读取已持有的 `credentialSlotMutex` 内。测试里不注入该回调，因此任何单测都不可能写到真实的机器凭据槽。
+  - **`getValidAccessToken` / `isAccessTokenFresh` 把所需有效期改成参数**（`src/features/quota/token.ts`，默认仍是 60 秒）：一次 HTTP 调用 60 秒够用，但子进程从启动到发出第一个请求要花几秒，所以 CLI 这条路径要求完整的两个小时窗。没有这一层，刷新会交回一个只剩 90 秒的令牌、随即被门禁拒掉——白跑一次刷新，CLI 照样跳过。
+  - **`test/quota-cli-token.test.ts` 新增十一个用例**：既钉住判定（无过期时间、差一秒、恰好等于边界），也钉住刷新窗口（90 秒对 HTTP 算新鲜、对 spawn 不算），以及顺序（刷新、写槽、复读校验、spawn）。
+
 ## 0.6.58 (2026-11-22)
 
 ### English

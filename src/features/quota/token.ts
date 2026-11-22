@@ -416,10 +416,11 @@ export async function getValidAccessToken(
   deps: QuotaTokenDeps,
   account: ManagedAccount,
   tokenRefreshInFlight: Map<string, Promise<string | null>>,
+  minValidityMs?: number,
 ): Promise<string | null> {
   const existing = tokenRefreshInFlight.get(account.id)
   if (existing !== undefined) return existing
-  const attempt = getValidAccessTokenUncached(deps, account).finally(() => {
+  const attempt = getValidAccessTokenUncached(deps, account, minValidityMs).finally(() => {
     tokenRefreshInFlight.delete(account.id)
   })
   tokenRefreshInFlight.set(account.id, attempt)
@@ -435,16 +436,24 @@ export async function getValidAccessToken(
 export function isAccessTokenFresh(
   tok: { accessToken?: string; expiryMs?: number },
   now = Date.now(),
+  bufferMs = 60_000,
 ): boolean {
-  return !!tok.accessToken && typeof tok.expiryMs === 'number' && tok.expiryMs > now + 60_000
+  return !!tok.accessToken && typeof tok.expiryMs === 'number' && tok.expiryMs > now + bufferMs
 }
 
-async function getValidAccessTokenUncached(deps: QuotaTokenDeps, account: ManagedAccount): Promise<string | null> {
+async function getValidAccessTokenUncached(
+  deps: QuotaTokenDeps,
+  account: ManagedAccount,
+  minValidityMs?: number,
+): Promise<string | null> {
   const tok = await deps.getStoredToken(account)
   if (!tok) return null
 
-  // Still fresh (with 60s buffer)? Use it directly.
-  if (tok.accessToken && isAccessTokenFresh(tok)) {
+  // Still fresh? Use it directly. The default 60s buffer is enough for an
+  // HTTP call; a caller that hands the token to a CHILD PROCESS passes a
+  // larger one, because that process spends seconds before its first request
+  // and does its own (racy) refresh when the token dies mid-startup.
+  if (tok.accessToken && isAccessTokenFresh(tok, Date.now(), minValidityMs)) {
     return tok.accessToken
   }
 
