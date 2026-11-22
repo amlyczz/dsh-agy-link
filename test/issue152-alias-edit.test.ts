@@ -31,7 +31,12 @@ test('issue #152: the panel offers an inline rename that calls the host', () => 
   const panel = readFileSync(join(root, 'src/client/sections/AccountsPanel.ts'), 'utf8')
   assert.match(panel, /renderAliasEditor/)
   assert.match(panel, /handlers\.saveAlias\(acc\.id\)/)
-  assert.match(panel, /t\('account\.rename'\)/)
+  // The label itself is the affordance (no standalone Rename button): clicking
+  // it opens the editor, and the rename copy rides along as its tooltip.
+  assert.match(panel, /agy-card-alias/)
+  assert.match(panel, /onClick: \(\) => setEditingAliasId\(isEditingAlias \? null : acc\.id\)/)
+  assert.match(panel, /t\('account\.renameTitle'\)/)
+  assert.doesNotMatch(panel, /\}, ` \$\{t\('account\.rename'\)\}`\)/, 'no standalone Rename button may come back')
   const hooks = readFileSync(join(root, 'src/client/hooks/useAccounts.ts'), 'utf8')
   assert.match(hooks, /postPool\('alias'/)
 })
