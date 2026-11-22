@@ -11,6 +11,7 @@
 // The async outcome closure lives in ./attempt-outcome.ts (it also drives the
 // credential-slot dispatch); the adapter calls runAgyAttempt from there.
 import { LlmError, type Message } from '@deepseek-ai/dsh-llm'
+import type { BackgroundTurnObserver } from '../common/background-types.ts'
 import type { AgyEvent, AgyTransportMode, PluginConfig } from '../common/types.ts'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
 import { createToolWatchdog, type ToolWatchdog } from './tool-watchdog.ts'
@@ -75,6 +76,8 @@ export interface AttemptDeps {
   spawnLimiter?: SpawnLimiter
   /** Optional persistent ACP attempt driver injected by host. */
   runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
+  /** Cross-turn background wake observer (tracks schedule timers & background tasks). */
+  backgroundObserver?: BackgroundTurnObserver
 }
 
 /** Everything one attempt needs. Values are produced by streamAttempt. */

@@ -253,6 +253,19 @@ export interface PluginConfig {
   imageOutputDir: string
   /** Extra attempts after a retryable image failure (default 1). */
   imageRetries: number
+  /**
+   * Wake idle DSH sessions across turns when an agy `schedule` timer,
+   * detached background task/subagent, or persistent ACP update finishes
+   * after the turn ends (default false: opt-in, because a session that
+   * speaks on its own after the turn is a behaviour change every user has
+   * to ask for). Turn it on in Settings → Runtime controls, with
+   * `/agy config wakeup on`, or with `DSH_AGY_BACKGROUND_WAKEUP=1`.
+   */
+  backgroundWakeup: boolean
+  /** Max lifetime (minutes) to retain post-turn background watches/timers (default 30). */
+  backgroundWakeupTtlMinutes: number
+  /** Max automatic background wakeups per session between real human turns (default 12). */
+  backgroundWakeupMaxPerSession: number
 }
 
 // The offline/signed-out lineup lives in `common/model-lineup.ts` — the single
@@ -373,5 +386,8 @@ export function defaultConfig(): PluginConfig {
     imageMaxBytes: 20 * 1024 * 1024,
     imageOutputDir: '',
     imageRetries: 1,
+    backgroundWakeup: false,
+    backgroundWakeupTtlMinutes: 30,
+    backgroundWakeupMaxPerSession: 12,
   }
 }

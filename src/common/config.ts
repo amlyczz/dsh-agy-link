@@ -185,6 +185,9 @@ export function resolveConfig(
     imageMaxBytes: asNum(get('imageMaxBytes')) ?? base.imageMaxBytes,
     imageOutputDir: asString(get('imageOutputDir')) ?? base.imageOutputDir,
     imageRetries: asNum(get('imageRetries')) ?? base.imageRetries,
+    backgroundWakeup: asBool(get('backgroundWakeup')) ?? base.backgroundWakeup,
+    backgroundWakeupTtlMinutes: asNum(get('backgroundWakeupTtlMinutes')) ?? base.backgroundWakeupTtlMinutes,
+    backgroundWakeupMaxPerSession: asNum(get('backgroundWakeupMaxPerSession')) ?? base.backgroundWakeupMaxPerSession,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -349,5 +352,19 @@ export function resolveConfig(
     const v = asNum(env.DSH_AGY_IMAGE_RETRIES)
     if (v !== undefined) cfg.imageRetries = v
   }
+  if (env.DSH_AGY_BACKGROUND_WAKEUP !== undefined) {
+    const bw = asBool(env.DSH_AGY_BACKGROUND_WAKEUP)
+    if (bw !== undefined) cfg.backgroundWakeup = bw
+  }
+  if (env.DSH_AGY_BACKGROUND_WAKEUP_TTL_MINUTES) {
+    const ttl = asNum(env.DSH_AGY_BACKGROUND_WAKEUP_TTL_MINUTES)
+    if (ttl !== undefined && ttl > 0) cfg.backgroundWakeupTtlMinutes = Math.min(240, Math.max(1, Math.floor(ttl)))
+  }
+  if (env.DSH_AGY_BACKGROUND_WAKEUP_MAX_PER_SESSION) {
+    const max = asNum(env.DSH_AGY_BACKGROUND_WAKEUP_MAX_PER_SESSION)
+    if (max !== undefined && max > 0) cfg.backgroundWakeupMaxPerSession = Math.min(100, Math.max(1, Math.floor(max)))
+  }
+  cfg.backgroundWakeupTtlMinutes = Math.min(240, Math.max(1, Math.floor(cfg.backgroundWakeupTtlMinutes)))
+  cfg.backgroundWakeupMaxPerSession = Math.min(100, Math.max(1, Math.floor(cfg.backgroundWakeupMaxPerSession)))
   return cfg
 }

@@ -33,7 +33,7 @@ export const COMMAND_REGISTRY: readonly CommandEntry[] = [
   { subs: ['models'], handle: handleModels },
   {
     subs: [
-      'mode', 'sandbox', 'agent', 'settings', 'transport', 'effort',
+      'mode', 'sandbox', 'agent', 'settings', 'transport', 'wakeup', 'effort',
       'dispatch', 'dispatch-retries',
       'parallel', 'max-concurrent',
       'workspace',

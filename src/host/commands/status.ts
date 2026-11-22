@@ -33,6 +33,7 @@ export async function renderStatus(deps: CommandDeps): Promise<string> {
     '- permission mode: ' + cfg.permissionMode + (cfg.permissionMode === 'skip' ? ' — WARNING: agy runs tools without approval' : ''),
     '- sandbox: ' + (cfg.sandbox ? 'on' : 'off'),
     '- transport: ' + cfg.transport + (cfg.transport === 'acp' && deps.acpStatus ? (() => { const s = deps.acpStatus(); return ` (${s.activeProcesses} proc, ${s.sessions} session(s))`; })() : ''),
+    '- background wakeup: ' + (cfg.backgroundWakeup ? 'on' : 'off') + (deps.backgroundStatus ? (() => { const w = deps.backgroundStatus(); return ` (watches: ${w.activeWatches}, timers: ${w.pendingTimers}, tasks: ${w.pendingTasks})`; })() : ''),
     ...(cfg.agent.trim() !== '' ? ['- agent: ' + cfg.agent.trim()] : []),
     ...(cfg.agySettings.trim() !== '' ? ['- settings override: ' + cfg.agySettings.trim()] : ''),
     '- workspace: ' + (cfg.workspaceRoot !== '' ? cfg.workspaceRoot : '(session cwd / process cwd)'),

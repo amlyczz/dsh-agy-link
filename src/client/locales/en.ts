@@ -207,6 +207,8 @@ export const en: AgyDictionary = {
   'config.imageToolDesc': 'Register the agy_image DSH tool so any model can generate or edit images via agy',
   'config.syncCustomizations': 'Multi-account ecosystem sync',
   'config.syncCustomizationsDesc': 'Automatically mirror primary Plugins, MCP servers, Skills, Rules, and Agents into isolated pool accounts',
+  'config.backgroundWakeup': 'Cross-turn background wakeup',
+  'config.backgroundWakeupDesc': 'Off by default. When on, idle DSH sessions wake up on their own when an agy timer fires or a background task / ACP session finishes',
   'config.agent': 'Default custom agent (--agent)',
   'config.agentDesc': 'Select a Markdown custom agent name; leave blank for the default agy agent',
   'config.agentPlaceholder': 'Custom agent name (blank = default)',

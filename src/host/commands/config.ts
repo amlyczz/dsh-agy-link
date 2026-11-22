@@ -91,6 +91,23 @@ export function handleConfig(deps: CommandDeps, ctx: CommandContext): CommandRes
     return ok(`Transport set to **${mode}** — effective next turn.`)
   }
 
+  if (sub === 'wakeup') {
+    const cur = deps.cfg().backgroundWakeup
+    if (arg === '' || arg === 'status') {
+      const st = deps.backgroundStatus?.()
+      const extra = st
+        ? ` (watches: ${st.activeWatches}, timers: ${st.pendingTimers}, tasks: ${st.pendingTasks})`
+        : ''
+      return ok(`Cross-turn background wakeup: **${cur ? 'on' : 'off'}**${extra} (usage: /agy wakeup <on|off|status>)`)
+    }
+    const val = arg.toLowerCase()
+    if (val !== 'on' && val !== 'off') {
+      return err('usage: /agy wakeup <on|off|status>')
+    }
+    deps.setOverride('backgroundWakeup', val === 'on')
+    return ok(`Cross-turn background wakeup set to **${val}**.`)
+  }
+
   if (sub === 'effort') {
     if (arg === '') {
       const cur = deps.cfg().defaultEffort || 'model default'

@@ -14,7 +14,7 @@ export function agyCommandDefinition(deps: CommandDeps): CommandDefinition {
     description: 'Antigravity (agy CLI) bridge: status, login, models, mode, diagnostics, goal',
     // Without `input`, DSH's composer treats `/agy <sub>` as an illegal bare
     // command and silently falls back to a normal chat message (issue #27).
-    input: { hint: '<status|pool|use|add-account|enable-account|disable-account|remove-account|refresh-quota|clear-cooldown|auth|auth-status|auth-code|import|image|goal|session|btw|fork|grill|learn|compact|mcp|plugins|agents|skills|sync-ecosystem|models|mode|sandbox|agent|settings|transport|effort|dispatch|dispatch-retries|parallel|max-concurrent|workspace|clear|doctor|help>' },
+    input: { hint: '<status|pool|use|add-account|enable-account|disable-account|remove-account|refresh-quota|clear-cooldown|auth|auth-status|auth-code|import|image|goal|session|btw|fork|grill|learn|compact|mcp|plugins|agents|skills|sync-ecosystem|models|mode|sandbox|agent|settings|transport|wakeup|effort|dispatch|dispatch-retries|parallel|max-concurrent|workspace|clear|doctor|help>' },
     handler: (invocation) => handle(deps, invocation.rawInput, invocation),
   }
 }
