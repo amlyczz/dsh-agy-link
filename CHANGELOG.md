@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.60 (2026-11-22)
+
+### English
+
+- **Fix(usage): the ACP transport reports the real token usage again (closes #158).** `agy acp` streams `session/update` with `usage_update` carrying only `{ used, size }` — the context-window occupancy at the end of an internal call, not a measurement of the call. The plugin promoted that number to `input_tokens`, and since a run reports `lastStepUsageRaw ?? resultRaw`, the placeholder shadowed the real `PromptResponse.usage`: the cache-hit rate stayed at 0%, the token speed read 0 tok/s, and the uncached input count was inflated (one multi-step turn could add up to 10M+).
+  - **`src/features/acp/protocol.ts`**: `usage_update` now records `used` in a new diagnostic field `lastContextUsed` and leaves `lastUsage` alone. An update that really carries `outputTokens` / `cachedReadTokens` still counts as a sample.
+  - **`src/host/recording.ts`**: `finalUsage()` prefers the last per-call sample only when it carries a token breakdown (`hasUsageBreakdown()`: output / cache read / cache write / thinking / total). An input-only sample now yields to the envelope, so the per-call-vs-cumulative protection the class was built for still holds.
+  - **Token speed has an honest fallback**: when no step reported output tokens, `speedStats()` measures the envelope's output count over the run's own event span (never below a 500 ms window) instead of reporting 0 tok/s.
+  - **No more placeholder `0/0` usage chunks**: a tool cut or a failed turn with no measurement now omits the usage chunk. DSH reads an absent chunk as "no new measurement", while an explicit `0/0` resets the context meter and drags the speed down.
+- **Regression tests**: `test/usage-acp.test.ts` (11 cases) pins the whole chain — a context reading never rides along on streamed steps, an update with real counts still does, a full ACP turn's final usage equals the `PromptResponse` usage, an input-only sample yields to the envelope, the no-measurement cases emit no chunk, and the speed fallback reports the envelope rate.
+
+### 中文
+
+- **修复(用量)：ACP 传输重新上报真实的 token 用量（关闭 #158）。** `agy acp` 的 `session/update` 里，`usage_update` 只带 `{ used, size }`——那是内部调用结束时的**上下文占用**，不是这次调用的用量。插件曾把它写进 `input_tokens`，而一次运行上报的是 `lastStepUsageRaw ?? resultRaw`，于是这个占位值盖掉了真实的 `PromptResponse.usage`：缓存命中率长期 0%、输出速度显示 0 tok/s、未命中 token 虚高（多步切分可累加到 10M+）。
+  - **`src/features/acp/protocol.ts`**：`usage_update` 改为把 `used` 记进新的诊断字段 `lastContextUsed`，不再碰 `lastUsage`；确实携带 `outputTokens` / `cachedReadTokens` 的更新仍算真实样本。
+  - **`src/host/recording.ts`**：`finalUsage()` 只在最后一条 per-call 样本确实带分项计数时才优先（`hasUsageBreakdown()`：output / cache read / cache write / thinking / total），只有 input 的样本让位给信封值——这个类原本要防的「per-call 与累计值混用」依然成立。
+  - **输出速度有了诚实的兜底**：没有任何 step 报过 output token 时，`speedStats()` 用信封的 output 数除以本轮事件跨度（窗口不小于 500ms）计算，而不是报 0 tok/s。
+  - **不再发占位的 `0/0` usage chunk**：没有测量的工具切步或失败回合直接省略该 chunk。DSH 把「没有 chunk」理解为「没有新的测量」，而显式 `0/0` 会重置上下文计量并把速度拖到 0。
+- **回归测试**：`test/usage-acp.test.ts`（11 个用例）钉住整条链路——上下文读数不会附着在流式 step 上、带真实计数的更新仍算样本、整轮 ACP 的最终 usage 与 `PromptResponse` 一致、只有 input 的样本让位给信封、无测量的两种情况不发 chunk、速度兜底给出信封速率。
+
 ## 0.6.59 (2026-11-22)
 
 ### English

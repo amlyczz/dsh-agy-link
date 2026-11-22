@@ -26,7 +26,22 @@ export interface AcpStreamState {
   textSeq: number
   thoughtSeq: number
   accumulatedText: string
+  /**
+   * Usage sample attached to streamed steps. agy 1.5.x's `usage_update` only
+   * carries { used, size } — a context-window occupancy figure, NOT a usage
+   * sample — so this stays empty until an update reports real token counts
+   * (output / cache read / cache write). See issue #158: writing `used` into
+   * `input_tokens` made the run's final usage `{inputTokens: used,
+   * outputTokens: 0}`, which zeroed the cache-hit rate and the token speed and
+   * inflated the uncached input count.
+   */
   lastUsage: RawUsage
+  /**
+   * Latest context-window occupancy from `usage_update`. Diagnostic only: it
+   * never reaches DSH's token meter, because "context used" is not "tokens
+   * billed this call".
+   */
+  lastContextUsed: number
   toolArgsByCallId: Map<string, { name: string; args: unknown }>
 }
 
@@ -36,6 +51,7 @@ export function createAcpStreamState(): AcpStreamState {
     thoughtSeq: 0,
     accumulatedText: '',
     lastUsage: {},
+    lastContextUsed: 0,
     toolArgsByCallId: new Map(),
   }
 }
@@ -126,8 +142,20 @@ export function acpUpdateToAgyEvents(
     return []
   }
   if (kind === 'usage_update') {
+    // agy 1.5.x sends { used, size } only: the context window occupancy at the
+    // end of the internal call. It carries NO output/cache breakdown, so it is
+    // recorded as a diagnostic figure and never promoted to a usage sample —
+    // doing that overwrote the real `PromptResponse.usage` with
+    // {inputTokens: used, outputTokens: 0} (issue #158: 0% cache hit, 0 tok/s,
+    // inflated uncached input).
     const used = num(update.used)
-    if (used !== undefined) state.lastUsage.input_tokens = used
+    if (used !== undefined) state.lastContextUsed = used
+    // A cache-read or output count, when a future agy version does send one,
+    // still counts as a real sample.
+    const cachedRead = num(update.cachedReadTokens) ?? num(update.cache_read_tokens) ?? num(update.cached_read_tokens)
+    const outputTokens = num(update.outputTokens) ?? num(update.output_tokens)
+    if (cachedRead !== undefined) state.lastUsage.cache_read_tokens = cachedRead
+    if (outputTokens !== undefined) state.lastUsage.output_tokens = outputTokens
     return []
   }
   if (kind === 'tool_call' || kind === 'tool_call_update') {

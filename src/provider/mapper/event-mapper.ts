@@ -522,11 +522,10 @@ export class EventMapper {
     const close = this.closeOpen()
     if (close) yield close
     const tracked = this.opts.usage?.finalUsage({})
-    yield {
-      type: 'usage',
-      usage: tracked !== undefined && Object.keys(tracked).length > 0
-        ? usageFromRaw(tracked)
-        : { inputTokens: 0, outputTokens: 0 },
+    // No sample means "no measurement", not "zero tokens": emitting 0/0 would
+    // reset DSH's context meter on a failed turn (issue #158).
+    if (tracked !== undefined && Object.keys(tracked).length > 0) {
+      yield { type: 'usage', usage: usageFromRaw(tracked) }
     }
     const failure: LlmFailure = {
       message,
