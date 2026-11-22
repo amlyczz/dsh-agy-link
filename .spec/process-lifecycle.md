@@ -73,7 +73,8 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
 - **CLI 参数透传（`src/provider/attempt.ts`, `src/host/oneshot.ts`）**：
   - 支持结构化透传 `--agent`（`agent` / `agyAgent`）、`--settings`（`agySettings`）、`--json-schema`（`agyJsonSchema` / `schemaArgs()` 自动写临时 schema 并清理）与 `--sandbox`。
 - **跨回合后台唤醒（`src/features/background/watcher.ts`, `BackgroundWakeWatcher`）**：
-  - 当回合结束前触发过一次性 `schedule`（`DurationSeconds > 0` 且未在同回合内完成）、存在 `RUNNING` 后台工具/`SUBAGENT_STATE_ALIVE` 子代理或 ACP 后台会话时，宿主按 `backgroundWakeupTtlMinutes` / `backgroundWakeupMaxPerSession` 保留计时器与 `.system_generated/` + ACP 会话监听，并在不归档、无活跃 `liveRun`、`agent.status !== 'running'` 且无重复入队 notice 时通过 `sessionController.resolveAgent` + `agent.followup(createUserMessage({ source: { kind: 'plugin', plugin: 'agy-link', form: 'notice', summary } }))` 唤醒 DSH 会话；`AcpSessionPool.evictIdle()` 对受保留的后台 ACP 会话豁免空闲超时驱逐。
+  - **opt-in**：`backgroundWakeup` 默认 `false`；未显式开启（设置页「跨回合后台自动唤醒」/ `/agy config wakeup on` / `DSH_AGY_BACKGROUND_WAKEUP=1`）时下列保留与唤醒逻辑一律不启动。ACP 常驻进程的回合后保留（`retainSession` / `attachAcpWatch`）同样受这一个开关控制，`transport` 只决定走哪条通道，两者不互相隐式启用。
+  - 当回合结束前触发过一次性 `schedule`（`DurationSeconds > 0` 且未在同回合内完成）、存在 `RUNNING` 后台工具/`SUBAGENT_STATE_ALIVE` 子代理或 ACP 后台会话时，宿主按 `backgroundWakeupTtlMinutes` / `backgroundWakeupMaxPerSession` 保留计时器与 `.system_generated/` + ACP 会话监听，并在不归档、无活跃 `liveRun`、`agent.status !== 'running'` 且无重复入队 notice 时通过 `sessionController.resolveAgent` + `agent.followup(createUserMessage({ source: { kind: 'plugin:agy-link', form: 'notice', summary } }))` 唤醒 DSH 会话；`AcpSessionPool.evictIdle()` 对受保留的后台 ACP 会话豁免空闲超时驱逐。唤醒通知的来源必须使用生产者自有 kind（`src/common/agy-link-source.ts` 的 `plugin:agy-link`）；会话格式 v4 会拒绝已退役的 `{ kind: 'plugin', plugin: 'agy-link' }` 包装并在落盘前丢弃整批消息。
 - **锚点**：`test/acp.test.ts`、`test/mcp-ready-disposal.test.ts`、`test/http-contract.test.ts`、`test/background-followup-wakeup.test.ts`。
 
 ## 6. `agy_tool` 镜像工具活性守卫与 `UNKNOWN_TOOL` 误报消除
