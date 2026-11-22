@@ -4,6 +4,22 @@
 
 ### English
 
+- **Fix(acp): report the real token usage instead of the context-window figure (merges PR #165, fixes #158).** agy 1.5.x's `usage_update` carries only `{ used, size }` — a context-window occupancy figure, **not** a usage sample. Writing `used` into `input_tokens` made the run's final usage `{ inputTokens: used, outputTokens: 0 }`, which zeroed the cache-hit rate and the token speed and inflated the uncached input count (multi-step runs accumulated 10M+). `used` is now recorded as a diagnostic-only `lastContextUsed` and never promoted to a usage sample; a future update that really carries cache-read/output counts is still honoured. 178 lines of new tests.
+- **Feat(wakeup): cross-turn background wakeup, opt-in (merges PR #164, supersedes #156).** When an agy `schedule` timer, a detached task/subagent, or a persistent ACP update finishes **after** the turn returned, an idle DSH session can now be woken with a followup prompt. Three slices in one PR: keep one-shot `schedule` timers alive across turns, wake on detached task/message/subagent completion, and keep an ACP session alive while its background work runs.
+  - **It is off by default** (`backgroundWakeup: false`): a session that speaks on its own after the turn is a behaviour change every user has to ask for. Turn it on in Settings → Runtime controls, with `/agy wakeup <on|off|status>`, or `DSH_AGY_BACKGROUND_WAKEUP=1`.
+  - Guardrails: 30-minute TTL, at most 12 wakeups per session between real human turns, archived sessions skipped, an active run blocks the wake, message ids de-duplicated, and language-server restart notices ignored so dead CLI subagents cannot cause retry loops.
+
+### 中文
+
+- **修复(acp)：报告真实的 token 用量，而不是上下文窗口占用（合并 PR #165，修复 #158）。** agy 1.5.x 的 `usage_update` 只携带 `{ used, size }`——这是**上下文窗口占用**，不是用量样本。把 `used` 写进 `input_tokens`，会让该轮最终用量变成 `{ inputTokens: used, outputTokens: 0 }`，于是缓存命中率与输出速度归零、未缓存输入虚高（多步运行可累加到 10M+）。现在 `used` 只作为诊断字段 `lastContextUsed` 记录，绝不提升为用量样本；若未来版本真的携带 cache-read/output 计数，仍会被采纳。新增 178 行测试。
+- **特性(唤醒)：跨轮后台唤醒，可选开启（合并 PR #164，取代 #156）。** 当 agy 的 `schedule` 定时器、游离任务/子代理、或持久 ACP 更新在**回合结束之后**才完成时，空闲的 DSH 会话现在可以被一条 followup prompt 唤醒。一个 PR 内含三片：让一次性 `schedule` 定时器跨轮存活、在游离任务/消息/子代理完成时唤醒、在 ACP 会话仍有后台工作时保活。
+  - **默认关闭**（`backgroundWakeup: false`）：会话在回合结束后自己说话，是每个用户都必须主动要求的行为变更。可在 设置 → 运行时控制、`/agy wakeup <on|off|status>`、或 `DSH_AGY_BACKGROUND_WAKEUP=1` 开启。
+  - 护栏：30 分钟 TTL、每会话在两次真人回合之间最多 12 次唤醒、归档会话跳过、活跃 run 阻止唤醒、消息 id 去重、语言服务器重启通知被忽略（避免死掉的 CLI 子代理引发重试循环）。
+
+## 0.6.60 (2026-11-22)
+
+### English
+
 - **Fix(usage): the ACP transport reports the real token usage again (closes #158).** `agy acp` streams `session/update` with `usage_update` carrying only `{ used, size }` — the context-window occupancy at the end of an internal call, not a measurement of the call. The plugin promoted that number to `input_tokens`, and since a run reports `lastStepUsageRaw ?? resultRaw`, the placeholder shadowed the real `PromptResponse.usage`: the cache-hit rate stayed at 0%, the token speed read 0 tok/s, and the uncached input count was inflated (one multi-step turn could add up to 10M+).
   - **`src/features/acp/protocol.ts`**: `usage_update` now records `used` in a new diagnostic field `lastContextUsed` and leaves `lastUsage` alone. An update that really carries `outputTokens` / `cachedReadTokens` still counts as a sample.
   - **`src/host/recording.ts`**: `finalUsage()` prefers the last per-call sample only when it carries a token breakdown (`hasUsageBreakdown()`: output / cache read / cache write / thinking / total). An input-only sample now yields to the envelope, so the per-call-vs-cumulative protection the class was built for still holds.

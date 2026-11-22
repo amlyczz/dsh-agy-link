@@ -49,3 +49,12 @@ DSH 会在工具结果之后追加**宿主生成**的上下文消息。各生产
 - **实时可见**：转后台的 `run_command` 任务日志（`.system_generated/tasks/*.log`）与完成/取消通知（`.system_generated/messages/{,undelivered/}*.json`）必须被增量跟随，而不是等到回合结束；ACP 运行同样要启用 tracker（`runAcpAttempt` 曾漏配）。跟随实现需满足：UTF-8 多字节安全、单次读取有界、续跑时以 EOF 为基线（避免重放历史）、消息按 id 去重、`stop()` 做最终同步 flush。
 - **中断横幅只对真正被中断的回合**：前一轮**已产出可消费结果**（`hasConsumableResult`）时，收尾超过 1.5 秒只是正常 shutdown，**不得**设置 `binding.interrupted` 或注入「上一轮被中断」文案——否则会对一个已经作答的回合说谎，并污染下一轮的上下文。
 - 锚点：`test/background-task-visibility.test.ts`（371 行：跟随、去重、续跑基线、可消费结果不标中断）。
+
+## 跨轮后台唤醒（PR #164，取代 #156）
+
+回合结束后，agy 的后台工作（`schedule` 定时器、游离任务/子代理、持久 ACP 更新）可能才完成。唤醒机制可以把空闲会话重新拉起来，但**默认必须关闭**。
+
+- **默认 `backgroundWakeup: false`**：会话在回合结束后自己说话属于行为变更，必须由用户显式开启（设置页 / `/agy wakeup on` / `DSH_AGY_BACKGROUND_WAKEUP=1`）。
+- 护栏（缺一不可）：30 分钟 TTL、每会话在两次真人回合之间最多 12 次唤醒、归档会话跳过、活跃 run 阻止唤醒、消息 id 去重、忽略语言服务器重启通知（否则已死的 CLI 子代理会造成重试循环）。
+- 判定「空闲」与真正 `followup()` 之间存在竞态窗口，注入策略需保证不与用户正在进行的回合交错。
+- 锚点：`test/background-followup-wakeup.test.ts` 等三片的用例。

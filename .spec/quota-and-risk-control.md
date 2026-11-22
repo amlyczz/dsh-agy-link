@@ -135,3 +135,12 @@ agy 启动时从凭证库取 token，该读取只有 10 秒预算。token 已过
 - 规则：CLI 轮询前要求 token 仍有 `CLI_TOKEN_SAFETY_MS`（2 分钟）寿命；不足则先刷新，仍不足则**跳过本轮 CLI，改用 REST**。跳过一轮无代价，弹浏览器窗口则以用户注意力为代价。
 - 不要把"几秒钟的聪明"引入每小时才跑一次的轮询——边际取得足够宽，比精确贴近失效点更重要。
 - 锚点：`test/quota-cli-token.test.ts`（121 行纯函数 + 226 行用例）。
+
+## ACP 的 `usage_update` 不是用量样本（PR #165 / issue #158）
+
+agy 1.5.x 的 `session/update`（`usage_update`）**只带 `{ used, size }`**——那是上下文窗口占用，**不是**本次调用的计费 token。
+
+- **不得**把 `used` 写入 `input_tokens`：那会让该轮最终 usage 变成 `{ inputTokens: used, outputTokens: 0 }`，导致缓存命中率 0%、输出速度 0 tok/s、未缓存输入虚高。真实数字只在 `PromptResponse.usage` 里。
+- `used` 仅作诊断记录（`lastContextUsed`）。只有当更新真的携带 `cachedReadTokens` / `outputTokens` 时才可作为用量样本。
+- 通用原则：**「上下文占用」与「计费用量」是两个量，永不互相替代。**
+- 锚点：`test/usage-acp.test.ts`（178 行）。
