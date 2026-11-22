@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { agyCommandDefinition } from '../src/host/commands.ts'
+import { COMMAND_REGISTRY } from '../src/host/commands/registry.ts'
+import { HELP } from '../src/host/commands/shared.ts'
 import { defaultConfig } from '../src/common/types.ts'
 
 const baseDeps = {
@@ -459,5 +461,126 @@ test('agy goal delegates to GoalService (1:1 semantics, 0-redundancy & idempoten
   const spacedReply = (await def.handler({ rawInput: 'workspace ' + spacedWorkspace } as never)).text ?? ''
   assert.ok(spacedReply.includes(spacedWorkspace), 'the spaced path must be echoed back intact: ' + spacedReply)
   assert.equal(overrides.workspaceRoot, spacedWorkspace)
+})
+
+test('commands normalize case, handle multi-word aliases, pick newest session binding, idempotent fallback goal resume, notifyPicker on models, and preserve help/hint parity', async (t) => {
+  const { AccountPoolManager } = await import('../src/host/pool.ts')
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'agy-cmd-audit-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  const cfg = defaultConfig()
+  const overrides: Record<string, unknown> = {}
+  const pool = new AccountPoolManager(dir)
+  const mwAcc = pool.createAccountSlot('Work Team Alpha')
+  pool.recordFailure(mwAcc.id, 'google', '429')
+  let authCodeSeen = ''
+  let pickerCount = 0
+
+  const absQuoteWs = process.platform === 'win32' ? 'C:\\Quoted Ws\\proj' : '/tmp/Quoted Ws/proj'
+  const def = agyCommandDefinition({
+    cfg: () => cfg,
+    bin: () => 'agy',
+    version: () => '1.5.12',
+    auth: () => null,
+    catalog: () => ({
+      get: () => ({ source: 'fallback', models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }] }),
+      forceRefresh: async () => ({ source: 'discovered', models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }] }),
+    }),
+    store: () => ({
+      all: () => ({
+        'sess-1:older': { conversationId: 'conv-old', model: 'm-old', lastMessageCount: 2, updatedAt: 100 },
+        'sess-1:newer': { conversationId: 'conv-new', model: 'm-new', lastMessageCount: 9, updatedAt: 200 },
+      }),
+      cleanupStaleAccounts: () => {},
+    }),
+    pool: () => pool,
+    poolAuth: () => ({
+      beginPrimary: async () => ({ ok: true }),
+      beginAccount: async () => ({ ok: true }),
+      submitCode: async (code: string) => { authCodeSeen = code; return { ok: true } },
+      status: () => ({ phase: 'idle' }),
+    }),
+    lastRun: () => null,
+    runDoctor: async () => '',
+    acpStatus: () => ({ activeProcesses: 0, sessions: 0, keys: [] }),
+    notifyPicker: () => { pickerCount++ },
+    setOverride: (k: string, v: unknown) => {
+      overrides[k] = v
+      ;(cfg as unknown as Record<string, unknown>)[k] = v
+    },
+  } as never)
+
+  // Case-insensitive commands/args & quoted workspace
+  assert.match((await def.handler({ rawInput: 'STATUS' } as never)).text ?? '', /1\.5\.12/)
+  assert.equal((await def.handler({ rawInput: 'MODE AUTO' } as never)).kind, 'success')
+  assert.equal(overrides.permissionMode, 'auto')
+  assert.equal((await def.handler({ rawInput: 'SANDBOX ON' } as never)).kind, 'success')
+  assert.equal(overrides.sandbox, true)
+  assert.equal((await def.handler({ rawInput: 'AGENT custom-one' } as never)).kind, 'success')
+  assert.equal((await def.handler({ rawInput: 'AGENT OFF' } as never)).kind, 'success')
+  assert.equal(overrides.agent, '')
+  assert.equal((await def.handler({ rawInput: 'SETTINGS CLEAR' } as never)).kind, 'success')
+  assert.equal(overrides.agySettings, '')
+  assert.match((await def.handler({ rawInput: 'TRANSPORT STATUS' } as never)).text ?? '', /ACP active processes/)
+  assert.equal((await def.handler({ rawInput: `WORKSPACE "${absQuoteWs}"` } as never)).kind, 'success')
+  assert.equal(overrides.workspaceRoot, absQuoteWs)
+  assert.equal((await def.handler({ rawInput: 'WORKSPACE DEFAULT' } as never)).kind, 'success')
+  assert.equal(overrides.workspaceRoot, '')
+
+  // Multi-word alias support across pool actions + quoted multi-token auth-code
+  assert.match((await def.handler({ rawInput: 'use Work Team Alpha claude' } as never)).text ?? '', new RegExp(mwAcc.id))
+  assert.equal(pool.getActiveAccountId('anthropic'), mwAcc.id)
+  const badFam = await def.handler({ rawInput: 'use Work Team Alpha badfam' } as never)
+  assert.equal(badFam.kind, 'error')
+  assert.match(badFam.text ?? '', /Unknown model family "badfam"/)
+  assert.match((await def.handler({ rawInput: 'disable-account Work Team Alpha' } as never)).text ?? '', /Disabled/)
+  assert.equal(pool.getAccount(mwAcc.id)?.enabled, false)
+  assert.match((await def.handler({ rawInput: 'enable-account Work Team Alpha' } as never)).text ?? '', /Enabled/)
+  assert.equal(pool.getAccount(mwAcc.id)?.enabled, true)
+  assert.match((await def.handler({ rawInput: 'clear-cooldown Work Team Alpha gemini' } as never)).text ?? '', /Cleared cooldown/)
+  assert.match((await def.handler({ rawInput: 'auth-code "code part one"' } as never)).text ?? '', /Logged in/)
+  assert.equal(authCodeSeen, 'code part one')
+  assert.match((await def.handler({ rawInput: 'remove-account Work Team Alpha' } as never)).text ?? '', new RegExp(`Removed account ${mwAcc.id}`))
+
+  // /agy session info picks newest binding by updatedAt and reports binding count
+  const sessInfo = await def.handler({ rawInput: 'SESSION INFO', agent: { id: 'sess-1' } } as never)
+  assert.match(sessInfo.text ?? '', /conv-new/)
+  assert.match(sessInfo.text ?? '', /Account Bindings.*2/)
+
+  // Fallback /agy goal resume idempotency when already active
+  let appended = false
+  const fbGoalRes = await def.handler({
+    rawInput: 'goal resume',
+    agent: {
+      id: 'sess-goal-fb',
+      session: {
+        snapshotEvents: () => [
+          { type: 'goal/change', data: { kind: 'goal/change', operation: 'create', goal: { id: 'g-fb', revision: 1, objective: 'Ship Y', phase: 'active' } } },
+        ],
+        append: () => { appended = true },
+      },
+    },
+  } as never)
+  assert.equal(fbGoalRes.kind, 'success')
+  assert.match(fbGoalRes.text ?? '', /already active/)
+  assert.equal(appended, false)
+
+  // /agy models notifies picker
+  const prevPicker = pickerCount
+  await def.handler({ rawInput: 'models' } as never)
+  assert.equal(pickerCount, prevPicker + 1)
+
+  // Completeness parity across COMMAND_REGISTRY, HELP, and input.hint
+  const registrySubs = new Set(COMMAND_REGISTRY.flatMap((e) => e.subs))
+  for (const sub of registrySubs) {
+    assert.ok(HELP.includes(`/agy ${sub}`), `HELP is missing documentation for /agy ${sub}`)
+  }
+  const hintTokens = def.input!.hint.replace(/^<|>$/g, '').split('|').filter(Boolean)
+  for (const token of hintTokens) {
+    assert.ok(token === 'help' || registrySubs.has(token), `input.hint token "${token}" missing from COMMAND_REGISTRY`)
+  }
 })
 

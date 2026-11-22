@@ -1,8 +1,10 @@
 // /agy image — generate or edit images inline from chat via ImageService.
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { isAbsolute, resolve } from 'node:path'
 import { formatImageResultMarkdown } from '../image-tool.ts'
 import type { ImageRequest } from '../image.ts'
 import { err, ok, type CommandContext, type CommandDeps } from './shared.ts'
+import { resolveSessionWorkspace } from './slash-context.ts'
 
 const IMAGE_USAGE = [
   'Usage: `/agy image <prompt> [-a <ratio>] [-n <name>] [-i <refPath>] [-o <outPath>] [--model <id>] [--effort <level>]`',
@@ -120,7 +122,18 @@ export async function handleImage(deps: CommandDeps, ctx: CommandContext): Promi
   const parsed = parseImageCommandInput(ctx.raw || `${ctx.sub} ${ctx.arg}`.trim())
   if ('error' in parsed) return err(parsed.error)
 
-  const res = await deps.imageService().generate(parsed)
+  const baseCwd = resolveSessionWorkspace(deps, ctx) || process.cwd()
+  const resolvedReq: ImageRequest = {
+    ...parsed,
+    ...(parsed.imagePaths
+      ? { imagePaths: parsed.imagePaths.map((p) => (isAbsolute(p) ? p : resolve(baseCwd, p))) }
+      : {}),
+    ...(parsed.outPath && !isAbsolute(parsed.outPath)
+      ? { outPath: resolve(baseCwd, parsed.outPath) }
+      : {}),
+  }
+
+  const res = await deps.imageService().generate(resolvedReq, ctx.invocation?.signal)
   if (!res.ok) {
     return err(`Image generation failed (${res.code ?? 'AGY_ERROR'}): ${res.error ?? 'unknown error'}`)
   }

@@ -323,6 +323,9 @@ export function handleGoal(deps: CommandDeps, ctx: CommandContext): CommandResul
     if (activeGoal.phase === 'complete') {
       return err(`Cannot resume completed goal \`${activeGoal.id}\`. Create a new goal instead.`)
     }
+    if (activeGoal.phase === 'active') {
+      return ok(`▶️ Goal \`${activeGoal.id}\` is already active.`)
+    }
     const maxRounds = activeGoal.maxGoalRounds ?? 256
     if (roundsStarted >= maxRounds) {
       return err(`Goal \`${activeGoal.id}\` exhausted ${maxRounds} goal rounds.`)
@@ -383,7 +386,7 @@ function dropSessionBindings(store: ReturnType<CommandDeps['store']>, sessionId:
 }
 
 export function handleSession(deps: CommandDeps, ctx: CommandContext): CommandResult {
-  const action = ctx.arg || 'info'
+  const action = (ctx.arg || 'info').toLowerCase()
   const sessionId = ctx.invocation?.agent?.id ? String(ctx.invocation.agent.id) : undefined
   const session = (ctx.invocation?.agent?.session as SessionView | undefined)
     ?? (deps.sessions?.() && sessionId ? (deps.sessions()!.get(sessionId) as SessionView) : undefined)
@@ -395,14 +398,17 @@ export function handleSession(deps: CommandDeps, ctx: CommandContext): CommandRe
       const cwd = session?.header?.cwd
       if (cwd) lines.push(`- **Workspace CWD**: \`${cwd}\``)
       const bindings = deps.store().all()
-      const matchedKey = Object.keys(bindings).find((k) => k === sessionId || k.startsWith(`${sessionId}:`))
-      if (matchedKey && bindings[matchedKey]) {
-        const b = bindings[matchedKey]
+      const matches = Object.entries(bindings)
+        .filter(([k, v]) => (k === sessionId || k.startsWith(`${sessionId}:`)) && v != null)
+        .sort(([, a], [, b]) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      const latestBinding = matches[0]?.[1]
+      if (latestBinding) {
         lines.push(
-          `- **Bound agy Conversation**: \`${b.conversationId}\``,
-          `- **Bound Model**: \`${b.model || 'default'}\``,
-          `- **Last Message Count**: ${b.lastMessageCount}`,
-          `- **Last Updated**: ${new Date(b.updatedAt).toLocaleTimeString()}`,
+          `- **Bound agy Conversation**: \`${latestBinding.conversationId}\``,
+          `- **Bound Model**: \`${latestBinding.model || 'default'}\``,
+          `- **Last Message Count**: ${latestBinding.lastMessageCount}`,
+          `- **Last Updated**: ${new Date(latestBinding.updatedAt).toLocaleTimeString()}`,
+          ...(matches.length > 1 ? [`- **Account Bindings**: ${matches.length}`] : []),
         )
       } else {
         lines.push('- **Bound agy Conversation**: *(none - next turn starts fresh)*')

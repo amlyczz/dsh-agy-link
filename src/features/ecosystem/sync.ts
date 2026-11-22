@@ -6,6 +6,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { writeFileAtomicSync } from '../../common/atomic-write.ts'
 import type { EcosystemSyncReport } from '../../common/ecosystem-types.ts'
 import type { ManagedAccount } from '../../common/pool-types.ts'
+import { isInternalBridgeKey } from './inventory.ts'
 
 const SENSITIVE_NAME_RE = /^(?:\.env(?:\.|$)|antigravity-oauth-token(?:\.bak)?$|\.primary-credential\.json$|id_rsa$|id_ed25519$)|(?:\.pem|\.key)$/i
 const SYNC_SUBDIRS = ['plugins', 'skills', 'rules', 'agents'] as const
@@ -108,11 +109,13 @@ function mergeMcpConfig(primaryFile: string, targetFile: string): boolean {
 
   const nextServers: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(primaryServers)) {
-    if (k === 'dsh-tools') continue
+    if (isInternalBridgeKey(k)) continue
     nextServers[k] = v
   }
-  if (targetServers['dsh-tools'] !== undefined) {
-    nextServers['dsh-tools'] = targetServers['dsh-tools']
+  for (const [k, v] of Object.entries(targetServers)) {
+    if (isInternalBridgeKey(k)) {
+      nextServers[k] = v
+    }
   }
 
   const nextObj = { ...target, mcpServers: nextServers }

@@ -4,6 +4,7 @@ import { ok, type CommandDeps } from './shared.ts'
 
 export async function handleModels(deps: CommandDeps): Promise<CommandResult> {
   const cat = await deps.catalog().forceRefresh()
+  deps.notifyPicker?.()
   const lines = [
     '**Antigravity models** — source: ' + cat.source + (cat.lastError === undefined ? '' : ' — ' + cat.lastError) + ':',
   ]

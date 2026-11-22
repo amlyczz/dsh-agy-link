@@ -14,14 +14,14 @@ export function agyCommandDefinition(deps: CommandDeps): CommandDefinition {
     description: 'Antigravity (agy CLI) bridge: status, login, models, mode, diagnostics, goal',
     // Without `input`, DSH's composer treats `/agy <sub>` as an illegal bare
     // command and silently falls back to a normal chat message (issue #27).
-    input: { hint: '<status|pool|use|enable-account|disable-account|image|goal|session|btw|fork|grill|learn|compact|mcp|plugins|agents|skills|sync-ecosystem|models|mode|sandbox|agent|settings|transport|effort|dispatch|dispatch-retries|parallel|max-concurrent|workspace|clear|doctor|help>' },
+    input: { hint: '<status|pool|use|add-account|enable-account|disable-account|remove-account|refresh-quota|clear-cooldown|auth|auth-status|auth-code|import|image|goal|session|btw|fork|grill|learn|compact|mcp|plugins|agents|skills|sync-ecosystem|models|mode|sandbox|agent|settings|transport|effort|dispatch|dispatch-retries|parallel|max-concurrent|workspace|clear|doctor|help>' },
     handler: (invocation) => handle(deps, invocation.rawInput, invocation),
   }
 }
 
 async function handle(deps: CommandDeps, raw: string, invocation?: CommandInvocation): Promise<CommandResult> {
   const parts = raw.trim().split(/\s+/).filter(Boolean)
-  const sub = parts[0] ?? 'help'
+  const sub = (parts[0] ?? 'help').toLowerCase()
   const arg = parts[1] ?? ''
   try {
     return await dispatchCommand(deps, { sub, arg, parts, raw, invocation })

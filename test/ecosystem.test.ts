@@ -284,3 +284,81 @@ test('EcosystemService & /agy ecosystem commands handle sync, plugin toggling, a
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('ecosystem ignores dsh-tools-* bridges during inspect/sync, preserves target bridge, resolves session cwd, and rejects invalid sub-actions', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-eco-bridge-'))
+  try {
+    const primary = join(root, 'primary')
+    const accDir = join(root, 'acc2')
+    const sessionWs = join(root, 'session-ws')
+    mkdirSync(join(primary, '.gemini', 'config'), { recursive: true })
+    mkdirSync(join(accDir, '.gemini', 'config'), { recursive: true })
+    mkdirSync(join(sessionWs, '.agents', 'skills', 'ws-skill'), { recursive: true })
+
+    writeFileSync(
+      join(primary, '.gemini', 'config', 'mcp_config.json'),
+      JSON.stringify({
+        mcpServers: {
+          'dsh-tools': { url: 'http://127.0.0.1:1111/mcp' },
+          'dsh-tools-54321': { url: 'http://127.0.0.1:54321/mcp' },
+          'ext-mcp': { command: 'node', args: ['ext.js'] },
+        },
+      }),
+    )
+    writeFileSync(
+      join(accDir, '.gemini', 'config', 'mcp_config.json'),
+      JSON.stringify({
+        mcpServers: {
+          'dsh-tools-61234': { url: 'http://127.0.0.1:61234/mcp' },
+          stale: { command: 'node', args: ['stale.js'] },
+        },
+      }),
+    )
+    writeFileSync(
+      join(sessionWs, '.agents', 'skills', 'ws-skill', 'SKILL.md'),
+      '---\nname: ws-skill\ndescription: session ws skill\n---\n',
+    )
+
+    const inspected = inspectEcosystem({ primaryHome: primary })
+    assert.deepEqual(inspected.mcpServers.map((m) => m.name), ['ext-mcp'])
+
+    syncEcosystemToPool({ primaryHome: primary, accounts: [makeAccount(accDir, 'acc_2')] })
+    const syncedMcp = JSON.parse(readFileSync(join(accDir, '.gemini', 'config', 'mcp_config.json'), 'utf8')) as {
+      mcpServers: Record<string, unknown>
+    }
+    assert.ok('ext-mcp' in syncedMcp.mcpServers)
+    assert.ok('dsh-tools-61234' in syncedMcp.mcpServers)
+    assert.equal('dsh-tools-54321' in syncedMcp.mcpServers, false)
+    assert.equal('dsh-tools' in syncedMcp.mcpServers, false)
+
+    const cfg = defaultConfig()
+    const eco = new EcosystemService({ primaryHome: primary, pool: { getAccounts: () => [] }, getConfig: () => cfg })
+    const deps: CommandDeps = {
+      cfg: () => cfg,
+      bin: () => 'agy',
+      version: () => '1.5.12',
+      auth: () => ({} as never),
+      catalog: () => ({} as never),
+      store: () => ({} as never),
+      pool: () => ({} as never),
+      lastRun: () => null,
+      runDoctor: async () => '',
+      setOverride: () => {},
+      ecosystem: () => eco,
+    }
+    const inv = { agent: { id: 's-eco', session: { header: { cwd: sessionWs } } } } as never
+
+    const skillsRes = handleEcosystem(deps, { sub: 'skills', arg: '', parts: ['skills'], raw: '/agy skills', invocation: inv })
+    assert.match(skillsRes.text ?? '', /ws-skill/)
+
+    const badPlugin = handleEcosystem(deps, { sub: 'plugins', arg: 'foo', parts: ['plugins', 'foo'], raw: '/agy plugins foo', invocation: inv })
+    assert.equal(badPlugin.kind, 'error')
+    assert.match(badPlugin.text ?? '', /Usage:/)
+
+    const badAgent = handleEcosystem(deps, { sub: 'agents', arg: 'foo', parts: ['agents', 'foo'], raw: '/agy agents foo', invocation: inv })
+    assert.equal(badAgent.kind, 'error')
+    assert.match(badAgent.text ?? '', /Usage:/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

@@ -1,6 +1,7 @@
 // /agy ecosystem commands: plugins, mcp, agents, skills, and sync-ecosystem.
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { err, ok, type CommandContext, type CommandDeps } from './shared.ts'
+import { resolveSessionWorkspace } from './slash-context.ts'
 
 function formatSourceTag(source: string, pluginName?: string): string {
   return pluginName ? `${source}:${pluginName}` : source
@@ -13,6 +14,7 @@ export function handleEcosystem(deps: CommandDeps, ctx: CommandContext): Command
   }
   const { sub, parts, raw } = ctx
   const action = (parts[1] ?? '').toLowerCase()
+  const workspaceRoot = resolveSessionWorkspace(deps, ctx)
 
   if (sub === 'sync-ecosystem' || sub === 'sync') {
     const report = eco.syncAll({ force: true })
@@ -29,15 +31,18 @@ export function handleEcosystem(deps: CommandDeps, ctx: CommandContext): Command
     return ok(lines.join('\n'))
   }
 
-  const snap = eco.inspect()
+  const snap = eco.inspect(workspaceRoot)
 
   if (sub === 'plugins') {
     if (action === 'enable' || action === 'disable') {
       const id = (parts[2] ?? '').trim()
       if (!id) return err(`Usage: /agy plugins ${action} <plugin-id>`)
-      const updated = eco.setPluginEnabled(id, action === 'enable')
+      const updated = eco.setPluginEnabled(id, action === 'enable', workspaceRoot)
       const target = updated.plugins.find((p) => p.id === id)
       return ok(`Plugin **${target?.name ?? id}** (\`${id}\`) ${action === 'enable' ? 'enabled' : 'disabled'}.`)
+    }
+    if (action !== '' && action !== 'list') {
+      return err('Usage: /agy plugins [list|enable <id>|disable <id>]')
     }
     if (snap.plugins.length === 0) {
       return ok('No Antigravity plugins installed (checked `~/.gemini/config/plugins` and `.agents/plugins`).')
@@ -82,6 +87,9 @@ export function handleEcosystem(deps: CommandDeps, ctx: CommandContext): Command
     if (action === 'off' || action === 'clear' || action === 'default') {
       deps.setOverride('agent', '')
       return ok('Custom agent cleared (back to default agy agent) — effective next turn.')
+    }
+    if (action !== '' && action !== 'list') {
+      return err('Usage: /agy agents [list|use <name>|off]')
     }
     const current = deps.cfg().agent.trim()
     if (snap.agents.length === 0) {

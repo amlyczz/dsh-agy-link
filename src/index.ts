@@ -155,6 +155,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       imageService: () => imageService,
       acpStatus: () => acpPool.status(),
       ecosystem: () => ecosystem,
+      activeRun: (sessionId) => adapter.activeRun(sessionId),
       runOnce: (req) => runAgyOnce({
         cfg: getConfig,
         bin,

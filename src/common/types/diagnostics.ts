@@ -36,7 +36,7 @@ export function looksLikeValidationRequired(text?: string): boolean {
  */
 export function looksLikeHeadlessPermissionDenial(text?: string): boolean {
   if (!text) return false
-  return /(?:approval|confirmation|review)\s+required\s+in\s+(?:non-interactive|print|headless)|cannot\s+(?:prompt|request)\s+(?:for\s+)?(?:permission|approval|review)\s+in\s+(?:print|non-interactive)|tool\s+execution\s+denied:\s*approval\s+required/i.test(
+  return /(?:approval|confirmation|review)\s+required\s+in\s+(?:non-interactive|print|headless)|cannot\s+(?:prompt|request)\s+(?:for\s+)?(?:permission|approval|review)\s+in\s+(?:print|non-interactive)|tool\s+execution\s+denied:\s*approval\s+required|headless mode cannot prompt for|a tool required [^\n]*permission that headless mode cannot prompt for|no output produced [—-]+ a tool required/i.test(
     text,
   )
 }

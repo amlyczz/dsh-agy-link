@@ -11,7 +11,7 @@ export async function handleAuth(deps: CommandDeps, ctx: CommandContext): Promis
     const selector = parts.slice(1).join(' ')
     let st
     if (!selector) {
-      st = await flow.beginPrimary()
+      st = await flow.beginPrimary(deps.cfg().proxyUrl || undefined)
     } else {
       const pool = deps.pool?.()
       if (!pool) return err('Account pool not available')
@@ -23,7 +23,7 @@ export async function handleAuth(deps: CommandDeps, ctx: CommandContext): Promis
       const account = matches[0]!
       st = account.systemHome || !account.dir
         ? await flow.beginPrimary(account.proxyUrl || deps.cfg().proxyUrl || undefined)
-        : await flow.beginAccount(account.id, deps.cfg().proxyUrl || undefined)
+        : await flow.beginAccount(account.id, account.proxyUrl || deps.cfg().proxyUrl || undefined)
     }
     if (st.ok && st.url) {
       return ok([
@@ -51,10 +51,11 @@ export async function handleAuth(deps: CommandDeps, ctx: CommandContext): Promis
   }
 
   if (sub === 'auth-code') {
-    if (arg === '') return err('usage: /agy auth-code <code-or-callback-url>')
+    const codeInput = parts.slice(1).join(' ').trim().replace(/^(['"])(.*)\1$/, '$2').trim()
+    if (codeInput === '') return err('usage: /agy auth-code <code-or-callback-url>')
     const flow = deps.poolAuth?.()
     if (!flow) return err('auth flow not available')
-    const st = await flow.submitCode(arg)
+    const st = await flow.submitCode(codeInput)
     if (st.ok) {
       deps.notifyPicker?.()
       return ok('Logged in to Antigravity.')

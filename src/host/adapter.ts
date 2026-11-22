@@ -74,6 +74,11 @@ export class AgyAdapter extends LlmAdapter {
     return this.effortPolicy.unsupportedModels()
   }
 
+  /** In-flight recording for a session (used by /agy btw to inspect live turn progress). */
+  activeRun(sessionKey: string): RunRecording | undefined {
+    return this.activeRuns.get(sessionKey)
+  }
+
   /** True when `--effort` must not be passed to this model. */
   isEffortUnsupported(model: string): boolean {
     return this.effortPolicy.isUnsupported(model)

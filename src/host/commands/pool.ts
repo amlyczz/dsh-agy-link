@@ -17,6 +17,49 @@ const FAMILY_LABELS: Record<string, string> = {
   openai: 'GPT-OSS',
 }
 
+const fmtQuota = (q?: { remainingFraction?: number; weeklyFraction?: number }): string => {
+  if (q?.remainingFraction !== undefined) return `${Math.round(q.remainingFraction * 100)}%`
+  if (q?.weeklyFraction !== undefined) return `${Math.round(q.weeklyFraction * 100)}% (7d)`
+  return 'unknown'
+}
+
+function resolveAccountId(
+  pool: { getAccount(id: string): { id: string } | undefined; getAccounts(): readonly { id: string; alias?: string; email?: string }[] },
+  selector: string,
+): { id: string } | { error: string } {
+  const exact = pool.getAccount(selector)
+  if (exact) return { id: exact.id }
+  const needle = selector.toLowerCase()
+  const matches = pool.getAccounts().filter((a) =>
+    [a.alias, a.email].some((v) => typeof v === 'string' && v.trim().toLowerCase() === needle))
+  if (matches.length === 1) return { id: matches[0]!.id }
+  if (matches.length > 1) return { error: `Multiple accounts match "${selector}"; use an account ID from /agy pool.` }
+  return { error: `Account ${selector} not found` }
+}
+
+function splitSelectorAndFamily(
+  pool: { getAccount(id: string): { id: string } | undefined; getAccounts(): readonly { id: string; alias?: string; email?: string }[] },
+  tailParts: readonly string[],
+): { selector: string; family?: ModelFamily; invalidFamily?: string } {
+  const full = tailParts.join(' ').trim()
+  if (!full || tailParts.length < 2) return { selector: full }
+  // Try the full tail first so multi-word aliases work without ambiguity.
+  if (!('error' in resolveAccountId(pool, full))) return { selector: full }
+  const maybeFamilyToken = tailParts.at(-1)!
+  const maybeFamily = normalizeModelFamily(maybeFamilyToken)
+  if (maybeFamily) {
+    return { selector: tailParts.slice(0, -1).join(' ').trim(), family: maybeFamily }
+  }
+  if (tailParts.length === 2 && !('error' in resolveAccountId(pool, tailParts[0]!))) {
+    return { selector: tailParts[0]!, invalidFamily: maybeFamilyToken }
+  }
+  const prefix = tailParts.slice(0, -1).join(' ').trim()
+  if (prefix && !('error' in resolveAccountId(pool, prefix))) {
+    return { selector: prefix, invalidFamily: maybeFamilyToken }
+  }
+  return { selector: full }
+}
+
 function renderPool(deps: CommandDeps): CommandResult {
   const pool = deps.pool?.()
   if (!pool) return ok('Account pool not enabled.')
@@ -29,9 +72,9 @@ function renderPool(deps: CommandDeps): CommandResult {
     const a = accounts[i]
     if (!a) continue
     const isPrimary = a.id === data.primaryAccountId
-    const qG = a.quotas.google?.remainingFraction !== undefined ? `${Math.round(a.quotas.google.remainingFraction * 100)}%` : 'unknown'
-    const qC = a.quotas.anthropic?.remainingFraction !== undefined ? `${Math.round(a.quotas.anthropic.remainingFraction * 100)}%` : 'unknown'
-    const qO = a.quotas.openai?.remainingFraction !== undefined ? `${Math.round(a.quotas.openai.remainingFraction * 100)}%` : 'unknown'
+    const qG = fmtQuota(a.quotas.google)
+    const qC = fmtQuota(a.quotas.anthropic)
+    const qO = fmtQuota(a.quotas.openai)
     // Gemini 4 Argon (Pro/Ultra only): a weekly-only counter. Append the
     // column ONLY when the backend reported one — accounts without the
     // argon permission keep the classic three-family line.
@@ -77,39 +120,45 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
   if (sub === 'pool' || sub === 'accounts') return renderPool(deps)
 
   if (sub === 'use' || sub === 'set-active') {
-    if (!arg) return err('usage: /agy use <id> [family]')
+    const tailParts = parts.slice(1)
+    if (tailParts.length === 0) return err('usage: /agy use <id|alias> [family]')
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
-    const rawFam = parts[2]
-    const parsedFamily = rawFam ? normalizeModelFamily(rawFam) : undefined
-    if (rawFam && !parsedFamily) {
-      return err(`Unknown model family "${rawFam}". Expected: gemini, argon, claude, gpt.`)
+    const split = splitSelectorAndFamily(pool, tailParts)
+    if (split.invalidFamily) {
+      return err(`Unknown model family "${split.invalidFamily}". Expected: gemini, argon, claude, gpt.`)
     }
-    const family: ModelFamily = parsedFamily ?? 'google'
+    const resolved = resolveAccountId(pool, split.selector)
+    if ('error' in resolved) return err(resolved.error)
+    const family: ModelFamily = split.family ?? 'google'
     const prev = pool.getActiveAccountId(family)
-    const success = pool.setActiveAccount(arg, family)
-    if (!success) return err(`Account ${arg} not found or not eligible for ${FAMILY_LABELS[family] ?? family} (disabled / cooling / auth required)`)
-    if (arg === prev) deps.notifyPicker?.()
-    return ok(`Active account for **${FAMILY_LABELS[family] ?? family}** set to **${arg}** — model picker synced.`)
+    const success = pool.setActiveAccount(resolved.id, family)
+    if (!success) return err(`Account ${resolved.id} not found or not eligible for ${FAMILY_LABELS[family] ?? family} (disabled / cooling / auth required)`)
+    if (resolved.id === prev) deps.notifyPicker?.()
+    return ok(`Active account for **${FAMILY_LABELS[family] ?? family}** set to **${resolved.id}** — model picker synced.`)
   }
 
   if (sub === 'enable-account' || sub === 'disable-account') {
-    if (!arg) return err(`usage: /agy ${sub} <id>`)
+    const selector = parts.slice(1).join(' ').trim()
+    if (!selector) return err(`usage: /agy ${sub} <id|alias>`)
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
+    const resolved = resolveAccountId(pool, selector)
+    if ('error' in resolved) return err(resolved.error)
     const enabled = sub === 'enable-account'
     const prevActive = pool.getActiveAccountId('google')
-    const success = pool.setAccountEnabled(arg, enabled)
+    const success = pool.setAccountEnabled(resolved.id, enabled)
     if (success && !(typeof pool.onAccountSwitch === 'function' && pool.getActiveAccountId('google') !== prevActive)) {
       deps.notifyPicker?.()
     }
-    return success ? ok(`${enabled ? 'Enabled' : 'Disabled'} account ${arg}`) : err(`Account ${arg} not found`)
+    return success ? ok(`${enabled ? 'Enabled' : 'Disabled'} account ${resolved.id}`) : err(`Account ${arg} not found`)
   }
 
   if (sub === 'add-account') {
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
-    const acc = pool.createAccountSlot(arg || undefined)
+    const alias = parts.slice(1).join(' ').trim()
+    const acc = pool.createAccountSlot(alias || undefined)
     // Quarantine until the terminal login completes: without the flag the
     // scheduler immediately routed real runs to the empty slot — a
     // guaranteed failure plus cooldown noise. The first successful run or
@@ -136,18 +185,25 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
   if (sub === 'clear-cooldown') {
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
-    const arg1 = parts[1]
-    const arg2 = parts[2]
-    let targetId: string | undefined = arg1 || undefined
-    let targetFamily: ModelFamily | undefined = arg2 ? normalizeModelFamily(arg2) : undefined
-    if (arg2 && !targetFamily) {
-      return err(`Unknown model family "${arg2}". Expected: gemini, argon, claude, gpt.`)
-    }
-    if (arg1 && !arg2 && !pool.getAccount(arg1)) {
-      const maybeFamily = normalizeModelFamily(arg1)
-      if (maybeFamily) {
-        targetId = undefined
-        targetFamily = maybeFamily
+    const tailParts = parts.slice(1)
+    let targetId: string | undefined
+    let targetFamily: ModelFamily | undefined
+    if (tailParts.length > 0) {
+      const full = tailParts.join(' ').trim()
+      const singleFamily = tailParts.length === 1 && !pool.getAccount(full)
+        ? normalizeModelFamily(full)
+        : undefined
+      if (singleFamily) {
+        targetFamily = singleFamily
+      } else {
+        const split = splitSelectorAndFamily(pool, tailParts)
+        if (split.invalidFamily) {
+          return err(`Unknown model family "${split.invalidFamily}". Expected: gemini, argon, claude, gpt.`)
+        }
+        const resolved = resolveAccountId(pool, split.selector)
+        if ('error' in resolved) return err(resolved.error)
+        targetId = resolved.id
+        targetFamily = split.family
       }
     }
     // includeQuotaBench: also lift the proactive low-quota rotation for the
@@ -158,18 +214,21 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
   }
 
   if (sub === 'remove-account') {
-    if (!arg) return err('usage: /agy remove-account <id>')
+    const selector = parts.slice(1).join(' ').trim()
+    if (!selector) return err('usage: /agy remove-account <id|alias>')
     const pool = deps.pool?.()
     if (!pool) return err('Account pool not available')
+    const resolved = resolveAccountId(pool, selector)
+    if ('error' in resolved) return err(resolved.error)
     const prevActive = pool.getActiveAccountId('google')
-    const success = pool.deleteAccount(arg)
+    const success = pool.deleteAccount(resolved.id)
     if (success) {
       deps.store().cleanupStaleAccounts?.(new Set(pool.getAccounts().map((a) => a.id)))
       if (!(typeof pool.onAccountSwitch === 'function' && pool.getActiveAccountId('google') !== prevActive)) {
         deps.notifyPicker?.()
       }
     }
-    return success ? ok(`Removed account ${arg}`) : err(`Account ${arg} not found`)
+    return success ? ok(`Removed account ${resolved.id}`) : err(`Account ${resolved.id} not found`)
   }
 
   return err(`Unknown pool command \`${sub}\`.`)

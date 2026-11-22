@@ -93,10 +93,13 @@ export function writeDoctorReport(deps: DoctorDeps): string {
       (cfg.suppressAgyAutoUpdate ? describeAgyAutoUpdate() : 'not suppressed (suppressAgyAutoUpdate=false)'),
   )
   // The full config is dumped for support: scrub values that can carry
-  // credentials (proxyUrl) instead of emitting them into a 0644 file.
+  // credentials (proxyUrl, agySettings) instead of emitting them into a 0644 file.
   const cfgDump: Record<string, unknown> = { ...cfg, extraArgs: cfg.extraArgs.length }
   if (typeof cfgDump.proxyUrl === 'string' && cfgDump.proxyUrl !== '') {
     cfgDump.proxyUrl = redactProxyUrl(cfgDump.proxyUrl as string)
+  }
+  if (typeof cfgDump.agySettings === 'string' && cfgDump.agySettings !== '') {
+    cfgDump.agySettings = redactLine(cfgDump.agySettings)
   }
   lines.push('- plugin config: ' + JSON.stringify(cfgDump))
   lines.push('- catalog: ' + cat.source + ' — ' + cat.models.length + ' models' + (cat.lastError === undefined ? '' : ' — error: ' + cat.lastError))

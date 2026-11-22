@@ -57,7 +57,7 @@ export async function renderStatus(deps: CommandDeps): Promise<string> {
           ...(errorKinds.includes('system_protection')
             ? ['- Guidance: `system_protection` — AGY hardcoded system protection remains enforced; do not attempt a bypass.']
             : []),
-          ...(hasHeadlessPermissionDenial && (cfg.permissionMode === 'plan' || cfg.permissionMode === 'accept-edits')
+          ...(hasHeadlessPermissionDenial && cfg.permissionMode !== 'skip'
             ? ['- Note: in headless operation, agy can automatically deny a tool under this mode; the raw denial above is not evidence of a human approval or denial.']
             : []),
         ]

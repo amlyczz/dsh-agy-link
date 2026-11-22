@@ -88,6 +88,10 @@ function redactUrlCredentials(rawUrl: string): string {
   }
 }
 
+export function isInternalBridgeKey(name: string): boolean {
+  return name === 'dsh-tools' || name.startsWith('dsh-tools-')
+}
+
 function readMcpFile(
   file: string,
   source: EcosystemSource,
@@ -98,7 +102,7 @@ function readMcpFile(
   const servers = doc?.mcpServers
   if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return
   for (const [name, rawEntry] of Object.entries(servers as Record<string, unknown>)) {
-    if (name === 'dsh-tools') continue
+    if (isInternalBridgeKey(name)) continue
     if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) continue
     const e = rawEntry as Record<string, unknown>
     const rawUrl = typeof e.url === 'string' ? e.url : (typeof e.serverUrl === 'string' ? e.serverUrl : '')
