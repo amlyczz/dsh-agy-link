@@ -21,6 +21,7 @@ import { presentMirrorResult } from '../src/provider/mirror/present.ts'
 import { AgyMirrorToolView } from '../src/client/toolview/index.ts'
 import { isTransientMirrorToolNotFound } from '../src/client/toolview/args.ts'
 import { apply } from '../src/index.ts'
+import { sandboxEnv } from './helpers/sandbox-env.ts'
 
 async function collect(iter: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
   const out: StreamChunk[] = []
@@ -242,9 +243,8 @@ test('presentMirrorResult suppresses exitCode=1 and scrubs Error: unknown tool "
 
 test('host plugin checks tools.get(agy_tool, agent) so restricted agent scopes and disposed plugins disable mirroring', async () => {
   const workDir = mkdtempSync(join(tmpdir(), 'agy-mirror-live-'))
-  const prevHome = process.env.DSH_HOME
+  const restoreEnv = sandboxEnv(workDir)
   const prevBin = process.env.DSH_AGY_BIN
-  process.env.DSH_HOME = workDir
   const stubBin = join(workDir, 'agy')
   writeFileSync(stubBin, '#!/bin/sh\necho "agy version 1.1.15"\n')
   chmodSync(stubBin, 0o755)
@@ -313,8 +313,7 @@ test('host plugin checks tools.get(agy_tool, agent) so restricted agent scopes a
   await ctx.fiber.dispose()
   assert.equal(check('sess-allowed'), false, 'false immediately after disposal')
 
-  if (prevHome === undefined) delete process.env.DSH_HOME
-  else process.env.DSH_HOME = prevHome
+  restoreEnv()
   if (prevBin === undefined) delete process.env.DSH_AGY_BIN
   else process.env.DSH_AGY_BIN = prevBin
   rmSync(workDir, { recursive: true, force: true })

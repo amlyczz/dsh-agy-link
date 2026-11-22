@@ -13,6 +13,7 @@ function createSandbox(t: TestContext) {
   const saved: Record<string, string | undefined> = {}
   for (const k of Object.keys(process.env)) saved[k] = process.env[k]
   process.env.HOME = root
+  process.env.USERPROFILE = root
   process.env.DSH_HOME = root
   process.env.DSH_STATE_DIR = root
   process.env.DSH_AGY_ACCOUNTS_DIR = root
@@ -174,6 +175,9 @@ test('POST /plugins/agy-link/pool/import imports refresh token via HTTP', async 
     refresh_token: rt,
   })
   ;(poolAuth as any).userEmail = async () => 'imported_user@example.com'
+  // The machine-wide Windows slot / login keychain is shared with the running app.
+  ;(poolAuth as any).writeSlot = () => true
+  ;(poolAuth as any).writeKeyring = () => true
 
   const routes = new Map<string, (req: any, res: any) => void>()
   registerPool((route) => routes.set(route.path, route.handler), services)
