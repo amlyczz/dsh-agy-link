@@ -198,6 +198,21 @@ async function driveAcpPrompt(opts: {
     slot.releaseOnce()
     deps.clearInFlightPrompt(sessionKey, input.prompt)
     recorder.rec.settle(terminalFailure)
+    // Tell the background watcher only after cooldowns, rotation, and bindings
+    // have landed: a wakeup can re-enter the attempt and must see settled state.
+    if (!input.isAux && sessionKey !== '') {
+      deps.backgroundObserver?.onAttemptSettled?.({
+        sessionKey,
+        conversationId: sid,
+        ...(recorder.rec.accountHome === undefined ? {} : { accountHome: recorder.rec.accountHome }),
+        transport: 'acp',
+        recording: recorder.rec,
+        failure: terminalFailure,
+        superseded: deps.isSuperseded(sessionKey, recorder.rec),
+        acpProcess: proc,
+        acpSessionId: sid,
+      })
+    }
   }
 }
 

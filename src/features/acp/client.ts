@@ -60,6 +60,30 @@ export class AcpProcess extends EventEmitter {
   get sessionCount(): number { return this.openSessions.size }
   get stderr(): string { return this.stderrTail }
 
+  hasOpenSession(sessionId: string): boolean { return this.openSessions.has(sessionId) }
+
+  /**
+   * Listen to what a session pushes outside a `session/prompt` call.
+   *
+   * This is how a detached background job started by a finished turn reports
+   * its outcome: the turn already returned, so there is no prompt loop left to
+   * receive the `session/update` notification.
+   */
+  subscribeSession(sessionId: string, listener: (u: Record<string, unknown>) => void): () => void {
+    let set = this.sessionListeners.get(sessionId)
+    if (!set) {
+      set = new Set()
+      this.sessionListeners.set(sessionId, set)
+    }
+    set.add(listener)
+    return () => {
+      const current = this.sessionListeners.get(sessionId)
+      if (!current) return
+      current.delete(listener)
+      if (current.size === 0) this.sessionListeners.delete(sessionId)
+    }
+  }
+
   private ensureStarted(): void {
     if (this.child !== null) return
     const env = withAgyQuietEnv(this.opts.env ?? process.env)

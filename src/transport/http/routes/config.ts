@@ -31,7 +31,7 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'transport must be cli or acp'
   }
-  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations') {
+  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup') {
     return typeof value === 'boolean' ? null : `${key} must be a boolean`
   }
   if (key === 'agent') {
@@ -65,7 +65,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
-          'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations',
+          'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup',
           'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',

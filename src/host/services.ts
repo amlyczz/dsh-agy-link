@@ -30,6 +30,7 @@ import { ImageService, runViaAdapter } from './image.ts'
 import { EcosystemService } from '../features/ecosystem/index.ts'
 import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { createPoolQuotaHooks } from '../provider/quota-failover.ts'
+import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
 import { acquireCredentialSlot, defaultSlotIo, readPrimaryCredential } from './credential-slot.ts'
@@ -43,6 +44,14 @@ import {
   runTranslationStream,
   syncSessionModelSelection,
 } from './service-helpers.ts'
+
+function safeCtxGet<T>(ctx: Context, name: string): T | undefined {
+  try {
+    return ctx.get(name as never) as T | undefined
+  } catch {
+    return undefined
+  }
+}
 
 export function createHostServices(ctx: Context, entryConfig: Record<string, unknown> = {}) {
   const tag = '[dsh-agy-link] '
@@ -299,8 +308,50 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   const runs = new RunRegistry()
   const webServerPort: { current?: number } = {}
   const acpPool = new AcpSessionPool({ bin, cfg: getConfig, log })
+  let adapter!: AgyAdapter
+  const backgroundWakeup = new BackgroundWakeWatcher({
+    getConfig,
+    log,
+    getActiveRun: (sessionId) => adapter.getActiveRun(sessionId),
+    retainAcpSession: (sid) => acpPool.retainSession(sid),
+    isArchived: (sessionId) => {
+      try {
+        const reg = safeCtxGet<{ archivedSessionIds?: Iterable<string> | { has?: (id: string) => boolean } }>(ctx, 'workspaceRegistry')
+        const archived = reg?.archivedSessionIds
+        if (!archived) return false
+        if (typeof (archived as { has?: (id: string) => boolean }).has === 'function') {
+          return (archived as { has: (id: string) => boolean }).has(sessionId)
+        }
+        for (const id of archived as Iterable<string>) {
+          if (id === sessionId) return true
+        }
+      } catch {
+        // ignore optional workspaceRegistry errors
+      }
+      return false
+    },
+    resolveAgent: async (sessionId) => {
+      try {
+        const agents = safeCtxGet<{ get?: (id: unknown) => unknown }>(ctx, 'agents')
+        const live = agents?.get?.(sessionId) as AgentLike | undefined
+        if (live && typeof live.followup === 'function') return live
+        const ctrl = safeCtxGet<{
+          resolveAgent?: (id: string) => Promise<{ agent?: AgentLike } | null | undefined>
+        }>(ctx, 'sessionController')
+        if (ctrl && typeof ctrl.resolveAgent === 'function') {
+          const res = await ctrl.resolveAgent(sessionId)
+          if (res && typeof res === 'object' && res.agent && typeof res.agent.followup === 'function') {
+            return res.agent
+          }
+        }
+      } catch (err) {
+        log('background-wakeup resolveAgent error: ' + String(err))
+      }
+      return null
+    },
+  })
 
-  const adapter = new AgyAdapter({
+  adapter = new AgyAdapter({
     getConfig,
     catalog,
     store,
@@ -327,6 +378,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     onParser: (p) => { lastParser = p },
     readImage: (ref) => readSessionImage(ctx, dshHome(), ref),
     runAcp: (attemptDeps, attemptInput, slot) => runAcpAttempt(acpPool, attemptDeps, attemptInput, slot),
+    backgroundObserver: backgroundWakeup,
   })
 
   const translationWorkers = new TranslationWorkerPool({
@@ -433,7 +485,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
 
   return {
     getConfig, log, notifyPicker, bin, version, status, store, pool, quota, warmup, semaphore,
-    catalog, auth, poolAuth, runs, adapter, acpPool, ecosystem, imageService, translation, translationWorkers, setOverride,
+    catalog, auth, poolAuth, runs, adapter, acpPool, backgroundWakeup, ecosystem, imageService, translation, translationWorkers, setOverride,
     readEffortUnsupported: effortStore.read,
     rememberEffortUnsupported: effortStore.remember,
     sessionsSvc, sessionAuto,
