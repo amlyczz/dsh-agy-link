@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.62 (2026-11-22)
+
+### English
+
+- **Fix(usage): a cached turn is no longer dropped from the token meter (fixes the total-token half of #167).** DSH's token meter reconstructs the prompt from `input + cacheRead + cacheWrite` and rejects the whole turn when `totalTokens` is missing or contradicts that sum. agy's **CLI** reports `total_tokens` as input + output only — the cached prompt is left out — and omits `cache_write_tokens` entirely, so every cached CLI turn (including the CLI fallback after an ACP failure, the aux/title path, and plain `transport: cli` runs) arrived with a total smaller than its own counters and vanished from the meter: cache-hit rate and token speed went blank, and the context pressure read as zero. `usageFromRaw` now derives the total when the reported one cannot be trusted: a reported total is kept when it already covers every known counter (and, when both cache counters are present, when `total - output` equals their sum exactly, which is what the host requires), and the derived `input + output + cacheRead + cacheWrite` is used otherwise. The ACP path, which reports the real total, is unchanged. Measured shapes and six new cases in `test/usage-total.test.ts`.
+
+### 中文
+
+- **修复(用量)：命中缓存的回合不再被 token 统计丢弃（修复 #167 的 total 部分）。** DSH 的 token 统计会用 `input + cacheRead + cacheWrite` 重建 prompt，一旦 `totalTokens` 缺失或与该和矛盾，整轮统计就会被拒绝。agy 的 **CLI** 把 `total_tokens` 报成 input + output，**漏掉了缓存命中的 prompt**，并且完全不报 `cache_write_tokens`——于是每个命中缓存的 CLI 回合（包括 ACP 失败后回退 CLI、标题/辅助请求、以及 `transport: cli` 的普通回合）都带着比自己分项还小的 total 抵达，从统计里消失：缓存命中率与输出速度变成空白，上下文占用显示为 0。现在 `usageFromRaw` 在报来的 total 不可信时自行推导：若报来的 total 已覆盖所有已知分项（且两个缓存分项都存在时，`total - output` 必须精确等于二者之和——这正是宿主要求的等式）就原样保留，否则用推导出的 `input + output + cacheRead + cacheWrite`。ACP 路径本来就报真实 total，行为不变。实测形状与六个新用例见 `test/usage-total.test.ts`。
+
 ## 0.6.61 (2026-11-22)
 
 ### English

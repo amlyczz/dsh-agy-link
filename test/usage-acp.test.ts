@@ -75,7 +75,8 @@ describe('issue #158: usage_update is context occupancy, not a usage sample', ()
       outputTokens: 820,
       cachedReadTokens: 38_000,
       thoughtTokens: 90,
-      totalTokens: 41_820,
+      // agy reports total = input + cacheRead + cacheWrite + output (issue #167).
+      totalTokens: 41_000 + 38_000 + 820,
     }
     rec.append(acpPromptResultToAgyEvent('sid', { stopReason: 'end_turn', usage: promptResponseUsage }, st.accumulatedText))
 
@@ -89,7 +90,7 @@ describe('issue #158: usage_update is context occupancy, not a usage sample', ()
     assert.equal(usage.outputTokens, 820, 'output is no longer forced to 0')
     assert.equal(usage.cacheReadTokens, 38_000, 'the cache-read counter survives')
     assert.equal(usage.reasoningTokens, 90)
-    assert.equal(usage.totalTokens, 41_820)
+    assert.equal(usage.totalTokens, 79_820)
   })
 
   test('a step sample still wins when it carries a real breakdown', () => {
