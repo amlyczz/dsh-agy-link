@@ -55,6 +55,8 @@ export class RunRecording {
   private failure: RecordingFailure | null = null
   private resultConversationId: string | null = null
   private lastStepUsageRaw: RawUsage | null = null
+  private resultUsageRaw: RawUsage | null = null
+  private isAcp = false
   /**
    * Per-step generation timing for token-speed statistics: stepKey ->
    * { startedAt, lastAt, outputTokens }. The last usage sample of a step wins
@@ -99,11 +101,17 @@ export class RunRecording {
     this.events.push(ev)
     const now = this.now()
     this.eventTimes.push(now)
-    if (ev.kind === 'result') this.resultConversationId = ev.conversationId ?? null
+    if (ev.kind === 'result') {
+      this.resultConversationId = ev.conversationId ?? null
+      if (ev.usage) this.resultUsageRaw = ev.usage
+    }
     if (ev.kind === 'init' && typeof ev.conversationId === 'string' && ev.conversationId !== '') {
       // init can carry the conversation id before the result envelope; prefer
       // the earliest known id so continuation spans can resolve the agy DB.
       this.resultConversationId = this.resultConversationId ?? ev.conversationId
+    }
+    if (ev.kind === 'init' && ev.raw && (ev.raw as Record<string, unknown>).transport === 'acp') {
+      this.isAcp = true
     }
     if (ev.kind === 'step' && ev.usage) {
       const out = typeof ev.usage.output_tokens === 'number' && Number.isFinite(ev.usage.output_tokens)
@@ -116,6 +124,16 @@ export class RunRecording {
           prev.lastAt = now
           prev.outputTokens = out
         }
+      }
+    } else if (this.isAcp && ev.kind === 'result' && ev.usage) {
+      const out = typeof ev.usage.output_tokens === 'number' && Number.isFinite(ev.usage.output_tokens)
+        ? ev.usage.output_tokens
+        : 0
+      if (out > 0) {
+        const key = `acp-prompt-${this.runId}`
+        const firstTextIndex = this.events.findIndex((e) => e.kind === 'step' && e.stepKind === 'text')
+        const startedAt = firstTextIndex >= 0 ? (this.eventTimes[firstTextIndex] ?? (this.eventTimes[0] ?? now)) : (this.eventTimes[0] ?? now)
+        this.stepSpeed.set(key, { startedAt, lastAt: now, outputTokens: out })
       }
     }
     this.wake()
@@ -152,8 +170,10 @@ export class RunRecording {
     // `lastTps` comes from the LAST generation step in event-arrival order.
     for (let i = this.events.length - 1; i >= 0; i--) {
       const ev = this.events[i]
-      if (ev === undefined || ev.kind !== 'step') continue
-      const s = this.stepSpeed.get(ev.stepKey)
+      if (ev === undefined) continue
+      if (ev.kind !== 'step' && !(this.isAcp && ev.kind === 'result')) continue
+      const key = ev.kind === 'result' ? `acp-prompt-${this.runId}` : ev.stepKey
+      const s = this.stepSpeed.get(key)
       if (s === undefined) continue
       if (s.outputTokens > 0 && s.lastAt - s.startedAt >= 500) {
         lastTps = s.outputTokens / ((s.lastAt - s.startedAt) / 1000)
@@ -189,7 +209,16 @@ export class RunRecording {
 
   /** The usage to report for the result envelope: last per-call step sample. */
   finalUsage(resultRaw: RawUsage): RawUsage {
-    return this.lastStepUsageRaw ?? resultRaw
+    const effectiveResult = Object.keys(resultRaw).length > 0 ? resultRaw : (this.resultUsageRaw ?? resultRaw)
+    if (this.isAcp || (this.lastStepUsageRaw && this.lastStepUsageRaw.output_tokens === undefined && effectiveResult && effectiveResult.output_tokens !== undefined)) {
+      if (effectiveResult && Object.keys(effectiveResult).length > 0) {
+        return {
+          ...(this.lastStepUsageRaw ?? {}),
+          ...effectiveResult,
+        }
+      }
+    }
+    return this.lastStepUsageRaw ?? effectiveResult
   }
 
   /** Settle the recording: no further events will arrive. */

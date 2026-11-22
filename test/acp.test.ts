@@ -137,6 +137,8 @@ async function closeProc(proc: AcpProcess): Promise<void> {
 test('ACP protocol helpers map updates, tool outputs, usage, results, and permission options', () => {
   const st = createAcpStreamState()
   assert.deepEqual(acpUpdateToAgyEvents('s1', { sessionUpdate: 'usage_update', used: 120 }, st), [])
+  assert.deepEqual(acpUpdateToAgyEvents('s1', { sessionUpdate: 'session_info_update', title: 'T', cachedReadTokens: 500 }, st), [])
+  assert.equal(st.lastUsage.cache_read_tokens, 500)
   const thought = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } }, st)
   assert.equal(thought[0]?.kind, 'step')
   assert.equal((thought[0] as Extract<AgyEvent, { kind: 'step' }>).stepKind, 'thinking')
@@ -466,6 +468,15 @@ test('runAcpAttempt streams happy path, falls back cleanly on pre-stream failure
     assert.equal(clearedPrompt, 'hi')
     assert.equal(lastRunCalled, true)
     assert.equal(store.get('sess-acp-1')?.conversationId, 'acp-sess-1')
+
+    // Authoritative per-prompt usage and output speed are preserved in ACP mode
+    const finalUsage = rec.finalUsage({})
+    assert.equal(finalUsage.input_tokens, 10)
+    assert.equal(finalUsage.output_tokens, 5)
+    assert.equal(finalUsage.cache_read_tokens, 2)
+    assert.equal(finalUsage.thinking_tokens, 3)
+    assert.equal(finalUsage.total_tokens, 20)
+    assert.equal(rec.speedStats().outputTokens, 5)
 
     // 2. Pre-stream failure returns null and keeps slot held for CLI fallback
     const beforeRelease = released

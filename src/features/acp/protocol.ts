@@ -128,6 +128,13 @@ export function acpUpdateToAgyEvents(
   if (kind === 'usage_update') {
     const used = num(update.used)
     if (used !== undefined) state.lastUsage.input_tokens = used
+    const cr = num(update.cachedReadTokens) ?? num(update.cached_read_tokens) ?? num(update.cachedTokens)
+    if (cr !== undefined) state.lastUsage.cache_read_tokens = cr
+    return []
+  }
+  if (kind === 'session_info_update') {
+    const cr = num(update.cachedReadTokens) ?? num(update.cached_read_tokens) ?? num(update.cachedTokens)
+    if (cr !== undefined) state.lastUsage.cache_read_tokens = cr
     return []
   }
   if (kind === 'tool_call' || kind === 'tool_call_update') {
