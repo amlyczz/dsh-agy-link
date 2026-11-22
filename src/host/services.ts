@@ -398,6 +398,8 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     hasArmedGoal: (sessionId) => resolveSessionGoal(ctx, sessionId) != null,
   })
 
+  let mirrorToolCheck: ((sessionId?: string) => boolean) | undefined = undefined
+
   adapter = new AgyAdapter({
     getConfig,
     catalog,
@@ -407,6 +409,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     acquire: (signal) => semaphore.acquire(signal),
     log,
     runs,
+    isMirrorToolAvailable: (sessionId) => (mirrorToolCheck ? mirrorToolCheck(sessionId) : true),
     getMediaBaseUrl: () => (webServerPort.current ? `http://127.0.0.1:${webServerPort.current}/plugins/agy-link/media` : null),
     // Non-forced: honours per-account cooldowns so a heal cannot stampede the
     // pool. Catalog re-discovery repairs `agy models` in the same pass.
@@ -536,6 +539,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     get lastParser() { return lastParser },
     mediaDir, bridgeState, webServerPort, activeCwds,
     hostDir: '',
+    setMirrorToolCheck: (fn: (sessionId?: string) => boolean): void => { mirrorToolCheck = fn },
     onConfigWritten: (_key: string, _value: unknown): void => undefined,
   }
 }

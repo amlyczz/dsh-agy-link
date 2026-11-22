@@ -10,6 +10,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { PROVIDER_ID } from '../common/types.ts'
+import { isMirrorToolNotFoundText, MIRROR_TOOL_RELOAD_NOTICE } from '../common/mirror-error.ts'
 import { stateDir } from '../common/config.ts'
 import { stripNulBytes } from '../host/runner.ts'
 import { sweepDir, mediaKindFor, type ImageRefLike, type MediaRefLike } from '../host/media.ts'
@@ -521,7 +522,9 @@ export function buildDigest(
     const text = stripNulBytes(textOf(m))
     if (text === '') continue
     if (taskLine !== '' && !isToolResultMessage(m) && m.role === 'user' && text === taskText) continue
-    const safeText = defuseQuotedSlashCommands(text)
+    const safeText = isToolResultMessage(m) && isMirrorToolNotFoundText(text)
+      ? MIRROR_TOOL_RELOAD_NOTICE
+      : defuseQuotedSlashCommands(text)
     otherLines.push(
       isToolResultMessage(m)
         ? capLine(digestLabel(m) + elideMiddle(safeText, toolLineCap))

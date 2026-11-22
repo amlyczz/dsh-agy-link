@@ -1,5 +1,6 @@
 // agy_tool argument/result parsing.
 
+import { isMirrorToolNotFoundText } from '../../common/mirror-error.ts';
 import type { RunningCallBlock, ToolBlock, ToolResultBlock } from './types.ts';
 
 export function parsedArgsRaw(block: ToolBlock): string {
@@ -156,6 +157,20 @@ export function isSettled(block: ToolBlock): boolean {
 export function isError(block: ToolBlock): boolean {
 	const settled = block as ToolResultBlock;
 	return settled.isError === true || (settled.error !== undefined && settled.error !== null);
+}
+
+/**
+ * True when a mirrored `agy_tool` card recorded DSH's transient
+ * `ToolNotFoundError: Error: unknown tool "agy_tool"` (e.g. plugin reloaded or
+ * `tools` sub-fiber restarted between span cut and dispatch). The underlying
+ * agy tool had already completed, so this must not display as a red tool error.
+ */
+export function isTransientMirrorToolNotFound(block: ToolBlock): boolean {
+	if (!isError(block)) return false;
+	const text = resultText(block);
+	if (isMirrorToolNotFoundText(text)) return true;
+	const settled = block as ToolResultBlock;
+	return settled.error?.code === 'UNKNOWN_TOOL' && /\bagy_tool\b/i.test(text);
 }
 
 const CARD_IMAGE_PATH_RE = /(?<![\w:/])(?:file:\/\/\/?)?(?:[A-Za-z]:[\\/]|\\\\wsl\.localhost\\|\/|~\/)[^\s"'`<>|)\]]+?\.(?:png|jpe?g|webp|gif|bmp|avif)\b/gi;

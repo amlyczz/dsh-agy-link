@@ -14,6 +14,7 @@ import type {
   ToolCallView,
   ToolResultView,
 } from '@deepseek-ai/dsh-tools'
+import { isMirrorToolNotFoundText, MIRROR_TOOL_RELOAD_NOTICE } from '../../common/mirror-error.ts'
 import { cleanResultText, pick, resultText, unwrapMcpTool, clip } from './args.ts'
 import { getGitHeadContent } from './git-head.ts'
 
@@ -393,7 +394,10 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
   const unwrapped = unwrapMcpTool(typeof a?.tool === 'string' ? a.tool : '', a?.input)
   const name = unwrapped.tool
   const rawText = resultText(result.content)
-  const text = cleanResultText(rawText)
+  const cleanedText = cleanResultText(rawText)
+  const transientMirrorMiss = result.isError && isMirrorToolNotFoundText(cleanedText)
+  const text = transientMirrorMiss ? MIRROR_TOOL_RELOAD_NOTICE : cleanedText
+  const effectiveIsError = transientMirrorMiss ? false : result.isError
   switch (name) {
     case 'run_command':
     case 'bash':
@@ -405,7 +409,7 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
       const m = /The command exited with code (\d+)/i.exec(text) ?? /\[exit code (\d+)\]/i.exec(text)
       if (m && m[1]) {
         exitCode = parseInt(m[1], 10)
-      } else if (/\[command timed out/i.test(text) || result.isError) {
+      } else if (/\[command timed out/i.test(text) || effectiveIsError) {
         exitCode = 1
       }
       const rendered = formatBackgroundTerminalOutput(text)

@@ -63,6 +63,13 @@ export interface EventMapperOptions {
   runId: string
   /** Cut spans on completed tool steps (main turns). False for auxiliary calls. */
   cutOnTool: boolean
+  /**
+   * Dynamic liveness check evaluated right before cutting a tool span.
+   * When provided and returning false (e.g. plugin disposing or `agy_tool`
+   * unregistered/restricted mid-span), the mapper suppresses tool-call cuts
+   * so DSH never fails with `Error: unknown tool "agy_tool"`.
+   */
+  canCutOnTool?: () => boolean
   /** Whether an earlier span of this run already streamed assistant text. */
   initialSawText?: boolean
   /**
@@ -145,6 +152,11 @@ export class EventMapper {
   /** Whether a terminal finish chunk has been emitted. */
   get isFinished(): boolean {
     return this.finished
+  }
+
+  private canCutOnTool(): boolean {
+    if (!this.opts.cutOnTool) return false
+    return this.opts.canCutOnTool ? this.opts.canCutOnTool() : true
   }
 
   private formatAssistantText(text: string): string {
@@ -395,7 +407,7 @@ export class EventMapper {
           // step into the reasoning block; the completed step still cuts the
           // span with the real tool card below.
           if (
-            this.opts.cutOnTool &&
+            this.canCutOnTool() &&
             !this.finished &&
             ev.state === 'ACTIVE' &&
             !this.pendingAnnounced.has(ev.stepKey)
@@ -416,7 +428,7 @@ export class EventMapper {
         }
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)
-        if (!this.opts.cutOnTool) return // auxiliary calls show no tool detail
+        if (!this.canCutOnTool()) return // auxiliary calls or unavailable agy_tool mirror: do not emit doomed tool-call
         yield* this.flushBannerOnlyThoughts()
         yield* this.flushPendingEmbed()
         // Cut the span: close any open block, then one tool-call block.

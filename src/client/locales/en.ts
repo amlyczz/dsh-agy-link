@@ -5,6 +5,7 @@ export const en: AgyDictionary = {
   'code.title': 'Code', 'code.inspect': 'Inspect',
   'tv.command': 'Command', 'tv.write': 'Write', 'tv.edit': 'Edit', 'tv.read': 'Read', 'tv.search': 'Search', 'tv.webSearch': 'Web Search', 'tv.list': 'List', 'tv.delete': 'Delete', 'tv.tool': 'Tool',
   'tv.noOutput': '(no output)', 'tv.noMatches': '(no matches)', 'tv.noChanges': '(no textual changes)', 'tv.emptyDir': '(empty directory)', 'tv.noDetail': '(no detail)',
+  'tv.mirrorReloadSkipped': 'Step already executed in agy (result replay skipped during bridge reload — not a tool error).',
   'tv.hint.expandInspect': 'Click to expand · right-click to inspect', 'tv.hint.collapseInspect': 'Click to collapse · right-click to inspect', 'tv.hint.expand': 'Click to expand', 'tv.hint.collapse': 'Click to collapse',
   'tv.diffMore': '… {count} more lines not rendered',
   'code.copy': 'Copy', 'code.copied': 'Copied',

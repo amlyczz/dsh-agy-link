@@ -5,6 +5,7 @@ export const ptBR: AgyDictionary = {
   'code.title': 'Código', 'code.inspect': 'Inspecionar',
   'tv.command': 'Comando', 'tv.write': 'Escrever', 'tv.edit': 'Editar', 'tv.read': 'Ler', 'tv.search': 'Buscar', 'tv.webSearch': 'Busca na web', 'tv.list': 'Listar', 'tv.delete': 'Excluir', 'tv.tool': 'Ferramenta',
   'tv.noOutput': '(sem saída)', 'tv.noMatches': '(nenhuma correspondência)', 'tv.noChanges': '(sem alterações de texto)', 'tv.emptyDir': '(diretório vazio)', 'tv.noDetail': '(sem detalhes)',
+  'tv.mirrorReloadSkipped': 'Etapa já executada no agy (replay do resultado ignorado durante recarga da ponte — não é erro de ferramenta).',
   'tv.hint.expandInspect': 'Clique para expandir · clique direito para inspecionar', 'tv.hint.collapseInspect': 'Clique para recolher · clique direito para inspecionar', 'tv.hint.expand': 'Clique para expandir', 'tv.hint.collapse': 'Clique para recolher',
   'tv.diffMore': '… {count} linhas restantes não renderizadas',
   'code.copy': 'Copiar', 'code.copied': 'Copiado',

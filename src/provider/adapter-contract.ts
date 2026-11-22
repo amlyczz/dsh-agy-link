@@ -32,6 +32,15 @@ export interface AgyAdapterDeps {
   /** Recordings shared with the agy_tool mirror (native tool-card mirroring). */
   runs: RunRegistry
   /**
+   * Live check that the `agy_tool` mirror is currently registered in DSH's
+   * tools service and visible to `sessionId`'s agent scope. Evaluated both at
+   * span entry and right before emitting a tool-call cut so startup races,
+   * scope restrictions, and mid-span plugin reloads never emit a doomed
+   * `agy_tool` call (`Error: unknown tool "agy_tool"`). Defaults to `true`
+   * when omitted (standalone unit tests).
+   */
+  isMirrorToolAvailable?: (sessionId?: string) => boolean
+  /**
    * Resolve the DSH session's working directory. Called with the raw
    * session id; return an absolute path to run agy inside that workspace.
    * Explicit config `workspaceRoot` still wins over this value.

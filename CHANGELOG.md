@@ -26,6 +26,7 @@
 - **Prompt cache, anti-429 cloak & stream resilience.** Normalizes model-slug binding checks, forwards `System instructions` once on Turn 1 (avoiding per-turn prefix churn), adds meaning-preserving DSH/Codex system-prompt cloaking (`cloakSystemPrompt`), strips leaked `agy` retry/cut-off boilerplate, classifies low AI credits as hard `RATE_LIMIT`, adds same-session ACP warm self-heal for empty/invalid output turns, and hardens compaction against parent 429 deadlocks.
 - **ACP spare pre-warm, native inline images & advanced 5h/daily/interval warmup.** Adds `AcpSessionPool.warmSpare`, native ACP `image` prompt blocks when advertised, and extends `WarmupService` with 5-hour rolling windows, IANA-timezone daily schedules, fixed-interval triggers, Antigravity sliding-idle reset detection, and a 50-entry audit history.
 - **Expanded `/agy` slash commands & ecosystem bridge filtering.** Adds live `btw` progress, enhanced `/agy goal` idempotency, and workspace-aware slash context.
+- **Eliminate false-positive `Error: unknown tool "agy_tool"` errors.** `AgyAdapter` / `EventMapper` now check `agy_tool` liveness dynamically (respecting plugin disposal order, `tools` service availability, and per-agent `tools.restrict` visibility) before emitting mirror tool cuts; historical or reload-boundary `unknown tool "agy_tool"` results are scrubbed in history digests and rendered as non-error reload notices instead of red tool failures.
 
 ### 中文
 
@@ -48,6 +49,7 @@
   - 账号卡片新增订阅等级徽标（**Free / Pro / Ultra / Enterprise**）。
   - 新增 `respectExternalSignIn` 在租约前后保护独立 `agy` 登录不被覆盖（#145）；主账号重新授权换绑不同 Google 邮箱时自动重置旧自定义别名（#152 第二部分）。
 - **反向 MCP 桥接四重加固**：自动附加 `_meta: { 'antigravity/alwaysLoad': true }`、18,000 token 安全预算渐进裁剪（防止触发 `agy` 20k 丢工具上限）、JS 到 Go RE2 正则转译与降级、`$ref`/`allOf`/`anyOf`/`const`/空 `enum`/无 `items` 数组展平，以及 MCP 工具返回图片的内容块透传。
+- **消除 `Error: unknown tool "agy_tool"` 误报**：`AgyAdapter` / `EventMapper` 在每次切割工具步骤前动态校验 `agy_tool` 注册与当前 Agent 作用域可见性（兼容 `tools.restrict` 与 PTC 模式），插件卸载时先置位 `pluginDisposing` 再关闭 ACP/注销工具，避免重载窗口切出无效调用；历史及边界竞态产生的 `unknown tool "agy_tool"` 结果在历史摘要与工具卡片中统一降级为中性提示而非标红报错。
 - **缓存命中率提升、DSH 防假 429 改写与流式自愈**：归一化模型 slug 避免同模型变体击穿会话绑定、System Prompt 仅首轮注入、新增保义 DSH/Codex 系统提示词改写（`cloakSystemPrompt`）、剥离 `agy` 流式泄露的重试/截断脏文本、细分 AI 积分不足为硬 `RATE_LIMIT`、新增 ACP 空思考/无效输出同会话热自愈，以及压缩期 429 死循环快速熔断与切号。
 - **ACP 备用进程预热、原生内联图片与 5h/每日/间隔预热升级**：新增 `AcpSessionPool.warmSpare` 消除冷启动、支持 `promptCapabilities.image` 原生内联图片块；`WarmupService` 支持 5 小时滚动窗、IANA 时区每日定时、固定间隔触发、Antigravity 滑动空闲重置点检测与 50 条审计日志。
 - **扩展 `/agy` 命令族与生态同步过滤**：新增 `btw` 实时进度、幂等 `/agy goal` 状态流转与上下文感知命令桥接。

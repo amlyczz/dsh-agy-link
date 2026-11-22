@@ -75,3 +75,14 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
 - **跨回合后台唤醒（`src/features/background/watcher.ts`, `BackgroundWakeWatcher`）**：
   - 当回合结束前触发过一次性 `schedule`（`DurationSeconds > 0` 且未在同回合内完成）、存在 `RUNNING` 后台工具/`SUBAGENT_STATE_ALIVE` 子代理或 ACP 后台会话时，宿主按 `backgroundWakeupTtlMinutes` / `backgroundWakeupMaxPerSession` 保留计时器与 `.system_generated/` + ACP 会话监听，并在不归档、无活跃 `liveRun`、`agent.status !== 'running'` 且无重复入队 notice 时通过 `sessionController.resolveAgent` + `agent.followup(createUserMessage({ source: { kind: 'plugin', plugin: 'agy-link', form: 'notice', summary } }))` 唤醒 DSH 会话；`AcpSessionPool.evictIdle()` 对受保留的后台 ACP 会话豁免空闲超时驱逐。
 - **锚点**：`test/acp.test.ts`、`test/mcp-ready-disposal.test.ts`、`test/http-contract.test.ts`、`test/background-followup-wakeup.test.ts`。
+
+## 6. `agy_tool` 镜像工具活性守卫与 `UNKNOWN_TOOL` 误报消除
+
+在插件热重载 / Cordis 重新装配 / `tools` 服务重启 / Agent 作用域 `tools.restrict({ allow })`（含 PTC 模式仅暴露 `run_code` 时）场景下，`agy` 本身的工具步骤已完成，但若 `EventMapper` 仍向未注册或不可见的 `agy_tool` 切分 `finish: tool-calls`，DSH 会抛出 `ToolNotFoundError: Error: unknown tool "agy_tool"` 误报卡片并污染后续上下文。
+
+- **动态活性守卫**：`AgyAdapterDeps.isMirrorToolAvailable(sessionId?)` 在宿主中实时校验 `!pluginDisposing && toolsSvcRef.current !== null && mirrorToolDispose.current !== null`，若 `tools.get(name, scope)` 可用则同时校验当前 `sessionId` 对应 agent 作用域对 `agy_tool` 可见。`EventMapper` 在每次切割工具步骤前动态调用 `canCutOnTool()`，而非仅在 span 启动时快照。
+- **卸载序不变式**：插件卸载回调（`src/index.ts`）必须先置位 `pluginDisposing = true`，再调用 `acpPool.dispose()` 与 `mirrorToolDispose.current()`，防止进程关闭冲刷出的尾部工具事件仍切割出 doomed `agy_tool` 调用。
+- **边界竞态与历史误报降级**：`src/common/mirror-error.ts` 提供统一判定 `isMirrorToolNotFoundText()`：
+  - `buildDigest()`（`src/provider/prompt-text.ts`）将历史中的 `Error: unknown tool "agy_tool"` 工具结果改写为中性提示，避免下一轮 `agy` 被误导去排查 `"agy_tool"`；
+  - 客户端 `AgyMirrorToolView`（`src/client/toolview/`）与服务端 `presentMirrorResult()`（`src/provider/mirror/present.ts`）将该错误识别为非工具失败（`data-state="ok"` / 不置 `exitCode: 1`），展示「插件重载期间跳过结果回放」提示，真实工具报错保持原样标红。
+- **锚点**：`test/mirror-tool-unavailable.test.ts`、`test/inject-race.test.ts`。

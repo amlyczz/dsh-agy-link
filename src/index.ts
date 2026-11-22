@@ -17,7 +17,7 @@ import { defineAgyImageTool } from './host/image-tool.ts'
 import { agyCommandDefinition } from './host/commands.ts'
 import { tslCommandDefinition } from './host/tsl-command.ts'
 import { writeDoctorReport } from './host/diagnostics.ts'
-import { defineAgyMirrorTool } from './host/mirror-tool.ts'
+import { defineAgyMirrorTool, MIRROR_TOOL_NAME } from './host/mirror-tool.ts'
 import { runAgyOnce } from './host/oneshot.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess } from './host/runner.ts'
@@ -239,11 +239,33 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // one-shot ctx.get('tools') silently loses every registration when it
   // races startup — which left the mirror unregistered and every span cut
   // failing with `unknown tool "agy_tool"`.
-  const toolsSvcRef: { current: { register: (t: unknown) => unknown } | null } = { current: null }
+  let pluginDisposing = false
+  const toolsSvcRef: { current: { register: (t: unknown) => unknown; get?: (name: string, scope?: unknown) => unknown } | null } = { current: null }
   const askToolDispose = { current: null as null | (() => void) }
   const imageToolDispose = { current: null as null | (() => void) }
   const mirrorToolDispose = { current: null as null | (() => void) }
   const preExecuteDispose = { current: null as null | (() => void) }
+  const resolveAgentsSvc = (): { get(id: unknown): unknown } | undefined => {
+    const svc = ctx.get('agents') as { get(id: unknown): unknown } | undefined
+    return svc ?? (ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents
+  }
+  // Live liveness gate for AgyAdapter / EventMapper: never emit an `agy_tool`
+  // tool-call while the plugin is disposing, before `tools` has mounted, or
+  // when an agent scope's `tools.restrict({ allow })` hides `agy_tool`.
+  services.setMirrorToolCheck((sessionId?: string): boolean => {
+    if (pluginDisposing || mirrorToolDispose.current === null || toolsSvcRef.current === null) {
+      return false
+    }
+    if (typeof toolsSvcRef.current.get === 'function') {
+      try {
+        const agent = sessionId ? resolveAgentsSvc()?.get(sessionId) : undefined
+        return toolsSvcRef.current.get(MIRROR_TOOL_NAME, agent) !== undefined
+      } catch {
+        return true
+      }
+    }
+    return true
+  })
   const syncAskTool = (): void => {
     const want = getConfig().askTool && bin() !== null
     if (want && askToolDispose.current === null && toolsSvcRef.current) {
@@ -486,6 +508,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
 
   ctx.effect(() => {
     return () => {
+      // Flip BEFORE tearing down ACP/tools so any trailing tool event flushed
+      // by disposal cannot emit a doomed `agy_tool` call (`UNKNOWN_TOOL`).
+      pluginDisposing = true
       bridgeDisposed = true
       services.backgroundWakeup.dispose()
       services.translationWorkers?.dispose()

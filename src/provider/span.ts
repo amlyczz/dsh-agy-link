@@ -21,6 +21,8 @@ export interface SpanDeps {
   runs: RunRegistry
   /** Base URL of the media route, e.g. http://127.0.0.1:PORT/plugins/agy-link/media */
   getMediaBaseUrl?: () => string | null
+  /** Live check that `agy_tool` is currently registered & visible to `sessionId`. */
+  isMirrorToolAvailable?: (sessionId?: string) => boolean
 }
 
 class ChunkQueue {
@@ -202,6 +204,7 @@ export async function* driveSpan(
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
   skipDbEnrichment = false,
+  sessionId?: string,
 ): AsyncIterable<StreamChunk> {
   if (signal?.aborted) {
     rec.requestAbort?.()
@@ -219,7 +222,7 @@ export async function* driveSpan(
   deps.runs.remember(rec)
   deps.runs.pin(rec.runId)
   try {
-    yield* driveSpanBody(deps, rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice, skipDbEnrichment)
+    yield* driveSpanBody(deps, rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice, skipDbEnrichment, sessionId)
   } finally {
     deps.runs.unpin(rec.runId)
     deps.runs.remember(rec)
@@ -239,6 +242,7 @@ export async function* driveSpanBody(
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
   skipDbEnrichment = false,
+  sessionId?: string,
 ): AsyncIterable<StreamChunk> {
   const queue = new ChunkQueue()
   let abortedLocally = false
@@ -263,6 +267,9 @@ export async function* driveSpanBody(
     const mapper = new EventMapper({
       runId: rec.runId,
       cutOnTool,
+      ...(deps.isMirrorToolAvailable === undefined
+        ? {}
+        : { canCutOnTool: () => cutOnTool && deps.isMirrorToolAvailable!(sessionId) }),
       initialSawText: rec.sawTextBefore(from),
       useCodeWrapper,
       usage: rec,

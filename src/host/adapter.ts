@@ -271,9 +271,10 @@ export class AgyAdapter extends LlmAdapter {
       // Do not re-drive a settled recording that failed account-scoped or lacks finishable events:
       // forget it so prompt assembly can rotate accounts or retry cleanly.
       const deadFailure = rec !== undefined && rec.isSettled ? rec.failureInfo : null
-      const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport)
+      const mirrorLive = policy.mirrorTools && hasToolSupport && (this.deps.isMirrorToolAvailable?.(sessionKey) ?? true)
+      const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, mirrorLive)
       if (rec !== undefined && !deadNoResult && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
-        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
+        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
         return
       }
       if (rec !== undefined) {
@@ -450,7 +451,7 @@ export class AgyAdapter extends LlmAdapter {
             'duplicate-debounce rescue: identical prompt for a live agy run ' + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
           )
           this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
-          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal)
+          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
           return
         }
         throw new LlmError(
@@ -585,6 +586,6 @@ export class AgyAdapter extends LlmAdapter {
 
     // First span of the run: stream recorded events until the first
     // completed tool step cuts it (or the result finishes it).
-    yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice)
+    yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice, false, sessionKey)
   }
 }
