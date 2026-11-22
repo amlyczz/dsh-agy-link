@@ -453,7 +453,11 @@ function awaitOutcome(
 export function startAgyProcess(opts: RunOptions): RunningProcess {
   const started = Date.now()
   const viaCmd = IS_WIN && isCmdShim(opts.bin)
-  const isNode = IS_WIN && /\.(mjs|js|cjs)$/i.test(opts.bin)
+  // A `.mjs`/`.js`/`.cjs` "bin" is a NODE SCRIPT on every platform, not just
+  // Windows: spawning it directly works there only because CreateProcess
+  // resolves the association, while POSIX needs an exec bit and a shebang it
+  // does not have (EACCES / ENOEXEC). Run it through the running Node binary.
+  const isNode = /\.(mjs|js|cjs)$/i.test(opts.bin)
   const env = withAgyQuietEnv(opts.env ?? process.env)
   // Issue #49: the quiet env cannot stop agy's internal `--bg-updater` child
   // (that chain allocates its own console), so pre-empt the update *check*

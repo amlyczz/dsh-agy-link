@@ -1637,9 +1637,15 @@ test('cliSlotHoldsAccount refuses when neither durable primary credential nor di
     cliSlotHoldsAccount(a: unknown): Promise<boolean>
   }
 
-  // Without an independent primary credential file or disk token, cliSlotHoldsAccount
-  // must return false and refuse to tautologically match the slot against itself.
-  assert.equal(await svc.cliSlotHoldsAccount(primary), false)
+  // The refusal contract differs per platform because only Windows swaps the
+  // shared credential slot between accounts:
+  //  - Windows: no durable primary credential and no disk token means we cannot
+  //    prove the slot is ours, so it must refuse (never self-match).
+  //  - Linux/macOS: `agy` keeps the primary credential in the OS keyring only
+  //    (#143), so a pool with no sibling can safely claim the slot; refusing
+  //    here would kill CLI-based quota for every keyring-only primary.
+  const expected = process.platform === "win32" ? false : true
+  assert.equal(await svc.cliSlotHoldsAccount(primary), expected)
 })
 
 test('readCliUsageFamilies acquires credentialSlotMutex and degrades to REST on contention', async () => {
@@ -1901,4 +1907,28 @@ test('getValidAccessToken returns null instead of an already-expired accessToken
   )
   assert.equal(tok, null, 'must not return an already-expired accessToken after refresh failure')
   assert.equal(pool.getAccount(acc.id)?.authRequired, undefined, 'transport failure must not mark authRequired')
+})
+
+
+test("cliSlotHoldsAccount refuses a slot that belongs to a sibling isolated account", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-quota-sibling-slot-"))
+  const pool = new AccountPoolManager(dir)
+  pool.setAccountEnabled("acc_primary", false)
+  const secondary = pool.createAccountSlot("sib")
+  const primary = pool.getAccounts().find((a) => a.systemHome)
+  assert.ok(primary)
+  assert.ok(secondary.dir)
+  const token = { accessToken: "a-sib", refreshToken: "1//SIBLING" }
+  class SiblingSlotService extends QuotaService {
+    override async readSystemKeychainToken() {
+      return token
+    }
+    override async getStoredToken(a: { id?: string }) {
+      return a.id === secondary.id ? token : null
+    }
+  }
+  const svc = new SiblingSlotService(pool, () => "", () => null, { bin: () => "agy" }) as unknown as {
+    cliSlotHoldsAccount(a: unknown): Promise<boolean>
+  }
+  assert.equal(await svc.cliSlotHoldsAccount(primary), false)
 })

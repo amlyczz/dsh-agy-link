@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.65 (2026-11-22)
+
+### English
+
+- **Node-script `agyBin` shims now run on every platform.** A `.mjs`/`.js`/`.cjs` binary was only routed through the running Node process on Windows; on Linux/macOS it was spawned directly, which needs an exec bit and a shebang it does not have (EACCES/ENOEXEC). It is now detected as a Node script everywhere — this is what turned the Linux CI run red for the one-shot tests.
+- **Credential-slot contract test is platform-aware.** `cliSlotHoldsAccount` deliberately claims a keyring-only primary on Linux/macOS (agy keeps that credential in the OS keyring, #143); refusing there would kill CLI quota for every keyring-only primary. The test now asserts refusal on Windows and the sibling-ownership refusal on every platform.
+
+### 中文
+
+- **`.mjs/.js` 形式的 `agyBin` 现在各平台都能跑。** 之前只有 Windows 会把它交给当前 Node 进程执行；Linux/macOS 直接 spawn 需要可执行位与 shebang，而它两者都没有（EACCES/ENOEXEC）。现在所有平台都按 Node 脚本处理 —— 这正是让 Linux CI 上 one-shot 测试变红的原因。
+- **凭据槽契约测试按平台区分。** `cliSlotHoldsAccount` 在 Linux/macOS 上有意认领「仅存于系统钥匙串」的主账号（agy 把该凭据放在 OS keyring 里，#143）；若在那里拒绝，所有仅钥匙串登录的主账号都会失去 CLI 配额。现在测试在 Windows 断言拒绝、在所有平台断言「槽属于兄弟账号时必须拒绝」。
+
 ## 0.6.64 (2026-11-22)
 
 ### English
