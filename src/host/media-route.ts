@@ -375,17 +375,35 @@ export function spawnDetachedOpener(
   }
 }
 
-export function executeOpenInSystem(targetPath: string, reveal = false): { ok: boolean; error?: string } {
+/**
+ * Open `targetPath` with the platform handler, or reveal it in the file manager.
+ *
+ * A path that no longer exists must never reach the OS opener: on Windows,
+ * `explorer.exe /select,<missing>` does not fail, it silently opens the Desktop
+ * folder instead, so a stale click looks like the plugin randomly opening the
+ * user's Desktop. Fail fast and let the route answer with a real error.
+ *
+ * @param opener injection seam for tests: a unit test must never launch a real
+ *   Explorer / Finder / xdg-open on the developer's machine.
+ */
+export function executeOpenInSystem(
+  targetPath: string,
+  reveal = false,
+  opener: typeof spawnDetachedOpener = spawnDetachedOpener,
+): { ok: boolean; error?: string } {
   try {
+    if (!existsSync(targetPath)) {
+      return { ok: false, error: 'target does not exist: ' + targetPath };
+    }
     if (process.platform === 'darwin') {
-      if (!spawnDetachedOpener('open', reveal ? ['-R', targetPath] : [targetPath])) {
+      if (!opener('open', reveal ? ['-R', targetPath] : [targetPath])) {
         return { ok: false, error: 'failed to launch the system opener' };
       }
       return { ok: true };
     }
     if (process.platform === 'win32') {
       if (reveal) {
-        if (!spawnDetachedOpener('explorer.exe', [`/select,${targetPath}`])) {
+        if (!opener('explorer.exe', [`/select,${targetPath}`])) {
           return { ok: false, error: 'failed to launch explorer.exe' };
         }
         return { ok: true };
@@ -411,15 +429,15 @@ export function executeOpenInSystem(targetPath: string, reveal = false): { ok: b
 
       const ext = extname(targetPath).toLowerCase();
       if (['.md', '.txt', '.json', '.jsonl', '.yaml', '.yml', '.ts', '.js', '.py', '.gd', '.log'].includes(ext)) {
-        if (spawnDetachedOpener('notepad.exe', [targetPath])) return { ok: true };
+        if (opener('notepad.exe', [targetPath])) return { ok: true };
       }
 
-      if (!spawnDetachedOpener('explorer.exe', [`/select,${targetPath}`])) {
+      if (!opener('explorer.exe', [`/select,${targetPath}`])) {
         return { ok: false, error: 'failed to launch explorer.exe' };
       }
       return { ok: true };
     }
-    if (!spawnDetachedOpener('xdg-open', [targetPath])) {
+    if (!opener('xdg-open', [targetPath])) {
       return { ok: false, error: 'failed to launch xdg-open' };
     }
     return { ok: true };

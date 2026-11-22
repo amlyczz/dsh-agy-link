@@ -333,9 +333,29 @@ test('media-route: handleOpenFile validates path and returns JSON', () => {
     handleOpenFile({ method: 'POST', url: '/plugins/agy-link/open' }, resBad as never);
     assert.equal(badStatus, 400);
 
-    // executeOpenInSystem reveal test
-    const revealRes = executeOpenInSystem(testDoc, true);
+    // executeOpenInSystem reveal test. The opener is injected: this unit test must
+    // never launch a real Explorer / Finder / xdg-open. Doing so opened a window on
+    // the developer's desktop on every run, because the test removes its temp dir in
+    // `finally` and `explorer /select,<gone>` degrades to opening the Desktop folder.
+    const launched: string[] = [];
+    const fakeOpener = ((command: string, args: readonly string[]) => {
+      launched.push([command, ...args].join(' '));
+      return true;
+    }) as unknown as typeof spawnDetachedOpener;
+
+    // A stale path must fail instead of handing a missing target to the OS opener.
+    const staleRes = executeOpenInSystem(join(root, 'already-deleted.md'), true, fakeOpener);
+    assert.equal(staleRes.ok, false, 'a missing target must fail instead of opening something else');
+    assert.equal(launched.length, 0, 'a missing target must not reach the OS opener');
+
+    const revealRes = executeOpenInSystem(testDoc, true, fakeOpener);
     assert.equal(revealRes.ok, true, 'reveal in explorer/finder should succeed');
+    const expected = process.platform === 'darwin'
+      ? 'open -R ' + testDoc
+      : process.platform === 'win32'
+        ? 'explorer.exe /select,' + testDoc
+        : 'xdg-open ' + testDoc;
+    assert.deepEqual(launched, [expected], 'reveal must hand the exact target to the platform opener');
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
   }
