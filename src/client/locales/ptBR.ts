@@ -242,6 +242,15 @@ export const ptBR: AgyDictionary = {
   'tsl.failed': 'Falha na tradução',
   'tsl.retry': 'Tentar novamente',
   'tsl.empty': 'Nada para traduzir',
+  'acp.reportBadge': 'Relatório em segundo plano do agy',
+  'acp.reportHint': 'Enviado pelo agy · sem consumir um turno extra',
+  'acp.drainBadge': 'Tarefa em segundo plano do agy interrompida',
+  'acp.resetBadge': 'Sessão do agy reconstruída',
+  'acp.resetText':
+    'A sessão ACP persistente foi redefinida (o agy não a encontrava mais); uma nova sessão foi criada e o histórico da conversa foi transferido.',
+  'acp.drainText':
+    'As tarefas em segundo plano da conta anterior foram interrompidas porque a credencial compartilhada mudou de conta.',
+  'acp.noticeHint': 'Aviso do canal do agy',
   'tsl.collapse': 'Recolher',
   'tsl.expand': 'Expandir',
 }

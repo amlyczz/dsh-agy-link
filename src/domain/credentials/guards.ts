@@ -121,6 +121,13 @@ export function reinstallAccountCredentialAt(
  * slot under a running agy would feed it the wrong credential on its next
  * in-run token refresh.
  */
+/** True when the raw credential blob itself names `email` (or names nobody). */
+function credentialDocEmailMatches(raw: string, email: string): boolean {
+  const doc = parseCredentialDoc(raw)
+  const actual = (doc?.email ?? '').trim().toLowerCase()
+  return actual === '' || actual === email
+}
+
 export async function recoverPrimarySlotAt(
   pool: AccountPoolLike | undefined,
   input: AcquireInput,
@@ -142,10 +149,26 @@ export async function recoverPrimarySlotAt(
     primary = null
   }
   if (primary === null) return { restored: false, reason: 'unverifiable' }
+  // The identity the stored primary claims and the identity its blob carries
+  // must agree. They disagree when the file was overwritten by another account's
+  // refresh; installing it would put the wrong login in the slot and every later
+  // run would fail authentication with no clue why.
+  const want = (primary.email ?? '').trim().toLowerCase()
+  if (want !== '' && !credentialDocEmailMatches(primary.raw, want)) {
+    input.log(`[agy-link] primary slot recovery refused: stored primary claims ${primary.email} but its credential names another account`)
+    return { restored: false, reason: 'unverifiable' }
+  }
   if (sameCredentialGrant(io.readSlot(), primary.raw)) return { restored: false, reason: 'already-primary' }
   try {
     installSlotOrThrow(io, primary.raw, input.log, 'primary')
   } catch {
+    return { restored: false, reason: 'failed' }
+  }
+  // Write-then-verify, the same discipline gate 1 uses: a slot that silently
+  // kept the old value would look restored while still serving the other login.
+  const landed = slotIdentity(io)
+  if (want !== '' && landed !== null && landed.toLowerCase() !== want) {
+    input.log(`[agy-link] primary slot recovery failed: slot reads back as ${landed}`)
     return { restored: false, reason: 'failed' }
   }
   lastSlotRecoveryAt = Date.now()

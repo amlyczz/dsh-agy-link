@@ -121,11 +121,21 @@ export function baselineSessionBrain(st: BrainScanState, brainDir: string): bool
   return hasAlive
 }
 
+/** Collapse whitespace so a wrapped copy of the same sentence still matches. */
+function flatText(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
 export function pollSessionBrainDir(
   st: BrainScanState,
   brainDir: string,
   onNotice: (item: WakeNoticeItem) => void,
+  alreadyDelivered: readonly string[] = [],
 ): { stoppedByServer: boolean } {
+  // agy writes the same narration into BOTH the ACP stream and this message
+  // directory. The stream copy was already shown (or woken on), so the file copy
+  // is the same event seen twice: waking on it costs a second model turn.
+  const delivered = new Set(alreadyDelivered.map(flatText).filter((t) => t !== ''))
   const msgBase = join(brainDir, '.system_generated', 'messages')
   for (const dir of [msgBase, join(msgBase, 'undelivered')]) {
     if (!existsSync(dir)) continue
@@ -140,6 +150,7 @@ export function pollSessionBrainDir(
         if (!summary || st.seenMessageKeys.has(summary.dedupKey)) continue
         st.seenMessageKeys.add(summary.dedupKey)
         if (SERVER_STOP_NOTICE_RE.test(summary.text)) return { stoppedByServer: true }
+        if (delivered.has(flatText(summary.text))) continue
         const wakeKey = `msg:${summary.dedupKey}`
         if (st.seenWakeKeys.has(wakeKey)) continue
         st.seenWakeKeys.add(wakeKey)

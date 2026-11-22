@@ -11,6 +11,7 @@ import { isCmdShim, windowsQuote } from '../../runtime/agy/bin.ts'
 import { nodeScriptEnv, withAgyQuietEnv } from '../../runtime/agy/env.ts'
 import { awaitAuthEmail, readAuthEmailFromLog } from './identity.ts'
 import { pickPermissionOption, type JsonRpcResponse } from './protocol.ts'
+import { runAcpTurn, type AcpPromptOptions } from './turn.ts'
 
 export interface AcpProcessOptions {
   bin: string
@@ -92,6 +93,9 @@ export class AcpProcess extends EventEmitter {
   private logFile: string | null = null
   /** Identity agy reported for THIS process (cached: the log line never changes). */
   private authEmail: string | null = null
+  /** The identity probe already ran for this process — never wait on it twice. */
+  private identityProbeDone = false
+  private identityProbe: Promise<string | null> | null = null
   private alive = false
   private initPromise: Promise<Record<string, unknown>> | null = null
   lastUsedAt = Date.now()
@@ -442,129 +446,57 @@ export class AcpProcess extends EventEmitter {
   private async assertIdentity(): Promise<void> {
     const expected = (this.opts.expectedEmail ?? '').trim().toLowerCase()
     if (expected === '') return
-    const actual = await awaitAuthEmail(this.logFile, () => this.isAlive())
+    // The log line never changes within one process, so the verdict is cached:
+    // re-probing on every openSession re-read the log tail each turn and, on a
+    // build that does not print the line, blocked every turn for the full probe
+    // window.
+    if (this.authEmail !== null) return this.checkIdentity(this.authEmail, expected)
+    if (this.identityProbeDone) return
+    this.identityProbe ??= awaitAuthEmail(this.logFile, () => this.isAlive()).finally(() => {
+      this.identityProbeDone = true
+    })
+    const actual = await this.identityProbe
     // No identity in the log is not proof of a mismatch (a build may not print
     // it); only a DIFFERENT identity is actionable.
-    if (actual === null || actual === expected) return
+    if (actual === null) return
+    this.authEmail = actual
+    this.checkIdentity(actual, expected)
+  }
+
+  private checkIdentity(actual: string, expected: string): void {
+    if (actual === expected) return
     throw new Error(`ACP identity mismatch: agy authenticated as ${actual}, expected ${expected}`)
   }
 
-  async prompt(opts: {
-    sessionId: string
-    text: string
-    timeoutMs: number
-    idleTimeoutMs?: number
-    longToolIdleMs?: number
-    maxTurnMs?: number
-    signal?: AbortSignal
-    onUpdate: (update: Record<string, unknown>) => void
-  }): Promise<Record<string, unknown>> {
-    if (opts.signal?.aborted) {
-      throw new Error('ACP session/prompt aborted')
+  async prompt(opts: AcpPromptOptions): Promise<Record<string, unknown>> {
+    return runAcpTurn(this, opts)
+  }
+
+  /**
+   * Graceful close: end stdin, give agy a moment to flush its SQLite state, then
+   * kill whatever is left. Only a forced close (timeout / discard) goes straight
+   * to the kill.
+   */
+  async closeGracefully(timeoutMs: number): Promise<void> {
+    if (!this.isAlive()) {
+      this.close()
+      return
     }
-    let set = this.sessionListeners.get(opts.sessionId)
-    if (!set) {
-      set = new Set()
-      this.sessionListeners.set(opts.sessionId, set)
-    }
-
-    const idleMs = Math.max(0, opts.idleTimeoutMs ?? opts.timeoutMs)
-    const longToolIdleMs = Math.max(0, opts.longToolIdleMs ?? 0)
-    const maxTurnMs = Math.max(0, opts.maxTurnMs ?? 0)
-    const activeTools = new Set<string>()
-    let settled = false
-    let idleTimer: NodeJS.Timeout | null = null
-    let turnTimer: NodeJS.Timeout | null = null
-    let rejectPrompt: ((err: Error) => void) | null = null
-
-    const clearTimers = () => {
-      if (idleTimer !== null) {
-        clearTimeout(idleTimer)
-        idleTimer = null
-      }
-      if (turnTimer !== null) {
-        clearTimeout(turnTimer)
-        turnTimer = null
-      }
-    }
-
-    const failWith = (err: Error, cancel = true) => {
-      if (settled) return
-      settled = true
-      clearTimers()
-      if (cancel) this.cancelSession(opts.sessionId)
-      rejectPrompt?.(err)
-    }
-
-    const armIdle = () => {
-      if (settled || idleMs <= 0) return
-      if (idleTimer !== null) clearTimeout(idleTimer)
-      const budget = activeTools.size > 0 && longToolIdleMs > 0 ? Math.max(idleMs, longToolIdleMs) : idleMs
-      idleTimer = setTimeout(() => {
-        failWith(new Error(`ACP session/prompt timed out after ${budget}ms (idle)`))
-      }, budget)
-      idleTimer.unref?.()
-    }
-
-    const wrappedOnUpdate = (update: Record<string, unknown>) => {
-      const kind = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : ''
-      if (kind === 'tool_call' || kind === 'tool_call_update') {
-        const tcId = typeof update.toolCallId === 'string' && update.toolCallId !== '' ? update.toolCallId : ''
-        const status = typeof update.status === 'string' ? update.status.toLowerCase() : ''
-        if (tcId !== '') {
-          if (status === 'completed' || status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') {
-            activeTools.delete(tcId)
-          } else {
-            activeTools.add(tcId)
-          }
-        }
-      }
-      armIdle()
-      opts.onUpdate(update)
-    }
-
-    set.add(wrappedOnUpdate)
-    const onAbort = () => failWith(new Error('ACP session/prompt aborted'))
-    opts.signal?.addEventListener('abort', onAbort, { once: true })
-
-    try {
-      armIdle()
-      if (maxTurnMs > 0) {
-        turnTimer = setTimeout(() => {
-          failWith(new Error(`ACP session/prompt timed out after ${maxTurnMs}ms (maxTurn)`))
-        }, maxTurnMs)
-        turnTimer.unref?.()
-      }
-      return await new Promise<Record<string, unknown>>((resolve, reject) => {
-        rejectPrompt = reject
-        this.request(
-          'session/prompt',
-          {
-            sessionId: opts.sessionId,
-            prompt: [{ type: 'text', text: opts.text }],
-          },
-          0,
-        ).then(
-          (res) => {
-            if (settled) return
-            settled = true
-            clearTimers()
-            resolve(res)
-          },
-          (err) => {
-            if (settled) return
-            settled = true
-            clearTimers()
-            reject(err instanceof Error ? err : new Error(String(err)))
-          },
-        )
+    const c = this.child
+    // Leaving stdin open is what keeps agy's session loop alive, so ending it
+    // is what asks it to shut down on its own terms.
+    try { c?.stdin?.end() } catch { /* ignore */ }
+    const exited = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs)
+      timer.unref?.()
+      this.once('exit', () => {
+        clearTimeout(timer)
+        resolve(true)
       })
-    } finally {
-      clearTimers()
-      opts.signal?.removeEventListener('abort', onAbort)
-      set.delete(wrappedOnUpdate)
-      if (set.size === 0) this.sessionListeners.delete(opts.sessionId)
-    }
+    })
+    // A process that ended by itself already flushed; anything else is killed.
+    if (!exited) this.close()
+    else this.alive = false
   }
 
   close(): void {

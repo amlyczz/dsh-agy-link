@@ -1,4 +1,5 @@
 export { AcpProcess, type AcpProcessOptions } from './client.ts'
+export type { AcpPromptOptions } from './turn.ts'
 export { AcpSessionPool, type AcpPoolOptions } from './pool.ts'
 export { runAcpAttempt } from './run-attempt.ts'
 export {

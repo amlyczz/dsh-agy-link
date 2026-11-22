@@ -80,6 +80,13 @@ export interface AttemptDeps {
    */
   appendAcpNotice?: (sessionKey: string, notice: AcpSessionNotice) => void
   /**
+   * Note a report written straight into the transcript, with the record seq it
+   * landed at. The same narration is also written by agy into the conversation's
+   * .system_generated/messages, so the host needs this to avoid waking the model
+   * over a sentence the user already has on screen.
+   */
+  noteAcpReport?: (sessionKey: string, text: string, seq: number) => void
+  /**
    * Rewrite the Windows credential slot with the account this attempt must run
    * as. Host-injected: the features layer may not touch host credential code.
    * Returns false when the slot cannot be written (non-Windows, unreadable

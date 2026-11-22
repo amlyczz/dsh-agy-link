@@ -242,6 +242,13 @@ export const zh = {
   'tsl.failed': '翻译失败',
   'tsl.retry': '重试',
   'tsl.empty': '没有可翻译的内容',
+  'acp.reportBadge': 'agy 后台汇报',
+  'acp.reportHint': 'agy 主动推送 · 未额外消耗回合',
+  'acp.drainBadge': 'agy 后台任务已中止',
+  'acp.resetBadge': 'agy 会话已重建',
+  'acp.resetText': '原常驻会话已重置（agy 侧已找不到该会话），已自动携历史上下文重建新会话。',
+  'acp.drainText': '因账号切换，旧账号上仍在运行的后台任务已被中止。',
+  'acp.noticeHint': 'agy 通道提示',
   'tsl.collapse': '收起',
   'tsl.expand': '展开',
 } as const

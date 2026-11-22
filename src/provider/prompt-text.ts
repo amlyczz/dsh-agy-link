@@ -100,6 +100,19 @@ export function isForeignAssistant(m: Message, currentConvId?: string): boolean 
  * or reminder block, causing agy to completely ignore the user's latest input
  * (e.g. session-c65a826e where 42 time samples were appended).
  */
+/** The record dsh-agy-link appends for an ACP report the agent wrote itself. */
+export const ACP_REPORT_SOURCE_KIND = 'plugin:agy-link/acp-report'
+
+/**
+ * True for the 方案 A card: agy's own post-turn narration, written into the
+ * transcript as a plugin record. It is not harness noise — it is the agent's
+ * words about work that finished after the turn — so the digest keeps it.
+ */
+export function isAcpReportMessage(m: Message): boolean {
+  const kind = (m as unknown as ForeignSource).source?.kind
+  return kind === ACP_REPORT_SOURCE_KIND
+}
+
 export function isSyntheticHarnessMessage(m: Message): boolean {
   if (isToolResultMessage(m)) return false
   const src = (m as unknown as ForeignSource).source
@@ -119,6 +132,10 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
     ) {
       return true
     }
+    // An ACP report is the agent's own narration of background work that
+    // finished after the turn; dropping it would hide the outcome from a later
+    // context rebuild (session reset / CLI fallback).
+    if (kind === ACP_REPORT_SOURCE_KIND) return false
     // Each DSH context producer names its own kind (`plugin:memory`,
     // `plugin:recall`, …) — dsh-llm has no shared catch-all `plugin` kind.
     if (kind.startsWith('plugin:')) return true
@@ -267,6 +284,9 @@ function collectMediaRefs(m: Message, out: MediaRefLike[]): void {
 
 function digestLabel(m: Message): string {
   if (isToolResultMessage(m)) return 'Tool result: '
+  // Label it as background narration so a later turn does not mistake it for a
+  // reply to whatever the user asked in the meantime.
+  if (isAcpReportMessage(m)) return 'Assistant (background report): '
   return m.role === 'user' ? 'User: ' : 'Assistant: '
 }
 

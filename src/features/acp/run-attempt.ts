@@ -12,28 +12,21 @@ import {
   looksLikeAuthFailure,
   looksLikeAuthVerificationJitter,
   looksLikeRateLimit,
+  networkRetryDelayMs,
 } from '../../common/types.ts'
-import {
-  agyHomeDirFor,
-  logSize,
-  readAgyRunLogText,
-  readLogSlice,
-  snapshotAgyLogs,
-  type AgyLogSnapshot,
-} from '../../host/agy-log.ts'
+import { logSize, readLogSlice } from '../../host/agy-log.ts'
 import { StreamJsonParser } from '../../host/parser.ts'
 import type { RunRecording } from '../../host/recording.ts'
 import { resolveModelSlug } from '../../host/models.ts'
 import { ensureIsolatedKeychain, type RunOutcome } from '../../host/runner.ts'
 import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { createAttemptRecorder, type AttemptDeps, type AttemptInput, type AttemptSlot } from '../../provider/attempt.ts'
-import { deliverContext } from '../../provider/context-delivery.ts'
 import { classifyFailure, type AttemptFailure } from '../../provider/failure.ts'
 import { finalizeAttempt } from '../../provider/finalize.ts'
-import { buildDigest, wrapLiveRequest } from '../../provider/prompt-text.ts'
 import type { AcpProcess } from './client.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
+import { rebuildAcpSession } from './rebuild.ts'
 
 /**
  * How long we watch a fresh ACP turn for its first event before handing the
@@ -54,6 +47,12 @@ interface AcpPromptOutcome {
   outcomeOverride?: RunOutcome
   /** Nothing at all was emitted — safe to re-run on the CLI transport. */
   empty: boolean
+  /**
+   * The failure was only a keyring/token-refresh blip. Retrying it on the CLI
+   * transport would just re-trigger the same blip AND spend a second credential
+   * handoff, so this one is surfaced instead of retried.
+   */
+  keyringJitter?: boolean
 }
 
 function firstLine(text: string): string {
@@ -67,13 +66,18 @@ function firstLine(text: string): string {
  * successful end_turn whose only text is this banner. Recognise it as "no model
  * output" instead of showing the user a fake answer.
  */
+const AGY_INFRA_BANNER =
+  /(failed to construct executor|plan model not specified|failed to fetch user info|proxyconnect|failed to construct (?:the )?executor)/i
+
 export function isAgyFailureBanner(text: string): boolean {
   const body = text.trim()
   if (body === '') return false
-  if (/failed to construct executor/i.test(body)) return true
-  if (/plan model not specified/i.test(body)) return true
-  // A short message that is nothing but the warning glyph carries no content.
-  return /^[⚠✖]/.test(body) && body.split('\n').filter((l) => l.trim() !== '').length <= 2
+  // Only agy's OWN infrastructure lines, and only when they are the whole
+  // message. The old rule ("starts with ⚠ and is at most two lines") also ate
+  // legitimate one-line answers such as "⚠ 端口 8080 已被占用，请先停掉旧服务。"
+  // and turned a good reply into a discarded process plus a CLI re-run.
+  const lines = body.split('\n').filter((l) => l.trim() !== '')
+  return lines.length <= 2 && AGY_INFRA_BANNER.test(body)
 }
 
 async function settleAcpOutcome(opts: {
@@ -138,15 +142,21 @@ async function runAcpPrompt(opts: {
   proc: AcpProcess
   sid: string
   prompt: string
-  runLogHome: string
-  runLogsBefore: AgyLogSnapshot
   onFirstOutput?: () => void
 }): Promise<AcpPromptOutcome> {
-  const { input, recorder, proc, sid, prompt, runLogHome, runLogsBefore, onFirstOutput } = opts
+  const { deps, input, recorder, proc, sid, prompt, onFirstOutput } = opts
   const { cfg } = input
   const startedAt = Date.now()
   const streamState = createAcpStreamState()
+  /** Anything at all arrived for this turn (including agy's own banners). */
   let emittedAny = false
+  /**
+   * Real model output arrived (text that is not an infrastructure banner, or a
+   * tool call). The first-output gate keys off THIS, not off emittedAny: a
+   * banner-only turn must not hold the gate open for the full window, and a
+   * banner followed by a real answer must still open it.
+   */
+  let sawRealOutput = false
   // Captured BEFORE the prompt: everything the process wrote earlier belongs to
   // another turn and must not colour this failure.
   const stderrOffset = proc.stderrOffset()
@@ -172,7 +182,10 @@ async function runAcpPrompt(opts: {
           // agy's own failure banner is not "the turn is alive": keeping the
           // first-output gate closed lets a dead upstream finish, be classified
           // and be retried over the CLI instead of streaming a fake answer.
-          if (!emittedAny && !isAgyFailureBanner(streamState.accumulatedText)) onFirstOutput?.()
+          if (!sawRealOutput && ev.kind !== 'init' && !isAgyFailureBanner(streamState.accumulatedText)) {
+            sawRealOutput = true
+            onFirstOutput?.()
+          }
           emittedAny = true
           recorder.rec.append(ev)
           input.agyOnEvent?.(ev)
@@ -193,8 +206,11 @@ async function runAcpPrompt(opts: {
     // ("⚠ failed to construct executor: ..."): agy reports end_turn with that
     // text when it cannot reach Google, so treating it as a model reply turned a
     // dead proxy into a green turn. Such a turn carries no model output at all.
+    // A turn that only ran tools is a SUCCESS: the model answered by acting, and
+    // demanding prose from it turned every such turn into a failed attempt (the
+    // old condition used ||, so an empty text half alone was enough to fail).
     const textOnly = streamState.accumulatedText.trim()
-    if (!emittedAny || textOnly === '' || isAgyFailureBanner(textOnly)) {
+    if (!sawRealOutput) {
       const errText = roundStderr()
       const logText = roundLog()
       const combined = `${errText} ${logText}`
@@ -237,6 +253,15 @@ async function runAcpPrompt(opts: {
       stderrTail: errText,
       durationMs: Date.now() - startedAt,
     }
+    const networkStreak = isTransportFailure({
+      rawErrText,
+      authFailureText: '',
+      stderrTail: errText,
+      stdoutHead: '',
+      runLogText: logText,
+    })
+      ? deps.noteNetworkFailure(input.sessionKey)
+      : 0
     const failure =
       classifyFailure({
         cfg,
@@ -259,6 +284,12 @@ async function runAcpPrompt(opts: {
         isRateLimit: looksLikeRateLimit(rawErrText),
         silentTimeout: timedOut && !emittedAny,
       }) ?? { kind: aborted ? 'aborted' : 'error', code: Err.AGY_ERROR, message: msg }
+    // A transport failure that reaches the caller without a backoff makes the
+    // CLI fallback retry instantly into the same dead egress; the CLI path
+    // already stamps this delay, so the ACP path must too.
+    if (networkStreak > 0 && failure.retryAfterMs === undefined) {
+      failure.retryAfterMs = networkRetryDelayMs(networkStreak)
+    }
     return {
       failure,
       durationMs: outcome.durationMs,
@@ -267,8 +298,13 @@ async function runAcpPrompt(opts: {
       runLogText: logText,
       silentTimeout: timedOut && !emittedAny,
       outcomeOverride: outcome,
-      empty: !emittedAny || isAgyFailureBanner(streamState.accumulatedText),
+      empty: !sawRealOutput,
+      keyringJitter: looksLikeAuthVerificationJitter(`${errText} ${logText}`),
     }
+  } finally {
+    // The streak is counted where the failure is classified (above), so this
+    // only has to clear it on a turn that actually produced model output.
+    if (sawRealOutput) deps.clearNetworkStreak(input.sessionKey)
   }
 }
 
@@ -345,51 +381,6 @@ async function settleEarlyAbort(
 }
 
 /**
- * A session id that no longer exists must never be silently replaced by an
- * empty one: rebuild it with the same ADR-7 history digest the first-turn path
- * uses, and say so in the conversation so the user knows why the context looks
- * new.
- */
-async function rebuildAcpSession(opts: {
-  deps: AttemptDeps
-  input: AttemptInput
-  proc: AcpProcess
-  previousSid: string
-  workspaceRoot: string
-}): Promise<{ sid: string; prompt: string }> {
-  const { deps, input, proc, previousSid, workspaceRoot } = opts
-  const { cfg } = input
-  deps.log?.(`acp session ${previousSid} could not be restored — rebuilding with a full history digest`)
-  deps.appendAcpNotice?.(input.sessionKey, {
-    kind: 'acp-reset',
-    text:
-      '原常驻会话已重置（agy 侧已找不到该会话），已自动携历史上下文重建新会话。' +
-      '\nThe persistent ACP session was reset; a new one was created with the conversation history carried over.',
-  })
-  const digest = buildDigest(input.messages, 0, cfg.contextTransferMaxChars, {
-    maxBytes: cfg.contextTransferFileMaxBytes,
-    maxLineBytes: 40_000,
-    includeTaskLine: false,
-  })
-  const extraDirs: string[] = []
-  const delivered = digest === '' ? '' : await deliverContext(digest, input.sessionKey, extraDirs, cfg)
-  const prompt = delivered === '' ? input.prompt : wrapLiveRequest(input.prompt) + delivered
-  let sid = previousSid
-  if (extraDirs.length > 0) {
-    // The digest was spilled to a file; agy needs that directory in scope.
-    const reopened = await proc.openSession({
-      cwd: workspaceRoot,
-      addDirs: [...input.addDirs, ...extraDirs],
-      model: resolveModelSlug(input.activeModel || cfg.defaultModel),
-      ...(input.effort ? { effort: input.effort } : {}),
-      mode: input.permissionMode,
-    })
-    sid = reopened.sessionId
-  }
-  return { sid, prompt }
-}
-
-/**
  * Open or resume an ACP session and fall back cleanly (`null`, keeping `slot`
  * held) on pre-stream failures. Once the session is ready, stream the prompt in
  * the background and return the live `RunRecording`.
@@ -406,8 +397,6 @@ export async function runAcpAttempt(
   }
 
   if (account && account.dir) ensureIsolatedKeychain(account.dir)
-  const runLogHome = agyHomeDirFor(account)
-  const runLogsBefore: AgyLogSnapshot = snapshotAgyLogs(runLogHome)
   const env = buildAgyEnv({
     ...(account === undefined ? {} : { account }),
     cfg,
@@ -489,8 +478,13 @@ export async function runAcpAttempt(
   if (!input.isAux && sessionKey !== '') {
     deps.registerActiveRun(sessionKey, recorder.rec)
   }
+  // Arm the narrow hand-off now, but do NOT fire onFirstEvent yet. ACP reads the
+  // credential when the child starts, however this turn can still be abandoned
+  // below and re-run over the CLI — and the CLI path spawns a NEW agy that must
+  // read the slot again. Releasing the lease here would let the slot be
+  // rewritten (typically back to the primary) before that second spawn, so the
+  // fallback would silently run as a different account.
   const handoff = slot.armHandoff()
-  handoff?.onFirstEvent()
 
   const initEv = { kind: 'init' as const, conversationId: sid, raw: { transport: 'acp' } }
   recorder.rec.append(initEv)
@@ -518,8 +512,6 @@ export async function runAcpAttempt(
     proc,
     sid,
     prompt,
-    runLogHome,
-    runLogsBefore,
     onFirstOutput: () => settleGate('stream'),
   })
   promptPromise.then(
@@ -545,6 +537,9 @@ export async function runAcpAttempt(
       result.empty &&
       failure.kind !== 'aborted' &&
       failure.code !== Err.TIMEOUT &&
+      // A keyring blip would simply repeat on the other transport, and the retry
+      // would pay a second credential hand-off for nothing.
+      result.keyringJitter !== true &&
       !input.signal?.aborted
     if (failure !== null && retryOnCli) {
       deps.log?.(`acp turn produced no output (${failure.code}) — discarding the process and retrying over CLI -p`)
@@ -552,12 +547,16 @@ export async function runAcpAttempt(
       deps.unregisterActiveRun(sessionKey, recorder.rec)
       recorder.rec.settle(failure)
       pool.discardProcess(proc)
+      // Keep the slot held: the CLI re-run is the same turn and must read the
+      // same account. releaseOnce() below is the single release point.
       return null
     }
+    handoff?.onFirstEvent()
     await finishAcpAttempt({ deps, input, recorder, slot, proc, sid, result })
     return recorder.rec
   }
 
+  handoff?.onFirstEvent()
   void promptPromise
     .then((result) => finishAcpAttempt({ deps, input, recorder, slot, proc, sid, result }))
     .catch((e: unknown) => {

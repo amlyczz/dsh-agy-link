@@ -25,10 +25,23 @@ async function waitSettled(rec: { isSettled?: boolean }, timeoutMs = 5_000): Pro
   }
 }
 
-/** Let taskkill reap the mock children before the temp cwd is removed. */
+/**
+ * Let taskkill reap the mock children before the temp cwd is removed. A child
+ * that still holds the directory makes rmSync fail with EPERM, so retry until
+ * the reaper catches up (a loaded machine can take well over a second).
+ */
 async function cleanupDir(dir: string): Promise<void> {
-  await new Promise((r) => setTimeout(r, 250))
-  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  const deadline = Date.now() + 5_000
+  for (;;) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+      return
+    } catch (e) {
+      const code = (e as { code?: string }).code
+      if (Date.now() >= deadline || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'ENOTEMPTY')) throw e
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
 }
 
 
@@ -172,6 +185,12 @@ function stubProc(sessions: string[] = []) {
     isAlive() { return stub.alive },
     hasOpenSession: (sid: string) => open.has(sid),
     close() { stub.closed = true; stub.alive = false },
+    /** The pool closes a live process gracefully: stub an instant exit. */
+    closeGracefully() {
+      stub.closed = true
+      stub.alive = false
+      return Promise.resolve()
+    },
     once(ev: string, cb: () => void) {
       const list = listeners.get(ev) ?? []
       list.push(cb)

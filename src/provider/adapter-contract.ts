@@ -88,6 +88,12 @@ export interface AgyAdapterDeps {
    */
   appendAcpNotice?: (sessionKey: string, notice: AcpSessionNotice) => void
   /**
+   * Note an ACP report written straight into the transcript (方案 A) with the
+   * record seq it landed at, so the same narration arriving again through the
+   * brain-poll channel does not wake the model a second time.
+   */
+  noteAcpReport?: (sessionKey: string, text: string, seq: number) => void
+  /**
    * Rewrite the machine-wide Windows credential slot with one account's
    * credential. Used by gate 2 after agy reports a different identity than the
    * account we dispatched.

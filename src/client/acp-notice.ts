@@ -9,6 +9,7 @@
 // append-only, and nothing enters the model-visible surface.
 
 import { h, service, win, type ClientContextLike } from './translate-context.ts'
+import { translateOr } from './i18n-bridge.ts'
 
 export const ACP_REPORT_KIND = 'agy-acp-report'
 export const ACP_REPORT_EVENT_TYPE = 'plugin:agy-link/acp-report'
@@ -122,7 +123,11 @@ export function AcpReportCard(props?: { node?: { data?: Record<string, unknown> 
 	const data = props?.node?.data ?? {}
 	const text = typeof data.text === 'string' ? data.text.trim() : ''
 	if (text === '') return null
-	return shell('agy 后台汇报', textBlock(text, 'agy-acp-body'), 'agy 主动推送 · 未额外消耗回合')
+	return shell(
+		translateOr('acp.reportBadge', 'agy background report'),
+		textBlock(text, 'agy-acp-body'),
+		translateOr('acp.reportHint', 'Pushed by agy · no extra turn spent'),
+	)
 }
 
 /** A channel-level notice: session rebuilt from history, or a task cut by an account switch. */
@@ -131,8 +136,16 @@ export function AcpNoticeCard(props?: { node?: { data?: Record<string, unknown> 
 	const text = typeof data.text === 'string' ? data.text.trim() : ''
 	if (text === '') return null
 	const kind = typeof data.kind === 'string' ? data.kind : ''
-	const badge = kind === 'acp-drain-aborted' ? 'agy 后台任务已中止' : 'agy 会话已重建'
-	return shell(badge, textBlock(text, 'agy-acp-body'), 'agy 通道提示')
+	// The host writes one bilingual string so the record is readable outside the
+	// GUI; the card prefers the viewer's own language and falls back to it.
+	const drain = kind === 'acp-drain-aborted'
+	const badge = drain
+		? translateOr('acp.drainBadge', 'agy background task stopped')
+		: translateOr('acp.resetBadge', 'agy session rebuilt')
+	const body = drain
+		? translateOr('acp.drainText', text)
+		: translateOr('acp.resetText', text)
+	return shell(badge, textBlock(body, 'agy-acp-body'), translateOr('acp.noticeHint', 'agy channel notice'))
 }
 
 const ACP_CSS = `

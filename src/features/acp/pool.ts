@@ -5,12 +5,28 @@ import { AcpProcess, type AcpProcessOptions } from './client.ts'
 
 /** Default grace window before a draining process is force-closed. */
 const DEFAULT_DRAIN_MS = 10 * 60_000
+/**
+ * How long a closed process gets to flush its own state before the tree is
+ * killed. agy keeps its conversation in SQLite; `/F` straight away can cut a
+ * write in half.
+ */
+const GRACEFUL_EXIT_MS = 400
+
+/** One session still owed background work by a draining process. */
+export interface AcpDrainSession {
+  /** agy-side ACP session id (what the pool knows). */
+  acpSessionId: string
+  /** DSH session key the user actually sees ('' when unknown). */
+  sessionKey: string
+}
 
 export interface AcpDrainExpiredInfo {
   /** Pool keys of the processes that hit the drain deadline and were closed. */
   keys: readonly string[]
-  /** Session ids that were still retained on those processes. */
+  /** Sessions that were still retained on those processes. */
   sessions: readonly string[]
+  /** Same sessions, with the DSH key needed to address the transcript. */
+  targets: readonly AcpDrainSession[]
   /** Why they were drained in the first place ('account-switch' | 'capacity'). */
   reason: string
 }
@@ -19,6 +35,7 @@ export interface AcpDrainClosedInfo {
   keys: readonly string[]
   /** Sessions that were still retained when the process was closed. */
   sessions: readonly string[]
+  targets: readonly AcpDrainSession[]
   reason: string
   /** True when the drain hit its budget instead of finishing on its own. */
   expired: boolean
@@ -35,7 +52,8 @@ export interface AcpPoolOptions {
   onDrainExpired?: (info: AcpDrainExpiredInfo) => void
   /**
    * Called whenever a draining process is closed (finished or expired). The
-   * host uses it to put the primary credential back into the Windows slot.
+   * host uses it to put the primary credential back into the Windows slot; it
+   * must not raise its own user-visible notice (onDrainExpired owns that).
    */
   onDrainClosed?: (info: AcpDrainClosedInfo) => void
   /** Called when the last live or draining process is gone. */
@@ -43,6 +61,9 @@ export interface AcpPoolOptions {
 }
 
 interface DrainingEntry {
+  /** Unique per drain: a key can be drained more than once over a session. */
+  id: string
+  key: string
   proc: AcpProcess
   startedAt: number
   deadline: number
@@ -53,16 +74,24 @@ interface DrainingEntry {
    * the very retain that just let go — by then the live refcount is gone, and
    * the host still needs to know WHICH sessions lost their background work.
    */
-  sessions: readonly string[]
+  sessions: readonly AcpDrainSession[]
+}
+
+interface RetainedSession {
+  acpSessionId: string
+  sessionKey: string
+  count: number
 }
 
 export class AcpSessionPool {
   private readonly procs = new Map<string, AcpProcess>()
-  private readonly retainedSessions = new Map<string, number>()
+  /** Retained sessions keyed by agy session id, remembering the DSH session. */
+  private readonly retainedSessions = new Map<string, RetainedSession>()
   private readonly draining = new Map<string, DrainingEntry>()
   private readonly maxProcesses: number
   private readonly idleTtlMs: number
   private sweepTimer: NodeJS.Timeout | null = null
+  private drainSeq = 0
   private slotOverwriteDetectedCount = 0
   private lastSlotRecoveryAt: number | null = null
 
@@ -81,11 +110,15 @@ export class AcpSessionPool {
     if (this.procs.size === 0 && this.draining.size === 0 && this.sweepTimer !== null) {
       clearInterval(this.sweepTimer)
       this.sweepTimer = null
-      try {
-        this.opts.onIdle?.()
-      } catch {
-        /* a failing idle hook must not break the pool */
-      }
+      this.fireIdle()
+    }
+  }
+
+  private fireIdle(): void {
+    try {
+      this.opts.onIdle?.()
+    } catch {
+      /* a failing idle hook must not break the pool */
     }
   }
 
@@ -113,7 +146,19 @@ export class AcpSessionPool {
     const startedAt = Date.now()
     this.procs.delete(key)
     const sessions = this.sessionsOn(proc)
-    this.draining.set(key, { proc, startedAt, deadline: startedAt + this.drainBudgetMs(), reason, sessions })
+    this.drainSeq += 1
+    // Keyed by a unique id, NOT by the pool key: the same account can be
+    // drained twice (switch away, run background work again, switch again) and
+    // keying by `key` used to overwrite — and orphan — the earlier entry.
+    this.draining.set(`drain-${this.drainSeq}`, {
+      id: `drain-${this.drainSeq}`,
+      key,
+      proc,
+      startedAt,
+      deadline: startedAt + this.drainBudgetMs(),
+      reason,
+      sessions,
+    })
     proc.lastUsedAt = startedAt
     this.opts.log?.(`[acp-pool] draining ${key} (${reason}) — background work keeps running`)
   }
@@ -146,12 +191,14 @@ export class AcpSessionPool {
       if (victimKey === null) break
       const victim = this.procs.get(victimKey)
       if (!victim) break
+      this.procs.delete(victimKey)
       if (this.hasRetainedSession(victim)) {
-        // Never kill a process that still owes background work to a session.
+        // Never kill a process that still owes background work to a session:
+        // hand it to the drain list, which keeps it alive until the work is done
+        // (or its budget expires) and notifies that session either way.
         this.drain(victimKey, victim, 'capacity')
       } else {
-        this.procs.delete(victimKey)
-        victim.close()
+        this.closeProc(victim, false)
       }
     }
 
@@ -169,8 +216,9 @@ export class AcpSessionPool {
     const proc = this.opts.createProcess ? this.opts.createProcess(procOpts) : new AcpProcess(procOpts)
     proc.once('exit', () => {
       if (this.procs.get(key) === proc) this.procs.delete(key)
-      const drain = this.draining.get(key)
-      if (drain?.proc === proc) this.draining.delete(key)
+      for (const [id, entry] of [...this.draining.entries()]) {
+        if (entry.proc === proc) this.draining.delete(id)
+      }
       this.stopSweepTimerIfEmpty()
     })
     this.procs.set(key, proc)
@@ -197,6 +245,35 @@ export class AcpSessionPool {
     return oldestFree ?? oldestAny
   }
 
+  /**
+   * Close a process, giving it a short window to flush before the tree is
+   * killed. `force` skips the window (a process we no longer trust).
+   */
+  private closeProc(proc: AcpProcess, force: boolean): void {
+    if (force || !proc.isAlive()) {
+      proc.close()
+      return
+    }
+    const graceful = (proc as { closeGracefully?: (ms: number) => Promise<void> }).closeGracefully
+    if (typeof graceful === 'function') {
+      // AcpProcess ends stdin, waits for agy to exit on its own (it then flushes
+      // its conversation DB), and only kills the tree if that window expires.
+      void graceful
+        .call(proc, GRACEFUL_EXIT_MS)
+        .catch(() => {
+          try {
+            proc.close()
+          } catch {
+            /* the process may already be gone */
+          }
+        })
+      return
+    }
+    // No graceful path (a test double, or a process type without one): close it
+    // now, there is nothing to give time to.
+    proc.close()
+  }
+
   evictOtherAccounts(keepAccountId?: string): number {
     const prefix = `${keepAccountId || 'primary'}|`
     let evicted = 0
@@ -209,24 +286,40 @@ export class AcpSessionPool {
         this.drain(k, p, 'account-switch')
       } else {
         this.procs.delete(k)
-        p.close()
+        this.closeProc(p, false)
       }
       evicted++
     }
-    this.stopSweepTimerIfEmpty()
+    // Deliberately no stopSweepTimerIfEmpty() here: this runs at the START of
+    // acquiring a process for the incoming account, so an empty pool is
+    // transient and firing onIdle would race the new spawn into a slot restore.
+    if (evicted > 0) this.ensureSweepTimer()
     return evicted
   }
 
-  retainSession(sessionId: string): () => void {
-    if (sessionId === '') return () => {}
-    this.retainedSessions.set(sessionId, (this.retainedSessions.get(sessionId) ?? 0) + 1)
+  /**
+   * Hold a session open across turns so its background work can still report.
+   * `sessionKey` is the DSH session the user sees; drain notices need it
+   * because the agy session id means nothing to the transcript service.
+   */
+  retainSession(acpSessionId: string, sessionKey = ''): () => void {
+    if (acpSessionId === '') return () => {}
+    const cur = this.retainedSessions.get(acpSessionId)
+    if (cur) {
+      cur.count += 1
+      if (sessionKey !== '' && cur.sessionKey === '') cur.sessionKey = sessionKey
+    } else {
+      this.retainedSessions.set(acpSessionId, { acpSessionId, sessionKey, count: 1 })
+    }
     let released = false
     return () => {
       if (released) return
       released = true
-      const cur = this.retainedSessions.get(sessionId) ?? 0
-      if (cur <= 1) this.retainedSessions.delete(sessionId)
-      else this.retainedSessions.set(sessionId, cur - 1)
+      const live = this.retainedSessions.get(acpSessionId)
+      if (live) {
+        if (live.count <= 1) this.retainedSessions.delete(acpSessionId)
+        else live.count -= 1
+      }
       this.closeFinishedDrains()
     }
   }
@@ -241,18 +334,29 @@ export class AcpSessionPool {
     return false
   }
 
-  /** Retained session ids that still have an open session on `proc`. */
-  private sessionsOn(proc: AcpProcess): string[] {
-    const out: string[] = []
-    for (const sid of this.retainedSessions.keys()) {
-      if (proc.hasOpenSession(sid)) out.push(sid)
+  /** Retained sessions that still have an open session on `proc`. */
+  private sessionsOn(proc: AcpProcess): AcpDrainSession[] {
+    const out: AcpDrainSession[] = []
+    for (const [sid, info] of this.retainedSessions) {
+      if (proc.hasOpenSession(sid)) out.push({ acpSessionId: sid, sessionKey: info.sessionKey })
     }
     return out
   }
 
-  private fireDrainClosed(keys: readonly string[], sessions: readonly string[], reason: string, expired: boolean): void {
+  private fireDrainClosed(
+    keys: readonly string[],
+    targets: readonly AcpDrainSession[],
+    reason: string,
+    expired: boolean,
+  ): void {
     try {
-      this.opts.onDrainClosed?.({ keys, sessions, reason, expired })
+      this.opts.onDrainClosed?.({
+        keys,
+        sessions: targets.map((t) => t.acpSessionId),
+        targets,
+        reason,
+        expired,
+      })
     } catch {
       /* a failing hook must not break the pool sweep */
     }
@@ -261,31 +365,36 @@ export class AcpSessionPool {
   /** Draining processes whose last retained session let go can be closed at once. */
   private closeFinishedDrains(now = Date.now()): number {
     let closed = 0
-    for (const [k, entry] of [...this.draining.entries()]) {
+    for (const [id, entry] of [...this.draining.entries()]) {
       if (!entry.proc.isAlive()) {
-        this.draining.delete(k)
+        this.draining.delete(id)
         continue
       }
       if (!this.hasRetainedSession(entry.proc)) {
-        this.draining.delete(k)
-        const sessions = entry.sessions
-        entry.proc.close()
-        this.opts.log?.(`[acp-pool] closed drained ${k} — no background work left`)
-        this.fireDrainClosed([k], sessions, entry.reason, false)
+        this.draining.delete(id)
+        const targets = entry.sessions
+        this.closeProc(entry.proc, false)
+        this.opts.log?.(`[acp-pool] closed drained ${entry.key} — no background work left`)
+        this.fireDrainClosed([entry.key], targets, entry.reason, false)
         closed++
       } else if (now >= entry.deadline) {
-        this.draining.delete(k)
-        const sessions = entry.sessions
-        entry.proc.close()
+        this.draining.delete(id)
+        const targets = entry.sessions
+        this.closeProc(entry.proc, true)
         this.opts.log?.(
-          `[acp-pool] drained ${k} hit its ${Math.round((now - entry.startedAt) / 1000)}s budget — force-closed`,
+          `[acp-pool] drained ${entry.key} hit its ${Math.round((now - entry.startedAt) / 1000)}s budget — force-closed`,
         )
         try {
-          this.opts.onDrainExpired?.({ keys: [k], sessions, reason: entry.reason })
+          this.opts.onDrainExpired?.({
+            keys: [entry.key],
+            sessions: targets.map((t) => t.acpSessionId),
+            targets,
+            reason: entry.reason,
+          })
         } catch {
           /* a failing notice hook must not break the pool sweep */
         }
-        this.fireDrainClosed([k], sessions, entry.reason, true)
+        this.fireDrainClosed([entry.key], targets, entry.reason, true)
         closed++
       }
     }
@@ -298,7 +407,7 @@ export class AcpSessionPool {
     for (const [k, p] of [...this.procs.entries()]) {
       if (!p.isAlive() || (now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p))) {
         this.procs.delete(k)
-        p.close()
+        this.closeProc(p, false)
         evicted++
       }
     }
@@ -316,10 +425,10 @@ export class AcpSessionPool {
     for (const [k, p] of [...this.procs.entries()]) {
       if (p === proc) this.procs.delete(k)
     }
-    for (const [k, entry] of [...this.draining.entries()]) {
-      if (entry.proc === proc) this.draining.delete(k)
+    for (const [id, entry] of [...this.draining.entries()]) {
+      if (entry.proc === proc) this.draining.delete(id)
     }
-    proc.close()
+    this.closeProc(proc, true)
     this.stopSweepTimerIfEmpty()
   }
 
@@ -349,7 +458,7 @@ export class AcpSessionPool {
       sessions += p.sessionCount
       keys.push(k)
     }
-    const drainingKeys = [...this.draining.keys()]
+    const drainingKeys = [...this.draining.values()].map((e) => e.key)
     // The credential-slot state machine observes overwrites/recoveries itself;
     // report the union so a host-level recovery is visible from this endpoint.
     const guards = slotGuardStats()

@@ -32,7 +32,7 @@ import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
-import { acquireCredentialSlot, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
+import { acquireCredentialSlot, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
 import {
   Semaphore,
   findSessionLogFile,
@@ -358,8 +358,12 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     // A drained process that ran out of budget is killed mid-flight; say so in
     // the conversation instead of letting the background task vanish silently.
     onDrainExpired: (info) => {
-      for (const sid of info.sessions) {
-        appendAcpNotice(sid, {
+      // Only the deadline branch speaks: a drain that ends on its own is the
+      // normal path, and warning about it would be a false alarm. The target's
+      // sessionKey is the DSH session (info.sessions holds agy's UUIDs, which
+      // the transcript service cannot resolve).
+      for (const target of info.targets) {
+        appendAcpNotice(target.sessionKey, {
           kind: 'acp-drain-aborted',
           text:
             '因账号切换，旧账号上仍在运行的后台任务已被中止。' +
@@ -370,17 +374,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     // Gate 3: once the last process of the OLD account is gone, nothing else can
     // legitimately own the machine-wide slot — put the primary back so the next
     // interactive turn authenticates as the user's own account.
-    onDrainClosed: (info) => {
-      if (info.sessions.length > 0) {
-        for (const sid of info.sessions) {
-          appendAcpNotice(sid, {
-            kind: 'acp-drain-aborted',
-            text:
-              '因账号切换，旧账号上仍在运行的后台任务已结束。' +
-              '\nBackground work on the previous account has finished because the credential slot switched accounts.',
-          })
-        }
-      }
+    onDrainClosed: () => {
       void restorePrimarySlot('drain-closed')
     },
     onIdle: () => {
@@ -391,7 +385,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   const backgroundWakeup = new BackgroundWakeWatcher({
     getConfig,
     log,
-    retainAcpSession: (sid) => acpPool.retainSession(sid),
+    retainAcpSession: (sid, sessionKey) => acpPool.retainSession(sid, sessionKey),
     getActiveRun: (sessionId) => adapter.getActiveRun(sessionId),
     isArchived: (sessionId) => {
       try {
@@ -411,8 +405,12 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     },
     // 方案 A: the ACP turn already produced its own report; write it straight
     // into the transcript so no model turn is spent repeating it.
-    presentAcpReport: async (sessionId, text) =>
-      (await appendPluginRecordTo(sessionId, ACP_REPORT_RECORD_TYPE, { text, at: Date.now() })) !== null,
+    presentAcpReport: async (sessionId, text) => {
+      const seq = await appendPluginRecordTo(sessionId, ACP_REPORT_RECORD_TYPE, { text, at: Date.now() })
+      // The seq travels back to the watcher, which uses it to recognise the same
+      // narration when agy also writes it to .system_generated/messages.
+      return seq === null ? false : seq
+    },
     hasArmedGoal: (sessionId) => resolveSessionGoal(ctx, sessionId) != null,
     resolveAgent: async (sessionId) => {
       try {
@@ -464,11 +462,18 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     runAcp: (attemptDeps, attemptInput, slot) => runAcpAttempt(acpPool, attemptDeps, attemptInput, slot),
     backgroundObserver: backgroundWakeup,
     appendAcpNotice,
+    noteAcpReport: (sessionKey, text, seq) => backgroundWakeup.noteAcpReport(sessionKey, text, seq),
     // Gate 2 recovery: agy proved it loaded a different account than the one we
     // dispatched, so the slot must be rewritten before the single retry.
     reinstallCredentialSlot: (account) => {
       if (process.platform !== 'win32') return false
-      const raw = account.dir ? readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log) : null
+      // The primary has no isolated dir: its token lives in the durable primary
+      // store, so read that instead. Falling through to null here used to make
+      // the whole gate-2 self-heal a no-op for the user's own account.
+      const raw =
+        account.systemHome || !account.dir
+          ? (readPrimaryCredential(pool.dir)?.raw ?? null)
+          : readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log)
       if (raw === null || raw === '') return false
       const ok = reinstallCredential(raw, { baseDir: pool.dir, log }, account.alias || account.id)
       if (ok) acpPool.noteSlotOverwrite()
