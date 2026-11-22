@@ -143,8 +143,14 @@ test('ACP protocol helpers map updates, tool outputs, usage, results, and permis
 
   const text = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } }, st)
   assert.equal(text[0]?.kind, 'step')
-  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage?.input_tokens, 120)
+  // issue #158: { used } is context occupancy, never a token sample.
+  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage, undefined)
+  assert.equal(st.lastContextUsed, 120)
   assert.equal(st.accumulatedText, 'hi')
+
+  // An update that really reports token counts still feeds the sample.
+  acpUpdateToAgyEvents('s1', { sessionUpdate: 'usage_update', used: 120, outputTokens: 7, cachedReadTokens: 90 }, st)
+  assert.deepEqual(st.lastUsage, { cache_read_tokens: 90, output_tokens: 7 })
 
   const startTool = acpUpdateToAgyEvents('s1', {
     sessionUpdate: 'tool_call',
