@@ -579,13 +579,18 @@ test('mirrorCallId round-trips through parseMirrorCallId', () => {
 })
 
 test('usageFromRaw maps snake_case fields', () => {
+  // issue #167: 1 + 2 + 4 + 5 = 12, so the reported 15 cannot be the sum of the
+  // counters and is replaced by the derived one.
   const u = usageFromRaw({ input_tokens: 1, output_tokens: 2, thinking_tokens: 3, cache_read_tokens: 4, cache_write_tokens: 5, total_tokens: 15 })
   assert.equal(u.inputTokens, 1)
   assert.equal(u.outputTokens, 2)
   assert.equal(u.reasoningTokens, 3)
   assert.equal(u.cacheReadTokens, 4)
   assert.equal(u.cacheWriteTokens, 5)
-  assert.equal(u.totalTokens, 15)
+  assert.equal(u.totalTokens, 12, 'a total that disagrees with the counters is derived')
+
+  const consistent = usageFromRaw({ input_tokens: 1, output_tokens: 2, cache_read_tokens: 4, cache_write_tokens: 5, total_tokens: 12 })
+  assert.equal(consistent.totalTokens, 12, 'a consistent reported total is kept as-is')
 })
 
 test('thinking-only turn without DB prose still surfaces the banner (issue #43)', () => {
