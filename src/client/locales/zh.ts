@@ -207,6 +207,8 @@ export const zh = {
   'config.imageToolDesc': '注册 agy_image 工具，让任意 DSH 模型都能直接调用 Antigravity 生图/改图',
   'config.syncCustomizations': '多账号定制同步',
   'config.syncCustomizationsDesc': '自动将主账号的 Plugins、MCP、Skills、Rules 与 Agents 镜像同步到隔离账号池',
+  'config.backgroundWakeup': '跨回合后台自动唤醒',
+  'config.backgroundWakeupDesc': '默认关闭。开启后，当定时任务到期、后台命令/子代理完成或 ACP 常驻推送更新时，自动唤醒空闲的 DSH 会话',
   'config.agent': '默认自定义 Agent (--agent)',
   'config.agentDesc': '指定 Markdown 自定义 Agent 名称，留空使用 agy 默认行为',
   'config.agentPlaceholder': '输入 agent 名称（留空默认）',

@@ -3,6 +3,7 @@
 // Moved verbatim out of src/host/adapter.ts so the adapter file stays a thin
 // orchestrator. The adapter re-exports this type, so `import type {
 // AgyAdapterDeps } from '.../adapter.ts'` keeps working for hosts and tests.
+import type { BackgroundTurnObserver } from '../common/background-types.ts'
 import type { PluginConfig } from '../common/types.ts'
 import type { ModelCatalog } from '../host/models.ts'
 import type { SessionStore } from '../host/sessions.ts'
@@ -77,4 +78,6 @@ export interface AgyAdapterDeps {
   onEffortUnsupported?: (model: string) => void
   /** Optional persistent ACP attempt runner wired from host services. */
   runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
+  /** Cross-turn background wake observer (tracks schedule timers & background tasks). */
+  backgroundObserver?: BackgroundTurnObserver
 }

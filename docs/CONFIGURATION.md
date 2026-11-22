@@ -42,6 +42,9 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `maxTurnMinutes` | `DSH_AGY_MAX_TURN_MINUTES` | `0` | Hard wall-clock cap per turn (0 = unlimited); bounds a self-driving turn that never goes idle |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget while a tool step is open; `0` keeps `timeoutMs` so wedged tools fail fast |
 | `idleGraceMinutes` | `DSH_AGY_IDLE_GRACE_MINUTES` | `10` | Grace before the `root agent idle; waiting for N background task(s)` reaper kills the agy tree; `0` disables the reaper (the activity watchdog and `maxTurnMinutes` still bound the turn) |
+| `backgroundWakeup` | `DSH_AGY_BACKGROUND_WAKEUP` | `false` | Opt-in. When on, wake idle DSH sessions across turns as a one-shot `schedule` timer expires, a detached task/subagent finishes, or a persistent ACP session emits a background completion update. Off by default because a session that speaks on its own after the turn is a behaviour change every user has to ask for; enable it in Settings → Runtime controls, with `/agy config wakeup on`, or with `DSH_AGY_BACKGROUND_WAKEUP=1` |
+| `backgroundWakeupTtlMinutes` | `DSH_AGY_BACKGROUND_WAKEUP_TTL_MINUTES` | `30` | Max window (minutes, 1–240) to keep post-turn background watches and one-shot `schedule` timers alive |
+| `backgroundWakeupMaxPerSession` | `DSH_AGY_BACKGROUND_WAKEUP_MAX_PER_SESSION` | `12` | Max automatic background wakeups per session between human turns (1–100) |
 | `dispatchTimeoutMinutes` | `—` | `15` | Cap on waiting for the Windows credential slot before backing off and retrying; `0` waits indefinitely |
 | `dispatchRetries` | `—` | `1` | Extra dispatch attempts after a credential-slot timeout |
 | `parallelSameAccount` | `—` | `true` | Concurrent sessions on the credential already in the slot start without exclusivity; `false` restores full slot exclusivity |

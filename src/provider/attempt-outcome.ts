@@ -455,6 +455,20 @@ export async function handleAttemptOutcome(
   } finally {
     rec.settle(failure)
   }
+  // Wake the background watcher only AFTER cooldowns, rotation, and bindings have
+  // landed: the followup it may fire has to see the settled account, and a wake
+  // that races finalize would re-enter the attempt with stale state.
+  if (!input.isAux && sessionKey !== '') {
+    deps.backgroundObserver?.onAttemptSettled?.({
+      sessionKey,
+      conversationId,
+      ...(rec.accountHome === undefined ? {} : { accountHome: rec.accountHome }),
+      transport: 'cli',
+      recording: rec,
+      failure,
+      superseded,
+    })
+  }
 }
 
 /**
