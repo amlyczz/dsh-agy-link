@@ -424,7 +424,13 @@ test('a Stop mid-flight marks the binding interrupted and the next prompt carrie
   } finally {
     try { while (!(await iter.next()).done) { /* drain the aborted stream */ } } catch { /* aborted streams may reject */ }
   }
-  const binding = await waitFor(() => store.get('sess-abort'))
+  // Wait for the FLAG, not for "any binding": the binding row is written when the
+  // run starts, so under load this read the pre-abort snapshot and the assertion
+  // raced the finalize write (flaked in full-suite runs).
+  const binding = await waitFor(() => {
+    const b = store.get('sess-abort')
+    return b?.interrupted === true ? b : undefined
+  })
   assert.equal(binding.interrupted, true, 'an interrupted turn must be flagged so the next prompt can say so')
 
   // Next turn: the boundary must precede the newest request, otherwise agy's
