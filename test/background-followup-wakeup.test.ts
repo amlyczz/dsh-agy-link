@@ -10,6 +10,7 @@ import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { resolveConfig } from '../src/common/config.ts'
 import { defaultConfig } from '../src/common/types.ts'
 import { extractAttemptBackgroundSignals, isBackgroundWakeupNotice, matchesTimerCondition } from '../src/features/background/schedule-parse.ts'
+import { AcpSessionPool } from '../src/features/acp/pool.ts'
 import { BackgroundWakeWatcher } from '../src/features/background/watcher.ts'
 import { setAgyDbDir } from '../src/runtime/agy/db/paths.ts'
 import { agyCommandDefinition } from '../src/host/commands.ts'
@@ -714,4 +715,210 @@ describe('cross-turn background wakeup, slice 2: task logs, completion messages,
     }
   })
 })
+
+describe('cross-turn background wakeup, slice 3: ACP session retention and post-turn updates', () => {
+  /** Minimal stand-in for AcpProcess: only what the watch actually uses. */
+  function fakeAcp() {
+    const listeners = new Map<string, Set<(u: Record<string, unknown>) => void>>()
+    return {
+      subscribed: 0,
+      isAlive: () => true,
+      subscribeSession(sid: string, fn: (u: Record<string, unknown>) => void) {
+        let set = listeners.get(sid)
+        if (!set) { set = new Set(); listeners.set(sid, set) }
+        set.add(fn)
+        this.subscribed += 1
+        return () => { set?.delete(fn) }
+      },
+      push(sid: string, update: Record<string, unknown>) {
+        for (const fn of [...(listeners.get(sid) ?? [])]) fn(update)
+      },
+      listenerCount(sid: string) { return listeners.get(sid)?.size ?? 0 },
+    }
+  }
+
+  test('a post-turn tool completion on the retained ACP session wakes the session once', async () => {
+    const proc = fakeAcp()
+    const followups: string[] = []
+    let retained = 0
+    let released = 0
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      retainAcpSession: () => { retained += 1; return () => { released += 1 } },
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+
+    try {
+      const rec = new RunRecording()
+      rec.append({
+        kind: 'step',
+        stepKey: 'acp-bg-1',
+        stepKind: 'tool',
+        state: 'ACTIVE',
+        text: '',
+        tool: { name: 'run_command', args: { CommandLine: 'npm test' } },
+      })
+      rec.append({ kind: 'result', ok: true, response: 'Running in the background.', conversationId: 'conv-acp', usage: {}, raw: null })
+      rec.settle(null)
+
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-acp',
+        conversationId: 'conv-acp',
+        transport: 'acp',
+        recording: rec,
+        failure: null,
+        superseded: false,
+        acpProcess: proc,
+        acpSessionId: 'sid-acp-1',
+      })
+
+      assert.equal(proc.subscribed, 1, 'the finished turn subscribes to its own session')
+      assert.equal(retained, 1, 'and pins it so the pool cannot sweep the running job')
+
+      proc.push('sid-acp-1', {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call-1',
+        status: 'completed',
+        title: 'npm test',
+      })
+      await new Promise((r) => setTimeout(r, 200))
+      assert.equal(followups.length, 1)
+      assert.ok(followups[0]?.includes('npm test'))
+
+      // The same terminal update arriving twice must not wake twice.
+      proc.push('sid-acp-1', { sessionUpdate: 'tool_call_update', toolCallId: 'call-1', status: 'completed', title: 'npm test' })
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(followups.length, 1)
+
+      // A non-terminal update is not a wakeup.
+      proc.push('sid-acp-1', { sessionUpdate: 'tool_call_update', toolCallId: 'call-2', status: 'in_progress', title: 'npm test' })
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(followups.length, 1)
+
+      watcher.onHumanTurn('sess-acp')
+      assert.equal(released, 1, 'a human turn drops the pin')
+      assert.equal(proc.listenerCount('sid-acp-1'), 0, 'and the listener with it')
+    } finally {
+      watcher.dispose()
+    }
+  })
+
+  test('a post-turn assistant message on the ACP session wakes the session', async () => {
+    const proc = fakeAcp()
+    const followups: string[] = []
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      retainAcpSession: () => () => {},
+      resolveAgent: async () => ({
+        status: 'idle',
+        inbox: { nextTurn: [] },
+        followup: (m) => followups.push((m.content[0] as { text?: string })?.text ?? ''),
+      }),
+    })
+    try {
+      const rec = new RunRecording()
+      rec.append({ kind: 'step', stepKey: 'bg', stepKind: 'tool', state: 'ACTIVE', text: '', tool: { name: 'run_command', args: { CommandLine: 'sleep 1' } } })
+      rec.append({ kind: 'result', ok: true, response: 'ok', conversationId: 'conv-acp2', usage: {}, raw: null })
+      rec.settle(null)
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-acp2',
+        conversationId: 'conv-acp2',
+        transport: 'acp',
+        recording: rec,
+        failure: null,
+        superseded: false,
+        acpProcess: proc,
+        acpSessionId: 'sid-acp-2',
+      })
+
+      proc.push('sid-acp-2', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '  Background run finished cleanly.  ' } })
+      await new Promise((r) => setTimeout(r, 200))
+      assert.equal(followups.length, 1)
+      assert.ok(followups[0]?.includes('Background run finished cleanly.'))
+    } finally {
+      watcher.dispose()
+    }
+  })
+
+  test('an idle sweep keeps the process of a retained session and closes the others', () => {
+    const closed: string[] = []
+    const procs: Array<{ name: string; open: Set<string>; lastUsedAt: number; isAlive: () => boolean; close: () => void; hasOpenSession: (sid: string) => boolean; sessionCount: number }> = []
+    const pool = new AcpSessionPool({
+      bin: () => 'agy',
+      cfg: () => defaultConfig(),
+      idleTtlMs: 1_000,
+      createProcess: ((opts: { agent?: string }) => {
+        const p = {
+          name: opts.agent ?? 'p',
+          open: new Set<string>(),
+          lastUsedAt: 0,
+          isAlive: () => true,
+          close: () => { closed.push(p.name) },
+          hasOpenSession: (sid: string) => p.open.has(sid),
+          sessionCount: 0,
+          once: () => p,
+        }
+        procs.push(p)
+        return p
+      }) as never,
+    })
+
+    try {
+      const busy = pool.acquireProcess({ bin: 'agy', cwd: '.', mode: 'skip', sandbox: false, agent: 'busy' })
+      const idle = pool.acquireProcess({ bin: 'agy', cwd: '.', mode: 'skip', sandbox: false, agent: 'idle' })
+      ;(busy as unknown as { open: Set<string> }).open.add('sid-busy')
+
+      const release = pool.retainSession('sid-busy')
+      // Both processes are past the idle TTL; only the unpinned one may go.
+      assert.equal(pool.evictIdle(Date.now() + 60_000), 1)
+      assert.deepEqual(closed, ['idle'])
+      assert.equal((idle as unknown as { isAlive: () => boolean }).isAlive(), true)
+
+      release()
+      assert.equal(pool.evictIdle(Date.now() + 60_000), 1)
+      assert.deepEqual(closed, ['idle', 'busy'])
+    } finally {
+      pool.dispose()
+    }
+  })
+
+  test('an ACP turn with nothing outstanding never subscribes to the session', () => {
+    const proc = fakeAcp()
+    let retained = 0
+    const watcher = new BackgroundWakeWatcher({
+      getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
+      coalesceMs: 25,
+      retainAcpSession: () => { retained += 1; return () => {} },
+      resolveAgent: async () => ({ status: 'idle', inbox: { nextTurn: [] }, followup: () => {} }),
+    })
+    try {
+      const rec = new RunRecording()
+      rec.append({ kind: 'step', stepKey: 't', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'run_command', args: { CommandLine: 'echo done' } } })
+      rec.append({ kind: 'result', ok: true, response: 'done', conversationId: 'conv-none', usage: {}, raw: null })
+      rec.settle(null)
+      watcher.onAttemptSettled({
+        sessionKey: 'sess-none',
+        conversationId: 'conv-none',
+        transport: 'acp',
+        recording: rec,
+        failure: null,
+        superseded: false,
+        acpProcess: proc,
+        acpSessionId: 'sid-none',
+      })
+      assert.equal(proc.subscribed, 0)
+      assert.equal(retained, 0)
+      assert.equal(watcher.status().pendingTasks, 0)
+    } finally {
+      watcher.dispose()
+    }
+  })
+})
+
 

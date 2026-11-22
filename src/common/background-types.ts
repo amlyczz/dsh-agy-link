@@ -10,6 +10,15 @@ export interface ReadableRecordingLike {
   eventTimestampAt?(index: number): number | undefined
 }
 
+/**
+ * The slice of `AcpProcess` a background watch needs: keep the session open
+ * and listen to what it pushes after the turn returned.
+ */
+export interface RetainableAcpProcess {
+  isAlive(): boolean
+  subscribeSession(sessionId: string, listener: (update: Record<string, unknown>) => void): () => void
+}
+
 export interface BackgroundAttemptSettledInfo {
   readonly sessionKey: string
   readonly conversationId: string | null
@@ -18,6 +27,8 @@ export interface BackgroundAttemptSettledInfo {
   readonly recording: ReadableRecordingLike
   readonly failure: unknown
   readonly superseded: boolean
+  readonly acpProcess?: RetainableAcpProcess
+  readonly acpSessionId?: string
 }
 
 export interface BackgroundTurnObserver {

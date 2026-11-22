@@ -13,6 +13,11 @@ export interface AcpPoolOptions {
 
 export class AcpSessionPool {
   private readonly procs = new Map<string, AcpProcess>()
+  /**
+   * Sessions pinned by a live background watch. Reference counted so two
+   * watchers on the same session cannot release each other's pin.
+   */
+  private readonly retainedSessions = new Map<string, number>()
   private readonly maxProcesses: number
   private readonly idleTtlMs: number
   private sweepTimer: NodeJS.Timeout | null = null
@@ -109,10 +114,35 @@ export class AcpSessionPool {
     return evicted
   }
 
+  /** Pin a session so the idle sweeper leaves its process alone; returns the release. */
+  retainSession(sessionId: string): () => void {
+    if (sessionId === '') return () => {}
+    this.retainedSessions.set(sessionId, (this.retainedSessions.get(sessionId) ?? 0) + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const cur = this.retainedSessions.get(sessionId) ?? 0
+      if (cur <= 1) this.retainedSessions.delete(sessionId)
+      else this.retainedSessions.set(sessionId, cur - 1)
+    }
+  }
+
+  /** True when this process hosts a pinned session (its background job is still running). */
+  private hasRetainedSession(proc: AcpProcess): boolean {
+    if (this.retainedSessions.size === 0) return false
+    const fn = (proc as unknown as { hasOpenSession?: (sid: string) => boolean }).hasOpenSession
+    if (typeof fn !== 'function') return false
+    for (const sid of this.retainedSessions.keys()) {
+      if (proc.hasOpenSession(sid)) return true
+    }
+    return false
+  }
+
   evictIdle(now = Date.now()): number {
     let evicted = 0
     for (const [k, p] of [...this.procs.entries()]) {
-      if (!p.isAlive() || now - p.lastUsedAt > this.idleTtlMs) {
+      if (!p.isAlive() || (now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p))) {
         this.procs.delete(k)
         p.close()
         evicted++

@@ -313,6 +313,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     getConfig,
     log,
     getActiveRun: (sessionId) => adapter.getActiveRun(sessionId),
+    retainAcpSession: (sid) => acpPool.retainSession(sid),
     isArchived: (sessionId) => {
       try {
         const reg = safeCtxGet<{ archivedSessionIds?: Iterable<string> | { has?: (id: string) => boolean } }>(ctx, 'workspaceRegistry')
