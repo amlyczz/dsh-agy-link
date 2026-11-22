@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.63 (2026-11-22)
+
+### English
+
+- **Fix(acp): stop re-sending the same model and effort before every turn (the session-config half of #167).** `session/set_config_option` is not idempotent on agy's side: every call logs `Switching model in session <sid> to: …` and re-runs the switch even when the value is identical — real logs show the same target being re-applied three turns in a row. DSH opens the ACP session again on every turn, so an unchanged turn re-applied its model and thought level right before the prompt. The client now remembers what each session already has and sends only what changed; a resumed session still gets its settings once, because what the server restored cannot be known. A model change also re-sends the thought level (agy resets it to the new model's default), and dropping the effort lets the new model's default apply.
+
+### 中文
+
+- **修复(acp)：不再在每轮之前重发相同的模型与思考等级（#167 的会话配置部分）。** `session/set_config_option` 在 agy 侧不幂等：每次调用都会打出 `Switching model in session <sid> to: …` 并真的重跑一次切换，即使值与原来完全相同——真实日志里同一目标连着三轮被重新应用。DSH 每轮都会重新打开 ACP 会话，于是没有变化的回合也会在 prompt 之前重设模型与思考等级。现在客户端会记住每个会话已经生效的设置，只发送变化的部分；恢复的会话仍会发送一次，因为无法知道服务端恢复成了什么。模型变化时会连带重发思考等级（agy 会把它重置为新模型的默认值），而不再指定思考等级时就让新模型的默认值生效。
+
 ## 0.6.61 (2026-11-22)
 
 ### English

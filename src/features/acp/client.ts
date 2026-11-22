@@ -46,6 +46,13 @@ export class AcpProcess extends EventEmitter {
   private readonly pending = new Map<number, PendingRpc>()
   private readonly sessionListeners = new Map<string, Set<(u: Record<string, unknown>) => void>>()
   private readonly openSessions = new Set<string>()
+  // Last mode/model/effort actually applied per session. `set_config_option` is
+  // not idempotent on agy's side: every call logs `Switching model in session
+  // <sid> to: …` and re-runs the switch even when the value is identical (real
+  // logs show the same target three turns in a row). DSH opens the session
+  // again on every turn, so an unchanged turn used to re-apply its settings
+  // before each prompt (issue #167).
+  private readonly sessionConfigs = new Map<string, { mode: string; model: string; effort: string }>()
   private buffer = ''
   private stderrTail = ''
   private alive = false
@@ -118,6 +125,7 @@ export class AcpProcess extends EventEmitter {
       }
       this.pending.clear()
       this.openSessions.clear()
+      this.sessionConfigs.clear()
       this.emit('exit', code, sig)
     })
     child.on('error', (err) => {
@@ -262,19 +270,43 @@ export class AcpProcess extends EventEmitter {
       if (sid === '') throw new Error('ACP session/new returned empty sessionId')
     }
     this.openSessions.add(sid)
+    await this.applySessionConfig(sid, opts)
+    return sid
+  }
+
+  /**
+   * Apply mode/model/effort to a session, skipping whatever is already in
+   * effect. A resumed session starts with an empty cache, so its settings are
+   * sent once — we cannot know what the server restored.
+   *
+   * A model change also resets the effort to that model's default (agy logs
+   * `Switching model in session <sid> to: X (High)` and then `… (Low)` for the
+   * follow-up thought_level call), so the effort has to be re-sent whenever the
+   * model changed, and the cached effort is dropped when no new one is given.
+   */
+  private async applySessionConfig(sid: string, opts: { model?: string; effort?: string; mode?: PermissionMode }): Promise<void> {
     const mode = opts.mode ?? this.opts.permissionMode
-    if (mode !== 'skip') {
+    const model = opts.model?.trim() ?? ''
+    const effort = opts.effort?.trim() ?? ''
+    const prev = this.sessionConfigs.get(sid)
+    if (prev?.mode !== mode && mode !== 'skip') {
       await this.request('session/set_mode', { sessionId: sid, modeId: mode }, 15_000).catch(() => undefined)
     }
-    if (opts.model && opts.model.trim() !== '') {
-      await this.request('session/set_config_option', { sessionId: sid, configId: 'model', value: opts.model.trim() }, 15_000)
+    const modelChanged = model !== '' && prev?.model !== model
+    if (modelChanged) {
+      await this.request('session/set_config_option', { sessionId: sid, configId: 'model', value: model }, 15_000)
         .catch(() => undefined)
     }
-    if (opts.effort && opts.effort.trim() !== '') {
-      await this.request('session/set_config_option', { sessionId: sid, configId: 'thought_level', value: opts.effort.trim() }, 15_000)
+    const effortToSend = effort !== '' ? effort : modelChanged ? '' : (prev?.effort ?? '')
+    if (effortToSend !== '' && (modelChanged || prev?.effort !== effortToSend)) {
+      await this.request('session/set_config_option', { sessionId: sid, configId: 'thought_level', value: effortToSend }, 15_000)
         .catch(() => undefined)
     }
-    return sid
+    this.sessionConfigs.set(sid, {
+      mode,
+      model: model === '' ? (prev?.model ?? '') : model,
+      effort: effortToSend === '' ? '' : effortToSend,
+    })
   }
 
   async prompt(opts: {

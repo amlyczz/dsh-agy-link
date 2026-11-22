@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -24,6 +24,7 @@ function createMockAcpBin(dir: string, behavior: 'normal' | 'fail-resume-load' |
   const scriptPath = join(dir, `mock-acp-${behavior}.mjs`)
   const script = `
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
 const mode = ${JSON.stringify(behavior)};
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -60,6 +61,9 @@ rl.on('line', (line) => {
     return;
   }
   if (msg.method === 'session/set_mode' || msg.method === 'session/set_config_option') {
+    if (process.env.MOCK_ACP_RECORD_DIR) {
+      try { appendFileSync(process.env.MOCK_ACP_RECORD_DIR + '/calls.log', msg.method + ' ' + JSON.stringify(msg.params) + '\\n'); } catch {}
+    }
     send({ jsonrpc: '2.0', id: msg.id, result: { ok: true } });
     return;
   }
@@ -236,6 +240,7 @@ test('AcpProcess runs initialize, openSession, prompt streaming, and resume fall
     sandbox: false,
     agent: 'reviewer',
     preemptAutoUpdate: false,
+    env: { ...process.env, MOCK_ACP_RECORD_DIR: dir },
   })
   const proc2 = new AcpProcess({ bin: loadBin, cwd: dir, permissionMode: 'skip', preemptAutoUpdate: false })
   try {
@@ -258,6 +263,26 @@ test('AcpProcess runs initialize, openSession, prompt streaming, and resume fall
     // Reuse already-open session without issuing another session/new.
     const reused = await proc.openSession({ cwd: dir, resumeId: sid, mode: 'auto' })
     assert.equal(reused, sid)
+    // issue #167: set_config_option is not idempotent on agy's side — it logs
+    // 'Switching model in session <sid>' and re-runs the switch for an unchanged
+    // value. DSH opens the session again on every turn, so an unchanged turn
+    // must not re-send anything.
+    const callsAfterFirst = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n')
+    assert.equal(callsAfterFirst.filter((l) => l.startsWith('session/set_mode')).length, 1)
+    assert.equal(callsAfterFirst.filter((l) => l.startsWith('session/set_config_option')).length, 2)
+    await proc.openSession({ cwd: dir, resumeId: sid, mode: 'auto', model: 'gemini-4-hydrogen', effort: 'medium' })
+    assert.equal(readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').length, callsAfterFirst.length)
+    // A turn that changes only the effort sends only the effort.
+    await proc.openSession({ cwd: dir, resumeId: sid, mode: 'auto', effort: 'high' })
+    const effortCalls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').slice(callsAfterFirst.length)
+    assert.equal(effortCalls.length, 1)
+    assert.match(effortCalls[0] ?? '', /thought_level.*high/)
+    // A model change re-sends the effort: agy resets it to the new model's default.
+    await proc.openSession({ cwd: dir, resumeId: sid, mode: 'auto', model: 'gemini-4-neon', effort: 'high' })
+    const modelCalls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').slice(callsAfterFirst.length + 1)
+    assert.equal(modelCalls.length, 2)
+    assert.match(modelCalls[0] ?? '', /"configId":"model".*gemini-4-neon/)
+    assert.match(modelCalls[1] ?? '', /thought_level.*high/)
 
     // Resume fallback to session/load when session/resume errors.
     const sid2 = await proc2.openSession({ cwd: dir, resumeId: 'prev-cid', mode: 'skip' })
