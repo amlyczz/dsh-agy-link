@@ -201,7 +201,7 @@ export function findTranslationRecord(
   for (const ev of events) {
     if (ev.type !== TRANSLATION_RECORD_TYPE) continue
     const d = dataOf(ev)
-    const recordTurn = num(d.turn)
+    const recordTurn = num(d.sourceTurn) ?? num(d.turn)
     if (recordTurn !== turn) continue
     const recordModel = typeof d.model === 'string' ? d.model : ''
     const recordEffort = typeof d.effort === 'string' ? d.effort : ''

@@ -11,6 +11,7 @@ import { isAccountCriticalAuth, isFamilyCooling } from '../../common/quota-bench
 import type { PluginConfig } from '../../common/types.ts'
 import type {
   WarmupAccountSummary,
+  WarmupAuditEntry,
   WarmupLastRunSnapshot,
   WarmupStatusSnapshot,
 } from '../../common/warmup-types.ts'
@@ -19,8 +20,15 @@ import { StreamJsonParser } from '../../host/parser.ts'
 import type { AccountPoolManager } from '../../host/pool.ts'
 import type { QuotaService } from '../../host/quota.ts'
 import { ensureIsolatedKeychain, probeProcess, resolveAgyBin } from '../../host/runner.ts'
+import { supportsSshIsolation } from '../../runtime/agy/env.ts'
 import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { WarmupHistoryStore } from './history.ts'
+import {
+  detectSlidingIdleReset,
+  isDailyScheduleDue,
+  isIntervalScheduleDue,
+  type ResetObservation,
+} from './schedule.ts'
 import {
   FAILURE_BACKOFF_MS,
   FOUR_HOURS_MS,
@@ -92,6 +100,8 @@ function summarizeWarmupRun(
   }
 }
 
+const MAX_RECENT_HISTORY = 50
+
 export class WarmupService {
   readonly history: WarmupHistoryStore
   private activeScope: 'all' | string | null = null
@@ -101,6 +111,11 @@ export class WarmupService {
   private activeCompleted = 0
   private activeTotal = 0
   private lastRun: WarmupLastRunSnapshot | null = null
+  private readonly recentHistory: WarmupAuditEntry[] = []
+  private readonly resetObservations = new Map<string, ResetObservation>()
+  private readonly slidingIdleKeys = new Set<string>()
+  private lastDailyFiredKey: string | null = null
+  private lastIntervalRunAt: number | null = null
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -134,7 +149,11 @@ export class WarmupService {
     }
     const start = Date.now()
     let slotLease: Awaited<ReturnType<typeof acquireCredentialSlot>>
-    if (process.platform === 'win32' && process.env.NODE_TEST_CONTEXT === undefined) {
+    const needsWinSlot =
+      process.platform === 'win32'
+      && process.env.NODE_TEST_CONTEXT === undefined
+      && !(account.dir && !account.systemHome && supportsSshIsolation(this._agyVersion()))
+    if (needsWinSlot) {
       try {
         slotLease = await acquireCredentialSlot(account, this.pool, {
           baseDir: this.pool.dir,
@@ -276,25 +295,83 @@ export class WarmupService {
     }
   }
 
-  /** Execute the planned weekly probes sequentially with a randomized gap. */
+  private pushAudit(entry: WarmupAuditEntry): void {
+    this.recentHistory.unshift(entry)
+    if (this.recentHistory.length > MAX_RECENT_HISTORY) {
+      this.recentHistory.length = MAX_RECENT_HISTORY
+    }
+  }
+
+  /**
+   * Observe an account's current quota reset timestamps so two consecutive
+   * readings can detect Antigravity's sliding idle reset-time behavior.
+   */
+  observeAccountQuotas(account: ManagedAccount, now = Date.now()): ReadonlySet<string> {
+    const identity = account.email || account.id
+    const quotas = account.quotas ?? {}
+    for (const [fam, q] of Object.entries(quotas)) {
+      if (!q) continue
+      if (q.weeklyResetTime && q.weeklyFraction !== undefined) {
+        const key = `${identity}:${fam}:weekly`
+        const curr: ResetObservation = { resetTimeIso: q.weeklyResetTime, observedAtMs: now, remainingFraction: q.weeklyFraction }
+        if (detectSlidingIdleReset(this.resetObservations.get(key), curr)) {
+          this.slidingIdleKeys.add(key)
+        } else if (q.weeklyFraction < 0.999) {
+          this.slidingIdleKeys.delete(key)
+        }
+        this.resetObservations.set(key, curr)
+      }
+      if (q.resetTime && q.remainingFraction !== undefined) {
+        const key = `${identity}:${fam}:5h`
+        const curr: ResetObservation = { resetTimeIso: q.resetTime, observedAtMs: now, remainingFraction: q.remainingFraction }
+        if (detectSlidingIdleReset(this.resetObservations.get(key), curr)) {
+          this.slidingIdleKeys.add(key)
+        } else if (q.remainingFraction < 0.999) {
+          this.slidingIdleKeys.delete(key)
+        }
+        this.resetObservations.set(key, curr)
+      }
+    }
+    return this.slidingIdleKeys
+  }
+
+  /** Execute the planned weekly / 5h probes sequentially with a randomized gap. */
   private async runWarmupTargets(
     account: ManagedAccount,
     targets: readonly WarmupTarget[],
     now: number,
+    trigger: WarmupAuditEntry['trigger'] = 'auto',
   ): Promise<WarmupResult[]> {
     const results: WarmupResult[] = []
     const identity = account.email || account.id
 
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i]!
-      this.log(`[Warmup] weekly CLI warmup for ${target.model} @ ${account.id} (${target.family})...`)
+      const win = target.window ?? 'weekly'
+      this.log(`[Warmup] ${win} CLI warmup for ${target.model} @ ${account.id} (${target.family})...`)
       const res = await this.probeModel(account, target.model)
       if (res.ok) {
         this.history.record(target.historyKey, now)
+        this.slidingIdleKeys.delete(target.historyKey)
+        for (const extra of target.extraHistoryKeys ?? []) {
+          this.history.record(extra, now)
+          this.slidingIdleKeys.delete(extra)
+        }
         this.history.record(`${identity}:${target.model}:100`, now)
       } else {
         this.history.record(target.failureKey, now)
       }
+      this.pushAudit({
+        timestamp: Date.now(),
+        accountId: account.id,
+        alias: account.alias || account.email || account.id,
+        model: target.model,
+        window: win,
+        trigger: target.slidingIdle ? 'sliding-idle' : trigger,
+        success: res.ok,
+        durationMs: res.durationMs,
+        ...(res.error ? { error: res.error } : {}),
+      })
       results.push({
         accountId: account.id,
         alias: account.alias,
@@ -331,14 +408,16 @@ export class WarmupService {
       lastRun: this.lastRun
         ? { ...this.lastRun, accounts: this.lastRun.accounts.map((a) => ({ ...a })) }
         : null,
+      recentHistory: this.recentHistory.map((e) => ({ ...e })),
     }
   }
 
   async warmupAccount(
     account: ManagedAccount,
-    options: { force?: boolean; model?: string; ignoreFailureBackoff?: boolean } = {},
+    options: { force?: boolean; model?: string; ignoreFailureBackoff?: boolean; trigger?: WarmupAuditEntry['trigger']; now?: number } = {},
   ): Promise<WarmupResult[]> {
-    const now = Date.now()
+    const now = options.now ?? Date.now()
+    const trigger: WarmupAuditEntry['trigger'] = options.trigger ?? (options.force ? 'manual' : 'auto')
     const trackStandalone = this.activeScope === null
     if (trackStandalone) {
       this.activeScope = account.id
@@ -368,15 +447,33 @@ export class WarmupService {
           results = [skippedWarmupResult(account, options.model, `${fam} family is cooling down`)]
           return results
         }
-        results = [await this.warmupExplicitModel(account, options.model, options.force === true, now)]
+        const single = await this.warmupExplicitModel(account, options.model, options.force === true, now)
+        if (!single.skipped) {
+          this.pushAudit({
+            timestamp: Date.now(),
+            accountId: account.id,
+            alias: account.alias || account.email || account.id,
+            model: single.model,
+            window: 'manual',
+            trigger,
+            success: single.success,
+            durationMs: single.durationMs,
+            ...(single.error ? { error: single.error } : {}),
+          })
+        }
+        results = [single]
         return results
       }
 
+      this.observeAccountQuotas(account, now)
+      const cfg = this.config()
       const plan = planWarmupTargets({
         account,
         force: options.force === true,
         ignoreFailureBackoff: options.ignoreFailureBackoff === true,
-        configuredModels: this.config().warmupModels,
+        configuredModels: cfg.warmupModels,
+        windows: cfg.warmupWindows ?? 'weekly',
+        slidingIdleKeys: this.slidingIdleKeys,
         now,
         isCoolingDown: (key, cooldownMs) => this.history.checkCooldown(key, cooldownMs, now),
       })
@@ -384,7 +481,7 @@ export class WarmupService {
         results = [skippedWarmupResult(account, plan.model, plan.reason, true)]
         return results
       }
-      results = await this.runWarmupTargets(account, plan.targets, now)
+      results = await this.runWarmupTargets(account, plan.targets, now, trigger)
       return results
     } finally {
       if (trackStandalone) {
@@ -404,8 +501,8 @@ export class WarmupService {
    * Warm up all eligible accounts sequentially, halting immediately if any
    * account hits a terminal `TOS_VIOLATION` (ban-sweep circuit breaker).
    */
-  async warmupAllAccounts(options: { force?: boolean; ignoreFailureBackoff?: boolean } = {}): Promise<WarmupResult[]> {
-    const startedAt = Date.now()
+  async warmupAllAccounts(options: { force?: boolean; ignoreFailureBackoff?: boolean; trigger?: WarmupAuditEntry['trigger']; now?: number } = {}): Promise<WarmupResult[]> {
+    const startedAt = options.now ?? Date.now()
     const accounts = this.pool.getAccounts().filter((a) =>
       a.enabled && !isAccountCriticalAuth(a) && (options.force || !accountPollSuppressed(a, startedAt)),
     )
@@ -446,8 +543,35 @@ export class WarmupService {
     }
   }
 
-  async runScheduledWarmup(): Promise<WarmupResult[]> {
-    if (!this.config().autoWarmup) return []
-    return this.warmupAllAccounts({ force: false })
+  async runScheduledWarmup(now = Date.now()): Promise<WarmupResult[]> {
+    const cfg = this.config()
+    if (!cfg.autoWarmup) return []
+    const dailyTime = (cfg.warmupDailyTime ?? '').trim()
+    const intervalHours = cfg.warmupIntervalHours ?? 0
+    if (dailyTime !== '' || intervalHours > 0) {
+      const daily = dailyTime !== ''
+        ? isDailyScheduleDue({
+            dailyTime,
+            timezone: cfg.warmupTimezone ?? '',
+            now,
+            lastFiredDayKey: this.lastDailyFiredKey,
+          })
+        : { due: false, dayKey: '' }
+      const intervalDue = isIntervalScheduleDue({
+        intervalHours,
+        now,
+        lastRunAt: this.lastIntervalRunAt,
+      })
+      if (!daily.due && !intervalDue) {
+        // Still observe quotas on scheduled ticks so sliding-idle detection stays current.
+        for (const acc of this.pool.getAccounts()) this.observeAccountQuotas(acc, now)
+        return []
+      }
+      const trigger: WarmupAuditEntry['trigger'] = daily.due ? 'daily' : 'interval'
+      if (daily.due && daily.dayKey !== '') this.lastDailyFiredKey = daily.dayKey
+      if (intervalDue) this.lastIntervalRunAt = now
+      return this.warmupAllAccounts({ force: false, trigger, now })
+    }
+    return this.warmupAllAccounts({ force: false, trigger: 'auto', now })
   }
 }

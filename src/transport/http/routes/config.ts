@@ -3,6 +3,7 @@ import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistra
 
 const PERMISSION_MODES = new Set(['skip', 'auto', 'plan', 'accept-edits'])
 const TRANSPORTS = new Set(['cli', 'acp'])
+const WARMUP_WINDOWS = new Set(['weekly', '5h', 'both'])
 
 function validateConfigValue(key: string, value: unknown): string | null {
   if (key === 'hiddenModels') {
@@ -31,8 +32,26 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'transport must be cli or acp'
   }
-  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup') {
+  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn') {
     return typeof value === 'boolean' ? null : `${key} must be a boolean`
+  }
+  if (key === 'warmupWindows') {
+    return typeof value === 'string' && WARMUP_WINDOWS.has(value)
+      ? null
+      : 'warmupWindows must be weekly, 5h, or both'
+  }
+  if (key === 'warmupDailyTime') {
+    return typeof value === 'string' && (value === '' || /^\d{1,2}:\d{2}$/.test(value.trim()))
+      ? null
+      : 'warmupDailyTime must be HH:MM or empty'
+  }
+  if (key === 'warmupTimezone') {
+    return typeof value === 'string' ? null : 'warmupTimezone must be an IANA timezone string'
+  }
+  if (key === 'warmupIntervalHours') {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 168
+      ? null
+      : 'warmupIntervalHours must be a number between 0 and 168'
   }
   if (key === 'agent') {
     return typeof value === 'string' ? null : 'agent must be a string'
@@ -66,7 +85,9 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
           'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup',
-          'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels', 'autoWarmup', 'warmupModels',
+          'cloakSystemPrompt', 'respectExternalSignIn',
+          'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels',
+          'autoWarmup', 'warmupModels', 'warmupWindows', 'warmupDailyTime', 'warmupTimezone', 'warmupIntervalHours',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',

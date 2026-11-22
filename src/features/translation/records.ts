@@ -28,7 +28,11 @@ export function buildTranslationRecord(params: {
   const { turn, answer, res, now } = params
   const record: TranslationRecord = {
     version: 1,
-    turn,
+    // Keep `turn: null` so DSH's ConversationLocationIndex treats the record
+    // as session-level and never hijacks `currentTurn` when translating an
+    // older turn while a newer turn is active or finished.
+    turn: null,
+    sourceTurn: turn,
     anchorSeq: answer.anchorSeq,
     text: res.text,
     ...(answer.text.trim() === '' ? {} : { original: capOriginal(answer.text) }),

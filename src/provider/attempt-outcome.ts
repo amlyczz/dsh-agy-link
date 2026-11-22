@@ -32,6 +32,7 @@ import {
   SlotUnavailableError,
 } from '../host/credential-slot.ts'
 import { detectSystemProxy } from '../host/wincred.ts'
+import { supportsSshIsolation } from '../runtime/agy/env.ts'
 import { classifyFailure, type AttemptFailure } from './failure.ts'
 import { finalizeAttempt } from './finalize.ts'
 import { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from './notices.ts'
@@ -96,10 +97,16 @@ function acquireSlotLease(
   // fake IO and still exercise the handoff directly.
   if (process.env.NODE_TEST_CONTEXT !== undefined) return Promise.resolve(undefined)
   const { cfg, account, signal } = input
-  // Windows has ONE process-global credential slot that every agy process
-  // reads. Ownership is serialized for the whole run and only handed over when
-  // it can provably be handed back. This throws instead of signing in as the
-  // wrong account, which would silently spend that account's quota.
+  // On agy >= 1.5, isolated accounts pass SSH_CONNECTION so agy bypasses the
+  // shared Windows Credential Manager completely — lock-free multi-account concurrency!
+  if (
+    process.platform === 'win32'
+    && account?.dir
+    && !account.systemHome
+    && supportsSshIsolation(deps.agyVersion?.() ?? null)
+  ) {
+    return Promise.resolve(undefined)
+  }
   return acquireCredentialSlot(account ?? undefined, deps.pool, {
     baseDir: deps.pool?.dir,
     proxyUrl: account?.proxyUrl || cfg.proxyUrl || detectSystemProxy() || undefined,
@@ -107,6 +114,7 @@ function acquireSlotLease(
     signal,
     dispatchTimeoutMs: dispatchHardCapMs,
     parallel: cfg.parallelSameAccount,
+    respectExternalSignIn: cfg.respectExternalSignIn,
   })
 }
 
@@ -435,6 +443,7 @@ export async function handleAttemptOutcome(
       sessionAccountKey: input.sessionAccountKey,
       ...(input.binding === undefined ? {} : { binding: input.binding }),
       conversationId,
+      cwd: input.binding?.cwd || input.workspaceRoot,
       messages: input.messages,
       model: input.model,
       activeModel: input.activeModel,
@@ -483,7 +492,7 @@ export async function* runAgyAttempt(
   const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId, true, {
     family: input.family,
     activeModel: input.activeModel,
-  })
+  }, input.isBackgroundAux === true)
   // Build the argv (and tail-trim an over-budget prompt) BEFORE waiting for
   // the slot, exactly as the former inline block did — the trim warning is
   // logged even when the dispatch later aborts.

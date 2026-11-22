@@ -64,20 +64,23 @@ function clipText(text: string, maxChars: number): string {
   return flat.slice(0, Math.max(0, maxChars - 1)) + '…'
 }
 
+/** ACP statuses that mean the tool call has not reached a terminal state yet. */
+const ACP_LIVE_STATUSES = new Set(['pending', 'in_progress', 'running', 'active'])
+
 /**
- * True when the call had not finished when the turn ended — the signal that it
- * was handed off to the background.
- *
- * `RUNNING` is what the CLI transport reports. The ACP transport only knows
- * pending / in_progress / completed, and it maps a live call to `ACTIVE`, so a
- * live state in either vocabulary counts. A call that already reported a
- * terminal state is never treated as background, however live it looked earlier
- * in the same turn.
+ * True when a tool call had not finished when the turn ended — the signal that
+ * it was handed off to the background. `RUNNING` is what the CLI transport
+ * reports; ACP never says RUNNING (it only knows pending / in_progress /
+ * completed), so a live ACP status counts as well. A call that already received
+ * a terminal update is never treated as background, however live it looked
+ * earlier in the same turn.
  */
-function isStillLive(state: string | undefined): boolean {
-  if (state === undefined || state === '') return false
-  const s = state.toLowerCase()
-  return s === 'running' || s === 'active' || s === 'pending' || s === 'in_progress'
+function isStillLive(state: string | undefined, rawStatus: string | undefined): boolean {
+  const s = (state ?? '').toLowerCase()
+  if (s === 'done' || s === 'error' || s === 'canceled' || s === 'cancelled') return false
+  if (s === 'running' || s === 'active' || s === 'pending' || s === 'in_progress') return true
+  const status = (rawStatus ?? '').toLowerCase()
+  return status !== '' && ACP_LIVE_STATUSES.has(status)
 }
 
 /** Cheap pre-filter: could this call plausibly start a background job? */
@@ -167,7 +170,7 @@ export function extractAttemptBackgroundSignals(
   }
 
   for (const call of toolCalls.values()) {
-    if (!isStillLive(call.event.state)) continue
+    if (!isStillLive(call.event.state, call.event.rawStatus)) continue
     const output = typeof call.event.tool?.output === 'string' ? call.event.tool.output : call.event.text
     const taskMatch = /\b(task-\d+)\b/i.exec(output) ?? /\b(task-\d+)\b/i.exec(JSON.stringify(call.input))
     const taskId = taskMatch?.[1] ?? (typeof call.input.bgTaskId === 'string' ? call.input.bgTaskId : undefined)

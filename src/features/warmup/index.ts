@@ -2,4 +2,5 @@
 // existing imports keep working unchanged.
 export * from './policy.ts'
 export * from './history.ts'
+export * from './schedule.ts'
 export * from './service.ts'

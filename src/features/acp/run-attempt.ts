@@ -1,5 +1,6 @@
 // Execute one AttemptInput over the persistent `agy acp` session pool,
 // populating the same RunRecording + finalizeAttempt lifecycle as the CLI path.
+import { readFile } from 'node:fs/promises'
 import type { ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
 import {
   Err,
@@ -13,10 +14,13 @@ import { StreamJsonParser } from '../../host/parser.ts'
 import type { RunRecording } from '../../host/recording.ts'
 import { resolveModelSlug } from '../../host/models.ts'
 import { ensureIsolatedKeychain, type RunOutcome } from '../../host/runner.ts'
+import { supportsSshIsolation } from '../../runtime/agy/env.ts'
 import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { createAttemptRecorder, type AttemptDeps, type AttemptInput, type AttemptSlot } from '../../provider/attempt.ts'
+import { deliverContext } from '../../provider/context-delivery.ts'
 import { classifyFailure, type AttemptFailure } from '../../provider/failure.ts'
 import { finalizeAttempt } from '../../provider/finalize.ts'
+import { buildDigest, wrapLiveRequest } from '../../provider/prompt-text.ts'
 import {
   createLiveQuotaController,
   reportDirectToolQuota,
@@ -26,6 +30,25 @@ import { SubagentTracker } from '../subagent/tracker.ts'
 import type { AcpProcess } from './client.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
+import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
+
+const INVALID_OUTPUT_RE = /model produced invalid output/i
+
+/**
+ * True when an ACP prompt ended with either an empty thinking-only turn (no
+ * visible text and no tool calls) or agy's transient `⚠ Model produced invalid
+ * output.` error, making a single same-session warm nudge worthwhile while
+ * preserving Google's prompt cache.
+ */
+export function shouldSelfHealAcpResult(
+  resEv: ReturnType<typeof acpPromptResultToAgyEvent>,
+  flags: { sawText: boolean; sawThinking: boolean; sawTools: boolean },
+): boolean {
+  if (resEv.kind !== 'result') return false
+  if (flags.sawTools) return false
+  if (INVALID_OUTPUT_RE.test(resEv.error ?? '') || INVALID_OUTPUT_RE.test(resEv.response)) return true
+  return resEv.ok && !flags.sawText && flags.sawThinking && resEv.response.trim() === ''
+}
 
 async function settleAcpOutcome(opts: {
   deps: AttemptDeps
@@ -69,6 +92,7 @@ async function settleAcpOutcome(opts: {
     sessionAccountKey: input.sessionAccountKey,
     ...(input.binding === undefined ? {} : { binding: input.binding }),
     conversationId: sid,
+    cwd: input.binding?.cwd || input.workspaceRoot,
     messages: input.messages,
     model: input.model,
     activeModel: input.activeModel,
@@ -103,6 +127,9 @@ async function driveAcpPrompt(opts: {
   const startedAt = Date.now()
   const streamState = createAcpStreamState()
   let emittedAny = false
+  let sawText = false
+  let sawThinking = false
+  let sawTools = false
   let terminalFailure: AttemptFailure | null = null
   let quotaCancelled = false
   const quotaCtrl = createLiveQuotaController({
@@ -127,34 +154,104 @@ async function driveAcpPrompt(opts: {
       })
     : null
 
+  const usageTailer = !input.isAux && sid !== ''
+    ? new AcpTranscriptUsageTailer(sid, recorder.rec.accountHome)
+    : null
+  const flushTranscriptUsage = (): number => {
+    if (!usageTailer) return 0
+    const samples = usageTailer.poll()
+    for (const s of samples) {
+      recorder.rec.append({
+        kind: 'step',
+        stepKey: s.stepKey,
+        stepKind: 'text',
+        text: '',
+        state: 'DONE',
+        usage: s.usage,
+        raw: { source: 'acp-transcript' },
+      })
+    }
+    return samples.length
+  }
+
   try {
     subTracker?.start()
     const idleMs = cfg.timeoutMs
     const longToolIdleMs = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes * 60_000 : 0
     const maxTurnMs = cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : 0
-    const result = await proc.prompt({
-      sessionId: sid,
-      text: input.prompt,
-      timeoutMs: idleMs,
-      idleTimeoutMs: idleMs,
-      longToolIdleMs,
-      maxTurnMs,
-      ...(input.signal ? { signal: input.signal } : {}),
-      onUpdate: (update) => {
-        for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
-          emittedAny = true
-          recorder.rec.append(ev)
-          input.agyOnEvent?.(ev)
-          reportDirectToolQuota(quotaCtrl, ev)
+    const inlineImages: Array<{ data: string; mimeType: string }> = []
+    if (proc.supportsImageBlocks && input.stagedImages && input.stagedImages.length > 0) {
+      for (const img of input.stagedImages) {
+        try {
+          const buf = await readFile(img.path)
+          if (buf.length > 0 && buf.length <= cfg.mediaMaxBytes) {
+            inlineImages.push({ data: buf.toString('base64'), mimeType: img.mediaType })
+          }
+        } catch {
+          // keep path-based fallback already in prompt
         }
-      },
-    })
+      }
+    }
+    const runOnePrompt = (promptText: string, includeImages: boolean) =>
+      proc.prompt({
+        sessionId: sid,
+        text: promptText,
+        ...(includeImages && inlineImages.length > 0 ? { images: inlineImages } : {}),
+        timeoutMs: idleMs,
+        idleTimeoutMs: idleMs,
+        longToolIdleMs,
+        maxTurnMs,
+        ...(input.signal ? { signal: input.signal } : {}),
+        onUpdate: (update) => {
+          const updateKind = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : ''
+          // Poll per-step transcript usage BEFORE appending completed tool steps so
+          // the tool cut immediately receives real cache_read / output metrics (#158).
+          if (updateKind === 'tool_call' || updateKind === 'tool_call_update' || updateKind === 'usage_update') {
+            flushTranscriptUsage()
+          }
+          for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
+            emittedAny = true
+            if (ev.kind === 'step') {
+              if (ev.stepKind === 'text' && ev.text.trim() !== '') sawText = true
+              else if (ev.stepKind === 'thinking' && ev.text.trim() !== '') sawThinking = true
+              else if (ev.stepKind === 'tool') sawTools = true
+            }
+            recorder.rec.append(ev)
+            input.agyOnEvent?.(ev)
+            reportDirectToolQuota(quotaCtrl, ev)
+          }
+        },
+      })
+    let result = await runOnePrompt(input.prompt, true)
     subTracker?.flush()
-    const liveQf = quotaCtrl.failoverState()
+    // Give transcript.jsonl a brief beat to flush the final PLANNER_RESPONSE if
+    // mid-turn steps already reported transcript usage (keeps final span accurate).
+    if (usageTailer && flushTranscriptUsage() === 0 && recorder.rec.lastUsage !== null) {
+      await new Promise((r) => setTimeout(r, 60))
+      flushTranscriptUsage()
+    }
+    let liveQf = quotaCtrl.failoverState()
     if (liveQf !== null) {
       throw new Error(liveQf.rawErrorText)
     }
-    const resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText)
+    let resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText, streamState.lastContextUsed)
+    if (
+      !input.isAux &&
+      !input.signal?.aborted &&
+      !quotaCancelled &&
+      shouldSelfHealAcpResult(resEv, { sawText, sawThinking, sawTools })
+    ) {
+      deps.log?.(`acp self-heal: retrying empty/invalid model output on same session ${sid}`)
+      streamState.accumulatedText = ''
+      result = await runOnePrompt('Continue and provide your response.', false)
+      subTracker?.flush()
+      flushTranscriptUsage()
+      liveQf = quotaCtrl.failoverState()
+      if (liveQf !== null) {
+        throw new Error(liveQf.rawErrorText)
+      }
+      resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText, streamState.lastContextUsed)
+    }
     recorder.rec.append(resEv)
     input.agyOnEvent?.(resEv)
     if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
@@ -268,6 +365,9 @@ export async function runAcpAttempt(
   let proc: AcpProcess
   let sid: string
   try {
+    const usesSharedSlot =
+      process.platform === 'win32'
+      && !(account?.dir && !account.systemHome && supportsSshIsolation(deps.agyVersion?.() ?? null))
     proc = pool.acquireProcess({
       bin: input.bin,
       cwd: workspaceRoot,
@@ -277,16 +377,35 @@ export async function runAcpAttempt(
       sandbox: input.sandbox ?? cfg.sandbox,
       agent: (input.agent ?? cfg.agent).trim(),
       preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
+      usesSharedSlot,
     })
     const resumeId = input.persistBinding ? input.binding?.conversationId : undefined
+    // Returning to the original cwd preserves agy's system-prompt prefix and
+    // keeps Google prompt cache hit rate high across turns.
+    const sessionCwd = resumeId && input.binding?.cwd ? input.binding.cwd : workspaceRoot
     sid = await proc.openSession({
-      cwd: workspaceRoot,
+      cwd: sessionCwd,
       ...(resumeId ? { resumeId } : {}),
       addDirs: input.addDirs,
       model: resolveModelSlug(input.activeModel || cfg.defaultModel),
       ...(input.effort ? { effort: input.effort } : {}),
       mode: input.permissionMode,
     })
+    // Stale ACP session rebuild (PR #157 hardening): if resume failed and a fresh
+    // session was opened, carry over the ADR-7 history digest so context isn't lost.
+    if (resumeId && proc.consumeRebuiltSession(sid)) {
+      deps.log?.(`acp session ${resumeId} could not be restored — rebuilding ${sid} with history digest`)
+      try { deps.store.delete(input.sessionAccountKey) } catch { /* ignore */ }
+      input.binding = undefined
+      const digest = buildDigest(input.messages, 0, cfg.contextTransferMaxChars, {
+        maxBytes: cfg.contextTransferFileMaxBytes,
+        maxLineBytes: 40_000,
+        includeTaskLine: false,
+      })
+      const extraDirs: string[] = []
+      const delivered = digest === '' ? '' : await deliverContext(digest, input.sessionKey, extraDirs, cfg)
+      if (delivered !== '') input.prompt = wrapLiveRequest(input.prompt) + delivered
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (input.signal?.aborted) {

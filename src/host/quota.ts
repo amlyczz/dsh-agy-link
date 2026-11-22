@@ -23,7 +23,8 @@ import {
 } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import { readPrimaryCredential, parseCredentialDoc, credentialFingerprint, writePrimaryCredential, credentialSlotMutex } from './credential-slot.ts'
-import { readAgyUsage, usageGroupsToFamilies } from './agy-usage.ts'
+import { readAgyUsage, usageGroupsToFamilies, type AgyUsageGroup } from './agy-usage.ts'
+import { supportsSshIsolation } from '../runtime/agy/env.ts'
 import { buildAgyEnvWithProxy, pickProxy } from '../runtime/net/account-env.ts'
 import { QUOTA_FORCE_CONCURRENCY } from '../common/timeouts.ts'
 import { CLI_TOKEN_SAFETY_MS, prepareCliToken as prepareCliTokenImpl } from '../features/quota/cli-token.ts'
@@ -135,6 +136,8 @@ export class QuotaService {
   private readonly summaryFailures = new Map<string, QuotaSummaryFailure | null>()
   /** accountIds with a refresh in flight, so the console can show real progress. */
   private readonly refreshingIds = new Set<string>()
+  /** Last raw CLI `/usage` groups per accountId (used for planTier inference). */
+  private readonly lastCliUsageGroups = new Map<string, readonly AgyUsageGroup[]>()
 
   /**
    * @param globalProxy resolves the plugin-wide proxy URL; used when the
@@ -228,17 +231,33 @@ export class QuotaService {
   ): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
     const bin = this.cliDeps.bin?.()
     if (!bin) return null
-    // Fast reject, no keystore read and no spawn: an isolated account's own
-    // directory cannot be the store's owner. This keeps the poll cheap on a
-    // multi-account pool and behaves identically on every platform.
-    if (account.dir && !account.systemHome) {
-      return null
+    const isIsolated = Boolean(account.dir && !account.systemHome)
+    if (isIsolated) {
+      // agy >= 1.5 with SSH_CONNECTION (injected by isolatedHomeEnv) bypasses
+      // the shared OS keyring / Windows Credential Manager and reads ONLY this
+      // account's isolated token file (verified live on Windows agy 1.5.12).
+      // Also safe on Linux/macOS where D-Bus / per-HOME isolation applies for
+      // free accounts (`no_summary_access`, issue #143).
+      const canIsolateCli =
+        supportsSshIsolation(this.agyVersion()) ||
+        (process.platform !== 'win32' && account.quotaUnavailable?.reason === 'no_summary_access')
+      if (!canIsolateCli) return null
+      if (!(await this.prepareCliToken(account))) return null
+      const env = buildAgyEnvWithProxy({
+        account,
+        proxy: pickProxy(account.proxyUrl, this.globalProxy()),
+      })
+      const groups = await readAgyUsage({
+        bin,
+        env,
+        timeoutMs: 20_000,
+        preemptAutoUpdate: this.cliDeps.preemptAutoUpdate?.(),
+      })
+      if (groups === null) return null
+      this.lastCliUsageGroups.set(account.id, groups)
+      return usageGroupsToFamilies(groups)
     }
 
-    // On Windows, the OS credential store (gemini:antigravity) is a single shared slot.
-    // Secondary runs temporarily swap this slot under credentialSlotMutex. To prevent
-    // reading a secondary's numbers or having the slot swapped mid-flight while
-    // `agy -p /usage` is running, serialize under credentialSlotMutex.
     let releaseMutex: (() => void) | null = null
     if (process.platform === 'win32') {
       try {
@@ -248,22 +267,14 @@ export class QuotaService {
           shouldProceed: () => true,
         })
       } catch {
-        // Mutex contention (e.g. secondary account turn active) — fall back to safe REST path immediately
         return null
       }
     }
 
     try {
-      // The owner itself still needs proof: while a secondary runs, the slot is
-      // temporarily handed that account's credential, and a CLI read then would
-      // return the secondary's numbers under the primary's row.
       if (!(await this.cliSlotHoldsAccount(account))) {
         return null
       }
-      // A spawn with a nearly-expired token makes agy lose its own 10s keyring
-      // race, fall back to INTERACTIVE OAuth and open the user's browser (9 of
-      // 375 hourly polls here, every one with <=60s of token life). Bring the
-      // credential into the safety window first; skip the CLI if that fails.
       if (!(await this.prepareCliToken(account))) {
         return null
       }
@@ -277,7 +288,9 @@ export class QuotaService {
         timeoutMs: 20_000,
         preemptAutoUpdate: this.cliDeps.preemptAutoUpdate?.(),
       })
-      return groups === null ? null : usageGroupsToFamilies(groups)
+      if (groups === null) return null
+      this.lastCliUsageGroups.set(account.id, groups)
+      return usageGroupsToFamilies(groups)
     } finally {
       releaseMutex?.()
     }
@@ -317,8 +330,21 @@ export class QuotaService {
     const slot = await this.readSystemKeychainToken()
     if (slot === null) return false
     const stored = await this.getStoredToken(account, false)
-    if (stored === null) return false
-    return sameCredentialGrant(slot, stored)
+    if (stored !== null) return sameCredentialGrant(slot, stored)
+    // Native `agy` sign-in on Linux/macOS stores credentials ONLY in the OS
+    // keyring with no `~/.gemini/antigravity-cli/antigravity-oauth-token` file
+    // on disk (issue #143 `branch: "stored-null"`). For the systemHome primary
+    // account on non-Windows (where secondaries never swap the global slot),
+    // verify the slot does not belong to any sibling isolated account.
+    if (account.systemHome && process.platform !== 'win32') {
+      for (const other of this.pool.getAccounts()) {
+        if (other.id === account.id || !other.dir || other.systemHome) continue
+        const sibling = await this.getStoredToken(other, false)
+        if (sibling !== null && sameCredentialGrant(slot, sibling)) return false
+      }
+      return true
+    }
+    return false
   }
 
   /** Dedicated account proxy wins, then the global config proxy, then detected system proxy. */
@@ -468,6 +494,7 @@ export class QuotaService {
       writePrimaryCredential: (cred, baseDir) => writePrimaryCredential(cred, baseDir),
       credentialFingerprint: (raw) => credentialFingerprint(raw),
       summaryFailure: () => this.summaryFailures.get(account.id) ?? null,
+      lastCliUsageGroups: () => this.lastCliUsageGroups.get(account.id),
     }
     return refreshAccountQuotaPipeline(deps, account, force)
   }

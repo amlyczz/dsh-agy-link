@@ -49,6 +49,8 @@ export class AcpProcess extends EventEmitter {
   private buffer = ''
   private stderrTail = ''
   private alive = false
+  private supportsInlineImages = false
+  private readonly rebuiltSessions = new Set<string>()
   private initPromise: Promise<Record<string, unknown>> | null = null
   lastUsedAt = Date.now()
 
@@ -59,8 +61,10 @@ export class AcpProcess extends EventEmitter {
   isAlive(): boolean { return this.alive && this.child !== null }
   get sessionCount(): number { return this.openSessions.size }
   get stderr(): string { return this.stderrTail }
+  get supportsImageBlocks(): boolean { return this.supportsInlineImages }
 
   hasOpenSession(sessionId: string): boolean { return this.openSessions.has(sessionId) }
+  consumeRebuiltSession(sessionId: string): boolean { return this.rebuiltSessions.delete(sessionId) }
 
   /**
    * Listen to what a session pushes outside a `session/prompt` call.
@@ -225,6 +229,13 @@ export class AcpProcess extends EventEmitter {
   async ensureInitialized(): Promise<Record<string, unknown>> {
     if (!this.initPromise) {
       this.initPromise = this.request('initialize', { protocolVersion: 1, clientCapabilities: {} }, 25_000)
+        .then((res) => {
+          const caps = (res.agentCapabilities ?? res.capabilities) as
+            | { promptCapabilities?: { image?: unknown } }
+            | undefined
+          this.supportsInlineImages = caps?.promptCapabilities?.image === true
+          return res
+        })
         .catch((err) => {
           this.initPromise = null
           throw err
@@ -260,6 +271,9 @@ export class AcpProcess extends EventEmitter {
       const r = await this.request('session/new', params, 30_000)
       sid = typeof r.sessionId === 'string' ? r.sessionId : ''
       if (sid === '') throw new Error('ACP session/new returned empty sessionId')
+      if (opts.resumeId && sid !== opts.resumeId) {
+        this.rebuiltSessions.add(sid)
+      }
     }
     this.openSessions.add(sid)
     const mode = opts.mode ?? this.opts.permissionMode
@@ -280,6 +294,8 @@ export class AcpProcess extends EventEmitter {
   async prompt(opts: {
     sessionId: string
     text: string
+    /** Native inline image content blocks (used when agy advertises promptCapabilities.image). */
+    images?: readonly { data: string; mimeType: string }[]
     timeoutMs: number
     idleTimeoutMs?: number
     longToolIdleMs?: number
@@ -365,11 +381,18 @@ export class AcpProcess extends EventEmitter {
       }
       return await new Promise<Record<string, unknown>>((resolve, reject) => {
         rejectPrompt = reject
+        const promptBlocks: Array<Record<string, unknown>> =
+          this.supportsInlineImages && opts.images && opts.images.length > 0
+            ? [
+                ...opts.images.map((img) => ({ type: 'image', data: img.data, mimeType: img.mimeType })),
+                { type: 'text', text: opts.text },
+              ]
+            : [{ type: 'text', text: opts.text }]
         this.request(
           'session/prompt',
           {
             sessionId: opts.sessionId,
-            prompt: [{ type: 'text', text: opts.text }],
+            prompt: promptBlocks,
           },
           0,
         ).then(

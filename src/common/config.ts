@@ -2,7 +2,7 @@
 // entry config > defaults (spec ADR-13). The overrides file backs /agy
 // hot changes and survives restarts; the env is read per call so a changed
 // process environment is honored without reload.
-import { defaultConfig, type AgyTransportMode, type PermissionMode, type PluginConfig } from './types.ts'
+import { defaultConfig, type AgyTransportMode, type PermissionMode, type PluginConfig, type WarmupWindowMode } from './types.ts'
 import { readFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -91,6 +91,12 @@ function asTransport(v: unknown): AgyTransportMode | undefined {
   return s === 'cli' || s === 'acp' ? s : undefined
 }
 
+function asWarmupWindows(v: unknown): WarmupWindowMode | undefined {
+  if (typeof v !== 'string') return undefined
+  const s = v.trim().toLowerCase()
+  return s === 'weekly' || s === '5h' || s === 'both' ? s : undefined
+}
+
 /** Layered config read; cheap enough to call per request (thunk pattern). */
 export function resolveConfig(
   entry: Record<string, unknown> | undefined,
@@ -128,10 +134,12 @@ export function resolveConfig(
     dispatchTimeoutMinutes: asNum(get('dispatchTimeoutMinutes')) ?? base.dispatchTimeoutMinutes,
     dispatchRetries: asNum(get('dispatchRetries')) ?? base.dispatchRetries,
     parallelSameAccount: asBool(get('parallelSameAccount')) ?? base.parallelSameAccount,
+    respectExternalSignIn: asBool(get('respectExternalSignIn')) ?? base.respectExternalSignIn,
     maxConcurrent: asNum(get('maxConcurrent')) ?? base.maxConcurrent,
     contextWindowDefault: asNum(get('contextWindowDefault')) ?? base.contextWindowDefault,
     maxTokensDefault: asNum(get('maxTokensDefault')) ?? base.maxTokensDefault,
     forwardSystemPrompt: asBool(get('forwardSystemPrompt')) ?? base.forwardSystemPrompt,
+    cloakSystemPrompt: asBool(get('cloakSystemPrompt')) ?? base.cloakSystemPrompt,
     digestMaxChars: asNum(get('digestMaxChars')) ?? base.digestMaxChars,
     contextTransferMaxChars: asNum(get('contextTransferMaxChars')) ?? base.contextTransferMaxChars,
     modelsCacheTtlMs: asNum(get('modelsCacheTtlMs')) ?? base.modelsCacheTtlMs,
@@ -165,6 +173,10 @@ export function resolveConfig(
     suppressAgyAutoUpdate: asBool(get('suppressAgyAutoUpdate')) ?? base.suppressAgyAutoUpdate,
     autoWarmup: asBool(get('autoWarmup')) ?? base.autoWarmup,
     warmupModels: asStringArray(get('warmupModels')) ?? base.warmupModels,
+    warmupWindows: asWarmupWindows(get('warmupWindows')) ?? base.warmupWindows,
+    warmupDailyTime: asString(get('warmupDailyTime')) ?? base.warmupDailyTime,
+    warmupTimezone: asString(get('warmupTimezone')) ?? base.warmupTimezone,
+    warmupIntervalHours: asNum(get('warmupIntervalHours')) ?? base.warmupIntervalHours,
     autoTranslate: asBool(get('autoTranslate')) ?? base.autoTranslate,
     translateModel: asString(get('translateModel')) ?? base.translateModel,
     translateEffort: asString(get('translateEffort')) ?? base.translateEffort,
@@ -318,6 +330,17 @@ export function resolveConfig(
     const wm = asStringArray(env.DSH_AGY_WARMUP_MODELS.split(','))
     if (wm) cfg.warmupModels = wm
   }
+  if (env.DSH_AGY_WARMUP_WINDOWS) {
+    const ww = asWarmupWindows(env.DSH_AGY_WARMUP_WINDOWS)
+    if (ww) cfg.warmupWindows = ww
+  }
+  if (env.DSH_AGY_WARMUP_DAILY_TIME !== undefined) cfg.warmupDailyTime = env.DSH_AGY_WARMUP_DAILY_TIME
+  if (env.DSH_AGY_WARMUP_TIMEZONE !== undefined) cfg.warmupTimezone = env.DSH_AGY_WARMUP_TIMEZONE
+  if (env.DSH_AGY_WARMUP_INTERVAL_HOURS) {
+    const ih = asNum(env.DSH_AGY_WARMUP_INTERVAL_HOURS)
+    if (ih !== undefined && ih >= 0) cfg.warmupIntervalHours = Math.min(168, Math.floor(ih))
+  }
+  cfg.warmupIntervalHours = Math.min(168, Math.max(0, Math.floor(cfg.warmupIntervalHours)))
   if (env.DSH_AGY_AUTO_TRANSLATE !== undefined) {
     const at = asBool(env.DSH_AGY_AUTO_TRANSLATE)
     if (at !== undefined) cfg.autoTranslate = at
@@ -351,6 +374,10 @@ export function resolveConfig(
   if (env.DSH_AGY_IMAGE_RETRIES) {
     const v = asNum(env.DSH_AGY_IMAGE_RETRIES)
     if (v !== undefined) cfg.imageRetries = v
+  }
+  if (env.DSH_AGY_CLOAK_SYSTEM_PROMPT !== undefined) {
+    const csp = asBool(env.DSH_AGY_CLOAK_SYSTEM_PROMPT)
+    if (csp !== undefined) cfg.cloakSystemPrompt = csp
   }
   if (env.DSH_AGY_BACKGROUND_WAKEUP !== undefined) {
     const bw = asBool(env.DSH_AGY_BACKGROUND_WAKEUP)

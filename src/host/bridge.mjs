@@ -62,6 +62,7 @@ async function listTools() {
     name: t.name,
     description: t.description || t.dshName,
     inputSchema: t.inputSchema || { type: 'object' },
+    _meta: t._meta || { 'antigravity/alwaysLoad': true },
     _dshName: t.dshName,
   }))
   return toolCache;
@@ -73,7 +74,7 @@ function send(msg) {
 
 async function handle(id, method, params) {
   if (method === 'initialize') {
-    send({ jsonrpc: '2.0', id, result: { protocolVersion: PROTOCOL, capabilities: { tools: {} }, serverInfo: { name: 'dsh-agy-link-bridge', version: '0.2.0' } } })
+    send({ jsonrpc: '2.0', id, result: { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'dsh-agy-link-bridge', version: '0.3.0' } } })
     return;
   }
   if (method.startsWith('notifications/')) return;
@@ -97,7 +98,10 @@ async function handle(id, method, params) {
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'ERROR: ' + JSON.stringify(res.body) }], isError: true } })
         return;
       }
-      send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: res.body.text || '' }] } })
+      const content = Array.isArray(res.body.content) && res.body.content.length > 0
+        ? res.body.content
+        : [{ type: 'text', text: res.body.text || '' }]
+      send({ jsonrpc: '2.0', id, result: { content } })
     } catch (e) {
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'ERROR: ' + String(e) }], isError: true } })
     }

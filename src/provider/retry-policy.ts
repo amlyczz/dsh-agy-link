@@ -8,6 +8,7 @@ import { modelFamilyOf } from '../common/pool-types.ts'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
 import { Err, looksLikeTosViolation, NETWORK_RETRY_DELAYS_MS } from '../common/types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
+import { pickAuxFallbackCandidate } from './account-selection.ts'
 import { parseEffortUnsupported, parseModelNotRecognized } from './effort-policy.ts'
 
 /**
@@ -79,6 +80,28 @@ function isAuxCall(options: AgyGenerateOptions): boolean {
     || (typeof options.system === 'string' && options.system.includes('REVIEW_POLICY'))
 }
 
+function isAuxModelFallbackPurpose(options: AgyGenerateOptions): boolean {
+  return options.purpose === 'compaction' || options.purpose === 'session-title'
+}
+
+function canFallbackAuxModel(
+  deps: EffortRetryDeps,
+  options: AgyGenerateOptions,
+  emitted: boolean,
+  finish: StreamChunk & { type: 'finish' },
+  auxModelFallbacksUsed: number,
+  rawMsg: string,
+): { activeModel: string } | null {
+  if (!isAuxModelFallbackPurpose(options) || emitted || options.signal?.aborted) return null
+  if (auxModelFallbacksUsed >= 2 || finish.reason.kind !== 'error' || looksLikeTosViolation(rawMsg)) return null
+  const code = (finish.reason as { failure?: { code?: string } }).failure?.code
+  if (code !== Err.RATE_LIMIT && code !== Err.ELIGIBILITY && code !== Err.AUTH && code !== Err.OVERLOADED) return null
+  if (!deps.pool) return null
+  const model = options.model || deps.defaultModel?.() || 'gemini'
+  const fb = pickAuxFallbackCandidate(deps.pool, modelFamilyOf(model), model)
+  return fb ? { activeModel: fb.activeModel } : null
+}
+
 function canRetryAuxQuota(
   deps: EffortRetryDeps,
   options: AgyGenerateOptions,
@@ -125,6 +148,8 @@ export async function* streamWithEffortRetry(
   let effortSelfHealed = false
   let modelSelfHealed = false
   let quotaHops = 0
+  let auxModelFallbacksUsed = 0
+  let currentOptions = options
   const isAux = isAuxCall(options)
   const poolEnabled = deps.pool ? deps.pool.getAccounts().filter((a) => a.enabled).length : 0
   const maxAuxHops = Math.min(Math.max(0, poolEnabled - 1), 16)
@@ -134,11 +159,11 @@ export async function* streamWithEffortRetry(
     // a replayed attempt cannot double-count tokens, and treat only real
     // content as "the caller has already seen something".
     let emitted = false
-    const bufferAux = isAux && quotaHops < maxAuxHops
+    const bufferAux = isAux && (quotaHops < maxAuxHops || (isAuxModelFallbackPurpose(currentOptions) && auxModelFallbacksUsed < 2))
     const buffered: StreamChunk[] = []
     const telemetry: StreamChunk[] = []
     let finish: (StreamChunk & { type: 'finish' }) | null = null
-    for await (const chunk of deps.streamAttempt(options, suppressEffort)) {
+    for await (const chunk of deps.streamAttempt(currentOptions, suppressEffort)) {
       if (chunk.type === 'finish') {
         // Hold the finish back one step: a refusal must not reach the caller
         // when the replay is about to succeed.
@@ -195,8 +220,14 @@ export async function* streamWithEffortRetry(
           }
         }
       }
-      if (canRetryAuxQuota(deps, options, emitted, finish, quotaHops, rawMsg)) {
+      if (canRetryAuxQuota(deps, currentOptions, emitted, finish, quotaHops, rawMsg)) {
         quotaHops++
+        continue
+      }
+      const auxModelFb = canFallbackAuxModel(deps, currentOptions, emitted, finish, auxModelFallbacksUsed, rawMsg)
+      if (auxModelFb !== null) {
+        auxModelFallbacksUsed++
+        currentOptions = { ...currentOptions, model: auxModelFb.activeModel }
         continue
       }
     }

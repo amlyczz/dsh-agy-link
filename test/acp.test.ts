@@ -143,7 +143,10 @@ test('ACP protocol helpers map updates, tool outputs, usage, results, and permis
 
   const text = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } }, st)
   assert.equal(text[0]?.kind, 'step')
-  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage?.input_tokens, 120)
+  // Bare usage_update { used } is kept separate in lastContextUsed so it never
+  // clobbers PromptResponse.usage with outputTokens: 0 / cacheReadTokens: 0 (#158).
+  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage, undefined)
+  assert.equal(st.lastContextUsed, 120)
   assert.equal(st.accumulatedText, 'hi')
 
   const startTool = acpUpdateToAgyEvents('s1', {

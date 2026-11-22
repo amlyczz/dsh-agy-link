@@ -27,6 +27,8 @@ export interface AcpStreamState {
   thoughtSeq: number
   accumulatedText: string
   lastUsage: RawUsage
+  /** Context occupancy reported by `usage_update` (`{ used, size }`), kept separate so it never clobbers real PromptResponse/transcript usage (#158). */
+  lastContextUsed?: number
   toolArgsByCallId: Map<string, { name: string; args: unknown }>
 }
 
@@ -46,6 +48,15 @@ function asObj(v: unknown): Record<string, unknown> | null {
 
 function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+/** ACP tool statuses that end a tool's lifecycle (anything else is still live). */
+const ACP_TERMINAL_STATUSES = new Set(['completed', 'failed', 'error', 'cancelled', 'canceled'])
+
+/** True when an ACP tool status is terminal (absent status is NOT terminal). */
+export function isAcpTerminalStatus(rawStatus: string | undefined): boolean {
+  if (rawStatus === undefined || rawStatus === '') return false
+  return ACP_TERMINAL_STATUSES.has(rawStatus)
 }
 
 export function extractAcpToolOutput(update: Record<string, unknown>): string | undefined {
@@ -99,7 +110,14 @@ export function acpUpdateToAgyEvents(
     const content = asObj(update.content)
     if (content?.type === 'text' && typeof content.text === 'string' && content.text !== '') {
       state.accumulatedText += content.text
-      const usage = Object.keys(state.lastUsage).length > 0 ? { ...state.lastUsage } : undefined
+      // Only attach usage when it carries real per-call metrics (output or cache
+      // tokens), never a bare `{ input_tokens: used }` snapshot from usage_update
+      // which would clobber PromptResponse.usage (#158).
+      const hasRealMetrics =
+        state.lastUsage.output_tokens !== undefined ||
+        state.lastUsage.cache_read_tokens !== undefined ||
+        state.lastUsage.thinking_tokens !== undefined
+      const usage = hasRealMetrics ? { ...state.lastUsage } : undefined
       return [{
         kind: 'step',
         stepKey: `acp-text-${state.textSeq}`,
@@ -127,7 +145,17 @@ export function acpUpdateToAgyEvents(
   }
   if (kind === 'usage_update') {
     const used = num(update.used)
-    if (used !== undefined) state.lastUsage.input_tokens = used
+    if (used !== undefined) state.lastContextUsed = used
+    // Only populate state.lastUsage when the update actually includes detailed
+    // token breakdowns; agy 1.5.x only sends `{ used, size }` here (#158).
+    const detailed = acpUsageToRawUsage(update)
+    if (
+      detailed.output_tokens !== undefined ||
+      detailed.cache_read_tokens !== undefined ||
+      detailed.thinking_tokens !== undefined
+    ) {
+      state.lastUsage = { ...state.lastUsage, ...detailed }
+    }
     return []
   }
   if (kind === 'tool_call' || kind === 'tool_call_update') {
@@ -154,6 +182,7 @@ export function acpUpdateToAgyEvents(
       stepKey: callId,
       stepKind: 'tool',
       state: stepState,
+      ...(rawStatus !== '' ? { rawStatus } : {}),
       text: output ?? '',
       conversationId: sessionId,
       tool: {
@@ -191,6 +220,7 @@ export function acpPromptResultToAgyEvent(
   sessionId: string,
   result: Record<string, unknown>,
   accumulatedText: string,
+  fallbackContextUsed?: number,
 ): AgyEvent {
   const stopReason = typeof result.stopReason === 'string' ? result.stopReason : 'end_turn'
   const rawErr = result.error
@@ -203,6 +233,9 @@ export function acpPromptResultToAgyEvent(
         : undefined
   const ok = stopReason !== 'error' && stopReason !== 'refusal' && extractedErr === undefined
   const usage = acpUsageToRawUsage(result.usage)
+  if (Object.keys(usage).length === 0 && typeof fallbackContextUsed === 'number' && fallbackContextUsed > 0) {
+    usage.input_tokens = fallbackContextUsed
+  }
   return {
     kind: 'result',
     conversationId: sessionId,

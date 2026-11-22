@@ -29,6 +29,8 @@ export interface SessionBinding {
   interrupted?: boolean
   /** Last measured per-call context input tokens for this session. */
   lastInputTokens?: number
+  /** Original working directory where this agy conversation was opened (preserves prompt cache on resume). */
+  cwd?: string
 }
 
 /** Keep the binding file small; the oldest ids are dropped first. */

@@ -31,7 +31,8 @@ import {
   stripNulBytes,
 } from '../host/runner.ts'
 import { agyHomeDirFor, snapshotAgyLogs, type AgyLogSnapshot } from '../host/agy-log.ts'
-import { acquireCredentialSlot, armSlotHandoff, type SlotHandoff } from '../host/credential-slot.ts'
+import { createAttemptSlot, type AttemptSlot } from './attempt-slot.ts'
+export { createAttemptSlot, type AttemptSlot } from './attempt-slot.ts'
 import { buildAgyEnv, pickProxy } from '../runtime/net/account-env.ts'
 import type { SpawnLimiter } from './spawn-limiter.ts'
 import { resolveModelSlug } from '../host/models.ts'
@@ -76,6 +77,8 @@ export interface AttemptDeps {
   spawnLimiter?: SpawnLimiter
   /** Optional persistent ACP attempt driver injected by host. */
   runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
+  /** Cached `agy --version` string (enables lock-free SSH_CONNECTION isolation on Windows agy >= 1.5). */
+  agyVersion?: () => string | null
   /** Cross-turn background wake observer (tracks schedule timers & background tasks). */
   backgroundObserver?: BackgroundTurnObserver
 }
@@ -88,10 +91,9 @@ export interface AttemptInput {
   sessionKey: string
   workspaceRoot: string
   isAux: boolean
+  isBackgroundAux?: boolean
   account: ManagedAccount | undefined
-  /** Prompt BEFORE NUL sanitization (sanitized inside; used by argv/stdin). */
   prompt: string
-  /** Resolved model slug (finalized telemetry / binding writes). */
   model: string
   activeModel: string
   effort: string | undefined
@@ -100,6 +102,7 @@ export interface AttemptInput {
   binding: SessionBinding | undefined
   messages: readonly Message[]
   newlySentImageIds: readonly string[]
+  stagedImages?: readonly { path: string; mediaType: string }[]
   sessionAccountKey: string
   family: ModelFamily
   signal: AbortSignal | undefined
@@ -233,6 +236,7 @@ export interface AttemptRecorder {
   before: DirSnapshot
   streamCid: string | null
   printTimeoutMinutes: number
+  maxTurnMs?: number | undefined
   attachProcess: (proc: RunningProcess) => void
   startTracker?: () => void
   feedLine: (line: string, onEvent: ((ev: AgyEvent) => void) | undefined, onFirstEvent: (() => void) | undefined) => void
@@ -252,6 +256,7 @@ export function createAttemptRecorder(
   initialConversationId?: string,
   trackSubagents = true,
   quotaCtx?: { family: ModelFamily; activeModel: string },
+  isBackgroundAux = false,
 ): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
@@ -259,7 +264,7 @@ export function createAttemptRecorder(
   const before = snapshotConversations(conversationsDir)
   const parser = new StreamJsonParser()
   deps.onParser?.(parser)
-  const watchdog = createToolWatchdog(deps.log, cfg)
+  const watchdog = createToolWatchdog(deps.log, cfg, isBackgroundAux ? { isBackgroundAux: true } : undefined)
   let attachedProc: RunningProcess | null = null
   let pendingQuotaKill = false
   const quotaCtrl = quotaCtx
@@ -293,6 +298,7 @@ export function createAttemptRecorder(
     before,
     streamCid: initialConversationId ?? null,
     printTimeoutMinutes: watchdog.printTimeoutMinutes,
+    maxTurnMs: watchdog.maxTurnMs,
     attachProcess: (proc) => {
       attachedProc = proc
       watchdog.attach(proc)
@@ -359,55 +365,6 @@ export function createAttemptRecorder(
   return state
 }
 
-export interface AttemptSlot {
-  /** Release the concurrency slot + credential lease exactly once. */
-  releaseOnce: () => void
-  /** Arm the narrow credential hand-off (no-op without a lease). */
-  armHandoff: () => SlotHandoff | null
-}
-
-export function createAttemptSlot(
-  concurrencyRelease: (() => void) | null,
-  credentialLease: Awaited<ReturnType<typeof acquireCredentialSlot>>,
-  log: ((msg: string) => void) | undefined,
-): AttemptSlot {
-  let release = concurrencyRelease
-  let released = false
-  let handoff: SlotHandoff | null = null
-  const releaseOnce = (): void => {
-    if (released) return
-    released = true
-    if (handoff !== null) {
-      handoff.dispose()
-    } else {
-      try {
-        credentialLease?.release()
-      } catch {
-        // best-effort
-      }
-    }
-    release?.()
-    release = null
-  }
-  return {
-    releaseOnce,
-    armHandoff: () => {
-      if (credentialLease === undefined) return null
-      handoff = armSlotHandoff({
-        release: () => {
-          try {
-            credentialLease?.release()
-          } catch {
-            // best-effort
-          }
-        },
-        log,
-      })
-      return handoff
-    },
-  }
-}
-
 /** Abort-aware sleep: rejects with the same error text the call sites used. */
 export function abortableDelay(ms: number, signal: AbortSignal | undefined, abortedMessage: string): Promise<void> {
   if (signal?.aborted) return Promise.reject(new LlmError(abortedMessage, Err.AGY_ERROR))
@@ -460,12 +417,14 @@ function persistBindingOnResult(
     input.binding?.sentImageIds || input.newlySentImageIds.length > 0
       ? [...new Set([...(input.binding?.sentImageIds ?? []), ...input.newlySentImageIds])]
       : undefined
+  const resolvedCwd = input.binding?.cwd || input.workspaceRoot
   deps.store.set(input.sessionAccountKey, {
     conversationId: finalId,
     lastMessageCount: input.messages.length,
     updatedAt: Date.now(),
     model: input.activeModel,
     ...(mergedImages && mergedImages.length > 0 ? { sentImageIds: mergedImages } : {}),
+    ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
   })
 }
 
@@ -489,27 +448,13 @@ export async function startAttemptProcess(
 ): Promise<SpawnedAttempt> {
   const { cfg, account, sessionKey, workspaceRoot } = input
   const signal = input.signal
-  // The acquire→spawn window can be arbitrarily long (all slots busy on long
-  // tool runs). Re-check the signal here: addEventListener on an already-aborted
-  // signal never fires, so the spawn below would run a full turn for a request
-  // nobody is reading any more.
   if (signal?.aborted) {
     slot.releaseOnce()
     throw new LlmError('request aborted before the agy process was spawned', Err.AGY_ERROR)
   }
-  // Only SECONDARY pool accounts get an isolated HOME. The primary account
-  // rides the real system HOME (agy 1.1.15 keeps credentials in the macOS
-  // Keychain); injecting HOME there signs agy out.
   if (account && account.dir) ensureIsolatedKeychain(account.dir)
-  // Snapshot agy's per-run log set BEFORE spawning so evidence found after the
-  // run can be attributed to THIS run (each invocation writes a fresh
-  // cli-*.log). Only this log separates a genuine sign-out from a keyring
-  // validation that died on the network.
   const runLogHome = agyHomeDirFor(account)
   const runLogsBefore = snapshotAgyLogs(runLogHome)
-  // One shared precedence + env assembly (runtime/net/account-env.ts). The MCP
-  // session id rides along so the bridge can resolve the calling agent
-  // (issue #55); telemetry flags keep their historical behaviour here.
   const env = buildAgyEnv({
     ...(account === undefined ? {} : { account }),
     cfg,
@@ -540,15 +485,13 @@ export async function startAttemptProcess(
     // line before startAgyProcess() even returns, and that first line is the
     // proof that agy is past its credential read.
     const slotHandoff = slot.armHandoff()
+    const effectiveCwd = input.persistBinding && input.binding?.cwd ? input.binding.cwd : workspaceRoot
     proc = startAgyProcess({
       bin: input.bin,
       args: spawn.args,
-      cwd: workspaceRoot,
+      cwd: effectiveCwd,
       timeoutMs: cfg.timeoutMs,
-      // Wall-clock cap for the whole turn (issue #92): the idle watchdog is
-      // re-armed by every output line, so a self-driving loop that keeps
-      // printing never trips it. 0 disables (behaviour unchanged).
-      maxTurnMs: cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined,
+      maxTurnMs: 'maxTurnMs' in recorder ? recorder.maxTurnMs : (cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined),
       // A turn that legitimately waits on background work (a build, an
       // integration test, a Docker job it launched) prints `root agent idle;
       // waiting for N background task(s)`; the reaper must not treat that as an

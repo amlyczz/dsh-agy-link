@@ -22,9 +22,10 @@ export function translationDefinition(): Record<string, unknown> {
 			const data = (ev.data ?? {}) as Record<string, unknown>
 			return {
 				seq: typeof ev.seq === 'number' ? ev.seq : 0,
-				turn: typeof data.turn === 'number' ? data.turn : 0,
+				turn: typeof data.sourceTurn === 'number' ? data.sourceTurn : typeof data.turn === 'number' ? data.turn : 0,
 				anchorSeq: typeof data.anchorSeq === 'number' ? data.anchorSeq : typeof ev.seq === 'number' ? ev.seq : 0,
 				text: typeof data.text === 'string' ? data.text : '',
+				original: typeof data.original === 'string' ? data.original : '',
 				model: typeof data.model === 'string' ? data.model : '',
 				effort: typeof data.effort === 'string' ? data.effort : '',
 				accountId: typeof data.accountId === 'string' ? data.accountId : '',
@@ -48,7 +49,11 @@ export function translationDefinition(): Record<string, unknown> {
 				target: 'chat',
 				// Sit immediately under the assistant message this card translates.
 				anchorSeq: anchorSeq + 0.1,
-				location: context.start?.location ?? { kind: 'unresolved' },
+				// Session-level location + `groupTree: 'turn'` keeps the card out of
+				// DSH's collapsible ProcessGroup (where a 0-tool group hides it) and
+				// prevents TurnGroups from regrouping or disrupting later turns.
+				location: { kind: 'session' },
+				groupTree: 'turn',
 				visibility: 'visible',
 				data: state,
 			}

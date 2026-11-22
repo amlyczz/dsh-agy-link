@@ -89,3 +89,28 @@ export function normalizeFileLinks(text: string): string {
     },
   )
 }
+
+/**
+ * Strip leaked `agy` internal retry / output-token-limit auto-continuation
+ * notices that occasionally bleed into assistant text streams:
+ *  - `⚠ API error (attempt N)...` / `⚠️ API error (attempt N)...`
+ *  - 3-line output-token-limit continuation preamble (`Your previous response
+ *    was cut off because it exceeded the output token limit...` + continuation
+ *    directive + `Retries remaining: N`)
+ */
+export function stripAgyInternalNoise(text: string): string {
+  if (!text) return text
+  let out = text
+  // 1. Leaked `⚠ API error (attempt N)...` retry banners
+  out = out.replace(/(?:^|\r?\n)[ \t]*⚠\uFE0F?[ \t]*API error \(attempt \d+\)[^\r\n]*(?=\r?\n|$)/gi, '')
+  // 2. Output-token-limit auto-continuation 3-line block (or single-line variants)
+  out = out.replace(
+    /(?:^|\r?\n)[ \t]*Your previous response was cut off because it exceeded the output token limit[^\r\n]*(?:\r?\n[ \t]*(?:Please continue|Continue directly|Resume directly|Continue from where you left off)[^\r\n]*)?(?:\r?\n[ \t]*Retries remaining:[ \t]*\d+[^\r\n]*)?(?=\r?\n|$)/gi,
+    '',
+  )
+  out = out.replace(/(?:^|\r?\n)[ \t]*Retries remaining:[ \t]*\d+[ \t]*(?=\r?\n|$)/gi, '')
+  if (out !== text) {
+    out = out.replace(/^\r?\n+/, '').replace(/\n{3,}/g, '\n\n')
+  }
+  return out
+}

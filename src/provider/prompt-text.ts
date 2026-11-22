@@ -161,6 +161,9 @@ export function latestUserTaskText(messages: readonly Message[]): string {
     const m = messages[i]
     if (m === undefined) continue
     if (isSyntheticHarnessMessage(m)) continue
+    // Memory recall snapshots injected by dsh-mnemon carry role:'user' so they
+    // flow on the first turn, but they must never hijack the live task text (#158).
+    if ((m as unknown as ForeignSource).source?.kind === 'dsh-mnemon') continue
     if (isToolResultMessage(m) || m.role === 'assistant' || m.role === 'system') continue
     if (m.role === 'user') {
       return textOf(m).trim()
@@ -342,6 +345,19 @@ export function collectUnsentImageRefs(
 export const AGY_SINGLE_MESSAGE_MAX_BYTES = 192_000
 export const AGY_PROMPT_SAFE_BYTES = 180_000
 
+const QUOTED_AGY_SLASH_RE =
+  /(?<![A-Za-z0-9_./:\\-])\/(goal|plan|compact|schedule|browser|grill-me|teamwork|learn|boost)(?![A-Za-z0-9_/-])/gi
+
+/**
+ * Neutralize standalone agy system slash commands (e.g. `/goal`, `/plan`) inside
+ * quoted history or compaction transcripts so `agy -p` does not expand them as
+ * live commands (which arms `/goal` stop hooks or alters mode), while preserving
+ * file paths (`/plan/doc.md`, `src/goal.ts`), URLs, and hyphenated tokens (`/goal-123`).
+ */
+export function defuseQuotedSlashCommands(text: string): string {
+  return text.includes('/') ? text.replace(QUOTED_AGY_SLASH_RE, '/ $1') : text
+}
+
 export function utf8Bytes(s: string): number {
   return Buffer.byteLength(s, 'utf8')
 }
@@ -467,10 +483,11 @@ export function buildDigest(
     const text = stripNulBytes(textOf(m))
     if (text === '') continue
     if (taskLine !== '' && !isToolResultMessage(m) && m.role === 'user' && text === taskText) continue
+    const safeText = defuseQuotedSlashCommands(text)
     otherLines.push(
       isToolResultMessage(m)
-        ? capLine(digestLabel(m) + elideMiddle(text, toolLineCap))
-        : capLine(digestLabel(m) + text),
+        ? capLine(digestLabel(m) + elideMiddle(safeText, toolLineCap))
+        : capLine(digestLabel(m) + safeText),
     )
   }
 

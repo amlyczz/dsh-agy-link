@@ -53,8 +53,10 @@ export class AcpSessionPool {
     sandbox: boolean
     agent: string
     preemptAutoUpdate?: boolean
+    /** True when this process depends on the shared Windows Credential Manager slot (legacy agy < 1.5). */
+    usesSharedSlot?: boolean
   }): AcpProcess {
-    if (process.platform === 'win32') {
+    if (process.platform === 'win32' && req.usesSharedSlot === true) {
       this.evictOtherAccounts(req.accountId)
     }
     const key = this.keyFor(req)
@@ -98,6 +100,34 @@ export class AcpSessionPool {
     this.procs.set(key, proc)
     this.ensureSweepTimer()
     return proc
+  }
+
+  /**
+   * Pre-warm one idle ACP process for the given account/mode key so the next
+   * turn adopts an already-initialized stdio server with zero startup delay.
+   * Performs only the local JSON-RPC `initialize` handshake (zero model calls).
+   */
+  async warmSpare(req: {
+    bin: string
+    cwd: string
+    env?: NodeJS.ProcessEnv
+    accountId?: string
+    mode: PermissionMode
+    sandbox: boolean
+    agent: string
+    preemptAutoUpdate?: boolean
+    usesSharedSlot?: boolean
+  }): Promise<boolean> {
+    const key = this.keyFor(req)
+    const existing = this.procs.get(key)
+    if (existing && existing.isAlive()) return true
+    try {
+      const proc = this.acquireProcess(req)
+      await proc.ensureInitialized()
+      return proc.isAlive()
+    } catch {
+      return false
+    }
   }
 
   evictOtherAccounts(keepAccountId?: string): number {

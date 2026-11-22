@@ -10,6 +10,7 @@ import { isAbsolute, join, relative } from 'node:path'
 import {
   AUTH_CONFIRM_STRIKES,
   isTerminalAuthError,
+  type AccountPlanTier,
   type AccountPoolData,
   type ManagedAccount,
   type ModelFamily,
@@ -205,6 +206,16 @@ export class PoolAdmin {
     return true
   }
 
+  setAccountPlanTier(id: string, tier: AccountPlanTier | undefined): boolean {
+    const acc = this.account(id)
+    if (!acc) return false
+    if (acc.planTier === tier) return true
+    if (tier === undefined || tier === 'unknown') delete acc.planTier
+    else acc.planTier = tier
+    this.deps.persist()
+    return true
+  }
+
   setAccountEnabled(id: string, enabled: boolean): boolean {
     const data = this.deps.getData()
     const acc = this.account(id)
@@ -306,15 +317,22 @@ export class PoolAdmin {
    * must not leak onto the new one. Resets everything email-bound while
    * keeping slot config (alias, dir, proxy, enabled).
    */
-  resetAccountIdentity(id: string, newEmail: string): void {
+  resetAccountIdentity(id: string, newEmail: string, resetAlias = false): void {
     const acc = this.account(id)
     if (!acc) return
     acc.email = newEmail
     acc.cooldowns = {}
     acc.quotas = {}
+    delete acc.dedicatedGroups
+    delete acc.planTier
+    delete acc.quotaUnavailable
     delete acc.authRequired
     delete acc.authError
     delete acc.authMarkedAt
+    if (resetAlias && acc.systemHome) {
+      acc.alias = 'Primary account (system sign-in)'
+      acc.defaultAlias = true
+    }
     this.deps.persist()
   }
 

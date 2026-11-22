@@ -7,6 +7,7 @@ import {
   Err,
   ELIGIBILITY_ERROR_HINT,
   HEADLESS_PERMISSION_ERROR_HINT,
+  looksLikeAiCreditsLow,
   looksLikeContextWindowExceeded,
   looksLikeEligibilityFailure,
   looksLikeHardRateLimit,
@@ -73,13 +74,16 @@ function classifyPolicyOrQuota(c: FailureContext): AttemptFailure | null {
   }
   if (c.isRateLimit) {
     const bestMsg = detailText(c, 'Rate limit or quota reached')
-    const hard = looksLikeHardRateLimit(c.rawErrText)
+    const aiCreditsLow = looksLikeAiCreditsLow(c.rawErrText) || looksLikeAiCreditsLow(bestMsg)
+    const hard = looksLikeHardRateLimit(c.rawErrText) || aiCreditsLow
     return {
       kind: 'error',
       code: hard ? Err.RATE_LIMIT : Err.OVERLOADED,
-      message: hard
-        ? 'Google Antigravity quota / rate limit reached: ' + bestMsg
-        : 'Google Antigravity quota / rate limit reached (server capacity overloaded): ' + bestMsg,
+      message: aiCreditsLow
+        ? 'Google Antigravity AI credits balance is too low: ' + bestMsg
+        : hard
+          ? 'Google Antigravity quota / rate limit reached: ' + bestMsg
+          : 'Google Antigravity quota / rate limit reached (server capacity overloaded): ' + bestMsg,
     }
   }
   const resultErr = c.parser.stats.lastResultError ?? ''

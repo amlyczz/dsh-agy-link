@@ -432,9 +432,19 @@ export class PoolAuthFlow {
           if (flow.proxyUrl && !primary.proxyUrl) {
             this.pool.setAccountProxy(primary.id, flow.proxyUrl)
           }
+          // Issue #152 part 2: when the primary slot is re-authenticated as a
+          // DIFFERENT Google account, reset identity-bound state and restore
+          // the default primary label so the previous account's custom alias
+          // never lingers next to the new email address.
+          const emailChanged = Boolean(
+            email && primary.email && primary.email.toLowerCase() !== email.toLowerCase(),
+          )
+          if (emailChanged && email) {
+            this.pool.resetAccountIdentity(primary.id, email, true)
+          }
           this.pool.clearAuthRequired(primary.id, true)
           this.pool.clearCooldown(primary.id, undefined, true)
-          this.pool.updateAccountQuotas(primary.id, primary.quotas, email)
+          this.pool.updateAccountQuotas(primary.id, emailChanged ? {} : primary.quotas, email)
           void this.quota.refreshAccountQuota(primary, true).catch(() => undefined)
         }
         this.log(`primary account signed in${email ? ` <${email}>` : ''}`)

@@ -6,6 +6,7 @@
 // two default-argument entry points were renamed to `*At` so the host facade
 // can keep the original `defaultPoolDir()` defaults without this module
 // depending on the host.
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tryWriteFileAtomic } from '../../common/atomic-write.ts'
@@ -13,6 +14,7 @@ import type { ManagedAccount } from '../../common/pool-types.ts'
 import { readAccountCredential } from './backup.ts'
 
 const PRIMARY_STORE_FILE = '.primary-credential.json'
+const LAST_INSTALLED_FILE = '.last-installed-fingerprint.json'
 
 // ---- token document helpers ----------------------------------------------
 
@@ -179,6 +181,41 @@ export function writePrimaryCredentialAt(cred: PrimaryCredential, baseDir: strin
     // ignore
   }
   return writeFileAtomic(primaryStorePath(baseDir), JSON.stringify(cred, null, 2))
+}
+
+/** Irreversible SHA-256 hash of a credential grant fingerprint (safe to persist, issue #145). */
+export function hashCredentialFingerprint(raw: string | null | undefined): string | null {
+  const fp = credentialFingerprint(raw)
+  if (!fp) return null
+  return createHash('sha256').update(fp).digest('hex')
+}
+
+export function lastInstalledFingerprintPath(baseDir: string): string {
+  return join(baseDir, LAST_INSTALLED_FILE)
+}
+
+/** Read the irreversible fingerprint hash last written to the Windows slot by this plugin (#145). */
+export function readLastInstalledFingerprintAt(baseDir: string): string | null {
+  const file = lastInstalledFingerprintPath(baseDir)
+  if (!existsSync(file)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { hash?: unknown }
+    return typeof parsed.hash === 'string' && parsed.hash.length === 64 ? parsed.hash : null
+  } catch {
+    return null
+  }
+}
+
+/** Persist the irreversible fingerprint hash of a credential blob we just wrote to the slot (#145). */
+export function writeLastInstalledFingerprintAt(raw: string | null | undefined, baseDir: string): boolean {
+  const hash = hashCredentialFingerprint(raw)
+  if (!hash) return false
+  try {
+    mkdirSync(baseDir, { recursive: true })
+  } catch {
+    // ignore
+  }
+  return writeFileAtomic(lastInstalledFingerprintPath(baseDir), JSON.stringify({ hash, updatedAt: Date.now() }, null, 2))
 }
 
 // ---- corruption detection --------------------------------------------------

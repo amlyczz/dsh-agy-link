@@ -316,6 +316,43 @@ if (mode === 'subagent-quota-live') {
   process.exit(0)
 }
 
+if (mode === 'parent-429-loop') {
+  process.on('SIGTERM', () => process.exit(143))
+  const cid = conv || 'conv-parent-429-' + invocation
+  const home = process.env.FAKE_AGY_BRAIN_HOME || process.env.HOME || process.env.USERPROFILE || ''
+  const failAll = process.env.FAKE_AGY_FAIL_ALL === '1'
+  const failModel = process.env.FAKE_AGY_FAIL_MODEL || ''
+  const modelAt = argv.indexOf('--model')
+  const reqModel = modelAt >= 0 ? (argv[modelAt + 1] ?? '') : ''
+  const shouldFail = failAll || (failModel !== '' ? reqModel === failModel : invocation === 0)
+  emit({ event: 'init', conversation_id: cid, model: reqModel || 'gemini-4-neon' })
+  if (home !== '' && shouldFail) {
+    const logDir = join(home, '.gemini', 'antigravity-cli', 'brain', cid, '.system_generated', 'logs')
+    mkdirSync(logDir, { recursive: true })
+    const rows = [
+      JSON.stringify({ step_index: 1, source: 'SYSTEM', type: 'ERROR_MESSAGE', status: 'DONE', error: 'API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).' }),
+      JSON.stringify({ step_index: 2, source: 'SYSTEM', type: 'ERROR_MESSAGE', status: 'DONE', error: 'API error (attempt 2): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).' }),
+      JSON.stringify({ step_index: 3, source: 'SYSTEM', type: 'ERROR_MESSAGE', status: 'DONE', error: 'API error (attempt 3): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).' }),
+    ]
+    if (process.env.FAKE_AGY_STOP_HOOK === '1') {
+      rows.push(JSON.stringify({
+        step_index: 4,
+        source: 'SYSTEM',
+        type: 'SYSTEM_MESSAGE',
+        status: 'DONE',
+        content: 'Stop hook blocked termination: You are still working toward the user\'s goal.',
+      }))
+    }
+    writeFileSync(join(logDir, 'transcript_full.jsonl'), rows.join('\n') + '\n')
+    await sleep(Number(process.env.FAKE_AGY_LOOP_WAIT_MS ?? 10_000))
+    emit({ event: 'result', result: { conversation_id: cid, status: 'ERROR', response: '', error: 'RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).', usage: { input_tokens: 0, output_tokens: 0 } } })
+    process.exit(1)
+  }
+  emit({ event: 'step_update', idx: 2, step_type: 'text', text: 'Compacted summary ready.' })
+  emit({ event: 'result', result: { conversation_id: cid, status: 'DONE', response: 'Compacted summary ready.', duration_seconds: 0.2, num_turns: 1, usage: { input_tokens: 80, output_tokens: 12 } } })
+  process.exit(0)
+}
+
 if (mode === 'tos-violation') {
   emit({
     event: 'result',

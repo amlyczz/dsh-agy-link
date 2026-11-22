@@ -296,7 +296,7 @@ function armTurnCap(child: ChildProcess, opts: RunOptions, state: RunState): voi
   }
 }
 
-function isBackgroundStderrNoise(line: string): boolean {
+export function isBackgroundStderrNoise(line: string): boolean {
   return (
     line.includes('fetchAvailableModels') ||
     line.includes('loadCodeAssist') ||
@@ -304,7 +304,10 @@ function isBackgroundStderrNoise(line: string): boolean {
     line.includes('FetchConfig') ||
     line.includes('ListExperiments') ||
     line.includes('daily-cloudcode-pa.googleapis.com') ||
-    line.includes('http_helpers.go')
+    line.includes('http_helpers.go') ||
+    (line.includes('run.go:') && /retrying in|RESOURCE_EXHAUSTED|code 429/i.test(line)) ||
+    line.includes('Reloading system slash commands') ||
+    line.includes('Slash commands unchanged')
   )
 }
 

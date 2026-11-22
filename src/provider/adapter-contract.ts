@@ -48,6 +48,8 @@ export interface AgyAdapterDeps {
    * signals decide).
    */
   sessionPlanMode?: (sessionId: string) => boolean | undefined
+  /** Resolve the latest selected Antigravity model for this session (honored by compaction when DSH passes stale lastUsed). */
+  sessionPendingModel?: (sessionId: string) => string | undefined
   /** Last-run telemetry surfaced by /agy status. Process completion and tool failures are distinct. */
   onRun?: (info: {
     processOk: boolean
@@ -78,6 +80,8 @@ export interface AgyAdapterDeps {
   onEffortUnsupported?: (model: string) => void
   /** Optional persistent ACP attempt runner wired from host services. */
   runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
+  /** Cached `agy --version` string (used to gate SSH_CONNECTION credential-slot bypass on agy >= 1.5). */
+  agyVersion?: () => string | null
   /** Cross-turn background wake observer (tracks schedule timers & background tasks). */
   backgroundObserver?: BackgroundTurnObserver
 }

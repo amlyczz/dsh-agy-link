@@ -79,6 +79,7 @@ export const zh = {
   'account.models': '单模型明细：', 'account.clearCooldown': '清除冷却', 'account.clearCooldownDone': '已清除冷却限制',
   'account.collapsedCoolingHint': '（{families} 冷却中）', 'account.poolHeading': '账号池 ({count})',
   'account.removed': '已移除账号：{alias}',
+  'plan.ultra': 'Ultra', 'plan.pro': 'Pro', 'plan.free': 'Free', 'plan.enterprise': 'Enterprise',
   'quota.fiveHour': '5 小时额度', 'quota.weekly': '周额度', 'quota.refreshed': '额度已刷新', 'quota.refreshStarted': '正在同步额度，稍后自动更新', 'quota.windowReset': '已重置 · 可用',
   'quota.unactivated': '未激活 · 预热启动计时',
   'quota.refreshInProgress': '该账号正在刷新中，请稍候',

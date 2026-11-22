@@ -56,6 +56,19 @@ export class RunRecording {
   private resultConversationId: string | null = null
   private lastStepUsageRaw: RawUsage | null = null
   /**
+   * Unconsumed per-span usage merged across internal LLM responses within the
+   * current DSH span (issue #161):
+   *   - Prompt-side fields (`input_tokens`, `cache_read_tokens`, `cache_write_tokens`,
+   *     `total_tokens`) take the LAST call so `contextPressure` never doubles.
+   *   - Generation-side fields (`output_tokens`, `thinking_tokens`) sum across
+   *     distinct `stepKey`s (replacing if the same `stepKey` updates cumulatively).
+   * Consumed once by the first cut/result so parallel tool cuts 2..N never
+   * double-bill the same LLM call.
+   */
+  private pendingSpanUsage: RawUsage | null = null
+  private readonly pendingSpanStepGen = new Map<string, { output: number; thinking: number }>()
+  private anyUsageEmitted = false
+  /**
    * Per-step generation timing for token-speed statistics: stepKey ->
    * { startedAt, lastAt, outputTokens }. The last usage sample of a step wins
    * (updates are cumulative snapshots of one internal call), so replacing —
@@ -179,12 +192,59 @@ export class RunRecording {
    * We therefore remember the last per-call step sample and report IT at
    * result time instead of the cumulative envelope.
    */
-  noteStepUsage(raw: RawUsage): void {
+  noteStepUsage(raw: RawUsage, stepKey?: string): void {
     this.lastStepUsageRaw = raw
+    if (Object.keys(raw).length === 0) return
+    const cur = this.pendingSpanUsage
+    const key = stepKey && stepKey !== '' ? stepKey : `__anon_${this.pendingSpanStepGen.size}`
+    const prevGen = this.pendingSpanStepGen.get(key)
+    const nextOut = typeof raw.output_tokens === 'number' && Number.isFinite(raw.output_tokens) ? raw.output_tokens : 0
+    const nextThink = typeof raw.thinking_tokens === 'number' && Number.isFinite(raw.thinking_tokens) ? raw.thinking_tokens : 0
+    this.pendingSpanStepGen.set(key, { output: nextOut, thinking: nextThink })
+    if (cur === null) {
+      this.pendingSpanUsage = { ...raw }
+      return
+    }
+    // Single-span multi-call merge (#161): prompt-side fields take the LATEST
+    // call (reflecting true current context occupancy without doubling pressure),
+    // while generation-side fields sum across distinct calls in the span.
+    const merged: RawUsage = { ...cur }
+    if (raw.input_tokens !== undefined) merged.input_tokens = raw.input_tokens
+    if (raw.cache_read_tokens !== undefined) merged.cache_read_tokens = raw.cache_read_tokens
+    if (raw.cache_write_tokens !== undefined) merged.cache_write_tokens = raw.cache_write_tokens
+    if (raw.total_tokens !== undefined) merged.total_tokens = raw.total_tokens
+    if (raw.output_tokens !== undefined || cur.output_tokens !== undefined) {
+      merged.output_tokens = Math.max(0, (cur.output_tokens ?? 0) - (prevGen?.output ?? 0) + nextOut)
+    }
+    if (raw.thinking_tokens !== undefined || cur.thinking_tokens !== undefined) {
+      merged.thinking_tokens = Math.max(0, (cur.thinking_tokens ?? 0) - (prevGen?.thinking ?? 0) + nextThink)
+    }
+    this.pendingSpanUsage = merged
   }
 
   get lastUsage(): RawUsage | null {
     return this.lastStepUsageRaw
+  }
+
+  /**
+   * Consume the pending usage for the current DSH span (issue #161).
+   * Returns null when no unconsumed step usage exists (e.g. concurrent tool
+   * cuts 2..N, empty tails, or failure with no sample), so callers omit the
+   * `{ type: 'usage' }` chunk instead of double-billing or flashing 0/0.
+   */
+  consumeSpanUsage(resultRaw?: RawUsage): RawUsage | null {
+    if (this.pendingSpanUsage !== null) {
+      const out = this.pendingSpanUsage
+      this.pendingSpanUsage = null
+      this.pendingSpanStepGen.clear()
+      this.anyUsageEmitted = true
+      return out
+    }
+    if (resultRaw !== undefined && Object.keys(resultRaw).length > 0 && !this.anyUsageEmitted) {
+      this.anyUsageEmitted = true
+      return resultRaw
+    }
+    return null
   }
 
   /** The usage to report for the result envelope: last per-call step sample. */

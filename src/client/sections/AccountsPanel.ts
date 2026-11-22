@@ -6,7 +6,8 @@
 // busy scoping and host-derived progress survive modal close/reopen.
 
 import { buildAccountModelRows, type AccountModelDisplayItem } from '../../common/account-models.ts';
-import type { AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
+import type { AccountPlanTier, AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
+import { resolveAccountPlanTier } from '../../common/plan-tier.ts';
 import {
 	QUOTA_FAMILIES,
 	isAccountCriticalAuth,
@@ -158,7 +159,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		},
 			renderCardHeader(t, acc, {
 				isPrimary, isAuthRequired, dotColor, isEditingProxy, isSyncing, isWarming, isEditingAlias,
-				displayAlias, accIndex, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId,
+				displayAlias, accountModelIds: accountModels?.[acc.id]?.map((m) => m.id), accIndex, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId,
 			}),
 			h('div', { key: 'agy-body', style: S.quotaBox },
 				renderQuotaUnavailableNote(t, acc),
@@ -202,6 +203,7 @@ interface CardHeaderCtx {
 	isSyncing: boolean;
 	isWarming: boolean;
 	displayAlias: string;
+	accountModelIds?: readonly string[];
 	accIndex: number;
 	accounts: ManagedAccount[];
 	pool: AccountPoolData | undefined;
@@ -218,8 +220,36 @@ function extractActionUrl(text?: string): string | undefined {
 	return m ? m[0] : undefined;
 }
 
+function renderPlanTierBadge(t: Translator, tier: AccountPlanTier | undefined): unknown {
+	if (!tier || tier === 'unknown') return null;
+	const palette: Record<Exclude<AccountPlanTier, 'unknown'>, { bg: string; text: string; border: string }> = {
+		ultra: { bg: 'rgba(139, 92, 246, 0.14)', text: '#8b5cf6', border: 'rgba(139, 92, 246, 0.4)' },
+		pro: { bg: 'rgba(59, 130, 246, 0.14)', text: '#3b82f6', border: 'rgba(59, 130, 246, 0.4)' },
+		free: { bg: 'var(--agy-bg-subbox)', text: 'var(--agy-text-secondary)', border: 'var(--agy-border-subbox)' },
+		enterprise: { bg: 'rgba(16, 185, 129, 0.14)', text: '#10b981', border: 'rgba(16, 185, 129, 0.4)' },
+	};
+	const c = palette[tier];
+	const label = t(`plan.${tier}` as never);
+	return h('span', {
+		className: `agy-plan-badge agy-plan-${tier}`,
+		title: label,
+		style: {
+			...S.badgeTag!,
+			background: c.bg,
+			color: c.text,
+			borderColor: c.border,
+			fontSize: '10px',
+			fontWeight: 700,
+			padding: '1px 6px',
+			letterSpacing: '0.02em',
+			whiteSpace: 'nowrap',
+		},
+	}, label);
+}
+
 function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown[] {
 	const { isAuthRequired } = ctx;
+	const planTier = resolveAccountPlanTier(acc, ctx.accountModelIds);
 	const unavailReason = acc.quotaUnavailable?.reason;
 	const isTos = isAuthRequired && (unavailReason === 'tos_violation' || /\bTOS_VIOLATION\b|violation of Terms of Service/i.test(acc.authError ?? ''));
 	const isValidation = isAuthRequired && !isTos && (unavailReason === 'validation_required' || /\bVALIDATION_REQUIRED\b/i.test(acc.authError ?? ''));
@@ -228,6 +258,7 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 		? (extractActionUrl(acc.authError) ?? (typeof acc.quotaUnavailable?.actionUrl === 'string' && acc.quotaUnavailable.actionUrl.startsWith('https://') ? acc.quotaUnavailable.actionUrl : undefined))
 		: undefined;
 	return [
+		renderPlanTierBadge(t, planTier),
 		acc.email ? h('span', {
 			style: {
 				...S.badgeTag!,

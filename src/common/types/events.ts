@@ -41,6 +41,8 @@ export type AgyEvent =
       tool?: AgyToolInfo
       /** Step lifecycle as reported by agy: ACTIVE / DONE / ERROR. */
       state?: string
+      /** Raw transport-level status, lowercased, when reported (ACP: pending / in_progress / completed / failed / cancelled). */
+      rawStatus?: string
       /** Per-step usage (agy ≥1.1.15 reports usage on agent_response steps). */
       usage?: RawUsage
       /** Conversation id carried directly on step_update when init hasn't been seen yet. */

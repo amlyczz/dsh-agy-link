@@ -111,7 +111,8 @@ export function createLiveQuotaController(ctx: LiveQuotaContext): LiveQuotaContr
     const alt = ctx.account && ctx.pool
       ? findAlternativeAccount(ctx.pool, ctx.account.id, ctx.inputFamily, ctx.activeModel, targetFamily)
       : undefined
-    const subject = info.role ? `子代理 (${info.role})` : '子代理/工具'
+    const isParentLoop = info.source === 'parent-retry-loop'
+    const subject = isParentLoop ? '主对话' : (info.role ? `子代理 (${info.role})` : '子代理/工具')
 
     if (alt && !triggeredKill) {
       triggeredKill = true
@@ -126,6 +127,21 @@ export function createLiveQuotaController(ctx: LiveQuotaContext): LiveQuotaContr
       ctx.emitNotice(
         `live-quota-switch-${ctx.account?.id ?? 'none'}-${targetFamily}`,
         `[agy] ${subject}额度耗尽，已自动切换至可用账号 ${alt.alias || alt.id}...\n`,
+      )
+      ctx.onTriggerKill()
+    } else if (!alt && isParentLoop && !triggeredKill) {
+      triggeredKill = true
+      state = {
+        family: targetFamily,
+        crossFamily: false,
+        errorText: raw.slice(0, 300),
+        rawErrorText: raw,
+        ...(resetTime === undefined ? {} : { resetTime }),
+        cooledInLive: cooledNow || cooled.has(targetFamily),
+      }
+      ctx.emitNotice(
+        `live-quota-loop-${ctx.account?.id ?? 'none'}-${targetFamily}`,
+        `[agy] ${subject}连续触发硬配额限流，当前无其他可用账号，已提前终止重试\n`,
       )
       ctx.onTriggerKill()
     } else if (!alt) {

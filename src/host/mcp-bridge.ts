@@ -22,6 +22,7 @@ import { writeFileAtomicSync } from '../common/atomic-write.ts'
 import { basename, dirname, join } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readJsonBody } from './read-json-body.ts'
+import { extractMcpContentBlocks, prepareMcpTools } from './mcp-schema.ts'
 import { homedir } from 'node:os'
 
 const MCP_SERVER_KEY = 'dsh-tools'
@@ -203,16 +204,11 @@ export function startMcpBridge(opts: {
         const used = new Set<string>()
         // List the CALLER's surface: without a scope the whole preset-registered
         // tool set is filtered out (issue #150).
-        const tools = svc.schemas(await resolveSessionAgent(req))
+        const rawTools = svc.schemas(await resolveSessionAgent(req))
           .filter((t) => allow.length === 0 || allowSet.has(t.name))
           // internal transports / loopback-only helpers are not bridgeable
           .filter((t) => !INTERNAL_TOOL_NAMES.has(t.name))
           .map((t) => {
-            // Map the DSH name to an MCP-safe name. Distinct DSH names can
-            // normalize to the same MCP name (e.g. 'a.b' and 'a_b'); rather than
-            // silently dropping one, disambiguate with a stable suffix so every
-            // real tool stays reachable. bridge.mjs calls back by the exact
-            // dshName, so the MCP-side suffix never affects execution.
             const base = toMcpName(t.name)
             let name = base
             for (let i = 2; used.has(name); i++) name = base + '__' + i
@@ -224,6 +220,7 @@ export function startMcpBridge(opts: {
               inputSchema: { type: 'object', ...t.parameters },
             }
           })
+        const tools = prepareMcpTools(rawTools)
         sendJson(res, 200, { tools })
         return;
       }
@@ -317,7 +314,13 @@ export function startMcpBridge(opts: {
             ...(isPtc ? { parent: Symbol(callId) } : {}),
           })
           audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
-          sendJson(res, 200, { ok: true, text: resultText(settledToolResult(result, callId)) })
+          const settled = settledToolResult(result, callId)
+          const content = extractMcpContentBlocks(settled)
+          sendJson(res, 200, {
+            ok: true,
+            text: resultText(settled),
+            ...(content ? { content } : {}),
+          })
         } catch (e) {
           audit('failed: ' + String(e).slice(0, 200))
           sendJson(res, 200, { ok: false, error: String(e) })

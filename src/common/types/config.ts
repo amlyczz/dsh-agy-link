@@ -10,6 +10,8 @@ export type PermissionMode = 'skip' | 'auto' | 'plan' | 'accept-edits'
 
 export type AgyTransportMode = 'cli' | 'acp'
 
+export type WarmupWindowMode = 'weekly' | '5h' | 'both'
+
 
 export interface PluginConfig {
   enabled: boolean
@@ -71,6 +73,8 @@ export interface PluginConfig {
    * exclusive only for account switches (Windows credential slot).
    */
   parallelSameAccount: boolean
+  /** Preserve a newer external standalone AGY sign-in in the Windows credential slot instead of overwriting it (#145). */
+  respectExternalSignIn: boolean
   maxConcurrent: number
   contextWindowDefault: number
   maxTokensDefault: number
@@ -83,6 +87,8 @@ export interface PluginConfig {
    * reviewer answer in prose instead of the required JSON object.
    */
   forwardSystemPrompt: boolean
+  /** Apply semantic-preserving rewrites to forwarded harness system prompts to avoid upstream prompt-fingerprint false 429 / shallow degradation (default: true). */
+  cloakSystemPrompt: boolean
   digestMaxChars: number
   /**
    * Character budget for the history digest used to seed a brand-new agy
@@ -188,6 +194,14 @@ export interface PluginConfig {
   autoWarmup: boolean
   /** Models monitored/used for auto-warmup. Defaults to the Gemini Flash + Claude lineup picks. */
   warmupModels: readonly string[]
+  /** Quota windows eligible for auto-warmup: 'weekly' (default), '5h', or 'both'. */
+  warmupWindows: WarmupWindowMode
+  /** Optional daily scheduled warmup wall-clock time (`HH:MM`, empty = event-driven/default). */
+  warmupDailyTime: string
+  /** Optional IANA timezone for `warmupDailyTime` (e.g. `Asia/Shanghai`, empty = local timezone). */
+  warmupTimezone: string
+  /** Optional fixed warmup interval in hours (0 = disabled, 1..168). */
+  warmupIntervalHours: number
   /**
    * Auto "plain language" translation after every completed agent turn
    * (default OFF). The finished turn's final answer is sent to the translate
@@ -313,6 +327,7 @@ export function defaultConfig(): PluginConfig {
      * false restores full-run slot exclusivity (one agy process at a time).
      */
     parallelSameAccount: true,
+    respectExternalSignIn: false,
     /**
      * Cross-session cap on concurrent agy request streams. 0 = UNLIMITED
      * (default): native agy concurrency — agy is a stateless CLI and runs
@@ -324,6 +339,7 @@ export function defaultConfig(): PluginConfig {
     contextWindowDefault: 1_048_576,
     maxTokensDefault: 65_536,
     forwardSystemPrompt: false,
+    cloakSystemPrompt: true,
     digestMaxChars: 8_000,
     contextTransferMaxChars: 660_000,
     contextTransferMaxBytes: 150_000,
@@ -361,6 +377,10 @@ export function defaultConfig(): PluginConfig {
     // explicitly with `autoWarmup: true` / DSH_AGY_AUTO_WARMUP=1.
     autoWarmup: false,
     warmupModels: [PREFERRED_GEMINI_FLASH, PREFERRED_CLAUDE],
+    warmupWindows: 'weekly',
+    warmupDailyTime: '',
+    warmupTimezone: '',
+    warmupIntervalHours: 0,
     // Translation is strictly opt-in: it spends quota on every completed
     // turn, so the default must never silently start billing a user.
     autoTranslate: false,

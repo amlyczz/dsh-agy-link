@@ -27,6 +27,22 @@ export function linuxDbusDisabledEnv(dir: string): { DBUS_SESSION_BUS_ADDRESS: s
   return { DBUS_SESSION_BUS_ADDRESS: 'unix:path=' + join(dir, '.no-dbus-session') }
 }
 
+export const AGY_SSH_ISOLATION_VALUE = '127.0.0.1 0 127.0.0.1 0'
+
+/**
+ * `agy >= 1.5.0` treats an active `SSH_CONNECTION` env var as a headless remote
+ * session and reads/writes `<HOME>/.gemini/antigravity-cli/antigravity-oauth-token`
+ * directly instead of the shared OS keyring / Windows Credential Manager.
+ */
+export function supportsSshIsolation(agyVersion?: string | null): boolean {
+  if (!agyVersion || agyVersion.trim() === '') return false
+  const m = agyVersion.trim().match(/^v?(\d+)\.(\d+)/)
+  if (!m) return false
+  const major = Number(m[1])
+  const minor = Number(m[2])
+  return major > 1 || (major === 1 && minor >= 5)
+}
+
 export function isolatedHomeEnv(dir: string): Record<string, string> {
   const geminiDir = join(dir, '.gemini')
   const env: Record<string, string> = {
@@ -35,6 +51,9 @@ export function isolatedHomeEnv(dir: string): Record<string, string> {
     ANTIGRAVITY_GEMINI_DIR: geminiDir,
     ANTIGRAVITY_APP_DATA_DIR: join(geminiDir, 'antigravity-cli'),
     DSH_STATE_DIR: process.env.DSH_STATE_DIR || join(homedir(), '.dsh'),
+    // Instruct agy >= 1.5 to bypass the shared OS keyring / Windows Credential
+    // Manager and use this isolated HOME's own antigravity-oauth-token file.
+    SSH_CONNECTION: AGY_SSH_ISOLATION_VALUE,
   }
   if (IS_WIN) {
     env.USERPROFILE = dir
