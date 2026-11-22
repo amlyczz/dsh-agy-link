@@ -47,7 +47,9 @@ test('disposing a ready plugin clears background timers, closes MCP and restores
     // warmup scheduler is interval-only (no boot pass, so an upgrade never
     // probes on stale pool.json rows).
     const boots = timeouts.mock.calls.filter(c => [4000, 5000].includes(Number(c.arguments[1])))
-    assert.equal(sweeps.length, 4, 'media TTL, quota refresh, warmup and the catalog TTL refresh are all >= 60s')
+    // media TTL, quota refresh, warmup, the catalog TTL refresh, and the deferred
+    // boot-maintenance interval (30 min).
+    assert.equal(sweeps.length, 5, 'media TTL, quota refresh, warmup, catalog TTL and maintenance are all >= 60s')
     assert.equal(boots.length, 2)
     for (const call of [...sweeps, ...boots]) assert.equal((call.result as NodeJS.Timeout).hasRef(), false)
     await ctx.fiber.dispose()

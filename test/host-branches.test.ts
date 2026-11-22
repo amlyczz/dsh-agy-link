@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { SessionStore, SENT_IMAGE_IDS_MAX } from '../src/host/sessions.ts'
 import { mergeSentImageIds } from '../src/provider/finalize.ts'
 import { runBootHygiene } from '../src/host/boot-hygiene.ts'
+import { runMaintenancePass } from '../src/host/boot-maintenance.ts'
 import type { HostServices } from '../src/host/services.ts'
 import { selectSessionAccount } from '../src/provider/account-selection.ts'
 import type { AccountPoolManager } from '../src/host/pool.ts'
@@ -186,7 +187,7 @@ function hygieneServices(over: {
   } as unknown as HostServices
 }
 
-test('boot-hygiene: sweeps staging dirs and old logs (non-darwin/win32 path, no spawn)', () => {
+test('boot-hygiene: staging/log sweeps are deferred, not run on the plugin-load path', () => {
   const restore = setPlatform('linux')
   const logs: string[] = []
   try {
@@ -197,8 +198,22 @@ test('boot-hygiene: sweeps staging dirs and old logs (non-darwin/win32 path, no 
       logs,
     })
     runBootHygiene(services)
-    assert.ok(logs.includes('swept 2 stale staging dir(s)'))
-    assert.ok(logs.includes('swept 3 old log file(s)'))
+    // Startup must stay cheap: a pool of N accounts no longer pays N staging
+    // walks plus the ecosystem mirror before the first frame.
+    assert.equal(logs.some((l) => l.includes('stale staging')), false)
+    assert.equal(logs.some((l) => l.includes('old log file')), false)
+
+    // The deferred pass owns them now, and reports one summary line.
+    const result = runMaintenancePass({
+      accounts: () => [],
+      sweepStaging: () => 2,
+      sweepLogs: () => 3,
+      log: (m) => logs.push(m),
+      reapOrphans: false,
+    })
+    assert.equal(result.staging, 2)
+    assert.equal(result.logs, 3)
+    assert.ok(logs.some((l) => l.includes('maintenance: swept') && l.includes('2 staging dir(s)') && l.includes('3 old log(s)')))
   } finally {
     restore()
   }
