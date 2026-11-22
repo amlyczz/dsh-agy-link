@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { apply } from '../src/index.ts'
+import { sandboxEnv } from './helpers/sandbox-env.ts'
 import { AuthHelper } from '../src/host/auth.ts'
 import { PoolAuthFlow } from '../src/host/pool-auth.ts'
 
 test('auth cleanup is deferred until the plugin scope is disposed', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-lifecycle-'))
-  const previous = process.env.DSH_HOME
-  process.env.DSH_HOME = dir
+  const restoreEnv = sandboxEnv(dir)
   const disposeAuth = t.mock.method(AuthHelper.prototype, 'dispose', () => undefined)
   const cancelPool = t.mock.method(PoolAuthFlow.prototype, 'cancel', async () => undefined)
   const ctx = new Context()
@@ -33,16 +33,14 @@ test('auth cleanup is deferred until the plugin scope is disposed', async (t) =>
     assert.equal(cancelPool.mock.callCount(), 1)
   } finally {
     await ctx.fiber.dispose()
-    if (previous === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = previous
+    restoreEnv()
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
 test('hiding a model announces itself to the picker via llm/adapters-updated', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-picker-notify-'))
-  const previous = process.env.DSH_HOME
-  process.env.DSH_HOME = dir
+  const restoreEnv = sandboxEnv(dir)
   const ctx = new Context()
   const emitted: string[] = []
   const routes: Array<{ path: string; handler: (req: unknown, res: unknown) => void }> = []
@@ -96,8 +94,7 @@ test('hiding a model announces itself to the picker via llm/adapters-updated', a
     assert.equal(overrides.translateEffort, 'medium')
   } finally {
     await ctx.fiber.dispose()
-    if (previous === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = previous
+    restoreEnv()
     rmSync(dir, { recursive: true, force: true })
   }
 })

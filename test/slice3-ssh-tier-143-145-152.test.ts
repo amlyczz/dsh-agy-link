@@ -193,9 +193,14 @@ test('issue #152 part 2: re-authenticating primary with a different Google accou
         token_type: 'Bearer',
       }),
       fetchUserEmail: async () => 'new@gmail.com',
+      // Never the real Windows slot / login keychain: they are machine-wide.
+      writeSlot: () => true,
+      writeKeyring: () => true,
     })
     const started = await auth.beginPrimary()
     assert.equal(started.ok, true)
+    // beginPrimary() targets the real home; write the token file into the temp dir instead.
+    ;(auth as any).flow.dir = dir
     const stateParam = new URL(started.url!).searchParams.get('state')!
     const done = await auth.submitCode(`http://localhost/cb?code=abc123&state=${encodeURIComponent(stateParam)}`)
     assert.equal(done.ok, true)

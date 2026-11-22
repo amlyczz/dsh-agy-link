@@ -9,11 +9,12 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../src/index.ts'
+import { sandboxEnv } from './helpers/sandbox-env.ts'
 
 // Hermetic sandbox: own DSH_HOME + a stub agy binary so the guard runs on
 // CI machines without agy installed.
 const workDir = mkdtempSync(join(tmpdir(), 'agy-inject-'))
-process.env.DSH_HOME = workDir
+sandboxEnv(workDir)
 const stubBin = join(workDir, 'agy')
 writeFileSync(stubBin, '#!/bin/sh\necho "agy version 1.1.15"\n')
 chmodSync(stubBin, 0o755)

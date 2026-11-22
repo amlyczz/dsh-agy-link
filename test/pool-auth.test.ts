@@ -7,6 +7,9 @@ import { AccountPoolManager } from '../src/host/pool.ts'
 import { PoolAuthFlow } from '../src/host/pool-auth.ts'
 import { QuotaService } from '../src/host/quota.ts'
 
+/** Never the real machine-wide Windows slot / login keychain (see PoolAuthFlowDeps). */
+const noMachineWrites = { writeSlot: () => true, writeKeyring: () => true }
+
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'agy-pool-auth-'))
   const pool = new AccountPoolManager(dir)
@@ -17,6 +20,7 @@ function fixture() {
 test('PoolAuthFlow begin produces a PKCE authorize URL and auto mode', async () => {
   const { pool, quota } = fixture()
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     openBrowser: async () => true,
     exchangeCode: async () => { throw new Error('invalid_grant: Bad Request') },
   })
@@ -39,7 +43,7 @@ test('PoolAuthFlow begin produces a PKCE authorize URL and auto mode', async () 
 
 test('PoolAuthFlow cancel cleans the staging dir', async () => {
   const { dir, pool, quota } = fixture()
-  const flow = new PoolAuthFlow(pool, quota, () => {}, { openBrowser: async () => false })
+  const flow = new PoolAuthFlow(pool, quota, () => {}, { ...noMachineWrites, openBrowser: async () => false })
   const st = await flow.begin()
   assert.equal(st.ok, true)
   const { readdirSync } = await import('node:fs')
@@ -51,6 +55,7 @@ test('PoolAuthFlow cancel cleans the staging dir', async () => {
 test('PoolAuthFlow rejects bogus paste and wrong-state URLs', async () => {
   const { pool, quota } = fixture()
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     openBrowser: async () => true,
     exchangeCode: async () => { throw new Error('invalid_grant: Bad Request') },
   })
@@ -72,6 +77,7 @@ test('PoolAuthFlow rejects bogus paste and wrong-state URLs', async () => {
 test('PoolAuthFlow fails cleanly when the exchange is rejected', async () => {
   const { dir, pool, quota } = fixture()
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     openBrowser: async () => true,
     exchangeCode: async () => { throw new Error('invalid_grant: Bad Request') },
   })
@@ -102,6 +108,7 @@ test('reauthentication restores an existing account without changing its setting
   const file = join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
   writeFileSync(file, 'previous credential')
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     openBrowser: async () => true,
     exchangeCode: async () => ({ access_token: 'access', refresh_token: 'refresh' }),
     fetchUserEmail: async () => 'backup@example.com',
@@ -129,6 +136,7 @@ test('reauthentication rejects wrong or unverifiable identities without overwrit
     const file = join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
     writeFileSync(file, 'original')
     const flow = new PoolAuthFlow(pool, quota, () => {}, {
+      ...noMachineWrites,
       openBrowser: async () => true,
       exchangeCode: async () => ({ access_token: 'access', refresh_token: refresh }),
       fetchUserEmail: async () => email,
@@ -147,6 +155,7 @@ test('cancelled reauthentication never deletes the existing account or commits a
   const account = pool.createAccountSlot('Backup')
   let resolveExchange!: (value: { access_token: string; refresh_token: string }) => void
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     openBrowser: async () => true,
     exchangeCode: async () => new Promise((resolve) => { resolveExchange = resolve }),
     fetchUserEmail: async () => 'backup@example.com',
@@ -158,6 +167,7 @@ test('cancelled reauthentication never deletes the existing account or commits a
     const sibling = pool.createAccountSlot('Other')
     pool.updateAccountQuotas(sibling.id, {}, 'other@example.com')
     const flow = new PoolAuthFlow(pool, quota, () => {}, {
+      ...noMachineWrites,
       openBrowser: async () => true,
       exchangeCode: async () => ({ access_token: 'access', refresh_token: 'refresh' }),
       fetchUserEmail: async () => 'OTHER@example.com',
@@ -183,6 +193,7 @@ test('importRefreshToken adds a new account to pool and writes token + backup', 
   const { pool, quota } = fixture()
   let notified = false
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     refreshTokens: async (rt) => ({ access_token: 'acc_' + rt, refresh_token: rt }),
     fetchUserEmail: async () => 'imported@example.com',
     onUpdate: () => { notified = true },
@@ -211,6 +222,7 @@ test('importRefreshToken updates existing account in place and clears authRequir
   assert.equal(existing.authRequired, true)
 
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     refreshTokens: async (rt) => ({ access_token: 'acc_' + rt, refresh_token: rt }),
     fetchUserEmail: async () => 'EXISTING@example.com',
   })
@@ -235,6 +247,7 @@ test('importRefreshToken updates existing account in place and clears authRequir
 test('importRefreshToken rejects empty/invalid input or failed token exchange', async () => {
   const { pool, quota } = fixture()
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
+    ...noMachineWrites,
     refreshTokens: async () => { throw new Error('invalid_grant: Token has been expired or revoked') },
     fetchUserEmail: async () => 'bad@example.com',
   })

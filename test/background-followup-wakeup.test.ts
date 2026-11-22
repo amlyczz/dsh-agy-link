@@ -15,6 +15,7 @@ import { BackgroundWakeWatcher } from '../src/features/background/watcher.ts'
 import { setAgyDbDir } from '../src/runtime/agy/db/paths.ts'
 import { agyCommandDefinition } from '../src/host/commands.ts'
 import { createHostServices } from '../src/host/services.ts'
+import { sandboxEnv } from './helpers/sandbox-env.ts'
 import { RunRecording } from '../src/host/recording.ts'
 import { isSyntheticHarnessMessage, latestUserTaskText } from '../src/provider/prompt-text.ts'
 import { registerRoutes } from '../src/transport/http/router.ts'
@@ -391,6 +392,8 @@ describe('cross-turn background wakeup, slice 1: one-shot schedule timers', () =
         }
       },
     })
+    const sandboxDir = mkdtempSync(join(tmpdir(), 'agy-wakeup-services-'))
+    const restoreEnv = sandboxEnv(sandboxDir)
     const services = createHostServices(ctx, { enabled: true, backgroundWakeup: true })
     try {
       const rec = new RunRecording()
@@ -413,6 +416,8 @@ describe('cross-turn background wakeup, slice 1: one-shot schedule timers', () =
       services.acpPool.dispose()
       services.translationWorkers?.dispose()
       await (ctx as unknown as { stop?: () => Promise<void> }).stop?.()
+      restoreEnv()
+      rmSync(sandboxDir, { recursive: true, force: true })
     }
   })
 })
