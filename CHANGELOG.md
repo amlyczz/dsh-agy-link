@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.66 (2026-11-22)
+
+### English
+
+- **Fix(usage): derive the total when the CLI reports one that cannot be right (merges PR #170).** A reported `totalTokens` that disagrees with `input + output` made the per-turn total either too small or too large; the mapper now derives the total from the parts it can trust and only falls back to the reported figure when they are consistent. 76 new tests.
+- **Fix(acp): skip an unchanged session config before a turn (merges PR #171, fixes half of #167).** `session/set_config_option` is not idempotent on agy's side — it logs `Switching model in session …` and re-runs the switch even for an unchanged value, and DSH opens the session again on every turn. The applied mode/model/effort are now remembered per session, so an unchanged turn sends nothing, a model change re-sends the effort (agy resets it), and a resumed session still sends its settings once.
+- **Fix(wakeup): the wake notice carries a producer-owned source kind (merges PR #172).** The wake prompt is instruction text the model must act on, so it is never stripped as context noise; a dedicated `common/agy-link-source.ts` kind keeps that decision in one place instead of relying on the generic plugin kind.
+- **Test(isolation): a slot-contract test no longer reads the developer's real token file.** `cliSlotHoldsAccount refuses when neither durable primary credential nor disk token exists` took the `stored !== null` branch on any machine where agy had signed in (and passed on a clean CI runner). It now stubs `getStoredToken` so the environment is pinned.
+- **Not merged: PR #168.** Its `protocol.ts` change writes `usage_update.used` back into `input_tokens` — the exact defect #165 fixed (#158). Its goals overlap #165; a rebase against current `main` is needed to see whether anything is left.
+
+### 中文
+
+- **修复(用量)：CLI 报告的 total 与 input+output 不一致时改为推导（合并 PR #170）。** 上报的 `totalTokens` 与 `input + output` 矛盾时，单轮总量会偏小或偏大；映射层现在用可信的分量推导总量，只有在两者一致时才采用上报值。新增 76 条测试。
+- **修复(acp)：回合前跳过未变更的会话配置（合并 PR #171，修复 #167 的一半）。** agy 侧的 `session/set_config_option` 不幂等——即使值未变也会记录 `Switching model in session …` 并重跑切换，而 DSH 每轮都会重新打开会话。现在按会话记住已应用的 mode/model/effort：未变更的回合不发任何请求，模型变更会重发 effort（agy 会重置它），续接会话仍会发送一次设置。
+- **修复(wakeup)：唤醒通知带上生产方自有 source kind（合并 PR #172）。** 唤醒 prompt 是模型必须照做的指令文本，绝不能被当作上下文噪声剥离；用 `common/agy-link-source.ts` 的专用 kind 把这一判断收敛到一处，而不是依赖通用 plugin kind。
+- **测试(隔离)：一条 slot 契约测试不再读取开发者的真实 token 文件。** `cliSlotHoldsAccount refuses when neither durable primary credential nor disk token exists` 在任何 agy 登录过的机器上都会走 `stored !== null` 分支（而在干净的 CI runner 上通过）。现在 stub 了 `getStoredToken`，把环境固定住。
+- **未合并：PR #168。** 它的 `protocol.ts` 改动把 `usage_update.used` 又写回 `input_tokens`——正是 #165 修掉的缺陷（#158）。目标与 #165 重叠，需要基于当前 `main` rebase 后重新评估是否还有剩余价值。
+
 ## 0.6.65 (2026-11-22)
 
 ### English

@@ -1631,6 +1631,13 @@ test('cliSlotHoldsAccount refuses when neither durable primary credential nor di
       // The slot holds some token (e.g. secondary account's token)
       return { accessToken: 'ya29.slot', refreshToken: '1//SLOT' }
     }
+    // The contract under test is "no durable primary AND no disk token". Without
+    // this stub the test reads the DEVELOPER's real ~/.gemini token file: on a
+    // machine where agy has signed in it takes the `stored !== null` branch and
+    // fails, while a clean CI runner passes. Pin the environment instead.
+    override async getStoredToken(): Promise<null> {
+      return null
+    }
   }
 
   const svc = new ServiceWithoutAuthoritativeStore(pool, () => '', () => null, { bin: () => 'agy' }) as unknown as {
