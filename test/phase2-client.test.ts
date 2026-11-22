@@ -774,3 +774,90 @@ test('AccountsPanel shows collapsed cooling hint, host-synced spinners, explicit
   }))
   assert.ok(finishedBar.includes('warmup.lastRun'), 'WarmupStatusBar displays lastRun summary once idle')
 })
+
+
+// Inline rename: the account label IS the affordance — no separate "Rename"
+// button — and re-login stays available on a healthy account.
+test('AccountsPanel renames by clicking the label itself and always offers re-login', () => {
+  const now = Date.now()
+  const healthy = {
+    id: 'acc_healthy',
+    alias: 'healthy',
+    dir: '/tmp/h',
+    enabled: true,
+    createdAt: 1,
+    cooldowns: {},
+    quotas: {
+      google: {
+        remainingFraction: 0.7,
+        resetTime: new Date(now + 3_600_000).toISOString(),
+        weeklyFraction: 0.8,
+        weeklyResetTime: new Date(now + 48 * 3_600_000).toISOString(),
+      },
+    },
+  }
+
+  const t = ((k: string) => {
+    if (k === 'account.rename') return 'RENAME_LABEL_SENTINEL'
+    if (k === 'account.renameTitle') return 'RENAME_TITLE_SENTINEL'
+    if (k === 'account.reauth') return 'REAUTH_LABEL_SENTINEL'
+    return k
+  }) as never
+
+  const edited: Array<string | null> = []
+  const panel = AccountsPanel({
+    t,
+    pool: { mode: 'sequential', accounts: [healthy], primaryAccountId: 'acc_primary' } as never,
+    accounts: [healthy] as never,
+    loadingAction: null,
+    proxyInputs: {},
+    setProxyInputs: () => {},
+    editingProxyId: null,
+    setEditingProxyId: () => {},
+    aliasInputs: {},
+    setAliasInputs: () => {},
+    editingAliasId: null,
+    setEditingAliasId: (id: string | null) => { edited.push(id) },
+    expandedModels: {},
+    toggleExpand: () => {},
+    optimisticActiveId: null,
+    handlers: {
+      moveAccount: async () => {},
+      setActiveAccount: async () => {},
+      beginReauth: async () => {},
+      removeAccount: async () => {},
+      toggleAccountEnabled: async () => {},
+      refreshQuota: async () => {},
+      warmupAccount: async () => {},
+      saveProxy: async () => {},
+      saveAlias: async () => {},
+      clearCooldown: async () => {},
+    },
+  })
+
+  const tree = JSON.stringify(panel)
+  assert.equal(tree.includes('RENAME_LABEL_SENTINEL'), false, 'no standalone Rename button may render')
+  assert.ok(tree.includes('RENAME_TITLE_SENTINEL'), 'the alias span carries the rename hint as its tooltip')
+  assert.ok(tree.includes('REAUTH_LABEL_SENTINEL'), 're-login must render on a healthy (non-authRequired) account')
+
+  type El = { props?: { className?: string; onClick?: () => void; children?: unknown } }
+  const findAlias = (node: unknown, depth = 0): El | null => {
+    if (depth > 12 || node === null || typeof node !== 'object') return null
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const hit = findAlias(child, depth + 1)
+        if (hit) return hit
+      }
+      return null
+    }
+    const el = node as El
+    if (typeof el.props?.className === 'string' && el.props.className.includes('agy-card-alias')) return el
+    return findAlias(el.props?.children, depth + 1)
+  }
+
+  const alias = findAlias(panel)
+  assert.ok(alias, 'the account label must render as the inline-rename target')
+  assert.equal(typeof alias.props?.onClick, 'function', 'the label must carry a click handler')
+  alias.props!.onClick!()
+  assert.deepEqual(edited, ['acc_healthy'], 'clicking the label opens that account\'s alias editor')
+})

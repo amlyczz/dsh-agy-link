@@ -299,14 +299,14 @@ export function defaultConfig(): PluginConfig {
     sandbox: false,
     agent: '',
     agySettings: '',
-    // ACP stays opt-in: the default is the one-shot `-p` CLI every existing
-    // install already runs. The persistent `agy acp` transport keeps one process
-    // per account and session, so background commands, subagents and timers
-    // survive the end of a turn — but switching every user's transport by
-    // default is a behaviour change the upgrade did not ask for. Turn it on
-    // with `DSH_AGY_TRANSPORT=acp`, `/agy config transport acp` or the settings
-    // page; a pre-stream failure falls back to the CLI automatically.
-    transport: 'cli',
+    // ACP is the default transport: the persistent `agy acp` channel keeps one
+    // process per account/session so background commands, subagents, timers and
+    // the cross-turn wake path survive the end of a turn, and it reports real
+    // per-call usage (#158). A pre-stream failure still falls back to the
+    // one-shot `-p` CLI automatically, so nothing is lost when ACP cannot start.
+    // Opt back into the CLI with `DSH_AGY_TRANSPORT=cli`,
+    // `/agy config transport cli` or the settings page.
+    transport: 'acp',
     imageTool: true,
     syncAccountCustomizations: true,
     mediaMaxFileBytes: 20 * 1024 * 1024,

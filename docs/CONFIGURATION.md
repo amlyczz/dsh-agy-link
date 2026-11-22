@@ -17,7 +17,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `sandbox` | `DSH_AGY_SANDBOX` | `false` | Run `agy` with OS terminal sandboxing (`--sandbox`) |
 | `agent` | `DSH_AGY_AGENT` | `''` (agy default) | Default custom Markdown agent name (`--agent`) |
 | `agySettings` | `DSH_AGY_SETTINGS` | `''` | Inline JSON object or file path passed to `agy --settings` |
-| `transport` | `DSH_AGY_TRANSPORT` | `cli` | `cli` runs one-shot `agy -p` per turn (background work dies with the process); `acp` keeps one persistent `agy acp` process per account and session, so background commands, subagents and timers keep running after a turn ends and report back on their own. Opt-in: `/agy config transport acp`, `/agy transport acp` or the settings page switch it at runtime. A pre-stream ACP failure and a no-output ACP turn fall back to `cli` automatically |
+| `transport` | `DSH_AGY_TRANSPORT` | `acp` | `acp` (default) keeps one persistent `agy acp` process per account and session, so background commands, subagents and timers keep running after a turn ends and report back on their own, and per-call usage/cache metrics stay accurate. `cli` runs one-shot `agy -p` per turn (background work dies with the process); switch with `/agy config transport cli`, `/agy transport cli` or the settings page. A pre-stream ACP failure and a no-output ACP turn fall back to `cli` automatically |
 | `syncAccountCustomizations` | `DSH_AGY_SYNC_CUSTOMIZATIONS` | `true` | Mirror primary `plugins`, `skills`, `rules`, `agents`, and MCP config into isolated pool accounts (credentials/keychains never touched) |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | `''` (session cwd) | Workspace root passed to agy |
 

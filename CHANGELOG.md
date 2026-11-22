@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.61 (2026-11-22)
+
+### English
+
+- **ACP is the default transport.** `transport` now resolves to `acp` out of the box, so background commands, subagents, timers and the post-turn report path work without any configuration, and per-call usage/cache metrics stay accurate (#158). A pre-stream ACP failure, or an ACP turn that produces nothing, still falls back to `cli -p` for that turn. Opt back into the one-shot CLI with `/agy config transport cli`, `/agy transport cli`, `DSH_AGY_TRANSPORT=cli` or Settings → Runtime controls. `backgroundWakeup` remains opt-in.
+- **Rename by clicking the name.** The separate "Rename" button is gone: the account label in each card header is itself the editor (click it, or focus it and press Enter/Space, to open the inline field). The label carries the rename hint as its tooltip.
+- **Re-login is always available.** The "Sign in again" action no longer appears only after an authentication failure — every account shows it, so a healthy account can be re-authenticated, re-bound to a different Google identity, or refreshed after a server-side token revocation. On an account that actually needs auth it keeps the highlighted primary styling.
+
+### 中文
+
+- **ACP 成为默认传输通道。** `transport` 默认解析为 `acp`，开箱即用：后台命令、子代理、定时器与回合后汇报链路无需任何配置即可工作，逐次调用的用量/缓存统计也保持准确（#158）。若 ACP 在流式启动前失败，或该回合零产出，仅该回合自动回退 `cli -p`。需要回到单轮 CLI 时用 `/agy config transport cli`、`/agy transport cli`、`DSH_AGY_TRANSPORT=cli` 或设置页切换。`backgroundWakeup` 仍保持 opt-in。
+- **点名字即可重命名。** 去掉独立的「重命名」按钮：账号卡片标题里的名称本身就是编辑入口（点击，或聚焦后按 Enter/空格，即展开行内输入框），名称的 tooltip 同时提示可重命名。
+- **重新登录按钮常驻。** 「重新登录」不再只在认证失败后才出现——所有账号都会显示，便于对健康账号主动重新认证、换绑 Google 身份，或刷新被服务端吊销的 token；真正需要认证的账号仍保持高亮主按钮样式。
+
 ## 0.6.60 (2026-11-22)
 
 ### English

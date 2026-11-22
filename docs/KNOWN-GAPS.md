@@ -38,12 +38,15 @@ Deliberate v1 boundaries and upstream-behavior notes.
     the wrong account when the primary cannot be verified.
   - Cross-process coordination uses an atomic lockfile (`acquireCrossProcessSlotLock`) alongside the in-process mutex so concurrent local hosts (`dsh web` + `dsh-agy-image` CLI) serialize slot transitions cleanly.
 
-## ACP transport (opt-in)
+## ACP transport (default)
 
-`agy acp` is a long-lived JSON-RPC process per account and session. It stays
-opt-in: `transport` defaults to `cli`, and you switch with
-`/agy config transport acp` or Settings → Runtime controls. That is what
-makes background work survive a turn: a `run_command`, an `invoke_subagent` or a
+`agy acp` is a long-lived JSON-RPC process per account and session, and it is
+the default transport: `transport` resolves to `acp` unless you opt back into
+the one-shot CLI with `/agy config transport cli`, `/agy transport cli`,
+`DSH_AGY_TRANSPORT=cli` or Settings → Runtime controls. A pre-stream ACP
+failure (or an ACP turn that produces nothing) still falls back to `cli` for
+that turn. ACP is what makes background work survive a turn: a `run_command`,
+an `invoke_subagent` or a
 `schedule` timer keeps running inside the process after `session/prompt` returns
 and pushes its result later as `tool_call_update` / `agent_message_chunk`.
 

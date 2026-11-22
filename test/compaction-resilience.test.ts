@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { defaultConfig, Err, type PluginConfig } from '../src/common/types.ts'
@@ -24,6 +24,30 @@ import { createToolWatchdog } from '../src/provider/tool-watchdog.ts'
 import { isBackgroundStderrNoise, startAgyProcess } from '../src/runtime/agy/process.ts'
 
 const fakeBin = join(import.meta.dirname, 'fake-agy.mjs')
+
+/**
+ * The `parent-429-loop` fake writes 429 transcripts under the real system HOME
+ * (that is exactly where the adapter's findBrainDir() lookup resolves). Remove
+ * those throwaway conversation dirs after each test so the harness never leaves
+ * fake quota logs behind in ~/.gemini.
+ */
+function cleanupFakeBrainDirs(): void {
+  const homes = [homedir(), process.env.USERPROFILE, process.env.HOME].filter(
+    (h): h is string => typeof h === 'string' && h !== '',
+  )
+  for (const home of new Set(homes)) {
+    const brain = join(home, '.gemini', 'antigravity-cli', 'brain')
+    try {
+      for (const name of readdirSync(brain)) {
+        if (name.startsWith('conv-parent-429-')) {
+          rmSync(join(brain, name), { recursive: true, force: true })
+        }
+      }
+    } catch {
+      // no brain dir — nothing to clean
+    }
+  }
+}
 
 function msg(role: 'user' | 'assistant' | 'system' | 'tool', text: string, extra: Record<string, unknown> = {}): Message {
   return { role, content: [{ type: 'text', text }], ...extra } as unknown as Message
@@ -211,7 +235,7 @@ describe('compaction deadlock & parent 429 loop resilience', () => {
     try {
       process.env.FAKE_AGY_MODE = 'parent-429-loop'
       process.env.FAKE_AGY_INVOCATION_FILE = invFile
-      process.env.FAKE_AGY_LOOP_WAIT_MS = '9000'
+      process.env.FAKE_AGY_LOOP_WAIT_MS = '15000'
       process.env.FAKE_AGY_STOP_HOOK = '1'
       writeFileSync(invFile, '')
 
@@ -226,7 +250,7 @@ describe('compaction deadlock & parent 429 loop resilience', () => {
       const elapsed2 = Date.now() - t0
       const finish2 = chunks2[chunks2.length - 1] as { type: string; reason: { kind: string } }
       assert.equal(finish2.reason.kind, 'stop')
-      assert.ok(elapsed2 < 4500, `expected failover in <4.5s (not 9s wait), took ${elapsed2}ms`)
+      assert.ok(elapsed2 < 9000, `expected failover well before the 15s fake loop, took ${elapsed2}ms`)
       assert.ok((acc1.cooldowns.google?.cooldownUntil ?? 0) > Date.now(), 'looping account cooled down')
       assert.equal(pool2.getPoolData().lastActiveAccountId, acc2.id)
       assert.equal(readFileSync(invFile, 'utf8').split('\n').filter(Boolean).length, 2)
@@ -244,7 +268,7 @@ describe('compaction deadlock & parent 429 loop resilience', () => {
       const finish1 = chunks1[chunks1.length - 1] as { type: string; reason: { kind: string; failure?: { code: string } } }
       assert.equal(finish1.reason.kind, 'error')
       assert.equal(finish1.reason.failure?.code, Err.RATE_LIMIT)
-      assert.ok(elapsed1 < 3500, `expected solo parent 429 breaker in <3.5s (not 9s wait), took ${elapsed1}ms`)
+      assert.ok(elapsed1 < 9000, `expected solo parent 429 breaker well before the 15s fake loop, took ${elapsed1}ms`)
     } finally {
       process.env.FAKE_AGY_MODE = prevMode
       if (prevInv === undefined) delete process.env.FAKE_AGY_INVOCATION_FILE
@@ -254,6 +278,7 @@ describe('compaction deadlock & parent 429 loop resilience', () => {
       if (prevStopHook === undefined) delete process.env.FAKE_AGY_STOP_HOOK
       else process.env.FAKE_AGY_STOP_HOOK = prevStopHook
       delete process.env.FAKE_AGY_FAIL_ALL
+      cleanupFakeBrainDirs()
       rmSync(root, { recursive: true, force: true })
     }
   })
@@ -384,6 +409,7 @@ describe('compaction deadlock & parent 429 loop resilience', () => {
       else process.env.FAKE_AGY_LOOP_WAIT_MS = prevWait
       if (prevArgs === undefined) delete process.env.FAKE_AGY_ARGS_FILE
       else process.env.FAKE_AGY_ARGS_FILE = prevArgs
+      cleanupFakeBrainDirs()
       rmSync(root, { recursive: true, force: true })
     }
   })

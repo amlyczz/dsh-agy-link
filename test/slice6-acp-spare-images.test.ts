@@ -87,8 +87,8 @@ function safeCleanup(dir: string): void {
 }
 
 describe('Slice 6: ACP spare pre-warm, native inline images, and stale session rebuild', () => {
-  it('keeps default transport as cli (does not flip to acp per PR #157 review)', () => {
-    assert.equal(defaultConfig().transport, 'cli')
+  it('defaults the transport to the persistent ACP channel', () => {
+    assert.equal(defaultConfig().transport, 'acp')
   })
 
   it('warmSpare pre-initializes one idle ACP process and acquireProcess adopts it instantaneously', async () => {

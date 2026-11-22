@@ -319,7 +319,7 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 }
 
 function renderHeaderBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
-	const { isPrimary, dotColor, displayAlias, accIndex, accounts, handlers } = ctx;
+	const { isPrimary, dotColor, displayAlias, accIndex, accounts, handlers, isEditingAlias, setEditingAliasId } = ctx;
 	return h('div', { className: 'agy-card-title-cluster', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', minWidth: 0 } },
 		h('span', {
 			style: {
@@ -354,8 +354,30 @@ function renderHeaderBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 			style: { background: dotColor, boxShadow: `0 0 6px ${dotColor}aa`, marginLeft: '1px' },
 		}),
 		h('span', {
-			style: { fontWeight: 700, fontSize: '13px', color: 'var(--agy-text-primary)', whiteSpace: 'nowrap' },
-			title: displayAlias,
+			className: 'agy-card-alias',
+			style: {
+				fontWeight: 700,
+				fontSize: '13px',
+				color: 'var(--agy-text-primary)',
+				whiteSpace: 'nowrap',
+				cursor: 'text',
+				borderRadius: '4px',
+				padding: '0 3px',
+				margin: '0 -3px',
+				borderBottom: isEditingAlias ? '1px dashed var(--agy-text-secondary)' : '1px dashed transparent',
+			},
+			title: `${t('account.renameTitle')} · ${displayAlias}`,
+			// Inline rename: clicking the name itself opens the editor. No separate
+			// button — the label IS the affordance.
+			onClick: () => setEditingAliasId(isEditingAlias ? null : acc.id),
+			onKeyDown: (e: { key?: string; preventDefault?: () => void }) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault?.();
+					setEditingAliasId(isEditingAlias ? null : acc.id);
+				}
+			},
+			role: 'button',
+			tabIndex: 0,
 		}, displayAlias),
 	);
 }
@@ -378,7 +400,7 @@ function renderMetaRow(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): 
 
 function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown {
 	const {
-		isEditingProxy, isAuthRequired, isSyncing, isWarming, isEditingAlias, displayAlias, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId,
+		isEditingProxy, isAuthRequired, isSyncing, isWarming, displayAlias, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId,
 	} = ctx;
 	return h('div', {
 		className: 'agy-card-header',
@@ -402,8 +424,8 @@ function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx
 		},
 			renderHeaderBadges(t, acc, ctx),
 			renderActionButtons(t, acc, {
-				isEditingProxy, isAuthRequired, isSyncing, isWarming, isEditingAlias, displayAlias,
-				showRemove: accounts.length > 1, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId,
+				isEditingProxy, isAuthRequired, isSyncing, isWarming, displayAlias,
+				showRemove: accounts.length > 1, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId,
 			}),
 		),
 		renderMetaRow(t, acc, ctx),
@@ -412,7 +434,6 @@ function renderCardHeader(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx
 
 function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	isEditingProxy: boolean;
-	isEditingAlias: boolean;
 	isAuthRequired: boolean;
 	isSyncing: boolean;
 	isWarming: boolean;
@@ -423,20 +444,13 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	accountActionBusy: (acc: ManagedAccount, action: string) => boolean;
 	handlers: AccountsPanelHandlers;
 	setEditingProxyId: (id: string | null) => void;
-	setEditingAliasId: (id: string | null) => void;
 }): unknown {
-	const { isEditingProxy, isAuthRequired, isSyncing, isWarming, isEditingAlias, displayAlias, showRemove, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId } = ctx;
+	const { isEditingProxy, isAuthRequired, isSyncing, isWarming, displayAlias, showRemove, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId } = ctx;
 	const effectiveProxy = acc.proxyUrl || pool?.systemProxy;
 	return h('div', {
 		className: 'agy-card-actions',
 		style: { display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 },
 	},
-		h(Button, {
-			variant: 'default', size: 'sm', className: 'agy-btn',
-			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
-			title: t('account.renameTitle'),
-			onClick: () => setEditingAliasId(isEditingAlias ? null : acc.id),
-		}, ` ${t('account.rename')}`),
 		h(Button, {
 			variant: acc.enabled ? 'default' : 'primary', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
@@ -453,13 +467,16 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 			disabled: isSyncing,
 			onClick: () => void handlers.refreshQuota(acc.id),
 		}, ...(isSyncing ? [Spinner(), t('account.syncing')] : [uiIcon('refresh', 10), ` ${t('account.sync')}`])),
-		isAuthRequired && handlers.beginReauth ? h(Button, {
-			variant: 'primary', size: 'sm', className: 'agy-btn',
+		// Re-login is ALWAYS available (not only after an auth failure): the user
+		// may want to re-authenticate a healthy account, switch its Google
+		// identity, or refresh a token that Google revoked server-side.
+		handlers.beginReauth ? h(Button, {
+			variant: isAuthRequired ? 'primary' : 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px' },
 			title: t('account.reauthTitle'),
 			disabled: accountActionBusy(acc, 'reauth'),
 			onClick: () => void handlers.beginReauth!(acc),
-		}, ...(loadingAction === `reauth:${acc.id}` ? [Spinner(), t('account.reauthing')] : [uiIcon('externalLink', 10, '#ffffff'), ` ${t('account.reauth')}`])) : null,
+		}, ...(loadingAction === `reauth:${acc.id}` ? [Spinner(), t('account.reauthing')] : [uiIcon('externalLink', 10, isAuthRequired ? '#ffffff' : 'var(--agy-text-secondary)'), ` ${t('account.reauth')}`])) : null,
 		acc.enabled && !isAuthRequired ? h(Button, {
 			variant: 'default', size: 'sm', className: 'agy-btn',
 			style: { gap: '3px', fontSize: '11px', padding: '1px 6px', height: '22px', justifyContent: 'center' },

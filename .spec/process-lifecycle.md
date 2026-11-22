@@ -64,7 +64,7 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
 
 ## 5. 常驻 `agy acp` 传输通道与 CLI 参数透传
 
-- **传输通道（`transport: 'cli' | 'acp'`，默认 `'cli'`）**：
+- **传输通道（`transport: 'cli' | 'acp'`，默认 `'acp'`）**：
   - `'cli'` 为每轮短生命周期 `agy -p` 子进程；`'acp'` 通过 `AcpSessionPool` + `AcpProcess`（`src/features/acp/`）复用常驻 `agy acp` stdio JSON-RPC 进程，保持会话并降低冷启动开销。
   - **惰性清扫定时器**：`AcpSessionPool` 在构造函数中**绝不创建**后台 `setInterval`，仅在首次 `acquireProcess()` 时启动，并在进程全部退出/驱逐或 `dispose()` 时立刻清理，防止空闲定时器泄漏。
   - **前置失败自动回退**：当 `runAcpAttempt()` 在流式启动前失败（未配置、进程拉起失败或 `openSession` 失败）时返回 `null` 并保留并发/凭据槽位，由 `runAgyAttempt()` 无缝回退至 CLI `-p` 路径；若进入 `runAcpAttempt()` 成功路径，须先调用 `recorder.stop()` 释放未使用的 CLI 录制器资源；当存在 `--json-schema`、`--settings` 或 `isAux` 辅助调用时自动走 CLI 通道。

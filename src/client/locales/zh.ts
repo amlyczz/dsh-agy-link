@@ -203,7 +203,7 @@ export const zh = {
   'config.transport': '执行传输通道',
   'config.transportDesc': 'cli = 单轮短进程 (-p)；acp = 常驻 JSON-RPC 服务（失败自动回退 CLI）',
   'config.transportCli': 'CLI (-p)',
-  'config.transportAcp': 'ACP 常驻',
+  'config.transportAcp': 'ACP 常驻（默认）',
   'config.acpStats': '{procs} 进程 · {sessions} 会话',
   'config.imageTool': '对话内生图工具 (agy_image)',
   'config.imageToolDesc': '注册 agy_image 工具，让任意 DSH 模型都能直接调用 Antigravity 生图/改图',

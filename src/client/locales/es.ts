@@ -203,7 +203,7 @@ export const es: AgyDictionary = {
   'config.transport': 'Transporte de ejecución',
   'config.transportDesc': 'cli = subproceso -p por turno; acp = servidor JSON-RPC persistente (con respaldo a CLI)',
   'config.transportCli': 'CLI (-p)',
-  'config.transportAcp': 'ACP persistente',
+  'config.transportAcp': 'ACP persistente (predeterminado)',
   'config.acpStats': '{procs} proc · {sessions} ses.',
   'config.imageTool': 'Herramienta de imagen en chat (agy_image)',
   'config.imageToolDesc': 'Registra agy_image para que cualquier modelo genere o edite imágenes con agy',

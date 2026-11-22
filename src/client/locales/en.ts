@@ -203,7 +203,7 @@ export const en: AgyDictionary = {
   'config.transport': 'Execution transport',
   'config.transportDesc': 'cli = per-turn -p subprocess; acp = persistent JSON-RPC daemon (falls back to CLI on startup failure)',
   'config.transportCli': 'CLI (-p)',
-  'config.transportAcp': 'ACP Persistent',
+  'config.transportAcp': 'ACP Persistent (default)',
   'config.acpStats': '{procs} proc · {sessions} sess',
   'config.imageTool': 'In-chat image tool (agy_image)',
   'config.imageToolDesc': 'Register the agy_image DSH tool so any model can generate or edit images via agy',
