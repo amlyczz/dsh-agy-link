@@ -95,3 +95,15 @@
   3. **失败可诊断**：`classifyExitOrFallback()` 在 stderr/结果为空时用 `rawErrText` 兜底，`agy exited with code 1` 会附带 ACP 的真实原因（如 `ACP prompt returned an empty turn: ...`），不再丢失。
   4. **AUTH 不回退 CLI**：`retryOnCli` 排除 `Err.AUTH`；身份不匹配直接 `settleEarlyFailure(..., Err.AUTH)`。CLI 回退只对「transport 本身死掉」有意义，对凭据/身份问题只会重复烧同一份坏凭据。
 - 锚点：`test/acp-identity.test.ts`（含 `unproven` 分支）、`test/auth-flag-heal.test.ts`（活证据自愈 + 退避节奏）、`test/auth-flag.test.ts`（`accountAuthState` 四态）、`test/failure-classifier.test.ts`（PROCESS_EXIT 保留 rawErrText）。
+
+## 7. 外部进程凭据租约（External credential lease）
+
+- **问题**：Windows 凭据槽的同号快路径计数与辅账号引用计数只存在插件进程内存里。自己启动官方 `agy` 的外部进程（如 `dsh-codex-conductor` 的 WSL runner，长任务需扛过 DSH 重启并自行消费 stream-json）对插件不可见：插件可能在它运行中切槽，它也无法以池内辅账号身份运行。
+- **原则：不新增切换逻辑**。`ExternalLeaseRegistry`（`src/host/external-lease.ts`）只是插件自身运行用的同一套部件的又一个调用方：`pool.selectAccount(modelFamilyOf(model || 'gemini'), model)` 选号 → `acquireCredentialSlot()` 取槽（`baseDir: pool.dir`、`proxyUrl` 按「账号 > 全局 > 系统代理」、`parallel: cfg.parallelSameAccount`、`respectExternalSignIn: cfg.respectExternalSignIn`，与 provider 相同）→ 释放时由共享的 `settleRunFailure()` 结算。
+- **失败分类唯一实现**：`src/host/run-settlement.ts` 的 `settleRunFailure()` / `settleSlotUnavailable()` 从 one-shot 原样抽出（顺序：TOS → `--effort` 拒绝 → 硬额度（排除瞬时突发限流，按错误里的模型族冷却并在族不同时 advance）→ 模型不识别（`markModelUnsupported` + advance）→ 地区资格（advance）→ 登出（`shouldMarkAuthRequired` 时 `noteAuthFailure` + advance）→ 其它不可消费失败），one-shot 与外部租约共用，不得再各写一份。
+- **钉住账号**：`accountId` 或 `accountDir`（Windows 下路径大小写/尾分隔符不敏感）钉住续接对话所属账号；只要求存在、启用、未 `authRequired`，**不检查冷却**。不钉住时 `SlotUnavailableError` 按 one-shot 规则结算（`markAuthRequired`，或主账号重申失败的隔离辅账号只 advance）后换下一个可选账号，同一账号不试两次。
+- **等待有界**：`waitMs` 默认与 one-shot 相同（`dispatchTimeoutMinutes × 60000`，未配置 60000），上限 1 小时；多次换号共享同一截止时间，剩余时间耗尽即 `slot_timeout`，绝不传 `0`（`0` 对槽表示无限等待）。
+- **生命周期**：租约仅在内存；DSH 宿主重启全部丢失，客户端重新 acquire。TTL 默认 120s、夹到 15s–600s；`unref` 的清扫器每 5s 释放过期租约且**不结算**并记日志。`release` 恰好释放一次槽；`dispose` 中止排队中的取槽、释放全部租约、移除路由与发现文件。租约 id 为 128 位 `crypto.randomBytes`。
+- **发现文件**：`<pool.dir>/.link-endpoint.json`（`{url,pid,startedAt}`，原子写）；卸载时仅当文件仍指向本进程 pid 与 url 才删除，另一个宿主接管后不误删。
+- **非 Windows**：取槽为空操作（`undefined` 租约），选号、TTL 与结算照常。测试运行（`NODE_TEST_CONTEXT`）下默认取槽同样为空操作，永不触碰真实凭据管理器。
+- 锚点：`test/external-lease.test.ts`、`test/lease-routes.test.ts`、`test/run-settlement.test.ts`。

@@ -11,6 +11,7 @@ import { register as registerTranslate } from './routes/translate.ts'
 import { register as registerMedia } from './routes/media.ts'
 import { register as registerEmbed } from './routes/embed.ts'
 import { register as registerEcosystem } from './routes/ecosystem.ts'
+import { register as registerLease } from './routes/lease.ts'
 
 export type { WebServerLike, Route, RouteHandler, RouteRegistrar } from './respond.ts'
 
@@ -28,7 +29,9 @@ export function registerRoutes(webServer: WebServerLike, services: HostServices)
   registerMedia(reg, services)
   registerEmbed(reg, services)
   registerEcosystem(reg, services)
+  const disposeLease = registerLease(reg, services, webServer.port)
   return () => {
+    disposeLease()
     for (const d of disposers) {
       try {
         d()

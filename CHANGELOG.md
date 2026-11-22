@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Feat(credentials): external credential leases.** On Windows every `agy.exe` reads one machine-wide credential (`gemini:antigravity`), and this plugin's slot coordination lived only in its own memory, so a process that launches the official `agy` itself (for example a long-job runner that must survive a DSH restart) could have the slot swapped under it and could never run as a pool secondary. New loopback routes `POST /plugins/agy-link/lease/acquire|renew|release` and `GET /plugins/agy-link/lease` let such a process hold the slot as one more ordinary holder: accounts are chosen by the same `selectAccount` (or pinned by `accountId` / `accountDir` so a continuation returns to the account that owns its conversation), the slot is taken through the same `acquireCredentialSlot`, and a reported failure settles the pool through the same classification the one-shot runner uses (now extracted into `src/host/run-settlement.ts`, behavior unchanged). Leases have a TTL (default 120 s, renewable), are swept when they expire, live in memory only (a host restart drops them), and are discoverable through `<pool dir>/.link-endpoint.json`. Cross-origin browser requests are refused. See the README section and `.spec/credential-lifecycle.md` §7.
+
+### 中文
+
+- **新增(凭据)：外部进程凭据租约。** Windows 上所有 `agy.exe` 共用一个机器级凭据（`gemini:antigravity`），而插件的凭据槽协调只存在于自身内存，自己启动官方 `agy` 的外部进程（例如要扛过 DSH 重启的长任务 runner）可能在运行中被插件切换槽位，也无法以池内备用账号身份运行。新增本机路由 `POST /plugins/agy-link/lease/acquire|renew|release` 与 `GET /plugins/agy-link/lease`，让这类进程作为一名普通持有者占用凭据槽：选号走同一个 `selectAccount`（或用 `accountId` / `accountDir` 钉住账号，保证续接对话回到拥有它的账号），取槽走同一个 `acquireCredentialSlot`，上报的失败按 one-shot 的同一套分类结算号池（该分类已抽到 `src/host/run-settlement.ts`，行为不变）。租约带 TTL（默认 120 秒，可续期），过期自动清扫，只存在内存（宿主重启即丢失），可通过 `<号池目录>/.link-endpoint.json` 发现端点；跨站浏览器请求一律拒绝。详见 README 对应章节与 `.spec/credential-lifecycle.md` 第 7 节。
+
 ## 0.6.72 (2026-11-23)
 
 ### English
@@ -29,16 +39,6 @@
   - `replace` —— 译文占据回复的位置，底部保留一条小栏（`✦ Gemini 翻译 · 显示原文 · 复制`）可翻回原文。
   - **仅影响显示**：会话与模型上下文仍保留原文。隐藏逻辑是一条声明式 `:has()` 样式规则，依据卡片自身的 `data-display` / `data-show-original`；DOM 与会话都不被改写。若 DSH 将来在中间插入节点，规则会**自然失效并同时显示两份**——失败方向是"多显示"，绝不是"回复被永久隐藏"。
   - 四语言文案齐全；配置校验、`/status`、HTTP 契约与 DOM 测试均已更新。
-
-## Unreleased
-
-### English
-
-- **Feat(translate): show the translation in the reply's place (`translateDisplay: replace`).** A new setting, "Translation display" (Settings, next to the translate-button switch; also `translateDisplay` in config or `DSH_AGY_TRANSLATE_DISPLAY`), chooses between the existing card under the reply (`card`, the default) and `replace`, where the translated reply shows the translation as if it were the reply, with a small footer to flip back to the original and to copy. It is display only: the session, and so the model's own context, keeps the original text. The reply is hidden by a stylesheet `:has()` rule keyed on the translation node DSH seats right after it (`anchorSeq + 0.1`), so nothing in the DOM or the session is rewritten; if DSH ever seats another node in between, both texts simply show. "Show original" brings back DSH's own full reply rather than the record's 8000-character copy.
-
-### 中文
-
-- **新增(翻译)：在回复原位显示译文（`translateDisplay: replace`）。** 新设置「译文显示方式」（设置面板，单条翻译按钮开关旁；也可在配置里写 `translateDisplay`，或用 `DSH_AGY_TRANSLATE_DISPLAY`）可在现有的「回复下方卡片」（`card`，缺省）和「替换原文」（`replace`）之间切换。替换模式下，已翻译的回复直接显示译文，脚注可切回原文、复制译文。只改显示：会话里、也就是模型自己的上下文里，原文不变。隐藏原文靠样式表 `:has()` 规则：DSH 把译文节点紧排在被翻译回复之后（`anchorSeq + 0.1`），规则据此隐藏那条回复，不改 DOM、不改会话；若两者之间被插入别的节点，规则不再匹配，原文和译文都会显示。「查看原文」切回的是 DSH 自己渲染的完整回复，不是记录里截断到 8000 字的副本。
 
 ## 0.6.70 (2026-11-23)
 

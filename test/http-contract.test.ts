@@ -69,6 +69,10 @@ const EXPECTED_ROUTES: ReadonlyArray<readonly [kind: string, path: string]> = [
   ['exact', '/plugins/agy-link/ecosystem'],
   ['exact', '/plugins/agy-link/ecosystem/sync'],
   ['exact', '/plugins/agy-link/ecosystem/plugin'],
+  ['exact', '/plugins/agy-link/lease'],
+  ['exact', '/plugins/agy-link/lease/acquire'],
+  ['exact', '/plugins/agy-link/lease/renew'],
+  ['exact', '/plugins/agy-link/lease/release'],
   ['prefix', '/plugins/agy-link/assets'],
 ]
 
@@ -539,8 +543,9 @@ test('every POST-only route rejects GET/PUT/DELETE with 405 before touching serv
       assert.deepEqual(captured.json(), { error: 'POST only' }, path + ' ' + method)
     }
   }
-  // 24 POST-only + 11 GET/method-agnostic routes = 35 routes total.
-  assert.equal(POST_ONLY_ROUTES.length + 11, EXPECTED_ROUTES.length)
+  // POST-only + 11 GET/method-agnostic routes + 4 lease routes (their own
+  // `{ok,code,error}` envelope; gated in test/lease-routes.test.ts).
+  assert.equal(POST_ONLY_ROUTES.length + 11 + 4, EXPECTED_ROUTES.length)
 })
 
 test('GET-style routes do not gate on method (current contract, asserted verbatim)', async (t) => {

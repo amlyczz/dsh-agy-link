@@ -197,6 +197,29 @@ dsh plugin --profile web add dsh-agy-link
 
 ---
 
+## 🔌 外部进程凭据租约 API（External credential lease）
+
+Windows 上所有 `agy.exe` 共用同一个凭据管理器条目 `gemini:antigravity`，改 HOME/USERPROFILE 只换会话目录、不换身份。插件自己的运行会协调这个槽，但**自己启动官方 `agy` 的外部进程**（例如需要扛过 DSH 重启的长任务 runner）看不到插件内存里的计数：插件可能在它运行途中切换槽位，它也无法以池内备用账号身份运行。租约 API 让外部进程成为槽的一名普通持有者——选号、取槽和失败结算复用插件自身运行的同一套逻辑。
+
+**发现端点**：插件拿到 web 端口后原子写入 `<号池目录>/.link-endpoint.json`（号池目录即 `pool.json` 所在目录，默认 `~/.dsh/agy-accounts`，设了 `DSH_STATE_DIR` 时为 `$DSH_STATE_DIR/agy-accounts`）：`{"url":"http://127.0.0.1:<port>/plugins/agy-link","pid":<pid>,"startedAt":<epoch ms>}`。插件卸载时仅当文件仍是本进程写的才删除。
+
+所有请求/响应都是 JSON；错误统一为 `{ "ok": false, "code": "...", "error": "..." }`。带非本机 `Origin` 的浏览器请求一律 `403 cross_origin`。
+
+| 端点 | 请求体 | 成功响应 | 错误 |
+| --- | --- | --- | --- |
+| `POST /lease/acquire` | `holder`（必填，≤200 字符）、`model?`、`accountId?` / `accountDir?`（**钉住**账号：续接对话必须回到拥有它的账号）、`ttlMs?`（默认 120000，夹到 15000–600000）、`waitMs?`（等槽上限，默认同 one-shot：`dispatchTimeoutMinutes × 60000`，未配置时 60000，最大 1 小时） | `{ ok, leaseId, ttlMs, expiresAt, account: { id, email, alias, primary, home, proxyUrl } }` | `400 invalid_json/invalid_request` · `404 account_not_found` · `409 account_unavailable`（钉住的账号已停用 / 需重登 / 槽拒绝交接）· `503 no_account`（附 `retryAfterMs`，已知时）· `504 slot_timeout` · `502 slot_error`（如主账号身份暂时无法在线核验，可重试） |
+| `POST /lease/renew` | `leaseId`、`ttlMs?` | `{ ok, expiresAt }` | `404 lease_not_found`（未知或已过期） |
+| `POST /lease/release` | `leaseId`、`ok?`、`error?`（截断到 8 KiB）、`model?` | `{ ok, outcome }`，`outcome ∈ success / quota / tos / model_unsupported / eligibility / auth / other / none` | `404 lease_not_found` |
+| `GET /lease` | — | `{ leases: [{ leaseId, holder, accountId, email, acquiredAt, expiresAt }] }`（诊断用） | — |
+
+使用要点：
+- **钉住账号**时只检查「存在、启用、未标记需重登」，不看冷却；不钉住时按插件自身的调度规则选号，槽拒绝交接会按 one-shot 的规则结算后换下一个账号（同一账号不会试两次）。
+- 用返回的 `account` 启动 agy：`home` 为空表示主账号（用正常用户目录）；非空时把 `HOME`/`USERPROFILE`、`GEMINI_CLI_HOME=<home>/.gemini`、`ANTIGRAVITY_GEMINI_DIR=<home>/.gemini`、`ANTIGRAVITY_APP_DATA_DIR=<home>/.gemini/antigravity-cli` 指向它（与插件自己的隔离账号环境一致）；`proxyUrl` 非空时设为代理。
+- 运行期间按 TTL 定期 `renew`；结束后**恰好一次** `release`：`ok: true` 记一次成功，`ok: false` 加 agy 的错误文本按插件 one-shot 失败分类结算（TOS 隔离、额度冷却、模型不支持、地区资格、登出），省略 `ok` 只释放不结算。
+- 租约只存在内存：**DSH 宿主重启会丢失全部租约**，客户端应重新 `acquire`（读新的 `.link-endpoint.json`）。过期未续的租约由后台清扫释放且不结算。非 Windows 上没有共享槽，取槽是空操作，但选号、TTL 与结算照常工作。
+
+---
+
 ## 🧩 架构与工作原理
 
 > 分层、依赖方向与各模块职责见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)；开发与重构门禁见 [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)。

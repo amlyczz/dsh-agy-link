@@ -41,6 +41,31 @@ Each invariant below is enforced in code AND covered by a regression test.
 - Every JSON body is read through `readJsonBody()`, capped at **1 MiB**; oversized
   bodies are discarded (`strict` callers get `__invalidJson`). (test: `test/http-body.test.ts`)
 
+## External credential-lease routes (`src/transport/http/routes/lease.ts`)
+
+`/plugins/agy-link/lease/{acquire,renew,release}` (POST) and `/plugins/agy-link/lease`
+(GET) let a local process hold the Windows credential slot and settle account state,
+so they are gated more strictly than the console routes:
+
+- Cross-origin browser requests (`Origin` present and not loopback / `app://` /
+  `file://`, same `isCrossOriginBlocked()` as `/media`) get **403 `cross_origin`**: a
+  webpage must not be able to hold the slot or quarantine an account.
+- Wrong method → **405 `method_not_allowed`**. Bodies are read strictly (malformed or
+  > 1 MiB → **400 `invalid_json`**); every field is type-checked (**400
+  `invalid_request`**): `holder` required, non-empty, ≤ 200 chars; ids/model ≤ 200;
+  `accountDir` ≤ 4096; `ttlMs`/`waitMs` finite numbers (`waitMs` > 0, capped at 1 h;
+  `ttlMs` clamped 15 s–600 s); `ok` boolean.
+- The reported `error` is truncated to **8 KiB** (UTF-8 safe) before it is classified
+  or stored as an account reason. `holder` is JSON-escaped before it is logged, so it
+  cannot forge log lines.
+- Lease ids are 128-bit `crypto.randomBytes`, never sequential; settlement requires
+  the id, so only the client that acquired a lease can report its outcome.
+- Every response uses the `{ ok:false, code, error }` envelope on failure. The acquire
+  route's backstop deadline is `longRouteTimeout(1 h)`; the slot wait itself is bounded
+  inside the registry, and a lease granted after the backstop already answered is
+  released at once (no orphaned slot holder). (tests: `test/lease-routes.test.ts`,
+  `test/external-lease.test.ts`)
+
 ## `/agy doctor` report (`src/host/diagnostics.ts`)
 
 - `redactLine()` masks: Google auth URLs, `4/` codes, `ya29.*`, `1//0…` refresh
