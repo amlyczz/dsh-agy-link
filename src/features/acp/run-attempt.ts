@@ -5,9 +5,10 @@
 // stderr ring and its --log-file are sliced from the offsets captured before the
 // prompt. Feeding the whole tail into classifyFailure made an old proxy blip
 // blame a later healthy turn.
-import type { ManagedAccount } from '../../common/pool-types.ts'
+import type { ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
 import {
   Err,
+  isNonConsumableResultError,
   isTransportFailure,
   looksLikeAuthFailure,
   looksLikeAuthVerificationJitter,
@@ -23,10 +24,22 @@ import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { createAttemptRecorder, type AttemptDeps, type AttemptInput, type AttemptSlot } from '../../provider/attempt.ts'
 import { classifyFailure, type AttemptFailure } from '../../provider/failure.ts'
 import { finalizeAttempt } from '../../provider/finalize.ts'
+import {
+  createLiveQuotaController,
+  reportDirectToolQuota,
+  type LiveQuotaFailoverState,
+} from '../../provider/quota-failover.ts'
+import { SubagentTracker } from '../subagent/tracker.ts'
 import type { AcpProcess } from './client.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
 import { rebuildAcpSession } from './rebuild.ts'
+import {
+  finishAcpAttempt,
+  settleAcpOutcome,
+  settleEarlyAbort,
+  type AcpPromptOutcome,
+} from './settle.ts'
 
 /**
  * How long we watch a fresh ACP turn for its first event before handing the
@@ -35,25 +48,6 @@ import { rebuildAcpSession } from './rebuild.ts'
  * the whole idle budget first would make the CLI fallback feel like a hang.
  */
 const FIRST_OUTPUT_GATE_MS = 20_000
-
-interface AcpPromptOutcome {
-  failure: AttemptFailure | null
-  durationMs: number
-  /** This turn's stderr slice only. */
-  stderr: string
-  rawErrText: string
-  runLogText: string
-  silentTimeout: boolean
-  outcomeOverride?: RunOutcome
-  /** Nothing at all was emitted — safe to re-run on the CLI transport. */
-  empty: boolean
-  /**
-   * The failure was only a keyring/token-refresh blip. Retrying it on the CLI
-   * transport would just re-trigger the same blip AND spend a second credential
-   * handoff, so this one is surfaced instead of retried.
-   */
-  keyringJitter?: boolean
-}
 
 function firstLine(text: string): string {
   const line = text.split('\n').find((l) => l.trim() !== '')
@@ -80,60 +74,6 @@ export function isAgyFailureBanner(text: string): boolean {
   return lines.length <= 2 && AGY_INFRA_BANNER.test(body)
 }
 
-async function settleAcpOutcome(opts: {
-  deps: AttemptDeps
-  input: AttemptInput
-  rec: RunRecording
-  account: ManagedAccount | undefined
-  sid: string | null
-  failure: AttemptFailure | null
-  durationMs: number
-  stderr: string
-  rawErrText: string
-  runLogText: string
-  silentTimeout: boolean
-  outcomeOverride?: RunOutcome
-}): Promise<void> {
-  const { deps, input, rec, account, sid, failure, durationMs, stderr, rawErrText, runLogText, silentTimeout, outcomeOverride } = opts
-  const outcome: RunOutcome = outcomeOverride ?? {
-    code: failure ? 1 : 0,
-    signal: null,
-    timedOut: failure?.code === Err.TIMEOUT,
-    aborted: failure?.kind === 'aborted' || Boolean(input.signal?.aborted),
-    capped: false,
-    stdout: '',
-    stderrTail: stderr,
-    durationMs,
-  }
-  await finalizeAttempt({
-    rec,
-    outcome,
-    failure,
-    store: deps.store,
-    ...(deps.pool === undefined ? {} : { pool: deps.pool }),
-    ...(account === undefined ? {} : { account }),
-    family: input.family,
-    persistBinding: input.persistBinding,
-    sessionAccountKey: input.sessionAccountKey,
-    ...(input.binding === undefined ? {} : { binding: input.binding }),
-    conversationId: sid,
-    messages: input.messages,
-    model: input.model,
-    activeModel: input.activeModel,
-    superseded: deps.isSuperseded(input.sessionKey, rec),
-    newlySentImageIds: input.newlySentImageIds,
-    rawErrText,
-    runLogText,
-    silentTimeout,
-    sessionKey: input.sessionKey,
-    clearNetworkStreak: (k) => deps.clearNetworkStreak(k),
-    dropFailoverBudget: (k) => deps.dropFailoverBudget(k),
-    clearRateLimitFailover: (k) => deps.clearRateLimitFailover(k),
-    sharesSingleEgress: () => deps.sharesSingleEgress(),
-    ...(deps.onRun === undefined ? {} : { onRun: deps.onRun }),
-  })
-}
-
 /** Drive one prompt and classify what happened. Never settles, never cleans up. */
 async function runAcpPrompt(opts: {
   deps: AttemptDeps
@@ -145,7 +85,7 @@ async function runAcpPrompt(opts: {
   onFirstOutput?: () => void
 }): Promise<AcpPromptOutcome> {
   const { deps, input, recorder, proc, sid, prompt, onFirstOutput } = opts
-  const { cfg } = input
+  const { cfg, account } = input
   const startedAt = Date.now()
   const streamState = createAcpStreamState()
   /** Anything at all arrived for this turn (including agy's own banners). */
@@ -164,8 +104,31 @@ async function runAcpPrompt(opts: {
   const logOffset = logSize(logFile)
   const roundStderr = (): string => proc.readStderrSince(stderrOffset)
   const roundLog = (): string => (logFile === null ? '' : readLogSlice(logFile, logOffset))
+  let quotaCancelled = false
+  const quotaCtrl = createLiveQuotaController({
+    pool: deps.pool,
+    account,
+    inputFamily: input.family,
+    activeModel: input.activeModel,
+    emitNotice: (stepKey, text) => recorder.rec.append({ kind: 'step', stepKey, stepKind: 'subagent', text, raw: {} }),
+    onTriggerKill: () => {
+      quotaCancelled = true
+      proc.cancelSession(sid)
+    },
+  })
+  const subTracker = !input.isAux && sid !== ''
+    ? new SubagentTracker({
+        conversationId: sid,
+        resumed: Boolean(input.binding?.conversationId),
+        accountHome: recorder.rec.accountHome,
+        log: deps.log,
+        onEvent: (ev) => recorder.rec.append(ev),
+        onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info),
+      })
+    : null
 
   try {
+    subTracker?.start()
     const idleMs = cfg.timeoutMs
     const longToolIdleMs = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes * 60_000 : 0
     const maxTurnMs = cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : 0
@@ -189,13 +152,21 @@ async function runAcpPrompt(opts: {
           emittedAny = true
           recorder.rec.append(ev)
           input.agyOnEvent?.(ev)
+          reportDirectToolQuota(quotaCtrl, ev)
         }
       },
     })
+    subTracker?.flush()
+    // A live quota trigger ended the turn on purpose: its error text is the
+    // quota evidence finalizeAttempt needs, not a transport problem.
+    const liveQf = quotaCtrl.failoverState()
+    if (liveQf !== null) {
+      throw new Error(liveQf.rawErrorText)
+    }
     const resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText)
     recorder.rec.append(resEv)
     input.agyOnEvent?.(resEv)
-    if (resEv.kind === 'result' && !resEv.ok && resEv.response === '') {
+    if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
       throw new Error(resEv.error ?? 'ACP prompt returned error without response')
     }
     // An "end_turn" with no event and no text is NOT a successful empty answer:
@@ -235,14 +206,19 @@ async function runAcpPrompt(opts: {
       runLogText: '',
       silentTimeout: false,
       empty: false,
+      cooledInLiveFamilies: quotaCtrl.cooledFamilies(),
     }
   } catch (err) {
+    subTracker?.flush()
+    const liveQf = quotaCtrl.failoverState()
     const msg = err instanceof Error ? err.message : String(err)
     const errText = roundStderr()
     const logText = roundLog()
-    const rawErrText = `${msg} ${errText}`.trim()
-    const timedOut = /timed out/i.test(msg)
-    const aborted = Boolean(input.signal?.aborted) || /aborted/i.test(msg)
+    const rawErrText = [msg, errText, liveQf?.rawErrorText].filter(Boolean).join(' ').trim()
+    // A quota-triggered kill is not a timeout and not the user aborting: its
+    // classification comes from the quota evidence, not from the error text.
+    const timedOut = liveQf === null && /timed out/i.test(msg)
+    const aborted = !quotaCancelled && liveQf === null && (Boolean(input.signal?.aborted) || /aborted/i.test(msg))
     const outcome: RunOutcome = {
       code: 1,
       signal: null,
@@ -306,78 +282,6 @@ async function runAcpPrompt(opts: {
     // only has to clear it on a turn that actually produced model output.
     if (sawRealOutput) deps.clearNetworkStreak(input.sessionKey)
   }
-}
-
-/** Settle the attempt and release everything the ACP path borrowed. */
-async function finishAcpAttempt(opts: {
-  deps: AttemptDeps
-  input: AttemptInput
-  recorder: ReturnType<typeof createAttemptRecorder>
-  slot: AttemptSlot
-  proc: AcpProcess
-  sid: string
-  result: AcpPromptOutcome
-}): Promise<void> {
-  const { deps, input, recorder, slot, proc, sid, result } = opts
-  const { sessionKey } = input
-  try {
-    await settleAcpOutcome({
-      deps,
-      input,
-      rec: recorder.rec,
-      account: input.account,
-      sid,
-      failure: result.failure,
-      durationMs: result.durationMs,
-      stderr: result.stderr,
-      rawErrText: result.rawErrText,
-      runLogText: result.runLogText,
-      silentTimeout: result.silentTimeout,
-      ...(result.outcomeOverride === undefined ? {} : { outcomeOverride: result.outcomeOverride }),
-    })
-  } finally {
-    recorder.stop()
-    deps.unregisterActiveRun(sessionKey, recorder.rec)
-    slot.releaseOnce()
-    deps.clearInFlightPrompt(sessionKey, input.prompt)
-    recorder.rec.settle(result.failure)
-    if (!input.isAux && sessionKey !== '') {
-      deps.backgroundObserver?.onAttemptSettled?.({
-        sessionKey,
-        conversationId: sid,
-        ...(recorder.rec.accountHome === undefined ? {} : { accountHome: recorder.rec.accountHome }),
-        transport: 'acp',
-        recording: recorder.rec,
-        failure: result.failure,
-        superseded: deps.isSuperseded(sessionKey, recorder.rec),
-        acpProcess: proc,
-        acpSessionId: sid,
-      })
-    }
-  }
-}
-
-async function settleEarlyAbort(
-  deps: AttemptDeps,
-  input: AttemptInput,
-  slot: AttemptSlot,
-  sid: string | null,
-  message: string,
-): Promise<RunRecording> {
-  const recorder = createAttemptRecorder(deps, input.cfg, input.account, sid ?? input.binding?.conversationId, false)
-  const failure: AttemptFailure = { kind: 'aborted', code: Err.AGY_ERROR, message }
-  try {
-    await settleAcpOutcome({
-      deps, input, rec: recorder.rec, account: input.account, sid,
-      failure, durationMs: 0, stderr: '', rawErrText: '', runLogText: '', silentTimeout: false,
-    })
-  } finally {
-    recorder.stop()
-    slot.releaseOnce()
-    deps.clearInFlightPrompt(input.sessionKey, input.prompt)
-    recorder.rec.settle(failure)
-  }
-  return recorder.rec
 }
 
 /**

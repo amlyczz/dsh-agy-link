@@ -53,3 +53,10 @@
 - `test/failure-classifier.test.ts` / `test/auth-jitter.test.ts`：`disabled` 日志不误判权威鉴权失败、同秒日志偏移读取、MCP 错误不误判、HTTP/2 `GOAWAY` 与代理 `502/504` 归类为 `NETWORK`。
 - `test/credential-slot.test.ts` / `test/issue101-slot-failover.test.ts`：主槽网络超时不连坐隔离辅账号、带 `expiry` 唯一写入。
 - `test/pool-auth.test.ts`：主账号 OAuth 登录与导入清除 `authRequired` 并触发选择器同步。
+
+## 账号显示名（alias）与 `defaultAlias`（issue #152）
+
+- `alias` 是卡片上的**显示标签**；`defaultAlias === true` 表示它仍是「自动生成」的占位（`备用 Google 账号 N` / 主账号默认名），界面会按 locale 重新渲染。
+- 用户手动改名必须走 `setAccountAlias()`——它同时 `trim()` 并置 `defaultAlias = false`，否则输入的名字永远不会被显示（界面仍在渲染生成标签）。
+- 路由 `POST /plugins/agy-link/pool/alias` 是唯一写入口：非空、长度上界、未知 id → 404。空名会让卡片无标签，因此服务端直接拒绝而不是静默接受。
+- 锚点：`test/issue152-alias-edit.test.ts`、`test/http-contract.test.ts`（路由表面登记）。

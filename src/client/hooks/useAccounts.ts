@@ -17,6 +17,8 @@ export interface AccountsDeps {
 	t: Translator;
 	proxyInputs: Record<string, string>;
 	setEditingProxyId: (id: string | null) => void;
+	aliasInputs: Record<string, string>;
+	setEditingAliasId: (id: string | null) => void;
 	setOptimisticActiveByFamily: (updater: (prev: Partial<Record<QuotaFamily, string>>) => Partial<Record<QuotaFamily, string>>) => void;
 }
 
@@ -29,6 +31,7 @@ export interface AccountActions {
 	refreshQuota: (id?: string) => Promise<void>;
 	warmupAccount: (id?: string) => Promise<void>;
 	saveProxy: (id: string) => Promise<void>;
+	saveAlias: (id: string) => Promise<void>;
 	clearCooldown: (id?: string, family?: QuotaFamily) => Promise<void>;
 }
 
@@ -78,8 +81,30 @@ function reorderActions(
 function lifecycleActions(
 	deps: AccountsDeps,
 	actionFailed: () => void,
-): Pick<AccountActions, 'setActiveAccount' | 'removeAccount' | 'toggleAccountEnabled'> {
-	const { refresh, showToast, setLoadingAction, t, setOptimisticActiveByFamily } = deps;
+): Pick<AccountActions, 'setActiveAccount' | 'removeAccount' | 'toggleAccountEnabled' | 'saveAlias'> {
+	const { refresh, showToast, setLoadingAction, t, setOptimisticActiveByFamily, aliasInputs, setEditingAliasId } = deps;
+
+	const saveAlias = async (id: string): Promise<void> => {
+		const alias = (aliasInputs[id] ?? '').trim();
+		if (alias === '') {
+			// An empty label would leave the card nameless; keep the editor open.
+			showToast(t('account.renameEmpty'), 'error');
+			return;
+		}
+		setLoadingAction(`alias:${id}`);
+		try {
+			const res = await postPool('alias', { id, alias });
+			if (res === null || res?.ok === false) {
+				actionFailed();
+				return;
+			}
+			await refresh();
+			setEditingAliasId(null);
+			showToast(t('account.renamed'), 'success');
+		} finally {
+			setLoadingAction(null);
+		}
+	};
 
 	const setActiveAccount = async (id: string, family: QuotaFamily = 'google'): Promise<void> => {
 		setOptimisticActiveByFamily((prev) => ({ ...prev, [family]: id }));
@@ -141,7 +166,7 @@ function lifecycleActions(
 		showToast(t(nextState ? 'account.enabledToast' : 'account.disabledToast', { alias: displayAlias }), 'success');
 	};
 
-	return { setActiveAccount, removeAccount, toggleAccountEnabled };
+	return { setActiveAccount, removeAccount, toggleAccountEnabled, saveAlias };
 }
 
 function quotaActions(
@@ -149,6 +174,7 @@ function quotaActions(
 	actionFailed: () => void,
 ): Pick<AccountActions, 'refreshQuota' | 'warmupAccount' | 'saveProxy' | 'clearCooldown'> {
 	const { refresh, showToast, setLoadingAction, t, proxyInputs, setEditingProxyId } = deps;
+
 
 	const refreshQuota = async (id?: string): Promise<void> => {
 		setLoadingAction(id ? `refresh:${id}` : 'refresh:all');

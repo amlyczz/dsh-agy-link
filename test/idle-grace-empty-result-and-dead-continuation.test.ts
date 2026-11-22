@@ -89,7 +89,10 @@ function makeRecorder(home: string, rec: RunRecording, cid: string): AttemptReco
     attachProcess: () => {},
     feedLine: () => {},
     drain: () => {},
+    flushTracker: () => {},
     stop: () => {},
+    quotaFailover: () => null,
+    cooledInLiveFamilies: () => new Set(),
     conversationId: () => cid,
   }
 }

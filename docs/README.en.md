@@ -1,7 +1,7 @@
 <h1 align="center">🛰️ dsh-agy-link</h1>
 
 <p align="center">
-  <b>DeepSeek Harness × Google Antigravity</b> — multi-account pooling and a native <code>agy</code> CLI bridge for DSH
+  <b>DeepSeek Harness × Google Antigravity</b> — multi-account pooling and native <code>agy</code> CLI / ACP bridge for DSH
 </p>
 
 <p align="center">
@@ -9,30 +9,53 @@
   <a href="https://github.com/amlyczz/dsh-agy-link/actions/workflows/ci.yml"><img src="https://github.com/amlyczz/dsh-agy-link/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT"/>
   <img src="https://img.shields.io/badge/node-%3E%3D24-green" alt="node"/>
+  <img src="https://img.shields.io/badge/agy-%3E%3D1.5-purple" alt="agy >=1.5"/>
 </p>
 
 <p align="center">
   <b>🌐 Language:</b>
   <a href="../README.md">中文</a> ·
   English ·
-  <a href="./CONFIGURATION.md">Configuration</a>
+  <a href="./CONFIGURATION.md">Configuration</a> ·
+  <a href="./ARCHITECTURE.md">Architecture</a> ·
+  <a href="./SECURITY-NOTES.md">Security</a>
 </p>
 
 ---
 
-Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the official, unmodified `agy` CLI: streaming, thinking, native tool cards, exact token metering, in-GUI OAuth login, a multi-account pool with automatic rotation, and official multi-bucket quota tracking (5h rolling + 7d weekly + Argon weekly).
+Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the official, unmodified `agy` CLI: streaming, thinking, rich native tool cards, Generative UI embeds, 1M physical context metering, in-GUI OAuth login, per-family multi-account pooling with automatic failover, CLI-first multi-bucket quota tracking (5h rolling + 7d weekly + Argon weekly), in-chat and CLI image generation, and multi-account ecosystem sync.
+
+<p align="center">
+  <img src="./assets/console.png" alt="Antigravity console — multi-account pool and multi-bucket quota bars" width="760" />
+</p>
+<p align="center">
+  <img src="./assets/model-picker.png" alt="Antigravity (agy CLI) model group in the DSH model picker" width="240" />
+  &nbsp;&nbsp;
+  <img src="./assets/settings.png" alt="Antigravity runtime settings, ecosystem panel, and model visibility controls" width="520" />
+</p>
+<p align="center">
+  <img src="./assets/token-usage.png" alt="Native context cache and token usage breakdown" width="330" />
+  &nbsp;&nbsp;
+  <img src="./assets/context-metering.png" alt="1M physical context metering breakdown" width="310" />
+</p>
+
+---
 
 ## ✨ Features
 
 | | |
 | --- | --- |
-| 🤖 **Antigravity models in DSH** | Gemini 3.8 Flash, Claude 5.5, GPT-OSS … selected from the normal `/model` picker; streaming, thinking blocks, tool cards and usage are native DSH chunks. |
-| 🔁 **Multi-account pool** | Sequential drain or round-robin; per-account isolated HOME, proxy and credentials; quota exhaustion cools the account and moves to the next one automatically. |
-| 📊 **Quota console** | 5h rolling, 7d weekly and Argon weekly buckets; countdowns, cooldowns and one-click sync from the header badge. |
-| 🔐 **In-GUI OAuth** | Add accounts without pasting credentials; headless paste-URL and manual code paths are also supported. |
-| 🗣 **Plain-language translation (`/tsl`)** | A native Gemini card anchored under the reply; per-session 1:1 translation conversation; auto mode and per-reply button. |
-| 🎨 **Image generation (`dsh-agy-image`)** | Bridges agy's built-in `generate_image` as a CLI that reuses the same adapter and account pool; strict artifact validation. |
-| 🖥 **Headless ready** | `dsh headless "…"` works; permissions are documented in [HEADLESS-PERMISSIONS.md](./HEADLESS-PERMISSIONS.md). |
+| 🤖 **Antigravity models & catalog filtering** | Merges `agy models` with quota-derived model rows; tick-list allow-list (`selectedModels`) and opt-in `poolWideCatalog`; live effort levels (`low`/`medium`/`high`/`xhigh` (Extra)/`max`) with automatic `--effort` refusal learning. |
+| 🔁 **Per-family multi-account pool** | Independent active pins and cooldowns across `Gemini`, `Argon`, `Claude`, and `GPT-OSS`; sequential drain or round-robin with quota-expiry-first rotation, per-account isolated HOME + proxy, and Windows identity-leased credential slots. |
+| 📊 **CLI-first quota console & warmup** | Prefers `agy -p /usage` (`quotaViaCli: true`) with official summary fallback; tracks 5h rolling, 7d weekly, and Argon weekly buckets with pacing markers, manual/auto warmup, and host-backed `WarmupStatusBar`. |
+| 🛡️ **4 permission modes, sandbox & ACP** | `permissionMode` supports `skip`, `auto` (`--mode auto`), `accept-edits`, and `plan`; supports `--sandbox`, `--agent`/`--settings`/`--json-schema` passthrough, and switchable short-lived `cli` (`-p`) or persistent `agy acp` stdio pool transport (with automatic pre-stream CLI fallback). |
+| 🃏 **Extended tool cards & Generative UI** | Native Terminal/Diff/Read/Search/MCP cards plus dedicated cards for `swarm`, `run_workflow`, `schedule`, `manage_task`, subagent lifecycle, `image-generator`, and browser/DevTools; renders `<agent-embed>` HTML widgets inside strict-CSP sandboxed `<iframe>`s with live theme sync. |
+| 🎬 **Multimodal inputs & inline playback** | Stages images plus PDF, audio, and video attachments (up to `mediaMaxFileBytes` 20 MiB default via `--add-dir`), with fullscreen image lightbox, video preview, inline `<audio>` player, Mermaid diagrams, decision chips, and compaction cards. |
+| 🔐 **In-GUI OAuth & token import** | Zero-paste browser PKCE OAuth (`127.0.0.1:51121`) with manual code/URL fallback plus direct `refresh_token`/JSON import; jitter-safe `NETWORK` vs `AUTH` classification and `TOS_VIOLATION` circuit breaker. |
+| 🗣 **Plain-language translation (`/tsl`)** | Native DSH Gemini card anchored under each reply and persisted across reloads; 1:1 per-session translation conversation; opt-in auto mode with model/effort dropdowns and per-reply translate button. |
+| 🎨 **Image generation (`agy_image` / CLI)** | Exposed via the `agy_image` DSH tool (`imageTool: true`), `/agy image` (`/agy img`) slash command, `image-generator` preview cards, and headless `dsh-agy-image` CLI — all sharing `ImageService` and account failover. |
+| 🧩 **Ecosystem sync & slash bridges** | Inspect/toggle `plugins`, view `mcp`/`skills`/`rules`/`agents`, and allowlist-mirror customizations to isolated accounts without touching credentials; bridges DSH `/goal`, `/plan`, and `/agy btw\|fork\|grill\|learn\|compact`. |
+| 🌐 **4-locale UI & visibility toggles** | Full `en`, `zh`, `es`, and `pt-BR` localization, responsive `< 680px` mobile drawer, and opt-out `showHeaderBadge` / `showTranslateAction` controls. |
 
 ## 📋 Requirements
 
@@ -40,7 +63,7 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the offi
 | --- | --- |
 | DSH | `dsh --version` |
 | Node.js ≥ 24 | `node --version` |
-| Google Antigravity CLI | `agy --version` (install: https://antigravity.google/docs/cli/install) |
+| Google Antigravity CLI (≥ 1.5) | `agy --version` (install: https://antigravity.google/docs/cli/install) |
 | Google connectivity | proxy/VPN/TUN where required |
 
 Where Google is unreachable directly, enable system proxy/TUN before starting DSH, or set a per-account proxy in the Antigravity panel.
@@ -55,14 +78,14 @@ dsh plugin --profile web add dsh-agy-link --registry https://registry.npmjs.org
 dsh web
 
 # In the chat input:
-/agy status              # binary, version, pool and catalog status
+/agy status              # binary, version, transport, sandbox, pool and catalog status
 /agy auth                # sign the primary account in
-/agy pool                # list account IDs
+/agy pool                # list account IDs and per-family quota/active pins
 /agy auth <account-id>   # reauthenticate an existing secondary account (also accepts full alias or email)
 /agy auth-status         # check the final login result within 30 seconds
 ```
 
-Add more accounts from the **AGY (n)** badge in the header (browser login), then pick an Antigravity model in `/model`.
+Add more accounts from the **AGY (n)** badge in the header (browser login or token import), then pick an Antigravity model in `/model`.
 
 ## 🗣 Plain-language translation (`/tsl`)
 
@@ -76,45 +99,68 @@ Add more accounts from the **AGY (n)** badge in the header (browser login), then
 /tsl auto on|off|status    # per-session auto mode
 ```
 
-- A native DSH card is rendered under the translated reply and survives reloads.
-- Each DSH session gets its own translation conversation; the persona is sent once.
+- A native DSH card is rendered under the translated reply and survives reloads without entering model-visible history.
+- Each DSH session gets its own translation conversation (`<sessionKey>#tsl`); the persona is sent once.
 - The per-reply “translate” button translates the **message you clicked**, not the turn's last answer.
-- Default effort is `medium` (measured on real agy: `low` ≈ 12s, `medium` ≈ 33s, `high` ≈ 45s for a 964-char reply; most of the low figure is agy startup).
+- Default effort is **`low`** (measured on real agy: `low` ≈ 12s, `medium` ≈ 33s, `high` ≈ 45s for a 964-char reply; configurable in Settings next to the auto-translate toggle).
 
-## 🎨 Image generation (`dsh-agy-image`)
+## 🎨 Image generation (`agy_image` + `/agy image` + `dsh-agy-image`)
 
-agy ships a built-in `generate_image` tool. The plugin exposes it as a CLI and **reuses the real `AgyAdapter`** (`purpose:'image'`): account selection, quota cooldown/rotation, proxy, failure classification and the `--effort` fallback are the same code path normal turns use. There is **no HTTP endpoint**.
+agy ships built-in image generation (`generate_image` / `image-generator`). The plugin exposes it across three entry points — the **`agy_image`** DSH tool (enabled by default via `imageTool: true` so any model can invoke it), the **`/agy image`** (`/agy img`) slash command, and the **`dsh-agy-image`** CLI — all reusing `ImageService` and the real `AgyAdapter` (`purpose:'image'`). When discovered in the catalog, `gemini-4-hydrogen` is preferred automatically (falling back to `gemini-3.8-flash`), with balanced `imageEffort: 'medium'` by default. There is **no HTTP endpoint**.
 
 ```bash
+# In-chat slash command
+/agy image "a shiba in sunglasses, flat illustration" -a 16:9 -n shiba
+/agy img "change the background to night" -i ./day.png
+
+# Headless CLI
 dsh-agy-image -p "a shiba in sunglasses, flat illustration" -a 16:9 -o ./dog.jpg
 dsh-agy-image -p "change the background to night" -i ./day.png -n night_scene --json
 ```
 
-- Parameters passed verbatim to the tool: `Prompt`, `ImageName`, `AspectRatio` (14 values), `ImagePaths`.
-- Strict validation before success: the artifact must exist, pass magic-byte sniffing (PNG/JPEG/WebP/GIF/BMP), parse its dimensions, stay under `imageMaxBytes`, and match the requested aspect ratio within 3%.
+- Parameters passed verbatim to the tool: `Prompt`, `ImageName`, `AspectRatio` (14 ratios), `ImagePaths`.
+- Strict validation before success: the artifact must exist, pass magic-byte sniffing (PNG/JPEG/WebP/GIF/BMP), parse its dimensions, stay under `imageMaxBytes` (20 MiB default), and match the requested aspect ratio within 3%.
 - `--json` returns `{ok, path, mime, width, height, aspectRatio, bytes, model, effort, durationMs, attempts, accountId?, conversationId?}`; failures carry a stable `code` (`BAD_PARAMS`, `IMAGE_NOT_FOUND`, `IMAGE_INVALID`, `IMAGE_ASPECT_MISMATCH`, `IMAGE_REGION_UNSUPPORTED`, `NO_ACCOUNT`, `TIMEOUT`, …).
 - Exit codes: `0` ok · `2` usage · `3` agy missing · `4` generation failed · `5` validation failed · `6` account/region unavailable.
-- The image model only produces ratios, not arbitrary pixel sizes (1:1 → 1024×1024, 16:9 → 1376×768). Region refusals (`User location is not supported`) are account/egress-level; the pool rotates to the next account on retry.
+- The image model produces aspect ratios rather than arbitrary pixel dimensions (e.g., 1:1 → 1024×1024, 16:9 → 1376×768). Region refusals (`User location is not supported`) rotate to the next eligible account on retry.
+
+## 🧩 Ecosystem sync & `/agy` command bridges
+
+- **Multi-account customization sync**: Settings → Antigravity shows a collapsible **Ecosystem** summary (`plugins`, `mcp`, `agents`, `skills`, `rules`), lets you toggle plugins or select a default `--agent`, and mirrors an explicit allowlist into isolated pool accounts (`syncAccountCustomizations: true`) while excluding `.env`, OAuth tokens, private keys, logs, and keychains.
+- **Slash & runtime commands**:
+  - Execution & transport: `/agy mode <skip|auto|plan|accept-edits>`, `/agy sandbox [on|off]`, `/agy transport [cli|acp|status]`, `/agy agent [name|off]`, `/agy settings [show|<json-or-path>|clear]`, `/agy effort <low|medium|high|xhigh|max|default>`
+  - Ecosystem: `/agy plugins [list|enable <id>|disable <id>]`, `/agy mcp`, `/agy skills`, `/agy agents [list|use <name>|off]`, `/agy sync-ecosystem`
+  - Session & workflow bridges: `/agy goal [status|set|edit|pause|resume|complete|clear]`, `/agy session [info|clear]`, `/agy btw <question>`, `/agy fork [list|restore <id>|<prompt>]`, `/agy grill [topic]` (`/agy grill-me`), `/agy learn [--apply] [focus]`, `/agy compact [focus]`, `/agy doctor`
 
 ## ⚙️ Configuration
 
 Every key, environment variable, default and advanced option lives in **one place**: [CONFIGURATION.md](./CONFIGURATION.md). The README deliberately does not duplicate that table.
 
-Common entry points: `/plugin`, the Antigravity settings panel, `DSH_AGY_*` environment variables, and `~/.dsh/agy-link/runtime-overrides.json` (where the panel writes).
+Common entry points: `/plugin`, the Antigravity settings panel, `DSH_AGY_*` environment variables, and `~/.dsh/agy-link/runtime-overrides.json` (where the panel and `/agy` commands write).
 
 ## 🧩 How it works
 
-1. **One short-lived process per turn**: `agy -p --output-format stream-json`, parsed as NDJSON.
-2. **Per-account sandbox**: the primary account uses the system HOME/keychain; secondary accounts get an isolated HOME with their own agy OAuth credentials. On Windows the credential slot is leased by identity, so parallel sessions on the same account are not serialized. Secondary credentials have a `.bak` in their account directory and are restored if the original file is missing.
-3. **Pooled failover**: 429/quota/region/auth failures are classified and routed — cool down, rotate the pointer, or retry on another account.
-4. **Aux routes**: translation and image generation ride the same pool through dedicated purposes (`translation`, `image`), so they never pollute a normal conversation binding.
+1. **CLI (`-p`) & optional persistent `agy acp` pool**: By default each turn runs `agy -p --output-format stream-json` and parses NDJSON events; switching `transport` to `'acp'` reuses persistent `agy acp` stdio JSON-RPC processes (idle-evicted, with automatic pre-stream CLI fallback).
+2. **Per-account sandbox**: The primary account uses the system HOME/keychain; secondary accounts get an isolated HOME with their own `0600` OAuth credentials and `.bak` recovery. On Windows the credential slot is leased by identity (`parallelSameAccount`), so parallel sessions on the same account run concurrently.
+3. **CLI-first quota & pooled failover**: Quotas prefer `agy -p /usage` (`quotaViaCli: true`) with fallback to `v1internal:retrieveUserQuotaSummary`; 429/quota/region/auth failures are classified per model family — cooling down, rotating the pointer, or retrying on another account.
+4. **Aux routes**: Translation, image generation, title generation, and goal derivation ride the same pool through dedicated `purpose` paths without polluting a normal conversation binding.
 
 ## ❓ FAQ (short)
 
 - **Proxy?** Export `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` before starting DSH, or set a per-account proxy in the console.
-- **A model rejects `--effort`?** The plugin learns the refusal, replays once without the flag, and hides the effort levels for that model.
-- **Quotas not updating?** They poll hourly by default; press “Sync” on the console card or run `/agy refresh-quota`.
-- **Windows console flash?** See the Windows notes in the Chinese README's FAQ; the root causes and fixes are identical.
+- **A model rejects `--effort`?** The plugin learns the refusal, replays once without the flag, persists it to `effort-unsupported.json`, and hides unsupported levels for that model.
+- **Quotas not updating?** They poll hourly by default (`quotaPollIntervalMs`); press “Sync” on a card, click “Refresh Quota”, or run `/agy refresh-quota`.
+- **Windows console flash?** Set Windows Terminal's default terminal application to **Windows Console Host** and restart DSH; `suppressAgyAutoUpdate` also suppresses `agy`'s `--bg-updater` console chain on Windows by default.
+
+## 📚 Documentation
+
+- [CONFIGURATION.md](./CONFIGURATION.md) — Complete configuration keys, environment variables, and defaults
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — Layering, provider pipeline, and the 35 HTTP routes
+- [AUTH.md](./AUTH.md) — PKCE OAuth, token import, keychain isolation, and redaction
+- [SECURITY-NOTES.md](./SECURITY-NOTES.md) — Threat model, route confinement, `/embed` CSP, and MCP bridge guardrails
+- [HEADLESS-PERMISSIONS.md](./HEADLESS-PERMISSIONS.md) — Least-privilege setup for `dsh headless`
+- [KNOWN-GAPS.md](./KNOWN-GAPS.md) — Platform limits, multimodal staging, and upstream behaviors
+- [DEVELOPMENT.md](./DEVELOPMENT.md) — Verification gates and refactoring guidelines
 
 ## ⚠️ Disclaimer
 

@@ -23,6 +23,7 @@ import {
   Err,
   isAuthoritativeAuthError,
   looksLikeHardRateLimit,
+  parseResetDurationMs,
   shouldMarkAuthRequired,
   type RawUsage,
 } from '../common/types.ts'
@@ -33,6 +34,7 @@ import type { RunRecording } from '../host/recording.ts'
 import type { RunOutcome } from '../host/runner.ts'
 import type { AttemptFailure } from './failure.ts'
 import { parseModelNotRecognized } from './effort-policy.ts'
+import type { LiveQuotaFailoverState } from './quota-failover.ts'
 
 /** Shape of the /agy status last-run telemetry callback. */
 export interface RunTelemetry {
@@ -79,6 +81,10 @@ export interface FinalizeInput {
   /** Silent timeout: no stdout event at all — rotate without a cooldown. */
   silentTimeout: boolean
   sessionKey: string
+  /** Live mid-run quota failover triggered by a subagent/tool before exit. */
+  quotaFailover?: LiveQuotaFailoverState | null
+  /** Families cooled mid-run by subagent/tool quota exhaustion (preserved across soft finish). */
+  cooledInLiveFamilies?: ReadonlySet<ModelFamily>
   /** Adapter-private state, injected as callbacks. */
   clearNetworkStreak: (sessionKey: string) => void
   dropFailoverBudget: (sessionKey: string) => void
@@ -104,7 +110,9 @@ export async function finalizeAttempt(input: FinalizeInput): Promise<void> {
 // ---- success path ---------------------------------------------------------
 
 function applySuccess(input: FinalizeInput): void {
-  if (input.account) input.pool?.recordSuccess(input.account.id, input.family)
+  if (input.account && !input.cooledInLiveFamilies?.has(input.family)) {
+    input.pool?.recordSuccess(input.account.id, input.family)
+  }
   input.dropFailoverBudget(input.sessionKey)
   input.clearRateLimitFailover(input.sessionKey)
   input.clearNetworkStreak(input.sessionKey)
@@ -150,8 +158,17 @@ function rotateOnFailure(input: FinalizeInput, failure: AttemptFailure): void {
   // overloaded) shape the message above but never cool the account.
   // Caller-aborted runs (stop button / steer preemption) are NOT server
   // rate limits and must never slap a cooldown on the account.
-  if (account && !outcome.aborted && looksLikeHardRateLimit(input.rawErrText)) {
-    pool?.recordFailure(account.id, family, failure.message)
+  const qf = input.quotaFailover
+  const targetFamily = qf?.family ?? family
+  const resetMs = parseResetDurationMs(input.rawErrText) ?? parseResetDurationMs(failure.message)
+  const serverResetTime = qf?.resetTime ?? (resetMs && resetMs > 0 ? new Date(Date.now() + resetMs).toISOString() : undefined)
+  if (account && !outcome.aborted && (looksLikeHardRateLimit(input.rawErrText) || Boolean(qf))) {
+    if (!qf?.cooledInLive) {
+      pool?.recordFailure(account.id, targetFamily, failure.message, serverResetTime)
+    }
+    if (qf?.crossFamily) {
+      pool?.advanceAccount(account.id, family, input.activeModel)
+    }
   }
   // Silent timeout: rotate to the next account for the automatic retry
   // WITHOUT a cooldown. A 15-minute penalty for what may be a transient
@@ -230,6 +247,7 @@ function persistFailureBinding(input: FinalizeInput, failure: AttemptFailure): v
   // forcing a fresh 660K-char digest seed on the next turn.
   const staleConversation =
     failure.code === Err.AUTH ||
+    input.quotaFailover?.crossFamily === true ||
     (failure.message !== '' && /conversation.*(not found|invalid|not recognized|expired|does not exist)|session.*(expired|invalid)/i.test(failure.message))
   // The run was cut mid-flight (Stop button / steer preemption / idle
   // watchdog) or aborted before it finished. agy's server-side turn has

@@ -133,6 +133,10 @@ export interface ImageServiceDeps {
   bin: () => string | null
   run: (call: ImageAgentCall) => Promise<ImageAgentResult>
   catalog?: () => ImageCatalogLike
+  /** Extra quota-failover hops available across the enabled account pool (independent of imageRetries). */
+  poolQuotaHops?: () => number
+  /** Cool down / rotate after hard quota exhaustion; returns true if another eligible account can be tried. */
+  onQuotaExhausted?: (accountId: string | undefined, model: string, errorText: string) => boolean
   log?: (msg: string) => void
   now?: () => number
 }

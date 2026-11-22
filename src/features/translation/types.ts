@@ -141,6 +141,8 @@ export interface TranslationServiceDeps {
   sessionCwd?: (sessionId: string) => string | undefined
   /** Absolute path of that session's raw log, so agy can read the history itself. */
   sessionLogPath?: (sessionId: string) => string | undefined
+  /** Extra quota-failover hops available across the enabled account pool. */
+  poolQuotaHops?: () => number
   log?: (msg: string) => void
   now?: () => number
 }

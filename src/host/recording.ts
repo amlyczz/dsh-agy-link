@@ -14,7 +14,7 @@
 // DSH message list alone — retries and replays stay idempotent with no
 // mutable per-stream state.
 import { randomUUID } from 'node:crypto'
-import type { AgyEvent, RawUsage } from '../common/types.ts'
+import { isNonConsumableResultError, type AgyEvent, type RawUsage } from '../common/types.ts'
 
 /** Terminal failure recorded when the process ended without a usable result. */
 export interface RecordingFailure {
@@ -40,6 +40,10 @@ export function classifyToolError(error: string): ToolErrorKind {
 }
 
 const waiters: unique symbol = Symbol('waiters')
+
+function isConsumableResult(ev: { ok: boolean; response: string; error?: string }): boolean {
+  return (ev.ok || ev.response !== '') && !isNonConsumableResultError(ev.ok, ev.error, ev.response)
+}
 
 /** One agy run's append-only event log plus its settlement state. */
 export class RunRecording {
@@ -224,10 +228,10 @@ export class RunRecording {
     return this.events.some((e) => e.kind === 'result')
   }
 
-  /** Whether a result event that EventMapper will finish on (ok, or non-empty error response) was recorded. */
+  /** Whether a result event that EventMapper will finish on (ok, or non-empty consumable error response) was recorded. */
   get hasConsumableResult(): boolean {
     const r = this.getResultEvent()
-    return r !== null && (r.ok || r.response !== '')
+    return r !== null && isConsumableResult(r)
   }
 
   /**
@@ -241,7 +245,7 @@ export class RunRecording {
     for (let i = Math.max(0, from); i < this.events.length; i++) {
       const ev = this.events[i]
       if (ev === undefined) continue
-      if (ev.kind === 'result' && (ev.ok || ev.response !== '')) return true
+      if (ev.kind === 'result' && isConsumableResult(ev)) return true
       if (
         cutOnTool
         && ev.kind === 'step'
@@ -257,25 +261,29 @@ export class RunRecording {
   }
 
   /** The last result envelope's finish-relevant projection, when one arrived. */
-  getResultEvent(): { ok: boolean; response: string } | null {
+  getResultEvent(): { ok: boolean; response: string; error?: string } | null {
     for (let i = this.events.length - 1; i >= 0; i--) {
       const ev = this.events[i]
-      if (ev !== undefined && ev.kind === 'result') return { ok: ev.ok, response: ev.response }
+      if (ev !== undefined && ev.kind === 'result') {
+        return {
+          ok: ev.ok,
+          response: ev.response,
+          ...(ev.error === undefined ? {} : { error: ev.error }),
+        }
+      }
     }
     return null
   }
 
   /**
    * True when at least one consumable `result` event (`ok` or non-empty
-   * `response`) exists at index >= `from`. A settled recording with
-   * `failureInfo === null` and no consumable result at `>= from` would always
-   * fail with `agy stream ended without a result event` if re-driven.
+   * `response`, excluding hard quota / policy errors) exists at index >= `from`.
    */
   hasConsumableResultFrom(from: number): boolean {
     const start = Math.max(0, from)
     for (let i = start; i < this.events.length; i++) {
       const ev = this.events[i]
-      if (ev !== undefined && ev.kind === 'result' && (ev.ok || ev.response !== '')) {
+      if (ev !== undefined && ev.kind === 'result' && isConsumableResult(ev)) {
         return true
       }
     }

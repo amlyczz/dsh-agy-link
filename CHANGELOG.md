@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.56 (2026-11-22)
+## 0.6.59 (2026-11-22)
 
 ### English
 
@@ -19,6 +19,38 @@
   - **会话恢复必须被证明**：`session/load` 对不存在的 ID 也会成功，因此只有回放了事件或上报了缓存读取才算恢复；否则丢弃绑定、把完整历史摘要投递给新会话，并在会话里显示重置提示。绑定写入优先采用本轮真实会话 ID，重建后不会把下一轮指向失效 ID。
   - **空回合与断网都算失败**：每轮 prompt 前记录 stderr 偏移与 `--log-file` 偏移，零产出回合只用本轮切片分类（网络/认证）；确实零产出时销毁坏进程并用 `cli -p` 重跑。`keyringJitter` 改为按真实日志证据判定，不再硬编码 `false`。
   - **Windows 凭据槽三道门禁**：槽文档里的 `id_token_email` 在快路径前与每次安装后都会核对；进程启动后核对 agy 自己日志里的身份（一次重装重试，仍不符则硬失败）；池淘汰改为排干仍持有后台会话的进程而不是直接杀掉，排干结束后自动恢复主账号凭据。`/plugins/agy-link/status` 新增 `drainingProcesses`、`slotOverwriteDetectedCount`、`lastSlotRecoveryAt`。
+
+## 0.6.58 (2026-11-22)
+
+### English
+
+- **Feat(accounts): a pool account's label is now editable from the console (fixes #152, part 1).** `pool.setAccountAlias()` existed but nothing exposed it — the alias could only be set while adding an account, so a typo, or a Google account that was renamed, left a stale label forever.
+  - **New route `POST /plugins/agy-link/pool/alias`** (`{ id, alias }`): non-empty, ≤64 chars, 404 for an unknown id. A successful rename clears `defaultAlias`, which is exactly what makes the card stop rendering the generated "Backup Google account N" label and show the typed one instead.
+  - **Inline rename in the card**: a "Rename" action opens an input under the card and saves through the host. The proxy editor and this one were the same layout written twice, so both now share `src/client/sections/inline-editor.ts` (which also keeps `AccountsPanel.ts` inside the file-size budget).
+  - Four locales carry the copy. `saveAlias` lives with the other account-lifecycle actions, not with quota actions — renaming has nothing to do with quota, and keeping it there would have pushed `quotaActions` past the line budget.
+
+### 中文
+
+- **特性(账号)：池账号的显示名称现在可在控制台编辑（修复 #152 第一部分）。** `pool.setAccountAlias()` 早就存在，但没有任何入口暴露它——别名只能在添加账号时设定，于是打错字、或 Google 账号改名后，卡片上的旧名字会一直留着。
+  - **新增路由 `POST /plugins/agy-link/pool/alias`**（`{ id, alias }`）：非空、≤64 字符、未知 id 返回 404。改名成功会清除 `defaultAlias`——这正是让卡片不再渲染自动生成的「备用 Google 账号 N」、改为显示用户输入的机制。
+  - **卡片内联重命名**：一个「重命名」动作在卡片下展开输入框，经宿主保存。代理编辑器与它原本是同一套布局写了两遍，现在共用 `src/client/sections/inline-editor.ts`（同时让 `AccountsPanel.ts` 保持在行数预算内）。
+  - 四语言文案齐全。`saveAlias` 归入账号生命周期动作而非配额动作——改名与配额无关，放在配额里会把 `quotaActions` 顶出行数预算。
+
+## 0.6.56 (2026-11-21)
+
+### English
+
+- **Feat(accounts): a pool account's label is now editable from the console (fixes #152, part 1).** `pool.setAccountAlias()` existed but nothing exposed it — the alias could only be set while adding an account, so a typo or a renamed Google account left a stale label forever.
+  - **New route `POST /plugins/agy-link/pool/alias`** (`{ id, alias }`) with the validations the UI relies on: non-empty, ≤64 chars, and a 404 for an unknown id. A successful rename clears `defaultAlias`, which is what makes the card stop rendering the generated "Backup Google account N" label and show the typed one.
+  - **Inline rename in the card**: a "Rename" action opens an input under the card, saving through the host and refreshing the pool. The proxy editor and this one were the same layout twice, so both now share `src/client/sections/inline-editor.ts` (which also keeps `AccountsPanel.ts` inside the file-size budget).
+- **Test(dx): the SIGKILL-escalation test no longer asserts a wall-clock upper bound.** `durationMs` spans spawn→exit, so on a saturated host it read **16 minutes** during a full coverage run while the escalation itself was correct. The lower bound (must wait out the 3s window) and the semantic `signal === 'SIGKILL'` assertion stay; "hangs forever" is covered by the race guard, which reaps the child.
+
+### 中文
+
+- **特性(账号)：池账号的显示名称现在可在控制台直接编辑（修复 #152 第一部分）。** `pool.setAccountAlias()` 早就存在，但没有任何入口暴露它——别名只能在添加账号时设定，于是打错字或 Google 账号改名后，卡片上的旧名字会一直留着。
+  - **新增路由 `POST /plugins/agy-link/pool/alias`**（`{ id, alias }`），带 UI 依赖的校验：非空、≤64 字符、未知 id 返回 404。改名成功会清除 `defaultAlias`，这正是让卡片不再渲染自动生成的「备用 Google 账号 N」、改为显示用户输入的关键。
+  - **卡片内联重命名**：一个「重命名」动作在卡片下展开输入框，经宿主保存后刷新池。代理编辑器与它原本是同一套布局写了两遍，现在共用 `src/client/sections/inline-editor.ts`（同时让 `AccountsPanel.ts` 保持在文件行数预算内）。
+- **测试(开发体验)：SIGKILL 升级用例不再断言墙钟上界。** `durationMs` 是 spawn→exit 的跨度，在饱和的宿主上于一次完整覆盖率运行中读到 **16 分钟**，而升级本身是正确的。保留了下界（必须等过 3 秒窗口）与语义断言 `signal === 'SIGKILL'`；「是否永久挂住」由带回收的 race 守卫覆盖。
 
 ## 0.6.55 (2026-11-21)
 

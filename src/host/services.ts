@@ -30,6 +30,7 @@ import { ImageService, runViaAdapter } from './image.ts'
 import { EcosystemService } from '../features/ecosystem/index.ts'
 import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
+import { createPoolQuotaHooks } from '../provider/quota-failover.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
 import { acquireCredentialSlot, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
@@ -365,9 +366,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       for (const target of info.targets) {
         appendAcpNotice(target.sessionKey, {
           kind: 'acp-drain-aborted',
-          text:
-            '因账号切换，旧账号上仍在运行的后台任务已被中止。' +
-            '\nBackground tasks on the previous account were stopped because the credential slot switched accounts.',
+          text: '因账号切换，旧账号上仍在运行的后台任务已被中止。\nBackground tasks on the previous account were stopped because the credential slot switched accounts.',
         })
       }
     },
@@ -495,6 +494,8 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     },
   })
 
+  const quotaHooks = createPoolQuotaHooks(pool)
+
   const translation = new TranslationService({
     cfg: getConfig,
     catalog: () => catalog.get(),
@@ -502,6 +503,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     autoEnabled: (id) => sessionAuto.get(id) ?? getConfig().autoTranslate,
     sessionCwd: (id) => sessionWorkspace(id),
     sessionLogPath: (id) => findSessionLogFile(dshHome(), id),
+    poolQuotaHops: quotaHooks.poolQuotaHops,
     log,
     run: (req) => runTranslationStream(ctx, getConfig, log, req, translationWorkers),
     appendRecord: async (sessionId, record: TranslationRecord) => {
@@ -576,6 +578,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     bin,
     run: (call) => runViaAdapter(adapter, call),
     catalog: () => catalog.get(),
+    ...quotaHooks,
     log,
   })
 

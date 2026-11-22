@@ -77,7 +77,7 @@ export interface RunOptions {
 export interface RunningProcess {
   child: ChildProcess
   outcome: Promise<RunOutcome>
-  kill(reason: 'timeout' | 'abort'): void
+  kill(reason: 'timeout' | 'abort' | 'quota'): void
   /**
    * Re-arm the activity watchdog, optionally on a different idle budget.
    * Long-running tools (maven/compile, issue #33) go silent on stdout while
@@ -496,7 +496,7 @@ export function startAgyProcess(opts: RunOptions): RunningProcess {
     },
     kill: (reason) => {
       if (reason === 'timeout') state.timedOut = true
-      else state.aborted = true
+      else if (reason === 'abort') state.aborted = true
       if (state.watchdog) clearTimeout(state.watchdog)
       if (state.turnCap) clearTimeout(state.turnCap)
       if (state.idleGraceTimer) clearTimeout(state.idleGraceTimer)
