@@ -16,6 +16,7 @@ import type {
 import type { PluginConfig } from '../../common/types.ts'
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
 import { baselineSessionBrain, pollSessionBrainDir, type WatchedTaskLog } from './brain-poll.ts'
+import { AGY_LINK_NOTICE_KIND, agyLinkNoticeSource } from '../../common/agy-link-source.ts'
 import {
   buildWakeupMessageText,
   extractAttemptBackgroundSignals,
@@ -404,7 +405,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
         return
       }
       const nextTurn = agent.inbox?.nextTurn
-      if (Array.isArray(nextTurn) && nextTurn.some((m) => m?.source?.plugin === 'agy-link' && m?.source?.form === 'notice')) {
+      if (Array.isArray(nextTurn) && nextTurn.some((m) => m?.source?.kind === AGY_LINK_NOTICE_KIND && m?.source?.form === 'notice')) {
         return
       }
 
@@ -412,12 +413,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
       const { summary, text } = buildWakeupMessageText(items)
       const msg = createUserMessage({
         content: [{ type: 'text', text }],
-        source: {
-          kind: 'plugin',
-          plugin: 'agy-link',
-          form: 'notice',
-          summary: boundContextSummary(summary),
-        },
+        source: agyLinkNoticeSource(boundContextSummary(summary)),
       })
       st.wakesUsed += 1
       if (st.schedules.size === 0) {

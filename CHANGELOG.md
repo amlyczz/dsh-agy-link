@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.62 (2026-11-22)
+
+### English
+
+- **Fix(wakeup): a background wake notice now carries a producer-owned source kind.**
+  Session format v4 refuses the retired `{ kind: 'plugin', plugin: 'agy-link' }` wrapper *before* the row is encoded (`format v4 message requires a producer-owned source kind`), and the whole append batch is dropped with it — so the notice never reaches the session file while the UI reports the same failure on every following turn. The notice now identifies itself with its own kind, `plugin:agy-link`, declared through the merge-extensible `MessageSourceMap` in `src/common/agy-link-source.ts`. The wake dedupe, the "was the last user message my own notice" check and the synthetic-context filter now read the same kind; the filter had to special-case it explicitly, because the shared `plugin:*` rule would otherwise strip the instruction the wake exists to deliver.
+
+### 中文
+
+- **修复(唤醒)：后台唤醒通知改用生产方自己的来源类型。**
+  会话格式 v4 在编码落盘**之前**就拒绝退役写法 `{ kind: 'plugin', plugin: 'agy-link' }`（`format v4 message requires a producer-owned source kind`），并连带丢弃整批写入——通知因此从未进入会话文件，而界面上之后每一轮都报同一句失败。现在通知用自己名下的 `plugin:agy-link` 标识，类型经 `src/common/agy-link-source.ts` 里可合并扩展的 `MessageSourceMap` 声明。唤醒去重、「最后一条用户消息是否自己的通知」、以及合成上下文过滤都改读同一个类型；过滤处必须显式放行，否则通用的 `plugin:*` 规则会把唤醒要送达的指令当成上下文噪音剥掉。
+
 ## 0.6.61 (2026-11-22)
 
 ### English

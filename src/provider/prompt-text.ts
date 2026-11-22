@@ -9,6 +9,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Message } from '@deepseek-ai/dsh-llm'
+import { AGY_LINK_NOTICE_KIND } from '../common/agy-link-source.ts'
 import { PROVIDER_ID } from '../common/types.ts'
 import { stateDir } from '../common/config.ts'
 import { stripNulBytes } from '../host/runner.ts'
@@ -119,6 +120,9 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
     ) {
       return true
     }
+    // dsh-agy-link's own background wake carries instruction text the model must
+    // act on, so it is never stripped as context noise.
+    if (kind === AGY_LINK_NOTICE_KIND) return false
     // Each DSH context producer names its own kind (`plugin:memory`,
     // `plugin:recall`, …) — dsh-llm has no shared catch-all `plugin` kind.
     if (kind.startsWith('plugin:')) return true

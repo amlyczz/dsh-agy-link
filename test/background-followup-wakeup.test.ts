@@ -48,8 +48,7 @@ describe('cross-turn background wakeup, slice 1: one-shot schedule timers', () =
     const msg = createUserMessage({
       content: [{ type: 'text', text: '[Background Task Wakeup] timer fired — run verification' }],
       source: {
-        kind: 'plugin',
-        plugin: 'agy-link',
+        kind: 'plugin:agy-link',
         form: 'notice',
         summary: boundContextSummary('Scheduled timer: verify'),
       },
@@ -158,7 +157,7 @@ describe('cross-turn background wakeup, slice 1: one-shot schedule timers', () =
     let archived = false
     let agentStatus: 'idle' | 'running' = 'running'
     let releaseIdle = (): void => {}
-    let inboxNextTurn: { nextTurn: Array<{ source: { plugin: string; form: string } }> } = { nextTurn: [] }
+    let inboxNextTurn: { nextTurn: Array<{ source: { kind: string; form: string } }> } = { nextTurn: [] }
     const followups: string[] = []
     const cfg = { ...defaultConfig(), backgroundWakeup: true, backgroundWakeupMaxPerSession: 2 }
 
@@ -207,7 +206,7 @@ describe('cross-turn background wakeup, slice 1: one-shot schedule timers', () =
       assert.equal(followups.length, 1)
 
       // A notice already queued in the inbox must not be double-enqueued
-      inboxNextTurn = { nextTurn: [{ source: { plugin: 'agy-link', form: 'notice' } }] }
+      inboxNextTurn = { nextTurn: [{ source: { kind: 'plugin:agy-link', form: 'notice' } }] }
       const rec2 = new RunRecording()
       rec2.append({ kind: 'step', stepKey: 's2', stepKind: 'tool', state: 'RUNNING', text: '', tool: { name: 'schedule', args: { DurationSeconds: 0.05, Prompt: 'dup skip' } } })
       rec2.settle(null)

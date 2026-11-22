@@ -2,6 +2,7 @@
 import type { Message } from '@deepseek-ai/dsh-llm'
 import type { ReadableRecordingLike } from '../../common/background-types.ts'
 import type { AgyEvent } from '../../common/types.ts'
+import { isAgyLinkNoticeSource } from '../../common/agy-link-source.ts'
 import { pick, unwrapMcpTool } from '../../provider/mirror/args.ts'
 
 const BACKGROUND_TOOL_NAMES = new Set([
@@ -95,8 +96,7 @@ function hasBackgroundTaskHint(input: Record<string, unknown>, ev: Extract<AgyEv
 /** True when a user message was injected by dsh-agy-link's own background wake watcher. */
 export function isBackgroundWakeupNotice(msg: Message | undefined): boolean {
   if (!msg || msg.role !== 'user') return false
-  const src = (msg as unknown as { source?: { kind?: unknown; plugin?: unknown; form?: unknown } }).source
-  return src?.kind === 'plugin' && src?.plugin === 'agy-link' && src?.form === 'notice'
+  return isAgyLinkNoticeSource((msg as unknown as { source?: { kind?: unknown; form?: unknown } }).source)
 }
 
 /**

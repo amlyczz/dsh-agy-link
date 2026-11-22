@@ -25,6 +25,7 @@ import { runAgyAttempt } from '../provider/attempt-outcome.ts'
 export { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from '../provider/notices.ts'
 export { AGY_PROMPT_SAFE_BYTES, AGY_SINGLE_MESSAGE_MAX_BYTES, buildDigest, collectUnsentImageRefs, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserMessageAny, latestUserTaskText, utf8Bytes } from '../provider/prompt-text.ts'
 import { Err, accountsShareSingleEgress, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { isAgyLinkNoticeSource } from '../common/agy-link-source.ts'
 import type { RunRecording } from './recording.ts'
 import { defaultEffortFor, findEntry, resolveModelSlug } from './models.ts'
 import { detectSystemProxy } from './wincred.ts'
@@ -508,8 +509,8 @@ export class AgyAdapter extends LlmAdapter {
 
     // Dispatch to attempt-outcome.ts. Inject private state callbacks so adapter owns activeRuns/failover.
     if (!isAux && sessionKey !== '') {
-      const lastUser = [...messages].reverse().find((m) => m.role === 'user') as { source?: { kind?: unknown; plugin?: unknown; form?: unknown } } | undefined
-      const isWakeNotice = lastUser?.source?.kind === 'plugin' && lastUser?.source?.plugin === 'agy-link' && lastUser?.source?.form === 'notice'
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user') as { source?: { kind?: unknown; form?: unknown } } | undefined
+      const isWakeNotice = isAgyLinkNoticeSource(lastUser?.source)
       if (!isWakeNotice) this.deps.backgroundObserver?.onHumanTurn?.(sessionKey)
       this.deps.backgroundObserver?.onAttemptStart?.(sessionKey)
     }
