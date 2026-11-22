@@ -400,7 +400,9 @@ test('the style sheet refreshes itself when a reload left a stale tag behind', (
   // rules of an already-installed (older) sheet were never replaced and newly
   // added rules — like the hover hint — silently never applied.
   assert.match(source, /const existing = doc\.getElementById\(STYLE_ID\)/)
-  assert.match(source, /if \(existing\.textContent !== CSS\) existing\.textContent = CSS/)
+  // The ACP card sheet now sits in the same bundle, so tsdown suffixes the two
+  // module-level stylesheet constants (CSS / CSS$1) — match the guard loosely.
+  assert.match(source, /if \(existing\.textContent !== CSS\$?\d*\) existing\.textContent = CSS\$?\d*/)
   assert.match(source, /STYLE_ID = ["']dsh-agy-link-tsl-css-v2["']/)
 })
 

@@ -64,20 +64,28 @@ function clipText(text: string, maxChars: number): string {
   return flat.slice(0, Math.max(0, maxChars - 1)) + '…'
 }
 
+/** ACP statuses that mean the tool call has not reached a terminal state yet. */
+const ACP_LIVE_STATUSES = new Set(['pending', 'in_progress', 'running', 'active'])
+
 /**
- * True when the call had not finished when the turn ended — the signal that it
- * was handed off to the background.
- *
- * `RUNNING` is what the CLI transport reports. The ACP transport only knows
- * pending / in_progress / completed, and it maps a live call to `ACTIVE`, so a
- * live state in either vocabulary counts. A call that already reported a
- * terminal state is never treated as background, however live it looked earlier
- * in the same turn.
+ * True when a tool call had not finished when the turn ended — the signal that
+ * it was handed off to the background. `RUNNING` is what the CLI transport
+ * reports; ACP never says RUNNING (it only knows pending / in_progress /
+ * completed), so a live ACP status counts as well. A call that already received
+ * a terminal update is never treated as background, however live it looked
+ * earlier in the same turn.
  */
-function isStillLive(state: string | undefined): boolean {
-  if (state === undefined || state === '') return false
-  const s = state.toLowerCase()
-  return s === 'running' || s === 'active' || s === 'pending' || s === 'in_progress'
+function isStillLive(state: string | undefined, rawStatus: string | undefined): boolean {
+  // Compare case-insensitively: the recorder maps CLI statuses to upper case
+  // (RUNNING / DONE) while callers and fixtures sometimes hand over the raw
+  // lower-case vocabulary. Both spellings mean the same thing.
+  const mapped = (state ?? '').toLowerCase()
+  if (mapped === 'running' || mapped === 'active') return true
+  if (mapped === 'done' || mapped === 'error' || mapped === 'canceled' || mapped === 'cancelled') return false
+  const status = (rawStatus ?? '').toLowerCase()
+  if (status !== '' && ACP_LIVE_STATUSES.has(status)) return true
+  // A bare pending / in_progress in the state slot is the same signal.
+  return ACP_LIVE_STATUSES.has(mapped)
 }
 
 /** Cheap pre-filter: could this call plausibly start a background job? */
@@ -99,13 +107,6 @@ export function isBackgroundWakeupNotice(msg: Message | undefined): boolean {
   return src?.kind === 'plugin' && src?.plugin === 'agy-link' && src?.form === 'notice'
 }
 
-/**
- * Background work still pending after the turn ended.
- *
- * Recurring `CronExpression` schedules are reported as `ignoredRecurringCron`
- * instead of being armed: a CLI `-p` turn owns that timer, so it dies with the
- * process and cannot be re-armed from here.
- */
 export function extractAttemptBackgroundSignals(
   rec: ReadableRecordingLike,
   now = Date.now(),
@@ -117,9 +118,8 @@ export function extractAttemptBackgroundSignals(
   // Track which tool steps had later substantial assistant/tool progress
   // well after the schedule call (indicating in-turn self-wakeup).
   const scheduleCandidates: Array<{ index: number; ts: number; item: PendingScheduleSignal }> = []
-  // Last event seen per tool call. The final state decides whether the call was
-  // a background job still running when the turn ended, so it must be judged
-  // after the whole recording has been read.
+  // Last event seen per tool call, filled in the first pass and judged in the
+  // second one (see the comment there).
   const toolCalls = new Map<string, {
     toolName: string
     name: string
@@ -144,7 +144,7 @@ export function extractAttemptBackgroundSignals(
         ignoredRecurringCron = true
         continue
       }
-      if (duration !== undefined && duration > 0 && !isTerminalState(ev.state)) {
+      if (duration !== undefined && duration > 0 && ev.state !== 'ERROR' && ev.state !== 'CANCELED' && ev.state !== 'CANCELLED') {
         scheduleCandidates.push({
           index: i,
           ts: evTs,
@@ -161,13 +161,23 @@ export function extractAttemptBackgroundSignals(
       continue
     }
 
+    // Remember the LAST event of every tool call: its final state decides
+    // whether the call was a background job still running when the turn ended.
     if (BACKGROUND_TOOL_NAMES.has(name) || hasBackgroundTaskHint(input, ev)) {
       toolCalls.set(ev.stepKey, { toolName: unwrapped.tool, name, input, event: ev })
     }
   }
 
   for (const call of toolCalls.values()) {
-    if (!isStillLive(call.event.state)) continue
+    // `stillLive` is the state of the LAST event seen for this call:
+    //   • CLI reports terminal states in place (DONE / ERROR) and marks a job
+    //     that is still running as RUNNING.
+    //   • ACP reports `in_progress` / `pending` while the tool lives and sends a
+    //     `completed` update for the same toolCallId when it finishes. A call
+    //     still not terminal when the turn ended is exactly the background job
+    //     we must keep watching; a call that DID get a terminal update is not,
+    //     however live it looked earlier.
+    if (!isStillLive(call.event.state, call.event.rawStatus)) continue
     const output = typeof call.event.tool?.output === 'string' ? call.event.tool.output : call.event.text
     const taskMatch = /\b(task-\d+)\b/i.exec(output) ?? /\b(task-\d+)\b/i.exec(JSON.stringify(call.input))
     const taskId = taskMatch?.[1] ?? (typeof call.input.bgTaskId === 'string' ? call.input.bgTaskId : undefined)
@@ -205,12 +215,6 @@ export function extractAttemptBackgroundSignals(
   }
 
   return { schedules, backgroundTools, ignoredRecurringCron }
-}
-
-function isTerminalState(state: string | undefined): boolean {
-  if (state === undefined) return false
-  const s = state.toLowerCase()
-  return s === 'done' || s === 'error' || s === 'canceled' || s === 'cancelled' || s === 'failed'
 }
 
 export function matchesTimerCondition(condition: string, sender: string | undefined): boolean {

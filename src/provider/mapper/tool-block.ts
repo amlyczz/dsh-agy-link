@@ -58,9 +58,11 @@ export function buildToolCallBlock(input: ToolCallBlockInput): ToolCallBlockResu
       })
   const rawCallId = mirrorCallId(input.runId, input.absIndex)
   const assignedCallId = rememberToolCallId(input.toolCallStates, rawCallId, toolName)
-  // Forward the last per-call context sample instead of a hard 0/0: DSH's
-  // token meter treats the last reported sample as current context occupancy,
-  // so a zero here reset the meter on every tool hop of an agentic turn.
+  // Forward the last per-call context sample when there is one. With no sample
+  // the usage chunk is OMITTED rather than sent as 0/0: DSH treats a missing
+  // usage chunk as "no new measurement" (it keeps the previous context
+  // pressure and does not count the step towards decode time), while an
+  // explicit 0/0 resets the meter and drags token speed down (issue #158).
   const trackedCut = input.finalUsage()
   const chunks: StreamChunk[] = [
     { type: 'block-start', index: idx, blockType: 'tool-call' },
@@ -74,12 +76,9 @@ export function buildToolCallBlock(input: ToolCallBlockInput): ToolCallBlockResu
         arguments: argumentsJson,
       },
     },
-    {
-      type: 'usage',
-      usage: trackedCut !== undefined && Object.keys(trackedCut).length > 0
-        ? usageFromRaw(trackedCut)
-        : { inputTokens: 0, outputTokens: 0 },
-    },
+    ...(trackedCut !== undefined && Object.keys(trackedCut).length > 0
+      ? [{ type: 'usage' as const, usage: usageFromRaw(trackedCut) }]
+      : []),
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ]
   return { chunks, nextBlockIdx: idx + 1 }

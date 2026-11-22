@@ -12,6 +12,20 @@ import type { OneShotResult } from '../oneshot.ts'
 import type { EcosystemService } from '../../features/ecosystem/index.ts'
 import type { BackgroundWakeStatus } from '../../common/background-types.ts'
 
+/**
+ * ACP pool view for the status surfaces. The three drain/slot fields are
+ * optional so host stubs written before they existed still satisfy the shape.
+ */
+export interface AcpStatusView {
+  activeProcesses: number
+  sessions: number
+  keys: readonly string[]
+  drainingProcesses?: number
+  drainingKeys?: readonly string[]
+  slotOverwriteDetectedCount?: number
+  lastSlotRecoveryAt?: number | null
+}
+
 export interface GoalViewLike {
   id: string
   revision: number
@@ -58,7 +72,7 @@ export interface CommandDeps {
   goals?: () => GoalServiceLike | undefined
   agents?: () => { get(id: unknown): unknown } | undefined
   imageService?: () => import('../image.ts').ImageService
-  acpStatus?: () => { activeProcesses: number; sessions: number; keys: readonly string[] }
+  acpStatus?: () => AcpStatusView
   backgroundStatus?: () => BackgroundWakeStatus
   ecosystem?: () => EcosystemService
   runOnce?: (req: {

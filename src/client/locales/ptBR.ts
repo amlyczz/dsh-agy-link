@@ -208,7 +208,7 @@ export const ptBR: AgyDictionary = {
   'config.syncCustomizations': 'Sincronização de ecossistema multi-conta',
   'config.syncCustomizationsDesc': 'Espelha Plugins, MCP, Skills, Rules e Agents da conta principal para contas isoladas do pool',
   'config.backgroundWakeup': 'Despertar automático em segundo plano',
-  'config.backgroundWakeupDesc': 'Desativado por padrão. Quando ativado, sessões ociosas do DSH despertam sozinhas ao vencer um timer ou concluir uma tarefa/ACP',
+  'config.backgroundWakeupDesc': 'Desativado por padrão. Quando ativado, sessões ociosas do DSH reativam sozinhas quando um timer vence ou uma tarefa/ACP termina',
   'config.agent': 'Agente personalizado (--agent)',
   'config.agentDesc': 'Nome do agente Markdown personalizado; deixe em branco para usar o padrão',
   'config.agentPlaceholder': 'Nome do agente (vazio = padrão)',
@@ -247,6 +247,15 @@ export const ptBR: AgyDictionary = {
   'tsl.failed': 'Falha na tradução',
   'tsl.retry': 'Tentar novamente',
   'tsl.empty': 'Nada para traduzir',
+  'acp.reportBadge': 'Relatório em segundo plano do agy',
+  'acp.reportHint': 'Enviado pelo agy · sem consumir um turno extra',
+  'acp.drainBadge': 'Tarefa em segundo plano do agy interrompida',
+  'acp.resetBadge': 'Sessão do agy reconstruída',
+  'acp.resetText':
+    'A sessão ACP persistente foi redefinida (o agy não a encontrava mais); uma nova sessão foi criada e o histórico da conversa foi transferido.',
+  'acp.drainText':
+    'As tarefas em segundo plano da conta anterior foram interrompidas porque a credencial compartilhada mudou de conta.',
+  'acp.noticeHint': 'Aviso do canal do agy',
   'tsl.collapse': 'Recolher',
   'tsl.expand': 'Expandir',
 }

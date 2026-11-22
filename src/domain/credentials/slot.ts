@@ -3,12 +3,12 @@
 // acquire/release transitions.
 //
 // MOVED VERBATIM from src/host/credential-slot.ts (Phase 5g). Module-level
-// mutable state (primaryFastRuns / installedIdentity / pending switch targets)
-// lives HERE so the host facade and every caller share exactly one instance.
+// mutable state (fast-path counters / installed identity / pending targets)
+// lives in switch-state.ts so the host facade and every caller share exactly one
+// instance.
 // Platform operations arrive through `CredentialPlatform`; nothing in this file
 // imports host/wincred/oauth/net.
 
-import { EventEmitter } from 'node:events'
 import type { ManagedAccount } from '../../common/pool-types.ts'
 import {
   accountTokenFilePath,
@@ -52,51 +52,28 @@ import { resolvePrimaryCredentialAt, type AccountPoolLike } from './resolve.ts'
 // the active pool account starved every other session — three cardboard-empire
 // turns parked ~9 minutes behind a single run on 2026-10-17.
 
-let primaryFastRuns = 0
+import {
+  claimSwitchTarget,
+  currentInstalledIdentity,
+  enterPrimaryFastRun,
+  leavePrimaryFastRun,
+  isSlotSwitchPending,
+  pendingSwitchKeys,
+  primaryFastRunCount,
+  releaseSwitchTarget,
+  setInstalledIdentity,
+  slotEvents,
+  type InstalledIdentity,
+} from './switch-state.ts'
+import { slotEmailMatches as slotEmailMatchesIn, slotIdentity, type AcquireInput } from './guards.ts'
 
-export interface InstalledIdentity {
-  /** Credential grant currently installed in the Windows slot. */
-  fingerprint: string
-  /** Runs relying on it: the handoff owner plus same-identity fast leases. */
-  holders: number
-  /** Persist a rotated token, restore the primary, release the mutex. */
-  finish: () => void
-}
+export { fastPathRunCount, isSlotSwitchPending } from './switch-state.ts'
 
-/** The secondary identity currently installed in the slot, if any. */
-let installedIdentity: InstalledIdentity | null = null
+// The identity checks (gate 1), the primary re-assertion (gate 3) and the
+// `AcquireInput` they share live in guards.ts, the fast-path counters and the
+// switch-target bookkeeping in switch-state.ts, so this state machine stays
+// under the module budget.
 
-/** Event bus to immediately wake queued same-identity runs when an identity is installed. */
-const slotEvents = new EventEmitter()
-slotEvents.setMaxListeners(500)
-
-/**
- * Identities that waiting runs want installed, keyed by grant fingerprint
- * (`'primary'` for the system account). Same-identity peers may still join
- * while a key for their OWN grant is pending; joins are refused as soon as a
- * DIFFERENT identity waits, so a switcher can never be postponed forever.
- */
-const pendingSwitchTargets = new Map<string, number>()
-
-function claimSwitchTarget(key: string): void {
-  pendingSwitchTargets.set(key, (pendingSwitchTargets.get(key) ?? 0) + 1)
-}
-
-function releaseSwitchTarget(key: string): void {
-  const left = (pendingSwitchTargets.get(key) ?? 0) - 1
-  if (left > 0) pendingSwitchTargets.set(key, left)
-  else pendingSwitchTargets.delete(key)
-}
-
-/** Live same-identity run count — exported for diagnostics. */
-export function fastPathRunCount(): number {
-  return primaryFastRuns + (installedIdentity?.holders ?? 0)
-}
-
-/** True while a run is waiting for (or performing) a slot identity switch. */
-export function isSlotSwitchPending(): boolean {
-  return pendingSwitchTargets.size > 0
-}
 
 /**
  * Leave a reference-counted secondary identity. The last holder completes the
@@ -106,27 +83,10 @@ function leaveInstalledIdentity(state: InstalledIdentity): void {
   if (state.holders <= 0) return
   state.holders -= 1
   if (state.holders > 0) return
-  if (installedIdentity === state) installedIdentity = null
+  if (currentInstalledIdentity() === state) setInstalledIdentity(null)
   state.finish()
 }
 
-// ---- resolved inputs -------------------------------------------------------
-
-/**
- * Everything the state machine needs, already resolved by the host facade:
- * platform operations, the two base directories and the public options.
- */
-export interface AcquireInput {
-  baseDir: string
-  homeDir: string
-  platform: CredentialPlatform
-  log: (msg: string) => void
-  signal?: AbortSignal
-  dispatchTimeoutMs?: number
-  parallel?: boolean
-  proxyUrl?: string
-  force?: boolean
-}
 
 export interface SlotAcquireOptions {
   account: ManagedAccount
@@ -248,6 +208,25 @@ class SlotAcquire {
   }
 
   /**
+   * Gate 1: prove the slot document really names `expected` before trusting it.
+   *
+   * A matching refresh grant is NOT proof of identity (signing the same account
+   * in again mints a new grant), and the slot is shared by every agy process on
+   * the machine. Returns false when agy's own recorded identity disagrees, so
+   * the caller reinstalls instead of silently spending another account's quota.
+   */
+  private slotEmailMatches(expected: string | undefined): boolean {
+    const matches = slotEmailMatchesIn(this.io, expected)
+    if (!matches) {
+      this.log(
+        '[agy-link] credential slot holds ' + (slotIdentity(this.io) ?? 'an unreadable document') +
+          ' but ' + expected + ' was requested — reinstalling the credential',
+      )
+    }
+    return matches
+  }
+
+  /**
    * Same-account fast path: no mutex, no wait. N sessions on the primary
    * account run in parallel.
    */
@@ -255,18 +234,22 @@ class SlotAcquire {
     if (!this.parallel || !this.isPrimarySlot || isSlotSwitchPending() || this.signal?.aborted) return null
     const stored = readPrimaryCredentialAt(this.baseDir)
     if (!stored || !sameCredentialGrant(this.io.readSlot(), stored.raw)) return null
-    primaryFastRuns += 1
+    // The slot's grant matches the stored primary, but the identity agy recorded
+    // in it may belong to another account (a refreshed foreign document can keep
+    // the same shape). Never fast-path a slot we cannot identify.
+    if (!this.slotEmailMatches(stored.email)) return null
+    enterPrimaryFastRun()
     this.log('[agy-link] same-account fast path: slot already holds the primary credential — running without exclusivity')
     return {
       identity: stored.email,
       release: (): void => {
-        primaryFastRuns = Math.max(0, primaryFastRuns - 1)
+        leavePrimaryFastRun()
         // Opportunistic in-place refresh capture: agy may have rotated the
         // access token (same grant). Cheap and guarded by the grant check —
         // concurrent releases writing identical content are harmless.
         try {
           const afterRaw = this.io.readSlot()
-          if (afterRaw && afterRaw !== stored.raw && sameCredentialGrant(afterRaw, stored.raw)) {
+          if (afterRaw && afterRaw !== stored.raw && sameCredentialGrant(afterRaw, stored.raw) && this.slotEmailMatches(stored.email)) {
             writePrimaryCredentialAt({ raw: afterRaw, email: stored.email, savedAt: Date.now() }, this.baseDir)
           }
         } catch {
@@ -280,16 +263,17 @@ class SlotAcquire {
   private joinInstalled(): SlotLease | null {
     if (!this.parallel || this.isPrimarySlot || this.requestedRaw === null || this.requestedFingerprint === null) return null
     if (this.signal?.aborted) return null
-    const state = installedIdentity
+    const state = currentInstalledIdentity()
     if (state === null || state.fingerprint !== this.requestedFingerprint) return null
     // Refuse to extend an installed identity while ANOTHER identity waits to
     // switch in — that guard is what keeps the switcher from starving.
-    for (const key of pendingSwitchTargets.keys()) {
+    for (const key of pendingSwitchKeys()) {
       if (key !== this.switchKey) return null
     }
     // Prove the slot still carries this grant: never join an identity the
     // machine no longer holds (another host may have replaced it).
     if (!sameCredentialGrant(this.io.readSlot(), this.requestedRaw)) return null
+    if (!this.slotEmailMatches(this.account.email)) return null
     state.holders += 1
     return {
       identity: this.account.email,
@@ -445,7 +429,8 @@ class SlotAcquire {
 
   /** Primary run: slot repair (or full serialization when parallel is off). */
   private primaryLease(primary: PrimaryCredential): SlotLease {
-    if (!sameCredentialGrant(this.io.readSlot(), primary.raw)) {
+    const identityOk = this.slotEmailMatches(primary.email)
+    if (!identityOk || !sameCredentialGrant(this.io.readSlot(), primary.raw)) {
       this.log('[agy-link] re-asserting the primary credential into the Windows credential slot')
       installSlotOrThrow(this.io, primary.raw, this.log, 'primary')
     }
@@ -460,8 +445,9 @@ class SlotAcquire {
           const afterRaw = this.io.readSlot()
           if (sameCredentialGrant(afterRaw, primary.raw)) {
             // agy may have refreshed the access token in place — keep the
-            // durable copy current. The identity is unchanged.
-            if (afterRaw && afterRaw !== primary.raw) {
+            // durable copy current. The identity is unchanged, and the recorded
+            // identity must say so before anything is copied over.
+            if (afterRaw && afterRaw !== primary.raw && this.slotEmailMatches(primary.email)) {
               writePrimaryCredentialAt({ raw: afterRaw, email: primary.email, savedAt: Date.now() }, this.baseDir)
             }
           } else if (afterRaw) {
@@ -479,18 +465,18 @@ class SlotAcquire {
 
   /** Wait out live same-account primary runs before swapping the slot. */
   private async drainPrimaryFastRuns(): Promise<void> {
-    if (!this.parallel || primaryFastRuns <= 0) return
+    if (!this.parallel || primaryFastRunCount() <= 0) return
     const deadline = this.dispatchTimeoutMs !== undefined && this.dispatchTimeoutMs > 0
       ? Date.now() + this.dispatchTimeoutMs
       : 0
-    this.log(`[agy-link] waiting for ${primaryFastRuns} same-account run(s) to finish before switching the credential slot to ${this.account.alias || this.account.id}`)
-    while (primaryFastRuns > 0) {
+    this.log(`[agy-link] waiting for ${primaryFastRunCount()} same-account run(s) to finish before switching the credential slot to ${this.account.alias || this.account.id}`)
+    while (primaryFastRunCount() > 0) {
       if (this.signal?.aborted) {
         throw new AbortedWaitError('aborted while waiting for same-account runs to finish')
       }
       if (deadline !== 0 && Date.now() > deadline) {
         throw new WaitTimeoutError(
-          `timed out waiting for ${primaryFastRuns} same-account run(s) to finish before switching the credential slot`,
+          `timed out waiting for ${primaryFastRunCount()} same-account run(s) to finish before switching the credential slot`,
         )
       }
       await new Promise((r) => setTimeout(r, 200))
@@ -535,6 +521,23 @@ class SlotAcquire {
     accountFingerprint: string,
   ): SlotLease {
     installSlotOrThrow(this.io, accountRaw, this.log, this.account.alias || this.account.id)
+    // Gate 1 after the write: prove agy will load THIS account. A rejected or
+    // raced write leaves the previous account in place, and running anyway would
+    // bill it for this account's turn.
+    // Retry with a FRESH read: Windows Credential Manager occasionally reports
+    // success while the previous value is still cached, so re-reading the same
+    // buffer would only prove we wrote what we think we wrote.
+    if (!this.slotEmailMatches(this.account.email)) {
+      installSlotOrThrow(this.io, accountRaw, this.log, this.account.alias || this.account.id)
+      if (!this.slotEmailMatches(this.account.email)) {
+        this.done()
+        throw new SlotUnavailableError(
+          'The Windows credential slot still holds a different account after installing ' +
+            (this.account.alias || this.account.id) +
+            "'s credential — refusing to run, because agy would authenticate as the other account.",
+        )
+      }
+    }
     this.releaseLockFileNow()
     // This account's identity is installed and STAYS installed while any
     // same-identity peer is live: the mutex this lease holds is handed back by
@@ -549,9 +552,12 @@ class SlotAcquire {
           const afterRaw = this.io.readSlot()
           const afterFingerprint = credentialFingerprint(afterRaw)
           if (sameCredentialGrant(afterRaw, accountRaw)) {
-            // Slot still belongs to this account: agy may have refreshed the
-            // access token, so persist it back into the account's own file.
-            if (afterRaw && afterRaw !== accountRaw) {
+            // Slot still carries this account's GRANT — but a grant is not an
+            // identity: another process can refresh the same grant while naming
+            // a different account in the document. Copying that back would put
+            // a foreign login into the account's own file, so the identity agy
+            // recorded must agree before anything is written.
+            if (afterRaw && afterRaw !== accountRaw && this.slotEmailMatches(this.account.email)) {
               if (readTokenFileRaw(accountFile) === accountRaw && writeFileAtomic(accountFile, afterRaw)) {
                 saveCredentialBackup(accountFile, afterRaw)
               }
@@ -574,7 +580,7 @@ class SlotAcquire {
         }
       },
     }
-    installedIdentity = state
+    setInstalledIdentity(state)
     // Identity installed: peers on this grant may join now. A queued switcher
     // keeps its own claim, so this only releases THIS run's guard.
     this.releaseClaim()
@@ -585,4 +591,3 @@ class SlotAcquire {
     }
   }
 }
-

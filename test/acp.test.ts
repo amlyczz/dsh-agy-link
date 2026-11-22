@@ -20,7 +20,7 @@ import { RunRegistry } from '../src/host/recording.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import type { AttemptDeps, AttemptInput, AttemptSlot } from '../src/provider/attempt.ts'
 
-function createMockAcpBin(dir: string, behavior: 'normal' | 'fail-resume-load' | 'hang-prompt' | 'crash-on-prompt' = 'normal'): string {
+function createMockAcpBin(dir: string, behavior: 'normal' | 'fail-resume-load' | 'hang-prompt' | 'crash-on-prompt' | 'crash-after-chunk' = 'normal'): string {
   const scriptPath = join(dir, `mock-acp-${behavior}.mjs`)
   const script = `
 import { createInterface } from 'node:readline';
@@ -52,6 +52,12 @@ rl.on('line', (line) => {
     return;
   }
   if (msg.method === 'session/load') {
+    // A real agy replays the stored transcript; an id that does not exist
+    // "succeeds" with nothing. Only the replay is evidence of a real restore.
+    if (mode === 'fail-resume-load') {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: msg.params.sessionId, update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'earlier question' } } } });
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: msg.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'earlier answer' } } } });
+    }
     send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: msg.params.sessionId } });
     return;
   }
@@ -72,6 +78,14 @@ rl.on('line', (line) => {
     if (mode === 'crash-on-prompt') {
       process.stderr.write('fatal acp stderr');
       process.exit(2);
+    }
+    if (mode === 'crash-after-chunk') {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } } } });
+      setTimeout(() => {
+        process.stderr.write('fatal acp stderr');
+        process.exit(2);
+      }, 30);
+      return;
     }
     if (mode === 'hang-prompt') {
       send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'tool_call', toolCallId: 'tc-hang', name: 'run_command', status: 'running', rawInput: { CommandLine: 'sleep' } } } });
@@ -143,8 +157,18 @@ test('ACP protocol helpers map updates, tool outputs, usage, results, and permis
 
   const text = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } }, st)
   assert.equal(text[0]?.kind, 'step')
-  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage?.input_tokens, 120)
+  // issue #158: `used` is context occupancy, not a usage sample — it must not
+  // ride along on streamed steps as input_tokens.
+  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage, undefined)
+  assert.equal(st.lastContextUsed, 120)
   assert.equal(st.accumulatedText, 'hi')
+
+  // A usage_update that DOES carry real counts (future agy) is still recorded.
+  acpUpdateToAgyEvents('s1', { sessionUpdate: 'usage_update', used: 130, cachedReadTokens: 90, outputTokens: 7 }, st)
+  assert.equal(st.lastUsage.cache_read_tokens, 90)
+  assert.equal(st.lastUsage.output_tokens, 7)
+  const text2 = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '!' } }, st)
+  assert.equal((text2[0] as Extract<AgyEvent, { kind: 'step' }>).usage?.output_tokens, 7)
 
   const startTool = acpUpdateToAgyEvents('s1', {
     sessionUpdate: 'tool_call',
@@ -233,8 +257,11 @@ test('AcpProcess runs initialize, openSession, prompt streaming, and resume fall
   })
   const proc2 = new AcpProcess({ bin: loadBin, cwd: dir, permissionMode: 'skip', preemptAutoUpdate: false })
   try {
-    const sid = await proc.openSession({ cwd: dir, addDirs: [dir], model: 'gemini-4-hydrogen', effort: 'medium', mode: 'auto' })
+    const opened = await proc.openSession({ cwd: dir, addDirs: [dir], model: 'gemini-4-hydrogen', effort: 'medium', mode: 'auto' })
+    const sid = opened.sessionId
     assert.equal(sid, 'acp-sess-1')
+    assert.equal(opened.status, 'created')
+    assert.equal(opened.resumeFailed, false)
     assert.equal(proc.isAlive(), true)
     assert.equal(proc.sessionCount, 1)
 
@@ -251,11 +278,14 @@ test('AcpProcess runs initialize, openSession, prompt streaming, and resume fall
 
     // Reuse already-open session without issuing another session/new.
     const reused = await proc.openSession({ cwd: dir, resumeId: sid, mode: 'auto' })
-    assert.equal(reused, sid)
+    assert.equal(reused.sessionId, sid)
+    assert.equal(reused.status, 'cached')
 
     // Resume fallback to session/load when session/resume errors.
     const sid2 = await proc2.openSession({ cwd: dir, resumeId: 'prev-cid', mode: 'skip' })
-    assert.equal(sid2, 'prev-cid')
+    assert.equal(sid2.sessionId, 'prev-cid')
+    assert.equal(sid2.status, 'loaded')
+    assert.equal(sid2.resumeFailed, false)
   } finally {
     await Promise.all([closeProc(proc), closeProc(proc2)])
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
@@ -269,7 +299,7 @@ test('AcpProcess enforces idle/maxTurn timeouts, abort cancellation, and crash r
   const proc = new AcpProcess({ bin: hangBin, cwd: dir, permissionMode: 'skip', preemptAutoUpdate: false })
   const crashProc = new AcpProcess({ bin: crashBin, cwd: dir, permissionMode: 'skip', preemptAutoUpdate: false })
   try {
-    const sid = await proc.openSession({ cwd: dir })
+    const { sessionId: sid } = await proc.openSession({ cwd: dir })
 
     await assert.rejects(
       proc.prompt({ sessionId: sid, text: 'wait', timeoutMs: 40, idleTimeoutMs: 40, longToolIdleMs: 90, onUpdate: () => {} }),
@@ -288,7 +318,7 @@ test('AcpProcess enforces idle/maxTurn timeouts, abort cancellation, and crash r
       /maxTurn/,
     )
 
-    const crashSid = await crashProc.openSession({ cwd: dir })
+    const { sessionId: crashSid } = await crashProc.openSession({ cwd: dir })
     await assert.rejects(
       crashProc.prompt({ sessionId: crashSid, text: 'crash', timeoutMs: 5_000, onUpdate: () => {} }),
       /exited/,
@@ -481,13 +511,31 @@ test('runAcpAttempt streams happy path, falls back cleanly on pre-stream failure
     assert.equal(abortedRec.failureInfo?.kind, 'aborted')
     assert.equal(released, beforeRelease + 1)
 
-    // 4. Unexpected child exit during prompt classifies as failure instead of hanging
-    const crashRec = await runAcpAttempt(crashPool, deps, { ...baseInput, bin: createMockAcpBin(dir, 'crash-on-prompt'), sessionKey: 'sess-acp-crash', persistBinding: false }, slot())
+    // 4. A child that dies before emitting anything is a dead transport, not an
+    // answer: the attempt hands back null so the caller re-runs over CLI -p.
+    const beforeCrashRelease = released
+    const deadRec = await runAcpAttempt(crashPool, deps, { ...baseInput, bin: createMockAcpBin(dir, 'crash-on-prompt'), sessionKey: 'sess-acp-dead', persistBinding: false }, slot())
+    assert.equal(deadRec, null, 'a turn with no output must fall back to the CLI transport')
+    assert.equal(released, beforeCrashRelease, 'the fallback keeps the slot held for the CLI retry')
+
+    // 5. A child that dies AFTER producing output keeps its partial answer and
+    // classifies as a failure instead of being retried (that would duplicate it).
+    const crashPool2 = new AcpSessionPool({
+      bin: () => createMockAcpBin(dir, 'crash-after-chunk'),
+      cfg: () => cfg,
+      createProcess: (o) => {
+        const p = new AcpProcess({ ...o, preemptAutoUpdate: false })
+        spawnedProcs.push(p)
+        return p
+      },
+    })
+    const crashRec = await runAcpAttempt(crashPool2, deps, { ...baseInput, bin: createMockAcpBin(dir, 'crash-after-chunk'), sessionKey: 'sess-acp-crash', persistBinding: false }, slot())
     assert.ok(crashRec)
     for await (const _ of crashRec.eventsFrom(0)) { /* wait for settlement */ }
     assert.ok(crashRec.failureInfo !== null)
     assert.equal(crashRec.failureInfo?.kind, 'error')
     assert.equal(crashRec.failureInfo?.code, Err.PROCESS_EXIT)
+    crashPool2.dispose()
   } finally {
     await Promise.all(spawnedProcs.map((p) => closeProc(p)))
     pool.dispose()

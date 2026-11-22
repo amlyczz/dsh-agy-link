@@ -72,11 +72,14 @@ test('every emitted chunk is lossless JSON (no undefined fields)', () => {
   const toolFinish = chunks.find((c) => (c as { type?: string; reason?: { kind?: string } }).type === 'finish' && (c as { reason: { kind: string } }).reason.kind === 'tool-calls') as Record<string, unknown>
   assert.ok(toolFinish, 'tool-calls finish present')
   assert.ok(!('replayState' in toolFinish), 'cut finish carries no replayState')
-  // usage chunk from the cut span is zeroed
+  // issue #158: a cut with no measurement omits the usage chunk entirely
+  // instead of sending a placeholder 0/0 that resets DSH's context meter.
+  const cutUsage = chunks.slice(0, chunks.indexOf(toolFinish)).find((c) => (c as { type?: string }).type === 'usage')
+  assert.equal(cutUsage, undefined, 'tool cut without a sample emits no usage chunk')
   const usageChunk = chunks.find((c) => (c as { type?: string }).type === 'usage') as { usage: Record<string, unknown> }
   assert.ok(!('cacheReadTokens' in usageChunk.usage), 'absent cache counter omitted')
   assert.ok(!('reasoningTokens' in usageChunk.usage))
-  assert.equal(usageChunk.usage.inputTokens, 0)
+  assert.equal(usageChunk.usage.inputTokens, 1)
   // final finish: replayState present (conversationId non-empty)
   const finish = chunks.filter((c) => (c as { type?: string }).type === 'finish').pop() as { replayState?: unknown; reason: { kind: string } }
   assert.equal(finish.reason.kind, 'stop')

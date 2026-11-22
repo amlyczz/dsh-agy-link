@@ -1251,3 +1251,129 @@ test('a rejected slot write refuses the run instead of spending the installed ac
     for (const d of [baseDir, homeDir]) rmSync(d, { recursive: true, force: true })
   }
 })
+
+// ---- gate 1: the slot document must NAME the account we are about to run ----
+//
+// agy writes the identity it loaded next to the token (id_token_email), so the
+// slot can be identified WITHOUT a network call. A matching refresh grant is
+// not proof of identity: signing the same account in again mints a new grant,
+// and a foreign document can keep the old shape.
+
+function tokenDocWithEmail(refreshToken: string, email: string): string {
+  return JSON.stringify({
+    token: {
+      access_token: 'access-' + refreshToken,
+      token_type: 'Bearer',
+      refresh_token: refreshToken,
+      expiry: new Date(Date.now() + 3600_000).toISOString(),
+    },
+    auth_method: 'consumer',
+    id_token_email: email,
+  })
+}
+
+test('parseCredentialDoc reads the identity agy records in the slot document', () => {
+  assert.equal(parseCredentialDoc(tokenDocWithEmail('R1', 'me@example.com'))?.email, 'me@example.com')
+  assert.equal(parseCredentialDoc(tokenDoc('R2'))?.email, undefined, 'a document without the field reports no identity')
+  assert.equal(parseCredentialDoc('not json'), null)
+})
+
+test('a slot that names another account is not trusted as the primary fast path', async () => {
+  const baseDir = tmp('agy-email-fast-')
+  const homeDir = tmp('agy-email-fast-home-')
+  try {
+    writePrimaryCredential({ raw: tokenDoc('PRIMARY'), email: 'me@example.com', savedAt: 1 }, baseDir)
+    // SAME grant, different identity: the slot was refreshed by another
+    // account's agy process, so running here would spend its quota.
+    const io = memoryIo(tokenDocWithEmail('PRIMARY', 'other@example.com'))
+    const pool = fakePool([account('acc_primary', undefined, { systemHome: true, email: 'me@example.com' })])
+    const logs: string[] = []
+    const lease = await acquireCredentialSlot(account('acc_primary', undefined, { systemHome: true, email: 'me@example.com' }), pool, {
+      baseDir,
+      homeDir,
+      io,
+      log: (m: string) => logs.push(m),
+    })
+    try {
+      assert.equal(fastPathRunCount(), 0, 'a mislabelled slot must not take the parallel fast path')
+      assert.ok(
+        logs.some((m) => m.includes('holds other@example.com but me@example.com was requested')),
+        'the mismatch is reported, not swallowed: ' + logs.join(' | '),
+      )
+      assert.equal(credentialFingerprint(io.current), 'r:PRIMARY', 'the slot is re-asserted from the durable store')
+      assert.equal(parseCredentialDoc(io.current)?.email, undefined, 'the re-asserted document is the stored one')
+    } finally {
+      lease?.release()
+    }
+  } finally {
+    for (const d of [baseDir, homeDir]) rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('a secondary install is verified after the write and refuses to run on the wrong account', async () => {
+  const baseDir = tmp('agy-email-sec-')
+  const homeDir = tmp('agy-email-sec-home-')
+  try {
+    writePrimaryCredential({ raw: tokenDoc('PRIMARY'), email: 'me@example.com', savedAt: 1 }, baseDir)
+    const accDir = tmp('agy-email-sec-acc-')
+    writeAccountToken(accDir, tokenDocWithEmail('SECONDARY', 'sec@example.com'))
+    // CredWrite reports success while the previous value is still cached
+    // (reproduced 2026-10-23): the slot keeps naming the primary.
+    let writeAttempts = 0
+    const io = memoryIo(tokenDocWithEmail('PRIMARY', 'me@example.com'), {
+      writeSlot: (): boolean => {
+        writeAttempts += 1
+        return true
+      },
+    })
+    const pool = fakePool([account('acc_primary', undefined, { systemHome: true, email: 'me@example.com' })])
+    await assert.rejects(
+      () =>
+        acquireCredentialSlot(account('sec', accDir, { email: 'sec@example.com' }), pool, {
+          baseDir,
+          homeDir,
+          io,
+          log: () => {},
+        }),
+      (err: unknown) => err instanceof SlotUnavailableError && /still holds a different account/.test(String(err)),
+    )
+    assert.ok(writeAttempts >= 2, 'the install is retried with a fresh read before giving up (got ' + writeAttempts + ')')
+    assert.equal(credentialSlotMutex.pending, 0, 'a refused install must not leak the mutex')
+    assert.equal(fastPathRunCount(), 0)
+  } finally {
+    for (const d of [baseDir, homeDir]) rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('a peer refuses to join an installed identity the slot no longer names', async () => {
+  const baseDir = tmp('agy-email-join-')
+  const homeDir = tmp('agy-email-join-home-')
+  try {
+    writePrimaryCredential({ raw: tokenDoc('PRIMARY'), email: 'me@example.com', savedAt: 1 }, baseDir)
+    const accDir = tmp('agy-email-join-acc-')
+    writeAccountToken(accDir, tokenDocWithEmail('SECONDARY', 'sec@example.com'))
+    const io = memoryIo(tokenDoc('PRIMARY'))
+    const pool = fakePool([account('acc_primary', undefined, { systemHome: true, email: 'me@example.com' })])
+    const opts = { baseDir, homeDir, io, log: () => {} }
+    const first = await acquireCredentialSlot(account('sec', accDir, { email: 'sec@example.com' }), pool, opts)
+    assert.equal(parseCredentialDoc(io.current)?.email, 'sec@example.com')
+    // Another process refreshed the slot for a DIFFERENT account while keeping
+    // this account's grant; a peer must not silently join it.
+    io.current = tokenDocWithEmail('SECONDARY', 'intruder@example.com')
+    let second: SlotLease | undefined
+    let settled = false
+    const pending = acquireCredentialSlot(account('sec', accDir, { email: 'sec@example.com' }), pool, opts).then((lease) => {
+      second = lease
+      settled = true
+    })
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(settled, false, 'a mislabelled slot must not be joined')
+    first?.release()
+    await pending
+    assert.equal(second?.identity, 'sec@example.com')
+    assert.equal(parseCredentialDoc(io.current)?.email, 'sec@example.com', 'the peer reinstalled its own credential')
+    second?.release()
+  } finally {
+    for (const d of [baseDir, homeDir]) rmSync(d, { recursive: true, force: true })
+  }
+})

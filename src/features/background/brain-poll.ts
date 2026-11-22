@@ -185,12 +185,27 @@ export function baselineSessionBrain(st: BrainScanState, brainDir: string): bool
   return hasAlive
 }
 
-/** One scan of the brain directory; reports new messages, finished tasks, and subagent transitions. */
+/** Collapse whitespace so a wrapped copy of the same sentence still matches. */
+function flatText(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * One scan of the brain directory; reports new messages, finished tasks, and
+ * subagent transitions.
+ *
+ * `alreadyDelivered` holds text the host has already shown the user (an ACP
+ * post-turn report written straight into the transcript). agy mirrors that same
+ * narration into `.system_generated/messages`, so without this the model would
+ * be woken to re-read a sentence already on screen.
+ */
 export function pollSessionBrainDir(
   st: BrainScanState,
   brainDir: string,
   onNotice: (item: WakeNoticeItem) => void,
+  alreadyDelivered: readonly string[] = [],
 ): { stoppedByServer: boolean } {
+  const delivered = new Set(alreadyDelivered.map(flatText).filter((t) => t !== ''))
   const msgBase = join(brainDir, '.system_generated', 'messages')
   for (const dir of [msgBase, join(msgBase, 'undelivered')]) {
     if (!existsSync(dir)) continue
@@ -205,6 +220,7 @@ export function pollSessionBrainDir(
         if (!summary || st.seenMessageKeys.has(summary.dedupKey)) continue
         st.seenMessageKeys.add(summary.dedupKey)
         if (SERVER_STOP_NOTICE_RE.test(summary.text)) return { stoppedByServer: true }
+        if (delivered.has(flatText(summary.text))) continue
         const finishedTask = taskIdFromMessage(parsed)
         if (finishedTask !== undefined) {
           // A detached job reported its outcome. This is the only reliable

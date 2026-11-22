@@ -256,10 +256,12 @@ export interface PluginConfig {
   /**
    * Wake idle DSH sessions across turns when an agy `schedule` timer,
    * detached background task/subagent, or persistent ACP update finishes
-   * after the turn ends (default false: opt-in, because a session that
-   * speaks on its own after the turn is a behaviour change every user has
-   * to ask for). Turn it on in Settings → Runtime controls, with
-   * `/agy config wakeup on`, or with `DSH_AGY_BACKGROUND_WAKEUP=1`.
+   * after the turn ends.
+   *
+   * Opt-in (default false): a session that speaks on its own after the turn is
+   * a behaviour change no existing install asked for. Turn it on in Settings →
+   * Runtime controls, with `/agy config wakeup on`, or with
+   * `DSH_AGY_BACKGROUND_WAKEUP=1`.
    */
   backgroundWakeup: boolean
   /** Max lifetime (minutes) to retain post-turn background watches/timers (default 30). */
@@ -283,6 +285,13 @@ export function defaultConfig(): PluginConfig {
     sandbox: false,
     agent: '',
     agySettings: '',
+    // ACP stays opt-in: the default is the one-shot `-p` CLI every existing
+    // install already runs. The persistent `agy acp` transport keeps one process
+    // per account and session, so background commands, subagents and timers
+    // survive the end of a turn — but switching every user's transport by
+    // default is a behaviour change the upgrade did not ask for. Turn it on
+    // with `DSH_AGY_TRANSPORT=acp`, `/agy config transport acp` or the settings
+    // page; a pre-stream failure falls back to the CLI automatically.
     transport: 'cli',
     imageTool: true,
     syncAccountCustomizations: true,

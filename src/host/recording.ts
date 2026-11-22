@@ -45,6 +45,18 @@ function isConsumableResult(ev: { ok: boolean; response: string; error?: string 
   return (ev.ok || ev.response !== '') && !isNonConsumableResultError(ev.ok, ev.error, ev.response)
 }
 
+/**
+ * True when a usage sample carries a token breakdown rather than a bare input
+ * count. Only such samples may stand in for the result envelope's usage; see
+ * `finalUsage` and issue #158.
+ */
+export function hasUsageBreakdown(raw: RawUsage): boolean {
+  const positive = (v: number | undefined): boolean => typeof v === 'number' && Number.isFinite(v) && v > 0
+  return positive(raw.output_tokens) || positive(raw.cache_read_tokens) ||
+    positive(raw.cache_write_tokens) || positive(raw.thinking_tokens) ||
+    positive(raw.total_tokens)
+}
+
 /** One agy run's append-only event log plus its settlement state. */
 export class RunRecording {
   readonly runId: string
@@ -160,6 +172,23 @@ export class RunRecording {
       }
       break
     }
+    if (tokens === 0) {
+      // No step ever reported output tokens (agy's ACP `usage_update` does not
+      // carry them). Fall back to the run's own output count so the turn is not
+      // reported as 0 tok/s; the window is the span from the first recorded
+      // event to the last one, which is the closest honest denominator left.
+      const envelope = this.envelopeOutputTokens()
+      const spanMs = this.eventSpanMs()
+      if (envelope > 0 && spanMs >= 500) {
+        return {
+          lastTps: envelope / (spanMs / 1000),
+          avgTps: envelope / (spanMs / 1000),
+          outputTokens: envelope,
+          measuredSteps: 1,
+          generatingMs: spanMs,
+        }
+      }
+    }
     return {
       lastTps,
       avgTps: ms > 0 ? tokens / (ms / 1000) : null,
@@ -167,6 +196,25 @@ export class RunRecording {
       measuredSteps: steps,
       generatingMs: ms,
     }
+  }
+
+  /** Output tokens reported by the last result envelope (0 when it has none). */
+  private envelopeOutputTokens(): number {
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      const ev = this.events[i]
+      if (ev === undefined || ev.kind !== 'result' || ev.usage === undefined) continue
+      const out = ev.usage.output_tokens
+      return typeof out === 'number' && Number.isFinite(out) && out > 0 ? out : 0
+    }
+    return 0
+  }
+
+  /** Wall-clock span between the first and the last recorded event. */
+  private eventSpanMs(): number {
+    const first = this.eventTimes[0]
+    const last = this.eventTimes[this.eventTimes.length - 1]
+    if (first === undefined || last === undefined) return 0
+    return last - first
   }
 
   /**
@@ -187,9 +235,22 @@ export class RunRecording {
     return this.lastStepUsageRaw
   }
 
-  /** The usage to report for the result envelope: last per-call step sample. */
+  /**
+   * The usage to report for the result envelope: the last per-call step sample
+   * when it actually carries a token breakdown, otherwise the envelope's own
+   * usage.
+   *
+   * The sample is only preferred when it reports output / cache / thinking
+   * tokens. A sample that carries nothing but an input figure is a context
+   * occupancy reading, not a usage sample: agy's ACP `usage_update` sends
+   * `{ used, size }`, and promoting that to `{inputTokens: used,
+   * outputTokens: 0}` used to shadow the real `PromptResponse.usage` (0%
+   * cache hit, 0 tok/s, inflated uncached input — issue #158).
+   */
   finalUsage(resultRaw: RawUsage): RawUsage {
-    return this.lastStepUsageRaw ?? resultRaw
+    const step = this.lastStepUsageRaw
+    if (step === null) return resultRaw
+    return hasUsageBreakdown(step) ? step : resultRaw
   }
 
   /** Settle the recording: no further events will arrive. */

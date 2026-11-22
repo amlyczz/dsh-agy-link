@@ -42,4 +42,10 @@ export interface BackgroundWakeStatus {
   readonly activeWatches: number
   readonly pendingTimers: number
   readonly pendingTasks: number
+  /** Post-turn ACP reports written straight into the session (no model re-read). */
+  readonly directPresentations?: number
+  /** Post-turn ACP reports that had to go through a followup turn. */
+  readonly followupWakes?: number
+  /** Background ACP tool calls still live after the turn (each reports later). */
+  readonly pendingAcpTools?: number
 }

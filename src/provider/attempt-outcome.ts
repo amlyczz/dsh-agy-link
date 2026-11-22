@@ -41,14 +41,13 @@ import {
   buildSpawnArgs,
   createAttemptRecorder,
   createAttemptSlot,
-  startAttemptProcess,
   type AttemptDeps,
   type AttemptInput,
   type AttemptRecorder,
   type AttemptSlot,
   type SpawnPlan,
-  type SpawnedAttempt,
 } from './attempt.ts'
+import { startAttemptProcess, type SpawnedAttempt } from './attempt-spawn.ts'
 
 function describeDispatchTimeoutNotice(cfg: PluginConfig, attempt: number, maxAttempts: number, backoffMs: number): string {
   return '[agy] 等待 agy 凭据槽已超过 ' + cfg.dispatchTimeoutMinutes + ' 分钟，正在重新排队（' +
@@ -454,20 +453,17 @@ export async function handleAttemptOutcome(
     })
   } finally {
     rec.settle(failure)
-  }
-  // Wake the background watcher only AFTER cooldowns, rotation, and bindings have
-  // landed: the followup it may fire has to see the settled account, and a wake
-  // that races finalize would re-enter the attempt with stale state.
-  if (!input.isAux && sessionKey !== '') {
-    deps.backgroundObserver?.onAttemptSettled?.({
-      sessionKey,
-      conversationId,
-      ...(rec.accountHome === undefined ? {} : { accountHome: rec.accountHome }),
-      transport: 'cli',
-      recording: rec,
-      failure,
-      superseded,
-    })
+    if (!input.isAux && sessionKey !== '') {
+      deps.backgroundObserver?.onAttemptSettled?.({
+        sessionKey,
+        conversationId,
+        ...(rec.accountHome === undefined ? {} : { accountHome: rec.accountHome }),
+        transport: 'cli',
+        recording: rec,
+        failure,
+        superseded,
+      })
+    }
   }
 }
 

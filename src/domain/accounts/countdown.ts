@@ -57,12 +57,18 @@ export function earliestAvailableCountdown(
 /**
  * Sweep `cli-*.log` files older than `maxDays` across managed account homes
  * plus the system `~/.gemini/antigravity-cli/log` directory.
+ *
+ * `extraLogDirs` carries directories outside those homes — the plugin's own
+ * `logs/` directory holding the `acp-*.log` files the ACP transport asks agy
+ * to write (`--log-file`). They follow the same retention window so a long
+ * lived persistent session cannot accumulate logs forever.
  */
 export function sweepOldAgyLogs(
   accounts: readonly ManagedAccount[],
   systemHome: string,
   maxDays = 7,
   now = Date.now(),
+  extraLogDirs: readonly string[] = [],
 ): number {
   const maxAgeMs = Math.max(1, maxDays) * 86_400_000
   let removed = 0
@@ -72,11 +78,13 @@ export function sweepOldAgyLogs(
       targetLogDirs.push(join(acc.dir, '.gemini', 'antigravity-cli', 'log'))
     }
   }
+  for (const extra of extraLogDirs) targetLogDirs.push(extra)
   for (const logDir of targetLogDirs) {
     if (!existsSync(logDir)) continue
     try {
       for (const f of readdirSync(logDir)) {
-        if (!f.startsWith('cli-') || !f.endsWith('.log')) continue
+        if (!f.endsWith('.log')) continue
+        if (!f.startsWith('cli-') && !f.startsWith('acp-')) continue
         const fp = join(logDir, f)
         try {
           const st = statSync(fp)

@@ -1,12 +1,17 @@
 // Persistent `agy acp` stdio JSON-RPC client process.
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { stateDir } from '../../common/config.ts'
 import type { PermissionMode } from '../../common/types.ts'
 import { preemptAgyAutoUpdate } from '../../host/auto-updater.ts'
 import { consoleOutputEncoding, makeLineDecoder } from '../../runtime/agy/console.ts'
 import { isCmdShim, windowsQuote } from '../../runtime/agy/bin.ts'
 import { nodeScriptEnv, withAgyQuietEnv } from '../../runtime/agy/env.ts'
+import { awaitAuthEmail, readAuthEmailFromLog } from './identity.ts'
 import { pickPermissionOption, type JsonRpcResponse } from './protocol.ts'
+import { runAcpTurn, type AcpPromptOptions } from './turn.ts'
 
 export interface AcpProcessOptions {
   bin: string
@@ -17,7 +22,36 @@ export interface AcpProcessOptions {
   agent?: string
   preemptAutoUpdate?: boolean
   log?: (msg: string) => void
+  /** Directory for the per-process `acp-*.log` (default: <state>/logs). */
+  logDir?: string
+  /** Explicit log file path (tests / diagnostics); overrides `logDir`. */
+  logFile?: string
+  /**
+   * Account this process is SUPPOSED to authenticate as. When set, the identity
+   * agy reports in its own log (`applyAuthResult: email=...`) is compared after
+   * the first session is opened: the machine-wide credential slot can be
+   * refreshed by another agy at its own hourly mark, and a mismatch means this
+   * process is silently spending someone else's quota.
+   */
+  expectedEmail?: string
 }
+
+/** How a requested session id was resolved when the session was opened. */
+export type AcpSessionOpenStatus = 'cached' | 'resumed' | 'loaded' | 'created'
+
+export interface AcpOpenSessionResult {
+  sessionId: string
+  status: AcpSessionOpenStatus
+  /**
+   * True when a resume/load was requested but the server could not prove it
+   * restored anything (a stale id or a foreign account). The caller must then
+   * rebuild the context instead of silently continuing on an empty session.
+   */
+  resumeFailed: boolean
+}
+
+/** Absolute stderr kept per process; older bytes are dropped from the front. */
+const STDERR_MAX_CHARS = 256 * 1024
 
 interface PendingRpc {
   resolve: (res: Record<string, unknown>) => void
@@ -47,7 +81,21 @@ export class AcpProcess extends EventEmitter {
   private readonly sessionListeners = new Map<string, Set<(u: Record<string, unknown>) => void>>()
   private readonly openSessions = new Set<string>()
   private buffer = ''
-  private stderrTail = ''
+  /**
+   * Rolling stderr window plus absolute character offsets, so a failure can be
+   * classified from THIS turn's stderr only. The previous transport fed the
+   * whole tail into every failure, which let one old warning poison later
+   * classifications.
+   */
+  private stderrBuffer = ''
+  private stderrStart = 0
+  private stderrEnd = 0
+  private logFile: string | null = null
+  /** Identity agy reported for THIS process (cached: the log line never changes). */
+  private authEmail: string | null = null
+  /** The identity probe already ran for this process — never wait on it twice. */
+  private identityProbeDone = false
+  private identityProbe: Promise<string | null> | null = null
   private alive = false
   private initPromise: Promise<Record<string, unknown>> | null = null
   lastUsedAt = Date.now()
@@ -58,17 +106,66 @@ export class AcpProcess extends EventEmitter {
 
   isAlive(): boolean { return this.alive && this.child !== null }
   get sessionCount(): number { return this.openSessions.size }
-  get stderr(): string { return this.stderrTail }
-
+  /** Tail of the process stderr (diagnostics / crash messages). */
+  get stderr(): string { return this.stderrBuffer.slice(-4096) }
+  /** Absolute stderr offset right now; pass it to `readStderrSince` later. */
+  stderrOffset(): number { return this.stderrEnd }
+  /** stderr text produced since `offset` ('' when the window already rotated past it). */
+  readStderrSince(offset: number): string {
+    const from = Math.max(offset, this.stderrStart)
+    if (from >= this.stderrEnd) return ''
+    return this.stderrBuffer.slice(from - this.stderrStart)
+  }
+  /** Path of the agy ACP log this process writes (null until started). */
+  get logFilePath(): string | null { return this.logFile }
   hasOpenSession(sessionId: string): boolean { return this.openSessions.has(sessionId) }
 
   /**
-   * Listen to what a session pushes outside a `session/prompt` call.
-   *
-   * This is how a detached background job started by a finished turn reports
-   * its outcome: the turn already returned, so there is no prompt loop left to
-   * receive the `session/update` notification.
+   * The account agy authenticated as, read from its own `--log-file`. Gate 2:
+   * the credential slot is machine-wide, so the account we dispatched is no
+   * proof of the account this process loaded — another agy can refresh the slot
+   * at its own hourly mark and hand this process the wrong identity.
+   * Returns null until agy has written the line (a few seconds after start).
    */
+  readAuthEmail(): string | null {
+    if (this.authEmail !== null) return this.authEmail
+    const email = readAuthEmailFromLog(this.logFile)
+    if (email !== null) this.authEmail = email
+    return email
+  }
+
+  private appendStderr(text: string): void {
+    if (text === '') return
+    this.stderrBuffer += text
+    this.stderrEnd += text.length
+    if (this.stderrBuffer.length > STDERR_MAX_CHARS) {
+      const drop = this.stderrBuffer.length - STDERR_MAX_CHARS
+      this.stderrBuffer = this.stderrBuffer.slice(drop)
+      this.stderrStart += drop
+    }
+  }
+
+  /**
+   * Reserve a per-process log path so `agy acp --log-file` writes somewhere the
+   * plugin owns and can read after an empty turn. agy logs the real cause of a
+   * silent failure (proxy connect errors, executor construction) only there —
+   * the JSON-RPC stream and stderr both stay empty.
+   */
+  private resolveLogFile(): string {
+    if (this.logFile !== null) return this.logFile
+    const explicit = this.opts.logFile
+    if (explicit !== undefined && explicit !== '') {
+      this.logFile = explicit
+      return explicit
+    }
+    const dir = this.opts.logDir !== undefined && this.opts.logDir !== '' ? this.opts.logDir : join(stateDir(), 'logs')
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '')
+    const rand = Math.random().toString(36).slice(2, 8)
+    const file = join(dir, `acp-${stamp}-${rand}.log`)
+    this.logFile = file
+    return file
+  }
+
   subscribeSession(sessionId: string, listener: (u: Record<string, unknown>) => void): () => void {
     let set = this.sessionListeners.get(sessionId)
     if (!set) {
@@ -92,6 +189,14 @@ export class AcpProcess extends EventEmitter {
     if (this.opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
     if (this.opts.sandbox) args.push('--sandbox')
     if (this.opts.agent && this.opts.agent.trim() !== '') args.push('--agent', this.opts.agent.trim())
+    const logFile = this.resolveLogFile()
+    try {
+      mkdirSync(dirname(logFile), { recursive: true })
+      args.push('--log-file', logFile)
+    } catch {
+      // An unwritable log path must not block the transport: the classifier
+      // simply gets no log evidence for this process.
+    }
 
     const child = spawnAcpChild(this.opts, args, env)
     this.child = child
@@ -101,17 +206,13 @@ export class AcpProcess extends EventEmitter {
     const outDec = makeLineDecoder(consoleOutputEncoding())
     const errDec = makeLineDecoder(consoleOutputEncoding())
     child.stdout?.on('data', (chunk: Buffer) => this.consumeStdout(outDec.push(chunk)))
-    child.stderr?.on('data', (chunk: Buffer) => {
-      const t = errDec.push(chunk)
-      if (t !== '') this.stderrTail = (this.stderrTail + t).slice(-4096)
-    })
+    child.stderr?.on('data', (chunk: Buffer) => this.appendStderr(errDec.push(chunk)))
     child.on('close', (code, sig) => {
       this.consumeStdout(outDec.flush() + '\n')
-      const errTail = errDec.flush()
-      if (errTail !== '') this.stderrTail = (this.stderrTail + errTail).slice(-4096)
+      this.appendStderr(errDec.flush())
       this.alive = false
       this.child = null
-      const err = new Error(`agy acp exited (code=${String(code)}, signal=${String(sig)}): ${this.stderrTail.slice(-240)}`)
+      const err = new Error(`agy acp exited (code=${String(code)}, signal=${String(sig)}): ${this.stderr.slice(-240)}`)
       for (const [, p] of this.pending) {
         if (p.timer) clearTimeout(p.timer)
         p.reject(err)
@@ -122,7 +223,7 @@ export class AcpProcess extends EventEmitter {
     })
     child.on('error', (err) => {
       this.alive = false
-      this.stderrTail = (this.stderrTail + String(err)).slice(-4096)
+      this.appendStderr(String(err))
     })
   }
 
@@ -233,6 +334,55 @@ export class AcpProcess extends EventEmitter {
     return this.initPromise
   }
 
+  /**
+   * Restore a previously persisted session. `session/resume` answering means
+   * the conversation was found under this account; `session/load` answers
+   * successfully even for an id that does not exist (it opens an EMPTY
+   * session), so a load only counts when the replay it produced carries
+   * evidence: replayed update events or a non-zero cachedReadTokens usage.
+   */
+  private async restoreSession(
+    sessionId: string,
+    cwd: string,
+  ): Promise<{ sessionId: string; status: AcpSessionOpenStatus } | null> {
+    try {
+      const r = await this.request('session/resume', { sessionId, cwd, mcpServers: [] }, 30_000)
+      const sid = typeof r.sessionId === 'string' && r.sessionId !== '' ? r.sessionId : sessionId
+      return { sessionId: sid, status: 'resumed' }
+    } catch {
+      // -32603 cannot distinguish "wrong account" from "no such session";
+      // fall through to a load and judge it by its replay evidence.
+    }
+    let replayed = 0
+    let cachedReadTokens = 0
+    const unsub = this.subscribeSession(sessionId, (u) => {
+      const kind = typeof u.sessionUpdate === 'string' ? u.sessionUpdate : ''
+      if (
+        kind === 'agent_message_chunk' || kind === 'agent_thought_chunk' ||
+        kind === 'user_message_chunk' || kind === 'tool_call' || kind === 'tool_call_update'
+      ) {
+        replayed += 1
+      }
+      if (kind === 'usage_update') {
+        const raw = u.cachedReadTokens ?? u.cache_read_tokens ?? u.cached_read_tokens
+        const n = typeof raw === 'number' ? raw : Number.NaN
+        if (Number.isFinite(n) && n > cachedReadTokens) cachedReadTokens = n
+      }
+    })
+    try {
+      const r = await this.request('session/load', { sessionId, cwd, mcpServers: [] }, 30_000)
+      const sid = typeof r.sessionId === 'string' && r.sessionId !== '' ? r.sessionId : sessionId
+      // Give the replay a moment to arrive before judging it.
+      if (replayed === 0) await new Promise((r2) => setTimeout(r2, 300))
+      if (replayed === 0 && cachedReadTokens === 0) return null
+      return { sessionId: sid, status: 'loaded' }
+    } catch {
+      return null
+    } finally {
+      unsub()
+    }
+  }
+
   async openSession(opts: {
     cwd: string
     resumeId?: string
@@ -240,17 +390,24 @@ export class AcpProcess extends EventEmitter {
     model?: string
     effort?: string
     mode?: PermissionMode
-  }): Promise<string> {
+  }): Promise<AcpOpenSessionResult> {
     await this.ensureInitialized()
-    let sid = opts.resumeId && this.openSessions.has(opts.resumeId) ? opts.resumeId : ''
-    if (sid === '' && opts.resumeId) {
-      for (const method of ['session/resume', 'session/load']) {
-        try {
-          const r = await this.request(method, { sessionId: opts.resumeId, cwd: opts.cwd, mcpServers: [] }, 30_000)
-          sid = typeof r.sessionId === 'string' && r.sessionId !== '' ? r.sessionId : opts.resumeId
-          break
-        } catch {
-          // try fallback
+    let sid = ''
+    let status: AcpSessionOpenStatus = 'created'
+    let resumeFailed = false
+    if (opts.resumeId) {
+      if (this.openSessions.has(opts.resumeId)) {
+        sid = opts.resumeId
+        status = 'cached'
+      } else {
+        const restored = await this.restoreSession(opts.resumeId, opts.cwd)
+        if (restored !== null) {
+          sid = restored.sessionId
+          status = restored.status
+        } else {
+          // A silently empty session would look like a fresh conversation and
+          // lose all context without a word: report it so the caller rebuilds.
+          resumeFailed = true
         }
       }
     }
@@ -274,125 +431,72 @@ export class AcpProcess extends EventEmitter {
       await this.request('session/set_config_option', { sessionId: sid, configId: 'thought_level', value: opts.effort.trim() }, 15_000)
         .catch(() => undefined)
     }
-    return sid
+    await this.assertIdentity()
+    return { sessionId: sid, status, resumeFailed }
   }
 
-  async prompt(opts: {
-    sessionId: string
-    text: string
-    timeoutMs: number
-    idleTimeoutMs?: number
-    longToolIdleMs?: number
-    maxTurnMs?: number
-    signal?: AbortSignal
-    onUpdate: (update: Record<string, unknown>) => void
-  }): Promise<Record<string, unknown>> {
-    if (opts.signal?.aborted) {
-      throw new Error('ACP session/prompt aborted')
+  /**
+   * Gate 2: prove this process is running as the account we dispatched.
+   * agy prints its resolved identity to the `--log-file` a few seconds after
+   * start; the slot is machine-wide, so a mismatched identity means another agy
+   * refreshed it under us and this turn would bill the wrong account.
+   * Failing here (instead of silently answering) lets the caller reinstall the
+   * slot and retry once.
+   */
+  private async assertIdentity(): Promise<void> {
+    const expected = (this.opts.expectedEmail ?? '').trim().toLowerCase()
+    if (expected === '') return
+    // The log line never changes within one process, so the verdict is cached:
+    // re-probing on every openSession re-read the log tail each turn and, on a
+    // build that does not print the line, blocked every turn for the full probe
+    // window.
+    if (this.authEmail !== null) return this.checkIdentity(this.authEmail, expected)
+    if (this.identityProbeDone) return
+    this.identityProbe ??= awaitAuthEmail(this.logFile, () => this.isAlive()).finally(() => {
+      this.identityProbeDone = true
+    })
+    const actual = await this.identityProbe
+    // No identity in the log is not proof of a mismatch (a build may not print
+    // it); only a DIFFERENT identity is actionable.
+    if (actual === null) return
+    this.authEmail = actual
+    this.checkIdentity(actual, expected)
+  }
+
+  private checkIdentity(actual: string, expected: string): void {
+    if (actual === expected) return
+    throw new Error(`ACP identity mismatch: agy authenticated as ${actual}, expected ${expected}`)
+  }
+
+  async prompt(opts: AcpPromptOptions): Promise<Record<string, unknown>> {
+    return runAcpTurn(this, opts)
+  }
+
+  /**
+   * Graceful close: end stdin, give agy a moment to flush its SQLite state, then
+   * kill whatever is left. Only a forced close (timeout / discard) goes straight
+   * to the kill.
+   */
+  async closeGracefully(timeoutMs: number): Promise<void> {
+    if (!this.isAlive()) {
+      this.close()
+      return
     }
-    let set = this.sessionListeners.get(opts.sessionId)
-    if (!set) {
-      set = new Set()
-      this.sessionListeners.set(opts.sessionId, set)
-    }
-
-    const idleMs = Math.max(0, opts.idleTimeoutMs ?? opts.timeoutMs)
-    const longToolIdleMs = Math.max(0, opts.longToolIdleMs ?? 0)
-    const maxTurnMs = Math.max(0, opts.maxTurnMs ?? 0)
-    const activeTools = new Set<string>()
-    let settled = false
-    let idleTimer: NodeJS.Timeout | null = null
-    let turnTimer: NodeJS.Timeout | null = null
-    let rejectPrompt: ((err: Error) => void) | null = null
-
-    const clearTimers = () => {
-      if (idleTimer !== null) {
-        clearTimeout(idleTimer)
-        idleTimer = null
-      }
-      if (turnTimer !== null) {
-        clearTimeout(turnTimer)
-        turnTimer = null
-      }
-    }
-
-    const failWith = (err: Error, cancel = true) => {
-      if (settled) return
-      settled = true
-      clearTimers()
-      if (cancel) this.cancelSession(opts.sessionId)
-      rejectPrompt?.(err)
-    }
-
-    const armIdle = () => {
-      if (settled || idleMs <= 0) return
-      if (idleTimer !== null) clearTimeout(idleTimer)
-      const budget = activeTools.size > 0 && longToolIdleMs > 0 ? Math.max(idleMs, longToolIdleMs) : idleMs
-      idleTimer = setTimeout(() => {
-        failWith(new Error(`ACP session/prompt timed out after ${budget}ms (idle)`))
-      }, budget)
-      idleTimer.unref?.()
-    }
-
-    const wrappedOnUpdate = (update: Record<string, unknown>) => {
-      const kind = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : ''
-      if (kind === 'tool_call' || kind === 'tool_call_update') {
-        const tcId = typeof update.toolCallId === 'string' && update.toolCallId !== '' ? update.toolCallId : ''
-        const status = typeof update.status === 'string' ? update.status.toLowerCase() : ''
-        if (tcId !== '') {
-          if (status === 'completed' || status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') {
-            activeTools.delete(tcId)
-          } else {
-            activeTools.add(tcId)
-          }
-        }
-      }
-      armIdle()
-      opts.onUpdate(update)
-    }
-
-    set.add(wrappedOnUpdate)
-    const onAbort = () => failWith(new Error('ACP session/prompt aborted'))
-    opts.signal?.addEventListener('abort', onAbort, { once: true })
-
-    try {
-      armIdle()
-      if (maxTurnMs > 0) {
-        turnTimer = setTimeout(() => {
-          failWith(new Error(`ACP session/prompt timed out after ${maxTurnMs}ms (maxTurn)`))
-        }, maxTurnMs)
-        turnTimer.unref?.()
-      }
-      return await new Promise<Record<string, unknown>>((resolve, reject) => {
-        rejectPrompt = reject
-        this.request(
-          'session/prompt',
-          {
-            sessionId: opts.sessionId,
-            prompt: [{ type: 'text', text: opts.text }],
-          },
-          0,
-        ).then(
-          (res) => {
-            if (settled) return
-            settled = true
-            clearTimers()
-            resolve(res)
-          },
-          (err) => {
-            if (settled) return
-            settled = true
-            clearTimers()
-            reject(err instanceof Error ? err : new Error(String(err)))
-          },
-        )
+    const c = this.child
+    // Leaving stdin open is what keeps agy's session loop alive, so ending it
+    // is what asks it to shut down on its own terms.
+    try { c?.stdin?.end() } catch { /* ignore */ }
+    const exited = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs)
+      timer.unref?.()
+      this.once('exit', () => {
+        clearTimeout(timer)
+        resolve(true)
       })
-    } finally {
-      clearTimers()
-      opts.signal?.removeEventListener('abort', onAbort)
-      set.delete(wrappedOnUpdate)
-      if (set.size === 0) this.sessionListeners.delete(opts.sessionId)
-    }
+    })
+    // A process that ended by itself already flushed; anything else is killed.
+    if (!exited) this.close()
+    else this.alive = false
   }
 
   close(): void {
@@ -402,7 +506,10 @@ export class AcpProcess extends EventEmitter {
     this.initPromise = null
     if (c) {
       try { c.stdin?.end() } catch { /* ignore */ }
-      if (process.platform === 'win32' && isCmdShim(this.opts.bin) && c.pid !== undefined) {
+      // Windows: agy spawns helper processes (task shells, subagents). A bare
+      // kill() orphans them, and an orphan keeps writing to the shared
+      // credential slot and to its conversation DB. Kill the whole tree.
+      if (process.platform === 'win32' && c.pid !== undefined) {
         try {
           spawn('taskkill', ['/pid', String(c.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
           return

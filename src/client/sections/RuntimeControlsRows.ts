@@ -178,13 +178,13 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		// Opt-in: an absent field means "off", so the switch must not claim to be
+		// on when the host never reported a value.
 		boolRow({
 			t,
 			title: t('config.backgroundWakeup'),
 			desc: t('config.backgroundWakeupDesc'),
 			cfgKey: 'backgroundWakeup',
-			// Opt-in: an absent field means "off", so the switch must not read as
-			// on just because the status payload predates the setting.
 			value: status.backgroundWakeup === true,
 			loadingAction,
 			setCfg,

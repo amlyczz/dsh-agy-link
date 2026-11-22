@@ -289,14 +289,27 @@ describe('background task visibility (tasks/*.log, messages/*.json, RUNNING card
       const cfg = { ...defaultConfig(), permissionMode: 'plan' as const, transport: 'acp' as const }
       const fakeProc = {
         stderr: '',
+        stderrOffset: () => 0,
+        readStderrSince: () => '',
+        logFilePath: null,
         isAlive: () => true,
         lastUsedAt: Date.now(),
         activeSessionCount: 0,
         once: () => fakeProc,
-        openSession: async () => sid,
+        openSession: async () => ({ sessionId: sid, status: 'created', resumeFailed: false }),
         cancelSession: () => {},
-        prompt: async () => {
+        prompt: async (opts: { onUpdate?: (u: Record<string, unknown>) => void }) => {
           writeFileSync(join(tasksDir, 'task-55.log'), 'acp background line\n')
+          // A live turn always says something; an empty turn is now classified as
+          // a dead transport and retried over CLI instead of settling here.
+          opts.onUpdate?.({
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tc-acp-1',
+            name: 'run_command',
+            status: 'in_progress',
+            rawInput: { CommandLine: 'ping -n 20 127.0.0.1' },
+          })
+          opts.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'started the task' } })
           await new Promise((r) => setTimeout(r, 80))
           return { stopReason: 'end_turn' }
         },

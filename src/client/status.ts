@@ -26,7 +26,17 @@ export interface StatusPayload {
 	agent?: string;
 	agySettings?: string;
 	transport?: 'cli' | 'acp';
-	acpStatus?: { activeProcesses: number; sessions: number; keys: readonly string[] } | null;
+	acpStatus?: {
+		activeProcesses: number
+		sessions: number
+		keys: readonly string[]
+		/** Processes still finishing background work for a switched-away account. */
+		drainingProcesses?: number
+		drainingKeys?: readonly string[]
+		/** Times another agy rewrote the machine-wide credential slot under us. */
+		slotOverwriteDetectedCount?: number
+		lastSlotRecoveryAt?: number | null
+	} | null;
 	backgroundWakeup?: boolean;
 	imageTool?: boolean;
 	syncAccountCustomizations?: boolean;

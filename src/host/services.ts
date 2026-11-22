@@ -33,8 +33,9 @@ import { createPoolQuotaHooks } from '../provider/quota-failover.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
-import { acquireCredentialSlot, defaultSlotIo, readPrimaryCredential } from './credential-slot.ts'
-import { installSlotOrThrow } from '../domain/credentials/lease.ts'
+import { acquireCredentialSlot, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
+import { buildCliQuotaDeps } from './quota-cli-deps.ts'
+import { ACP_REPORT_RECORD_TYPE, createSessionRecords } from './session-records.ts'
 import {
   Semaphore,
   findSessionLogFile,
@@ -103,30 +104,17 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     pool,
     () => getConfig().proxyUrl || detectSystemProxy() || '',
     version,
-    {
+    // On Windows the CLI reads Credential Manager, so a token refreshed for the
+    // safety window has to land in the slot too — QuotaService already holds
+    // credentialSlotMutex for this read. Other platforms have no slot: agy reads
+    // the token document itself, which the refresh just rewrote.
+    buildCliQuotaDeps({
       bin: () => bin(),
       viaCli: () => getConfig().quotaViaCli,
       preemptAutoUpdate: () => getConfig().suppressAgyAutoUpdate,
-      // On Windows the CLI reads Credential Manager, so a token refreshed for
-      // the safety window has to land in the slot too — QuotaService already
-      // holds credentialSlotMutex for this read. Other platforms have no slot:
-      // agy reads the token document itself, which the refresh just rewrote.
-      ...(process.platform === 'win32'
-        ? {
-            syncSlot: () => {
-              const raw = readPrimaryCredential(pool.dir)?.raw
-              if (raw === undefined || raw === '') return false
-              try {
-                installSlotOrThrow(defaultSlotIo(), raw, log, 'quota token refresh')
-                return true
-              } catch {
-                return false
-              }
-            },
-          }
-        : {}),
+      poolDir: () => pool.dir,
       log,
-    },
+    }),
   )
   const warmup = new WarmupService(
     pool,
@@ -168,23 +156,10 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     (ctx.get('sessions') as SessionsServiceLike | undefined) ?? ((ctx as unknown as { sessions?: SessionsServiceLike }).sessions)
   const sessionAuto = new Map<string, boolean>()
 
-  type AppendPluginRecord = (session: unknown, type: string, data: unknown) => number
-  let appendPluginRecordPromise: Promise<AppendPluginRecord | null> | null = null
-  const loadAppendPluginRecord = (): Promise<AppendPluginRecord | null> => {
-    if (appendPluginRecordPromise === null) {
-      appendPluginRecordPromise = (async () => {
-        try {
-          const spec = '@deepseek-ai/dsh-session'
-          const mod = (await import(spec)) as { appendPluginRecord?: AppendPluginRecord }
-          return typeof mod.appendPluginRecord === 'function' ? mod.appendPluginRecord : null
-        } catch (e) {
-          log('translation records unavailable: ' + String(e))
-          return null
-        }
-      })()
-    }
-    return appendPluginRecordPromise
-  }
+  const { appendRecordTo, appendPluginRecordTo, appendAcpNotice } = createSessionRecords({
+    session: (id) => sessionsSvc()?.get(id),
+    log,
+  })
 
   const status = {
     get version(): string | null { return versionCache },
@@ -307,13 +282,64 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   })
   const runs = new RunRegistry()
   const webServerPort: { current?: number } = {}
-  const acpPool = new AcpSessionPool({ bin, cfg: getConfig, log })
+  // Gate 3: an account switch (or a crashed secondary) can leave the machine-wide
+  // Windows credential slot holding another account's login. Once no run holds it
+  // any more, put the primary back — otherwise the user's next turn silently
+  // authenticates as someone else and spends their quota.
+  let restoringSlot = false
+  const restorePrimarySlot = async (trigger: string): Promise<void> => {
+    if (restoringSlot || process.platform !== 'win32') return
+    restoringSlot = true
+    try {
+      const res = await recoverPrimaryCredential(pool, {
+        baseDir: pool.dir,
+        log,
+        ...(getConfig().proxyUrl?.trim() ? { proxyUrl: getConfig().proxyUrl.trim() } : {}),
+      })
+      if (res.reason === 'restored') {
+        acpPool.noteSlotRecovery()
+        log('[agy-link] restored the primary credential in the Windows slot (' + trigger + ')')
+      }
+    } catch (e) {
+      log('credential slot recovery failed (' + trigger + '): ' + String(e))
+    } finally {
+      restoringSlot = false
+    }
+  }
+  const acpPool = new AcpSessionPool({
+    bin,
+    cfg: getConfig,
+    log,
+    // A drained process that ran out of budget is killed mid-flight; say so in
+    // the conversation instead of letting the background task vanish silently.
+    onDrainExpired: (info) => {
+      // Only the deadline branch speaks: a drain that ends on its own is the
+      // normal path, and warning about it would be a false alarm. The target's
+      // sessionKey is the DSH session (info.sessions holds agy's UUIDs, which
+      // the transcript service cannot resolve).
+      for (const target of info.targets) {
+        appendAcpNotice(target.sessionKey, {
+          kind: 'acp-drain-aborted',
+          text: '因账号切换，旧账号上仍在运行的后台任务已被中止。\nBackground tasks on the previous account were stopped because the credential slot switched accounts.',
+        })
+      }
+    },
+    // Gate 3: once the last process of the OLD account is gone, nothing else can
+    // legitimately own the machine-wide slot — put the primary back so the next
+    // interactive turn authenticates as the user's own account.
+    onDrainClosed: () => {
+      void restorePrimarySlot('drain-closed')
+    },
+    onIdle: () => {
+      void restorePrimarySlot('idle')
+    },
+  })
   let adapter!: AgyAdapter
   const backgroundWakeup = new BackgroundWakeWatcher({
     getConfig,
     log,
     getActiveRun: (sessionId) => adapter.getActiveRun(sessionId),
-    retainAcpSession: (sid) => acpPool.retainSession(sid),
+    retainAcpSession: (sid, sessionKey) => acpPool.retainSession(sid, sessionKey),
     isArchived: (sessionId) => {
       try {
         const reg = safeCtxGet<{ archivedSessionIds?: Iterable<string> | { has?: (id: string) => boolean } }>(ctx, 'workspaceRegistry')
@@ -349,6 +375,15 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       }
       return null
     },
+    // 方案 A: the ACP turn already produced its own report; write it straight
+    // into the transcript so no model turn is spent repeating it.
+    presentAcpReport: async (sessionId, text) => {
+      const seq = await appendPluginRecordTo(sessionId, ACP_REPORT_RECORD_TYPE, { text, at: Date.now() })
+      // The seq travels back to the watcher, which uses it to recognise the same
+      // narration when agy also writes it to .system_generated/messages.
+      return seq === null ? false : seq
+    },
+    hasArmedGoal: (sessionId) => resolveSessionGoal(ctx, sessionId) != null,
   })
 
   adapter = new AgyAdapter({
@@ -379,6 +414,24 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     readImage: (ref) => readSessionImage(ctx, dshHome(), ref),
     runAcp: (attemptDeps, attemptInput, slot) => runAcpAttempt(acpPool, attemptDeps, attemptInput, slot),
     backgroundObserver: backgroundWakeup,
+    appendAcpNotice,
+    noteAcpReport: (sessionKey, text, seq) => backgroundWakeup.noteAcpReport(sessionKey, text, seq),
+    // Gate 2 recovery: agy proved it loaded a different account than the one we
+    // dispatched, so the slot must be rewritten before the single retry.
+    reinstallCredentialSlot: (account) => {
+      if (process.platform !== 'win32') return false
+      // The primary has no isolated dir: its token lives in the durable primary
+      // store, so read that instead. Falling through to null here used to make
+      // the whole gate-2 self-heal a no-op for the user's own account.
+      const raw =
+        account.systemHome || !account.dir
+          ? (readPrimaryCredential(pool.dir)?.raw ?? null)
+          : readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log)
+      if (raw === null || raw === '') return false
+      const ok = reinstallCredential(raw, { baseDir: pool.dir, log }, account.alias || account.id)
+      if (ok) acpPool.noteSlotOverwrite()
+      return ok
+    },
   })
 
   const translationWorkers = new TranslationWorkerPool({
@@ -407,32 +460,8 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     poolQuotaHops: quotaHooks.poolQuotaHops,
     log,
     run: (req) => runTranslationStream(ctx, getConfig, log, req, translationWorkers),
-    appendRecord: async (sessionId, record: TranslationRecord) => {
-      const session = sessionsSvc()?.get(sessionId)
-      if (session === undefined) return null
-      const append = await loadAppendPluginRecord()
-      if (append !== null) {
-        try {
-          const res = append(session, TRANSLATION_RECORD_TYPE, record)
-          if (typeof res === 'number') return res
-        } catch (e) {
-          log('failed to persist translation record via appendPluginRecord: ' + String(e))
-        }
-      }
-      try {
-        if (typeof session.append === 'function') {
-          const res = session.append(TRANSLATION_RECORD_TYPE, record)
-          if (typeof res === 'number') return res
-          if (res !== null && typeof res === 'object' && typeof (res as { seq?: unknown }).seq === 'number') {
-            return (res as { seq: number }).seq
-          }
-          return 0
-        }
-      } catch (e) {
-        log('failed to persist translation record via session.append: ' + String(e))
-      }
-      return null
-    },
+    appendRecord: (sessionId, record: TranslationRecord) =>
+      appendRecordTo(sessionId, TRANSLATION_RECORD_TYPE, record, 'persist translation record'),
   })
 
   const setOverride = (key: string, value: unknown): void => {

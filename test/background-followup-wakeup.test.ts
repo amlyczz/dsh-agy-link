@@ -745,6 +745,10 @@ describe('cross-turn background wakeup, slice 3: ACP session retention and post-
     const watcher = new BackgroundWakeWatcher({
       getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
       coalesceMs: 25,
+      // No host-side transcript writer here, so the report degrades to a real
+      // followup; the mechanical tool notice keeps its normal grace window.
+      acpToolGraceMs: 0,
+      acpReportSilenceMs: 25,
       retainAcpSession: () => { retained += 1; return () => { released += 1 } },
       resolveAgent: async () => ({
         status: 'idle',
@@ -814,6 +818,7 @@ describe('cross-turn background wakeup, slice 3: ACP session retention and post-
     const watcher = new BackgroundWakeWatcher({
       getConfig: () => ({ ...defaultConfig(), backgroundWakeup: true }),
       coalesceMs: 25,
+      acpReportSilenceMs: 25,
       retainAcpSession: () => () => {},
       resolveAgent: async () => ({
         status: 'idle',
