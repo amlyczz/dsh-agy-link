@@ -135,6 +135,7 @@ export function resolveConfig(
     dispatchRetries: asNum(get('dispatchRetries')) ?? base.dispatchRetries,
     parallelSameAccount: asBool(get('parallelSameAccount')) ?? base.parallelSameAccount,
     respectExternalSignIn: asBool(get('respectExternalSignIn')) ?? base.respectExternalSignIn,
+    reapOrphanMcp: asBool(get('reapOrphanMcp')) ?? base.reapOrphanMcp,
     maxConcurrent: asNum(get('maxConcurrent')) ?? base.maxConcurrent,
     contextWindowDefault: asNum(get('contextWindowDefault')) ?? base.contextWindowDefault,
     maxTokensDefault: asNum(get('maxTokensDefault')) ?? base.maxTokensDefault,

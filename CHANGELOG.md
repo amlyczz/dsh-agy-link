@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.62 (2026-11-22)
+
+### English
+
+- **Startup no longer fans out over the pool.** The boot probe used to run `agy --version` → `agy models` → `warmAccounts(all accounts)`; because agy forks every server in the user MCP registry for a `models` call, eight accounts meant tens of seconds of background churn and a fresh MCP process tree per probe. The probe now (a) waits for an idle moment and backs off while a turn is in flight, and (b) refreshes only the ACTIVE account eagerly — other accounts stay lazy (`ensureAccountCatalog` on first use) unless the opt-in pool-wide catalog needs them.
+- **Deferred maintenance pass.** Staging/log sweeps, the ecosystem mirror, stale `presence/*.lock` files (agy never removes them — hundreds accumulate across a pool) and orphaned MCP servers now run once after boot and then on a 30-minute interval, instead of on the plugin-load path. New `reapOrphanMcp` config (default `true`) only kills MCP-server processes whose parent is already dead and that have been running for more than five minutes; an unknown start time never triggers a kill.
+- **Windows proxy env no longer duplicates case.** Writing `HTTPS_PROXY` next to an inherited `https_proxy` produced two case-differing keys in every child environment block, which breaks PowerShell's `env:` provider ("An item with the same key has already been added") and `Start-Process`. Windows now collapses to a single uppercase entry (its env lookups are case-insensitive); POSIX still gets both spellings. When a proxy is configured, loopback (`127.0.0.1`, `localhost`, `::1`) is added to `NO_PROXY` so the MCP bridge, media routes and OAuth callback never travel through it.
+- **`/agy doctor` reports startup cost.** The report now lists the MCP registry (every agy spawn forks all of it), flags `@latest` entries that re-resolve against npm on every spawn (~1.4 s each), counts stale presence locks, and notes how many pool accounts have isolated homes.
+
+### 中文
+
+- **启动不再对全池扇出。** 原来开机流程是 `agy --version` → `agy models` → `warmAccounts(全部账号)`；由于 `agy models` 会 fork 用户 MCP 注册表里的每一个 server，8 个账号就是几十秒后台 churn 加一棵新的 MCP 进程树。现在探测会（a）等待空闲、有回合在跑就退避重试，（b）只主动刷新**当前账号**，其余账号保持惰性（首次使用时 `ensureAccountCatalog` 按需加载），只有开启 opt-in 的全池模型目录才需要全量预热。
+- **维护任务延后执行。** staging/日志清扫、生态镜像同步、陈旧的 `presence/*.lock`（agy 从不清理，池子里能积几百个）与孤儿 MCP 进程，改为开机后延迟执行一次、之后每 30 分钟一次，不再占用插件加载路径。新增 `reapOrphanMcp` 配置（默认 `true`）：只清理「父进程已死且已运行超过 5 分钟」的 MCP server 进程；启动时间无法解析时一律不动。
+- **Windows 代理环境变量不再大小写重复。** 把 `HTTPS_PROXY` 写在继承来的 `https_proxy` 旁边，会让每个子进程的环境块出现两个仅大小写不同的键，导致 PowerShell 的 `env:` 提供程序报「已添加了具有相同键的项」、`Start-Process` 直接失败。Windows 现在收敛为单个大写键（其环境变量查询本就大小写不敏感），POSIX 仍保留两种拼写。配置代理时会自动把 `127.0.0.1`、`localhost`、`::1` 加入 `NO_PROXY`，MCP 桥接、媒体路由与 OAuth 回调不再走代理。
+- **`/agy doctor` 报告启动开销。** 报告新增 MCP 注册表清单（每次 agy 启动都会 fork 全部）、`@latest` 未锁定版本条目（每次启动都要重新解析 npm 版本，约 1.4 s）、陈旧 presence 锁数量，以及有隔离 home 的账号数。
+
 ## 0.6.61 (2026-11-22)
 
 ### English

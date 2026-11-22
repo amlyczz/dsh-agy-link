@@ -72,10 +72,74 @@ export function isolatedHomeEnv(dir: string): Record<string, string> {
 }
 
 /**
+ * Loopback hosts a proxy must never be asked to reach: the MCP bridge, the
+ * media/embed routes, the OAuth callback server and every `127.0.0.1:<port>`
+ * probe live there. Without this, a machine-wide proxy turns our own local
+ * calls into "proxy refused 127.0.0.1:9" noise and stalls boot.
+ */
+export const LOOPBACK_NO_PROXY = ['127.0.0.1', 'localhost', '::1'] as const
+
+const NO_PROXY_KEYS = ['NO_PROXY', 'no_proxy'] as const
+
+/** Append the loopback entries to whatever NO_PROXY the operator already set. */
+export function ensureLoopbackNoProxy(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const current = (env.NO_PROXY ?? env.no_proxy ?? '').trim()
+  const entries = current === '' ? [] : current.split(',').map((s) => s.trim()).filter(Boolean)
+  const lower = new Set(entries.map((e) => e.toLowerCase()))
+  let changed = current === ''
+  for (const host of LOOPBACK_NO_PROXY) {
+    if (!lower.has(host)) {
+      entries.push(host)
+      changed = true
+    }
+  }
+  if (!changed) return env
+  const merged = entries.join(',')
+  env.NO_PROXY = merged
+  env.no_proxy = merged
+  return env
+}
+
+/**
+ * Collapse the case-paired proxy variables on Windows.
+ *
+ * Windows environment blocks are case-INSENSITIVE and PowerShell's `env:`
+ * provider refuses to enumerate a block that contains two names differing only
+ * in case ("An item with the same key has already been added"), and
+ * `Start-Process` fails outright. Writing `HTTPS_PROXY` next to an inherited
+ * `https_proxy` reproduced exactly that in every child we spawn (agv/MCP/node).
+ *
+ * A single uppercase entry is fully sufficient there: Node's `process.env`
+ * inside the child is itself a case-insensitive proxy, so a lowercase reader
+ * still resolves it. POSIX is left untouched — those are distinct variables and
+ * several tools read only the lowercase spelling.
+ */
+export function foldProxyEnvCase(env: NodeJS.ProcessEnv, platform: string = process.platform): NodeJS.ProcessEnv {
+  if (platform !== 'win32') return env
+  const pairs: ReadonlyArray<readonly [string, string]> = [
+    ['HTTP_PROXY', 'http_proxy'],
+    ['HTTPS_PROXY', 'https_proxy'],
+    ['ALL_PROXY', 'all_proxy'],
+    ['NO_PROXY', 'no_proxy'],
+  ]
+  for (const [upper, lower] of pairs) {
+    const upperValue = typeof env[upper] === 'string' ? env[upper] : undefined
+    const lowerValue = typeof env[lower] === 'string' ? env[lower] : undefined
+    const value = (upperValue ?? lowerValue ?? '').trim()
+    delete env[upper]
+    delete env[lower]
+    if (value !== '') env[upper] = value
+  }
+  return env
+}
+
+/**
  * Standard proxy env block for one proxy URL. agy is a Go binary and only
  * honors HTTP(S)_PROXY / ALL_PROXY; GUI hosts don't inherit shell proxy
  * env, so the plugin injects this explicitly (global config or per-account).
  * Exported for tests.
+ *
+ * Call {@link foldProxyEnvCase} afterwards for the Windows spawn path.
  */
 export function proxyEnvFor(proxyUrl: string | undefined | null): Record<string, string> {
   const url = proxyUrl?.trim()

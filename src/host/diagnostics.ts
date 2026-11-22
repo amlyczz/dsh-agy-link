@@ -4,6 +4,8 @@
 // token-shaped strings redacted before anything hits disk.
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { describeStartupCost } from './boot-maintenance.ts'
+import { agyMcpConfigPath } from './mcp-bridge.ts'
 import { stateDir } from '../common/config.ts'
 import type { PluginConfig } from '../common/types.ts'
 import { agyBinDiagnostics } from '../runtime/agy/bin.ts'
@@ -18,6 +20,8 @@ export interface DoctorDeps {
   catalog: () => ModelCatalog
   store: () => SessionStore
   recentLines: () => readonly string[];
+  /** Pool accounts, for the startup-cost section. */
+  accounts?: () => readonly { id: string; dir?: string; systemHome?: boolean }[]
   /** Models agy refused `--effort` for (issue #67); absent = none known. */
   effortUnsupported?: () => readonly string[]
 }
@@ -115,6 +119,15 @@ export function writeDoctorReport(deps: DoctorDeps): string {
   lines.push('- conversation bindings: ' + Object.keys(bindings).length)
   for (const [k, b] of Object.entries(bindings)) {
     lines.push('  - ' + k + ' -> ' + b.conversationId + ' @ ' + new Date(b.updatedAt).toISOString())
+  }
+  if (deps.accounts !== undefined) {
+    // Why startup was slow, and what the next spawn will still pay.
+    try {
+      const registry = agyMcpConfigPath('', process.env)
+      for (const line of describeStartupCost(registry, deps.accounts() as never)) lines.push(line)
+    } catch {
+      // diagnostics must never fail the command
+    }
   }
   lines.push('- node: ' + process.version + ' — ' + process.platform + ' ' + process.arch)
   lines.push('')

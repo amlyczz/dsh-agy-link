@@ -35,7 +35,16 @@ test('buildAgyEnv isolates HOME and applies the proxy to every variable', () => 
     assert.equal(env.GEMINI_CLI_HOME, join(dir, '.gemini'))
     assert.equal(env.DSH_MCP_SESSION, 'sess-1')
     assert.equal(env.HTTPS_PROXY, 'http://global:7890')
-    assert.equal(env.https_proxy, 'http://global:7890')
+    if (process.platform === 'win32') {
+      // Windows env blocks are case-insensitive: only the uppercase spelling may
+      // exist, otherwise PowerShell's env: provider and Start-Process break in
+      // every child we spawn.
+      assert.equal(env.https_proxy, undefined, 'no lowercase duplicate on Windows')
+    } else {
+      assert.equal(env.https_proxy, 'http://global:7890')
+    }
+    // Our own loopback bridge must never be sent through the proxy.
+    assert.match(String(env.NO_PROXY ?? env.no_proxy), /127\.0\.0\.1/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

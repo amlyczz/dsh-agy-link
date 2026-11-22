@@ -73,6 +73,12 @@ export interface PluginConfig {
    * exclusive only for account switches (Windows credential slot).
    */
   parallelSameAccount: boolean
+  /**
+   * Reap MCP servers orphaned by short-lived agy probes (agy forks every MCP
+   * server from the user registry for `models`/`/usage`/`--version` and does not
+   * kill them on exit). Only processes whose parent is already dead are killed.
+   */
+  reapOrphanMcp: boolean
   /** Preserve a newer external standalone AGY sign-in in the Windows credential slot instead of overwriting it (#145). */
   respectExternalSignIn: boolean
   maxConcurrent: number
@@ -336,6 +342,7 @@ export function defaultConfig(): PluginConfig {
      * false restores full-run slot exclusivity (one agy process at a time).
      */
     parallelSameAccount: true,
+    reapOrphanMcp: true,
     respectExternalSignIn: false,
     /**
      * Cross-session cap on concurrent agy request streams. 0 = UNLIMITED

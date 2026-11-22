@@ -84,6 +84,11 @@ export class AgyAdapter extends LlmAdapter {
     return this.activeRuns.get(sessionKey)
   }
 
+  /** Turns in flight: boot probes yield to real work instead of competing. */
+  activeRunCount(): number {
+    return this.activeRuns.size
+  }
+
   /** True when `--effort` must not be passed to this model. */
   isEffortUnsupported(model: string): boolean {
     return this.effortPolicy.isUnsupported(model)

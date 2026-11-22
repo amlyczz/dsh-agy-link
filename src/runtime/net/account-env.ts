@@ -6,6 +6,7 @@
 import { homedir } from 'node:os'
 import type { PluginConfig } from '../../common/types.ts'
 import { isolatedHomeEnv, proxyEnvFor } from '../../host/runner.ts'
+import { ensureLoopbackNoProxy, foldProxyEnvCase } from '../agy/env.ts'
 import { detectSystemProxy } from '../../host/wincred.ts'
 
 export interface AccountEnvRef {
@@ -60,7 +61,15 @@ export function buildAgyEnvWithProxy(input: BuildAgyEnvWithProxyInput): NodeJS.P
   if (input.account?.dir !== undefined && input.account.dir !== '') {
     Object.assign(env, isolatedHomeEnv(input.account.dir))
   }
-  Object.assign(env, proxyEnvFor(input.proxy))
+  const proxy = input.proxy?.trim()
+  if (proxy !== undefined && proxy !== '') {
+    Object.assign(env, proxyEnvFor(proxy))
+    // Never route our own loopback bridge / OAuth callback through the proxy.
+    ensureLoopbackNoProxy(env)
+  }
+  // Windows blocks are case-insensitive: collapse the paired spellings so no
+  // child inherits duplicate keys (breaks PowerShell's env: provider).
+  foldProxyEnvCase(env)
   return env
 }
 

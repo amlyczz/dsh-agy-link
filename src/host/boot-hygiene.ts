@@ -56,18 +56,10 @@ export function runBootHygiene(services: HostServices): void {
   } catch {
     // best-effort hygiene
   }
-  const swept = pool.sweepStaleStaging()
-  if (swept > 0) log('swept ' + swept + ' stale staging dir(s)')
-  const logsSwept = pool.sweepOldLogs(getConfig().logRetentionDays)
-  if (logsSwept > 0) log('swept ' + logsSwept + ' old log file(s)')
-  if (getConfig().syncAccountCustomizations) {
-    try {
-      services.ecosystem?.syncAll()
-    } catch {
-      // best-effort ecosystem mirror
-    }
-  }
-  // Provision per-account login keychains for isolated pool homes (macOS):
+  // Staging/log sweeps and the ecosystem mirror are NOT done here: on a pool of
+  // 8 accounts they are hundreds of file stats plus a full copy into every
+  // isolated home, all before the first frame. scheduleBootMaintenance() runs
+  // them once, deferred (see boot-maintenance.ts).  // Provision per-account login keychains for isolated pool homes (macOS):
   // without one, agy's keyring save pops the system "create login keychain"
   // password dialog on every token refresh. Idempotent; pre-existing homes
   // from older versions are covered here too.

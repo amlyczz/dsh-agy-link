@@ -26,6 +26,7 @@ import { sweepDir } from './host/media.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, startMcpBridge, teardownBridgeState, type ToolsServiceLike } from './host/mcp-bridge.ts'
 import type { GoalServiceLike } from './host/commands/shared.ts'
 import { runBootHygiene } from './host/boot-hygiene.ts'
+import { scheduleBootMaintenance } from './host/boot-maintenance.ts'
 import { closeProxyAgents } from './host/net.ts'
 import { setRuntimeAgyVersion } from './host/oauth.ts'
 import { createHostServices } from './host/services.ts'
@@ -46,58 +47,111 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // Boot-time pool/store hygiene: stale staging logs, keychains, credential slot.
   runBootHygiene(services)
 
+  // Everything expensive (staging/log sweeps, the ecosystem mirror, stale presence
+  // locks, orphaned MCP servers) is deferred to one idle pass: a pool of 8 accounts
+  // otherwise pays hundreds of file stats plus a full copy per account before the
+  // first frame, and leaves the previous run's MCP children behind.
+  const stopBootMaintenance = scheduleBootMaintenance({
+    accounts: () => services.pool.getAccounts(),
+    sweepStaging: () => services.pool.sweepStaleStaging(),
+    sweepLogs: () => services.pool.sweepOldLogs(getConfig().logRetentionDays),
+    ...(getConfig().syncAccountCustomizations ? { syncEcosystem: () => services.ecosystem?.syncAll() } : {}),
+    log,
+    reapOrphans: getConfig().reapOrphanMcp,
+  })
+  ctx.effect(() => () => stopBootMaintenance())
+
   // Track version probe completion so the 5s boot quota refresh never races
   // `agy --version` (preventing fallback UA version skew on the first poll).
   let versionProbePromise: Promise<void> | null = null
 
   // ---- dormant detection + background probes ----
-  // Defer version/catalog spawns so plugin load does not immediately create
-  // agy child processes (Windows conhost flash, issue #23). Catalog refresh
-  // is also driven lazily by adapter.listModels / stream.
-  const bootProbeTimer = setTimeout(() => {
-    void (async () => {
-      if (!getConfig().enabled) {
-        services.status.dormantReason = 'disabled by config'
-        log('dormant: disabled by config')
-        return
-      }
-      const currentBin = bin()
-      if (!currentBin) {
-        // Same actionable wording as the turn-level error: the badge shows this
-        // string, so it must say where we looked and how to point us at a
-        // binary installed outside the probed locations.
-        services.status.dormantReason = agyNotInstalledMessage(getConfig())
-        log('dormant: agy binary not found')
-        return
-      }
-      versionProbePromise = (async () => {
-        try {
-          const v = await probeProcess(currentBin, ['--version'], 10_000, undefined, undefined, getConfig().suppressAgyAutoUpdate)
-          services.status.version = parseVersion(v.stdout)
-          setRuntimeAgyVersion(services.status.version)
-          catalog.syncAgyVersion(services.status.version)
-          if (services.status.version && compareVersions(services.status.version, MIN_AGY_VERSION) < 0) {
-            services.status.dormantReason = 'agy ' + services.status.version + ' is older than ' + MIN_AGY_VERSION + ' — run: agy update'
-            log('dormant: ' + services.status.dormantReason)
-            return
-          }
-          services.status.dormantReason = null
-          log('agy detected: ' + (services.status.version ?? 'unknown version'))
-        } catch {
-          log('version probe failed — continuing with fallback catalog')
+  // Boot probes are deliberately cheap and deferrable. Every `agy` spawn costs
+  // a process, a credential-slot read and (for `models`) a full MCP-server boot
+  // storm from the user's own registry, so a probe must never run while a real
+  // turn is in flight and must never fan out over the whole pool.
+  //
+  // Before this guard the boot path was: 4s timer -> `agy --version` ->
+  // `agy models` (~4.6s, forking every MCP server) -> warmAccounts(8). Eight
+  // accounts meant tens of seconds of background churn on every DSH start, on
+  // top of the MCP processes it orphaned. Now the probe waits for an idle
+  // moment, refreshes only the ACTIVE account eagerly, and leaves every other
+  // account lazy (ensureAccountCatalog loads it on first use) unless the
+  // opt-in pool-wide catalog actually needs them.
+  const BOOT_PROBE_DELAY_MS = 4_000
+  const BOOT_PROBE_RETRY_MS = 20_000
+  let bootProbeTimer: ReturnType<typeof setTimeout> | null = null
+  let bootProbeAttempts = 0
+  let bootProbeStopped = false
+
+  const runBootProbe = async (): Promise<void> => {
+    if (!getConfig().enabled) {
+      services.status.dormantReason = 'disabled by config'
+      log('dormant: disabled by config')
+      return
+    }
+    const currentBin = bin()
+    if (!currentBin) {
+      // Same actionable wording as the turn-level error: the badge shows this
+      // string, so it must say where we looked and how to point us at a
+      // binary installed outside the probed locations.
+      services.status.dormantReason = agyNotInstalledMessage(getConfig())
+      log('dormant: agy binary not found')
+      return
+    }
+    versionProbePromise = (async () => {
+      try {
+        const v = await probeProcess(currentBin, ['--version'], 10_000, undefined, undefined, getConfig().suppressAgyAutoUpdate)
+        services.status.version = parseVersion(v.stdout)
+        setRuntimeAgyVersion(services.status.version)
+        catalog.syncAgyVersion(services.status.version)
+        if (services.status.version && compareVersions(services.status.version, MIN_AGY_VERSION) < 0) {
+          services.status.dormantReason = 'agy ' + services.status.version + ' is older than ' + MIN_AGY_VERSION + ' — run: agy update'
+          log('dormant: ' + services.status.dormantReason)
+          return
         }
-      })()
-      await versionProbePromise
-      if (services.status.dormantReason !== null) return
-      const poolData = services.pool.getPoolData()
-      const activeId = services.pool.getActiveAccountId('google') ?? poolData.lastActiveAccountId ?? poolData.primaryAccountId
-      await catalog.refreshIfNeeded(activeId).catch(() => undefined)
-      notifyPicker()
+        services.status.dormantReason = null
+        log('agy detected: ' + (services.status.version ?? 'unknown version'))
+      } catch {
+        log('version probe failed — continuing with fallback catalog')
+      }
+    })()
+    await versionProbePromise
+    if (services.status.dormantReason !== null) return
+
+    const poolData = services.pool.getPoolData()
+    const activeId = services.pool.getActiveAccountId('google') ?? poolData.lastActiveAccountId ?? poolData.primaryAccountId
+    // ONE spawn for the account the picker actually shows.
+    await catalog.refreshIfNeeded(activeId).catch(() => undefined)
+    notifyPicker()
+    // Only the opt-in pool-wide catalog needs every account discovered; the
+    // per-account rows otherwise load lazily on first use, so we never pay
+    // N x (agy models + MCP boot storm) at startup again.
+    if (getConfig().poolWideCatalog) {
       void catalog.warmAccounts(services.pool.getAccounts()).catch(() => undefined)
-    })();
-  }, 4_000)
-  bootProbeTimer.unref?.()
-  ctx.effect(() => () => clearTimeout(bootProbeTimer))
+    }
+  }
+
+  const scheduleBootProbe = (delayMs: number): void => {
+    if (bootProbeStopped) return
+    bootProbeTimer = setTimeout(() => {
+      // A turn is running: come back later instead of competing with it for the
+      // spawn slot, the credential slot, and the user's first token.
+      if (bootProbeAttempts < 30 && services.adapter.activeRunCount() > 0) {
+        bootProbeAttempts++
+        scheduleBootProbe(BOOT_PROBE_RETRY_MS)
+        return
+      }
+      void runBootProbe()
+    }, delayMs)
+    bootProbeTimer.unref?.()
+  }
+
+  scheduleBootProbe(BOOT_PROBE_DELAY_MS)
+  ctx.effect(() => () => {
+    bootProbeStopped = true
+    if (bootProbeTimer !== null) clearTimeout(bootProbeTimer)
+  })
 
   // Catalog freshness without probing from listModels(): refreshIfNeeded()
   // honours its TTL, so this costs at most one `agy models` spawn per window
@@ -180,6 +234,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           store: () => store,
           recentLines: () => services.lastParser.recentLines,
           effortUnsupported: () => adapter.effortUnsupportedModels(),
+          accounts: () => services.pool.getAccounts(),
         })
       },
     }),
