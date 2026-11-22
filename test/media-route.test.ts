@@ -356,6 +356,12 @@ test('media-route: handleOpenFile validates path and returns JSON', () => {
         ? 'explorer.exe /select,' + testDoc
         : 'xdg-open ' + testDoc;
     assert.deepEqual(launched, [expected], 'reveal must hand the exact target to the platform opener');
+
+    // Belt and braces: even a caller that injects nothing must stay window-free
+    // while the suite runs, because NODE_TEST_CONTEXT is set in every test child.
+    const suppressed = executeOpenInSystem(testDoc, true);
+    assert.equal(suppressed.ok, true, 'the default opener is suppressed, not failed, under the runner');
+    assert.equal(launched.length, 1, 'the default opener must not reach the real OS handler');
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
   }

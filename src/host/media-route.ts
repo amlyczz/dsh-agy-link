@@ -395,6 +395,12 @@ export function executeOpenInSystem(
     if (!existsSync(targetPath)) {
       return { ok: false, error: 'target does not exist: ' + targetPath };
     }
+    // node:test marks every test child with NODE_TEST_CONTEXT. When the caller
+    // did not inject an opener, skip the real OS handler so a suite run never
+    // steals focus with an Explorer / Finder / xdg-open window.
+    if (opener === spawnDetachedOpener && process.env.NODE_TEST_CONTEXT) {
+      return { ok: true, error: 'os opener suppressed under the test runner' };
+    }
     if (process.platform === 'darwin') {
       if (!opener('open', reveal ? ['-R', targetPath] : [targetPath])) {
         return { ok: false, error: 'failed to launch the system opener' };
