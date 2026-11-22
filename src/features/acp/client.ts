@@ -97,6 +97,8 @@ export class AcpProcess extends EventEmitter {
   private identityProbeDone = false
   private identityProbe: Promise<string | null> | null = null
   private alive = false
+  private supportsInlineImages = false
+  private readonly rebuiltSessions = new Set<string>()
   private initPromise: Promise<Record<string, unknown>> | null = null
   lastUsedAt = Date.now()
 
@@ -118,7 +120,10 @@ export class AcpProcess extends EventEmitter {
   }
   /** Path of the agy ACP log this process writes (null until started). */
   get logFilePath(): string | null { return this.logFile }
+  /** True when the remote `agy acp` advertised `promptCapabilities.image === true`. */
+  get supportsImageBlocks(): boolean { return this.supportsInlineImages }
   hasOpenSession(sessionId: string): boolean { return this.openSessions.has(sessionId) }
+  consumeRebuiltSession(sessionId: string): boolean { return this.rebuiltSessions.delete(sessionId) }
 
   /**
    * The account agy authenticated as, read from its own `--log-file`. Gate 2:
@@ -326,6 +331,13 @@ export class AcpProcess extends EventEmitter {
   async ensureInitialized(): Promise<Record<string, unknown>> {
     if (!this.initPromise) {
       this.initPromise = this.request('initialize', { protocolVersion: 1, clientCapabilities: {} }, 25_000)
+        .then((res) => {
+          const caps = (res.agentCapabilities ?? res.capabilities) as
+            | { promptCapabilities?: { image?: unknown } }
+            | undefined
+          this.supportsInlineImages = caps?.promptCapabilities?.image === true
+          return res
+        })
         .catch((err) => {
           this.initPromise = null
           throw err
@@ -417,6 +429,9 @@ export class AcpProcess extends EventEmitter {
       const r = await this.request('session/new', params, 30_000)
       sid = typeof r.sessionId === 'string' ? r.sessionId : ''
       if (sid === '') throw new Error('ACP session/new returned empty sessionId')
+      if (opts.resumeId && sid !== opts.resumeId) {
+        this.rebuiltSessions.add(sid)
+      }
     }
     this.openSessions.add(sid)
     const mode = opts.mode ?? this.opts.permissionMode
@@ -446,18 +461,12 @@ export class AcpProcess extends EventEmitter {
   private async assertIdentity(): Promise<void> {
     const expected = (this.opts.expectedEmail ?? '').trim().toLowerCase()
     if (expected === '') return
-    // The log line never changes within one process, so the verdict is cached:
-    // re-probing on every openSession re-read the log tail each turn and, on a
-    // build that does not print the line, blocked every turn for the full probe
-    // window.
     if (this.authEmail !== null) return this.checkIdentity(this.authEmail, expected)
     if (this.identityProbeDone) return
     this.identityProbe ??= awaitAuthEmail(this.logFile, () => this.isAlive()).finally(() => {
       this.identityProbeDone = true
     })
     const actual = await this.identityProbe
-    // No identity in the log is not proof of a mismatch (a build may not print
-    // it); only a DIFFERENT identity is actionable.
     if (actual === null) return
     this.authEmail = actual
     this.checkIdentity(actual, expected)
@@ -469,7 +478,8 @@ export class AcpProcess extends EventEmitter {
   }
 
   async prompt(opts: AcpPromptOptions): Promise<Record<string, unknown>> {
-    return runAcpTurn(this, opts)
+    const effectiveOpts = this.supportsInlineImages ? opts : { ...opts, images: undefined }
+    return runAcpTurn(this, effectiveOpts)
   }
 
   /**
@@ -483,8 +493,6 @@ export class AcpProcess extends EventEmitter {
       return
     }
     const c = this.child
-    // Leaving stdin open is what keeps agy's session loop alive, so ending it
-    // is what asks it to shut down on its own terms.
     try { c?.stdin?.end() } catch { /* ignore */ }
     const exited = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => resolve(false), timeoutMs)
@@ -494,7 +502,6 @@ export class AcpProcess extends EventEmitter {
         resolve(true)
       })
     })
-    // A process that ended by itself already flushed; anything else is killed.
     if (!exited) this.close()
     else this.alive = false
   }

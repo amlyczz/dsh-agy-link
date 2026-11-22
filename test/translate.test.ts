@@ -351,7 +351,8 @@ test('translateTurn appends a durable record anchored at the final message', asy
   assert.equal(records.length, 1)
   const rec = records[0]!.record
   assert.equal(records[0]!.sessionId, 's1')
-  assert.equal(rec.turn, 1)
+  assert.equal(rec.turn, null)
+  assert.equal(rec.sourceTurn, 1)
   assert.equal(rec.anchorSeq, 103)
   assert.equal(rec.messageId, 'm-1-3')
   assert.equal(rec.model, 'gemini-3.8-flash')
@@ -403,7 +404,8 @@ test('translateMessage resolves the owning turn', async () => {
   const { service, records } = makeService({ runs: [{ ok: true, text: '人话版' }] })
   const res = await service.translateMessage('s1', 'm-1-3')
   assert.equal(res.ok, true)
-  assert.equal(records[0]!.record.turn, 1)
+  assert.equal(records[0]!.record.turn, null)
+  assert.equal(records[0]!.record.sourceTurn, 1)
 })
 
 test('autoTranslateTurn is skipped when the switch is off', async () => {
@@ -438,7 +440,8 @@ test('translateMessage falls back to lastCompletedTurn when message is unindexed
   const { service, records } = makeService({ runs: [{ ok: true, text: '人话版' }] })
   const res = await service.translateMessage('s1', 'unknown-msg-id')
   assert.equal(res.ok, true)
-  assert.equal(records[0]!.record.turn, 1)
+  assert.equal(records[0]!.record.turn, null)
+  assert.equal(records[0]!.record.sourceTurn, 1)
 })
 
 test('sessionEvents reads from snapshotEvents and ownEvents', () => {
@@ -479,7 +482,8 @@ test('translateMessage explains the CLICKED message, not the turn final answer',
   assert.doesNotMatch(calls[0]!.text ?? '', /最终答复/)
   assert.equal(records[0]!.record.messageId, 'm-1-1')
   assert.equal(records[0]!.record.anchorSeq, 101, 'the card lands under the clicked message')
-  assert.equal(records[0]!.record.turn, 1)
+  assert.equal(records[0]!.record.turn, null)
+  assert.equal(records[0]!.record.sourceTurn, 1)
 })
 
 test('dedupe is message-scoped: siblings in one turn translate independently', async () => {

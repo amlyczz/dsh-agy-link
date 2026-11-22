@@ -133,6 +133,8 @@ export interface ResolveOptions {
    * degraded (refresh-token-less) document.
    */
   force?: boolean
+  /** Refuse to overwrite an unrecognised external standalone AGY sign-in in the Windows slot (#145). */
+  respectExternalSignIn?: boolean
 }
 
 function resolveIo(options: ResolveOptions): SlotIo {
@@ -212,6 +214,7 @@ export async function acquireCredentialSlot(
     ...(options.parallel === undefined ? {} : { parallel: options.parallel }),
     ...(options.proxyUrl === undefined ? {} : { proxyUrl: options.proxyUrl }),
     ...(options.force === undefined ? {} : { force: options.force }),
+    ...(options.respectExternalSignIn === undefined ? {} : { respectExternalSignIn: options.respectExternalSignIn }),
   })
 }
 

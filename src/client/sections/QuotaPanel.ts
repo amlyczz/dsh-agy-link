@@ -376,7 +376,9 @@ export function renderFamilyQuotaBar(
 			),
 			renderFamilyHeaderActions(t, cooling, cooldownTip, familyActions),
 		),
-		(familyKey !== 'argon' || has5h) ? renderLine(t, t('quota.fiveHour'), pct5h, c5h, note5h, FIVE_H_MS, info?.remainingFraction, info?.resetTime, isRefreshing) : null,
+		// Hide the 5-hour row when a family is weekly-only (e.g. Free-tier Gemini or
+		// dedicated Argon weekly bucket) so the card reflects the real quota structure.
+		(has5h || (!hasWeekly && familyKey !== 'argon')) ? renderLine(t, t('quota.fiveHour'), pct5h, c5h, note5h, FIVE_H_MS, info?.remainingFraction, info?.resetTime, isRefreshing) : null,
 		renderLine(t, t('quota.weekly'), pctWeekly, cWeekly, noteWeekly, SEVEN_D_MS, info?.weeklyFraction, info?.weeklyResetTime, isRefreshing),
 	);
 }

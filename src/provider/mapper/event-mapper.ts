@@ -20,7 +20,14 @@ import { type CompactionNotice, renderCompactionMarker } from '../../common/comp
 import { type GoalContext, buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock } from '../../host/dsh-goal.ts'
 import { unwrapMcpTool } from '../../host/mirror-tool.ts'
 import { composeThinkingText } from './thoughts.ts'
-import { normalizeFileLinks, rewriteAgentEmbeds, rewriteImageMarkdown, splitPendingEmbedFragment, suffixDelta } from './text.ts'
+import {
+  normalizeFileLinks,
+  rewriteAgentEmbeds,
+  rewriteImageMarkdown,
+  splitPendingEmbedFragment,
+  stripAgyInternalNoise,
+  suffixDelta,
+} from './text.ts'
 import { buildToolCallBlock } from './tool-block.ts'
 import { usageFromRaw } from './usage.ts'
 import type { ToolCallState } from './tool-calls.ts'
@@ -69,8 +76,9 @@ export interface EventMapperOptions {
    * conversation-cumulative and must never reach DSH's token meter.
    */
   usage?: {
-    noteStepUsage(raw: RawUsage): void
+    noteStepUsage(raw: RawUsage, stepKey?: string): void
     finalUsage(resultRaw: RawUsage): RawUsage
+    consumeSpanUsage?(resultRaw?: RawUsage): RawUsage | null
   }
   /**
    * Resolve FULL tool args for a recorded step from the agy conversation DB
@@ -140,8 +148,9 @@ export class EventMapper {
   }
 
   private formatAssistantText(text: string): string {
+    const clean = stripAgyInternalNoise(text)
     const embedBase = this.opts.mediaBaseUrl ? this.opts.mediaBaseUrl.replace(/\/media\/?$/, '/embed') : undefined
-    const withEmbeds = rewriteAgentEmbeds(text, embedBase)
+    const withEmbeds = rewriteAgentEmbeds(clean, embedBase)
     const withImages = this.opts.mediaBaseUrl ? rewriteImageMarkdown(withEmbeds, this.opts.mediaBaseUrl) : withEmbeds
     return normalizeFileLinks(withImages)
   }
@@ -264,7 +273,7 @@ export class EventMapper {
     yield* this.emitCompactionNoticeIfPending()
     yield* this.flushBannerOnlyThoughts()
     if (ev.kind === 'step') {
-      if (ev.usage) this.opts.usage?.noteStepUsage(ev.usage)
+      if (ev.usage) this.opts.usage?.noteStepUsage(ev.usage, ev.stepKey)
       if (ev.stepKind === 'text') {
         const thoughtTokens = ev.usage?.thinking_tokens ?? 0
         const stepTextEmitted = (this.emittedByKey.get(ev.stepKey) ?? '') !== ''
@@ -422,7 +431,11 @@ export class EventMapper {
           useCodeWrapper: this.opts.useCodeWrapper === true,
           blockIdx: this.blockIdx,
           toolCallStates: this.toolCallStates,
-          finalUsage: () => this.opts.usage?.finalUsage({}),
+          finalUsage: () => (
+            this.opts.usage?.consumeSpanUsage
+              ? this.opts.usage.consumeSpanUsage()
+              : this.opts.usage?.finalUsage({})
+          ),
         })
         for (const ch of block.chunks) yield ch
         this.blockIdx = block.nextBlockIdx
@@ -460,7 +473,12 @@ export class EventMapper {
     yield* this.flushPendingEmbed()
     const close = this.closeOpen()
     if (close) yield close
-    yield { type: 'usage', usage: usageFromRaw(this.opts.usage?.finalUsage(ev.usage) ?? ev.usage) }
+    const resultUsage = this.opts.usage?.consumeSpanUsage
+      ? this.opts.usage.consumeSpanUsage(ev.usage)
+      : (this.opts.usage?.finalUsage(ev.usage) ?? ev.usage)
+    if (resultUsage !== null && resultUsage !== undefined && Object.keys(resultUsage).length > 0) {
+      yield { type: 'usage', usage: usageFromRaw(resultUsage) }
+    }
 
     // If running in a DSH goal continuation round and DSH provided the update_goal tool:
     // Emit a synthetic update_goal call to mark the goal complete and prevent infinite loop continuation rounds.
@@ -521,10 +539,12 @@ export class EventMapper {
     yield* this.flushPendingEmbed()
     const close = this.closeOpen()
     if (close) yield close
-    const tracked = this.opts.usage?.finalUsage({})
     // No sample means "no measurement", not "zero tokens": emitting 0/0 would
-    // reset DSH's context meter on a failed turn (issue #158).
-    if (tracked !== undefined && Object.keys(tracked).length > 0) {
+    // reset DSH's context meter on a failed turn (issues #158 & #161).
+    const tracked = this.opts.usage?.consumeSpanUsage
+      ? this.opts.usage.consumeSpanUsage()
+      : this.opts.usage?.finalUsage({})
+    if (tracked !== null && tracked !== undefined && Object.keys(tracked).length > 0) {
       yield { type: 'usage', usage: usageFromRaw(tracked) }
     }
     const failure: LlmFailure = {

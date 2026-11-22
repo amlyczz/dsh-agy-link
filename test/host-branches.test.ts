@@ -1172,17 +1172,21 @@ test('handleGoal: an unknown phase falls back to the neutral emoji and the clear
 })
 
 test('handleGoal: complete/pause/resume error without a goal or without append', () => {
-  for (const action of ['complete', 'pause', 'resume']) {
+  for (const [action, startPhase] of [['complete', 'active'], ['pause', 'active'], ['resume', 'paused']] as const) {
     assert.equal(handleGoal(cmdDeps(fakeStore()), ctx(action, { id: 's1', session: goalSession([]) })).kind, 'error')
-    const noAppend = goalSession([goalEvent()])
+    const noAppend = goalSession([goalEvent({ phase: startPhase })])
     assert.match(handleGoal(cmdDeps(fakeStore()), ctx(action, { id: 's1', session: noAppend })).text ?? '', /cannot append/)
   }
 })
 
 test('handleGoal: complete/pause/resume/clear append the right transition', () => {
-  for (const [action, phase] of [['complete', 'complete'], ['pause', 'paused'], ['resume', 'active']] as const) {
+  for (const [action, startPhase, phase] of [
+    ['complete', 'active', 'complete'],
+    ['pause', 'active', 'paused'],
+    ['resume', 'paused', 'active'],
+  ] as const) {
     const appended: Array<{ t: string; d: Record<string, unknown> }> = []
-    const session = goalSession([goalEvent()], (t, d) => appended.push({ t, d: d as Record<string, unknown> }))
+    const session = goalSession([goalEvent({ phase: startPhase })], (t, d) => appended.push({ t, d: d as Record<string, unknown> }))
     const out = handleGoal(cmdDeps(fakeStore()), ctx(action, { id: 's1', session }))
     assert.equal(out.kind, 'success')
     assert.equal(appended[0]?.t, 'goal/change')

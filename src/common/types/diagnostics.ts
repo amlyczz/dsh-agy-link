@@ -66,6 +66,12 @@ export function extractAuthUrl(text: string): string | undefined {
   return m[0].replace(/[)\]>.,;\x27\x22]+$/, '')
 }
 
+/** Account has run out of Antigravity AI credits (`Your AI credits balance is too low`). */
+export function looksLikeAiCreditsLow(text?: string): boolean {
+  if (!text) return false
+  return /ai credits balance is too low|insufficient ai credits|out of ai credits|ai credits? (?:exhausted|depleted)/i.test(text)
+}
+
 /**
  * HARD, server-issued rate-limit signatures — the ONLY patterns allowed to
  * put an account into cooldown. Deliberately narrow: bare `429` or
@@ -76,6 +82,7 @@ export function extractAuthUrl(text: string): string | undefined {
  */
 export function looksLikeHardRateLimit(text?: string): boolean {
   if (!text) return false
+  if (looksLikeAiCreditsLow(text)) return true
   return /RESOURCE_EXHAUSTED|\bQUOTA_EXHAUSTED\b|"?code"?\s*[:=]\s*429\b|"?status"?\s*[:=]\s*429\b|HTTP(?:\/[\d.]+)?[ :]?429\b|too many requests|individual quota reached|quota (?:exceeded|reached|exhausted|limit)|rate[ -]?limit(?:ed)? (?:exceeded|reached|hit)?|exceeded (?:your |the )?quota|has been exhausted|exhausted your (?:quota|capacity)|out of quota|check quota|insufficient quota|usage limit reached/i.test(
     text,
   )

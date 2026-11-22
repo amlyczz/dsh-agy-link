@@ -20,6 +20,20 @@ export interface WarmupLastRunSnapshot {
   accounts: WarmupAccountSummary[]
 }
 
+export interface WarmupAuditEntry {
+  timestamp: number
+  accountId: string
+  alias: string
+  model: string
+  window: 'weekly' | '5h' | 'manual'
+  trigger: 'auto' | 'daily' | 'interval' | 'manual' | 'sliding-idle'
+  success: boolean
+  skipped?: boolean
+  durationMs: number
+  error?: string
+  skipReason?: string
+}
+
 export interface WarmupStatusSnapshot {
   running: boolean
   scope: 'all' | string | null
@@ -29,4 +43,5 @@ export interface WarmupStatusSnapshot {
   completed: number
   total: number
   lastRun: WarmupLastRunSnapshot | null
+  recentHistory?: WarmupAuditEntry[]
 }

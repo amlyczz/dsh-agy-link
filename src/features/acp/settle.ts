@@ -79,6 +79,7 @@ export async function settleAcpOutcome(opts: {
     sessionAccountKey: input.sessionAccountKey,
     ...(input.binding === undefined ? {} : { binding: input.binding }),
     conversationId: sid,
+    cwd: input.binding?.cwd || input.workspaceRoot,
     messages: input.messages,
     model: input.model,
     activeModel: input.activeModel,

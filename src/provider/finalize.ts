@@ -65,6 +65,8 @@ export interface FinalizeInput {
   sessionAccountKey: string
   binding?: SessionBinding
   conversationId: string | null
+  /** Original working directory for this conversation (persisted to preserve prompt cache on resume). */
+  cwd?: string
   messages: readonly Message[]
   /** Model slug reported to onRun (resolved model id). */
   model: string
@@ -130,6 +132,7 @@ function writeSuccessBinding(input: FinalizeInput): void {
   const finalId = input.conversationId ?? input.binding?.conversationId
   if (!finalId) return
   const inputTokens = resolveInputTokens(input.rec, input.binding)
+  const resolvedCwd = input.binding?.cwd || input.cwd
   input.store.set(input.sessionAccountKey, {
     conversationId: finalId,
     lastMessageCount: input.messages.length,
@@ -137,6 +140,7 @@ function writeSuccessBinding(input: FinalizeInput): void {
     model: input.activeModel,
     sentImageIds: mergeSentImageIds(input.binding?.sentImageIds, input.newlySentImageIds),
     ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
+    ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
   })
 }
 
@@ -271,6 +275,7 @@ function persistFailureBinding(input: FinalizeInput, failure: AttemptFailure): v
     const finalId = input.conversationId ?? input.binding?.conversationId
     if (!finalId) return
     const inputTokens = resolveInputTokens(input.rec, input.binding)
+    const resolvedCwd = input.binding?.cwd || input.cwd
     input.store.set(input.sessionAccountKey, {
       conversationId: finalId,
       lastMessageCount: input.messages.length,
@@ -284,6 +289,7 @@ function persistFailureBinding(input: FinalizeInput, failure: AttemptFailure): v
       sentImageIds: mergeSentImageIds(input.binding?.sentImageIds, []),
       ...((interruptedTurn || input.binding?.interrupted === true) ? { interrupted: true } : {}),
       ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
+      ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
     })
   }
 }

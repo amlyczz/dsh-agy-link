@@ -20,37 +20,23 @@ import {
   writePrimaryCredentialAt,
   type PrimaryCredential,
 } from './docs.ts'
+import {
+  assertPrimarySlotSafeToReassert,
+  installSlotTracked,
+  restorePrimarySlotRespectingExternal,
+} from './external-guard.ts'
 import { AbortedWaitError, SlotUnavailableError, WaitTimeoutError } from './errors.ts'
 import { acquireCrossProcessSlotLock } from './lock.ts'
 import { credentialSlotMutex } from './mutex.ts'
 import { saveCredentialBackup } from './backup.ts'
-import { installSlotBestEffort, installSlotOrThrow, type SlotLease } from './lease.ts'
+import type { SlotLease } from './lease.ts'
 import type { CredentialPlatform } from './platform.ts'
 import { resolvePrimaryCredentialAt, type AccountPoolLike } from './resolve.ts'
 
 // ---- same-account concurrency ----------------------------------------------
-//
-// agy is a stateless CLI process and natively supports concurrent runs. The
-// ONLY thing that must stay exclusive on Windows is the machine-global
-// credential slot, and only when its IDENTITY has to change:
-//
-//   * Runs on the identity ALREADY in the slot only ever READ the credential.
-//     Google refresh tokens are not single-use, so parallel token refreshes on
-//     one grant produce multiple valid access tokens — no conflict. These runs
-//     bypass the mutex entirely (FAST PATH) and are pure parallelism.
-//   * A run that needs a DIFFERENT identity in the slot must first wait out
-//     every same-identity run: swapping the slot under a live process would
-//     feed it the wrong credential on its next in-run token refresh — the
-//     exact corruption class this module exists to prevent. While a switch
-//     waits, new fast paths are refused so the switcher cannot starve.
-//
-// A SECONDARY account's installed identity is reference-counted: the first run
-// performs the exclusive handoff and keeps the mutex, later runs on the same
-// grant join it as fast leases, and the LAST holder persists any rotated token
-// and restores the primary. Before this existed every secondary run held the
-// slot exclusively (only the primary had a fast path), so one long agy run on
-// the active pool account starved every other session — three cardboard-empire
-// turns parked ~9 minutes behind a single run on 2026-10-17.
+// Same-identity runs bypass the mutex (fast path); identity switches serialize
+// and drain live peers. Secondary identities are refcounted so same-grant runs
+// share one lease and the last holder persists rotated tokens & restores primary.
 
 import {
   claimSwitchTarget,
@@ -87,6 +73,7 @@ function leaveInstalledIdentity(state: InstalledIdentity): void {
   state.finish()
 }
 
+export type { AcquireInput } from './guards.ts'
 
 export interface SlotAcquireOptions {
   account: ManagedAccount
@@ -101,6 +88,7 @@ export interface SlotAcquireOptions {
   dispatchTimeoutMs: number | undefined
   proxyUrl: string | undefined
   force: boolean | undefined
+  respectExternalSignIn: boolean
 }
 
 /**
@@ -130,6 +118,7 @@ export async function acquireCredentialSlotAt(
     dispatchTimeoutMs: input.dispatchTimeoutMs,
     proxyUrl: input.proxyUrl,
     force: input.force,
+    respectExternalSignIn: input.respectExternalSignIn === true,
   }).run()
 }
 
@@ -147,6 +136,7 @@ class SlotAcquire {
   private readonly dispatchTimeoutMs: number | undefined
   private readonly proxyUrl: string | undefined
   private readonly force: boolean | undefined
+  private readonly respectExternalSignIn: boolean
 
   private claimSwitch = false
   private requestedRaw: string | null = null
@@ -171,6 +161,7 @@ class SlotAcquire {
     this.dispatchTimeoutMs = opts.dispatchTimeoutMs
     this.proxyUrl = opts.proxyUrl
     this.force = opts.force
+    this.respectExternalSignIn = opts.respectExternalSignIn
   }
 
   async run(): Promise<SlotLease | undefined> {
@@ -429,10 +420,20 @@ class SlotAcquire {
 
   /** Primary run: slot repair (or full serialization when parallel is off). */
   private primaryLease(primary: PrimaryCredential): SlotLease {
+    const live = this.io.readSlot()
     const identityOk = this.slotEmailMatches(primary.email)
-    if (!identityOk || !sameCredentialGrant(this.io.readSlot(), primary.raw)) {
+    if (!identityOk || !sameCredentialGrant(live, primary.raw)) {
+      if (!sameCredentialGrant(live, primary.raw)) {
+        assertPrimarySlotSafeToReassert({
+          liveSlotRaw: live,
+          primaryRaw: primary.raw,
+          baseDir: this.baseDir,
+          log: this.log,
+          respectExternalSignIn: this.respectExternalSignIn,
+        })
+      }
       this.log('[agy-link] re-asserting the primary credential into the Windows credential slot')
-      installSlotOrThrow(this.io, primary.raw, this.log, 'primary')
+      installSlotTracked(this.io, primary.raw, this.baseDir, this.log, 'primary')
     }
     this.releaseLockFileNow()
     // The identity is installed: same-account peers may fast-path again.
@@ -444,17 +445,19 @@ class SlotAcquire {
         try {
           const afterRaw = this.io.readSlot()
           if (sameCredentialGrant(afterRaw, primary.raw)) {
-            // agy may have refreshed the access token in place — keep the
-            // durable copy current. The identity is unchanged, and the recorded
-            // identity must say so before anything is copied over.
             if (afterRaw && afterRaw !== primary.raw && this.slotEmailMatches(primary.email)) {
               writePrimaryCredentialAt({ raw: afterRaw, email: primary.email, savedAt: Date.now() }, this.baseDir)
             }
           } else if (afterRaw) {
-            // Something replaced the primary mid-run. Put it back.
-            this.log('[agy-link] credential slot changed during a primary run — restoring the primary credential')
-            installSlotBestEffort(this.io, primary.raw, this.log, 'primary')
-            writePrimaryCredentialAt(primary, this.baseDir)
+            const restored = restorePrimarySlotRespectingExternal({
+              io: this.io,
+              primaryRaw: primary.raw,
+              baseDir: this.baseDir,
+              log: this.log,
+              respectExternalSignIn: this.respectExternalSignIn,
+              contextLabel: 'during primary run',
+            })
+            if (restored) writePrimaryCredentialAt(primary, this.baseDir)
           }
         } finally {
           this.done()
@@ -520,20 +523,16 @@ class SlotAcquire {
     accountFile: string,
     accountFingerprint: string,
   ): SlotLease {
-    installSlotOrThrow(this.io, accountRaw, this.log, this.account.alias || this.account.id)
-    // Gate 1 after the write: prove agy will load THIS account. A rejected or
-    // raced write leaves the previous account in place, and running anyway would
-    // bill it for this account's turn.
-    // Retry with a FRESH read: Windows Credential Manager occasionally reports
-    // success while the previous value is still cached, so re-reading the same
-    // buffer would only prove we wrote what we think we wrote.
+    const label = this.account.alias || this.account.id
+    installSlotTracked(this.io, accountRaw, this.baseDir, this.log, label)
+    // Gate 1 after the write: prove agy will load THIS account (with one fresh-read retry).
     if (!this.slotEmailMatches(this.account.email)) {
-      installSlotOrThrow(this.io, accountRaw, this.log, this.account.alias || this.account.id)
+      installSlotTracked(this.io, accountRaw, this.baseDir, this.log, label)
       if (!this.slotEmailMatches(this.account.email)) {
         this.done()
         throw new SlotUnavailableError(
           'The Windows credential slot still holds a different account after installing ' +
-            (this.account.alias || this.account.id) +
+            label +
             "'s credential — refusing to run, because agy would authenticate as the other account.",
         )
       }
@@ -573,7 +572,14 @@ class SlotAcquire {
           }
         } finally {
           try {
-            installSlotBestEffort(this.io, primary.raw, this.log, 'primary')
+            restorePrimarySlotRespectingExternal({
+              io: this.io,
+              primaryRaw: primary.raw,
+              baseDir: this.baseDir,
+              log: this.log,
+              respectExternalSignIn: this.respectExternalSignIn,
+              contextLabel: `after ${this.account.alias || this.account.id}'s run`,
+            })
           } finally {
             this.done()
           }

@@ -14,15 +14,9 @@ import {
 } from '../../common/types.ts'
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
 import { TaskActivityTracker } from './task-activity.ts'
+import { ParentQuotaMonitor, type SubagentQuotaExhaustedInfo } from './parent-quota.ts'
 
-export interface SubagentQuotaExhaustedInfo {
-  source: 'subagent-transcript' | 'parent-system-message' | 'tool-step'
-  errorText: string
-  model?: string
-  resetMs?: number
-  role?: string
-  conversationId?: string
-}
+export type { SubagentQuotaExhaustedInfo }
 
 export interface SubagentTrackerOptions {
   conversationId?: string
@@ -249,6 +243,7 @@ export class SubagentTracker {
   private readonly trackedSubagents = new Map<string, TrackedSubagent>()
   private readonly seenStepKeys = new Set<string>()
   private readonly taskActivity: TaskActivityTracker
+  private readonly parentQuota = new ParentQuotaMonitor()
   private timer: NodeJS.Timeout | null = null
   private active = false
   private polling = false
@@ -272,6 +267,7 @@ export class SubagentTracker {
     this.parentCursor = createTranscriptCursor()
     this.parentLines = 0
     this.taskActivity.reset()
+    this.parentQuota.reset()
     if (this.active) {
       if (this.opts.resumed === true) {
         this.baselined = true
@@ -304,6 +300,7 @@ export class SubagentTracker {
       const parentLog = join(this.brainDir, '.system_generated', 'logs', 'transcript.jsonl')
       this.parentCursor = createTranscriptCursor(fileSizeOrZero(parentLog))
       this.taskActivity.baseline(this.brainDir)
+      this.parentQuota.baseline(this.brainDir)
       this.scanSubagentsForConv(this.conversationId, true)
       for (const cid of Array.from(this.trackedSubagents.keys())) {
         this.scanSubagentsForConv(cid, true)
@@ -344,6 +341,11 @@ export class SubagentTracker {
       if (!this.brainDir) return
 
       this.pollParentTranscript()
+      this.parentQuota.poll(this.brainDir, (hit) => {
+        const key = `parent-retry-loop-${this.conversationId}`
+        this.emitSubagentEvent(key, '[主对话] 连续触发配额限流，正在中断重试...\n', hit)
+        this.opts.onQuotaExhausted?.(hit)
+      })
       this.taskActivity.poll(this.brainDir, (ev) => {
         this.emitSubagentEvent(ev.stepKey, ev.text, ev.raw)
       })

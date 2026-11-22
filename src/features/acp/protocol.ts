@@ -39,7 +39,7 @@ export interface AcpStreamState {
   /**
    * Latest context-window occupancy from `usage_update`. Diagnostic only: it
    * never reaches DSH's token meter, because "context used" is not "tokens
-   * billed this call".
+   * billed this call" (issue #158).
    */
   lastContextUsed: number
   toolArgsByCallId: Map<string, { name: string; args: unknown }>
@@ -129,7 +129,14 @@ export function acpUpdateToAgyEvents(
     const content = asObj(update.content)
     if (content?.type === 'text' && typeof content.text === 'string' && content.text !== '') {
       state.accumulatedText += content.text
-      const usage = Object.keys(state.lastUsage).length > 0 ? { ...state.lastUsage } : undefined
+      // Only attach usage when it carries real per-call metrics (output or cache
+      // tokens), never a bare `{ input_tokens: used }` snapshot from usage_update
+      // which would clobber PromptResponse.usage (#158).
+      const hasRealMetrics =
+        state.lastUsage.output_tokens !== undefined ||
+        state.lastUsage.cache_read_tokens !== undefined ||
+        state.lastUsage.thinking_tokens !== undefined
+      const usage = hasRealMetrics ? { ...state.lastUsage } : undefined
       return [{
         kind: 'step',
         stepKey: `acp-text-${state.textSeq}`,
@@ -164,13 +171,21 @@ export function acpUpdateToAgyEvents(
     // inflated uncached input).
     const used = num(update.used)
     if (used !== undefined) state.lastContextUsed = used
-    // A cache-read count, when a future agy version does send one, tells a
-    // replayed conversation apart from a fresh one (a resumed session that
-    // really rehydrated history reports it).
-    const cachedRead = num(update.cachedReadTokens) ?? num(update.cache_read_tokens) ?? num(update.cached_read_tokens)
-    const outputTokens = num(update.outputTokens) ?? num(update.output_tokens)
-    if (cachedRead !== undefined) state.lastUsage.cache_read_tokens = cachedRead
-    if (outputTokens !== undefined) state.lastUsage.output_tokens = outputTokens
+    // Only populate state.lastUsage when the update actually includes detailed
+    // token breakdowns; agy 1.5.x only sends `{ used, size }` here (#158).
+    const detailed = acpUsageToRawUsage(update)
+    const snakeCached = num(update.cached_read_tokens)
+    if (snakeCached !== undefined && detailed.cache_read_tokens === undefined) {
+      detailed.cache_read_tokens = snakeCached
+    }
+    if (
+      detailed.output_tokens !== undefined ||
+      detailed.cache_read_tokens !== undefined ||
+      detailed.cache_write_tokens !== undefined ||
+      detailed.thinking_tokens !== undefined
+    ) {
+      state.lastUsage = { ...state.lastUsage, ...detailed }
+    }
     return []
   }
   if (kind === 'tool_call' || kind === 'tool_call_update') {
@@ -235,6 +250,7 @@ export function acpPromptResultToAgyEvent(
   sessionId: string,
   result: Record<string, unknown>,
   accumulatedText: string,
+  fallbackContextUsed?: number,
 ): AgyEvent {
   const stopReason = typeof result.stopReason === 'string' ? result.stopReason : 'end_turn'
   const rawErr = result.error
@@ -247,6 +263,9 @@ export function acpPromptResultToAgyEvent(
         : undefined
   const ok = stopReason !== 'error' && stopReason !== 'refusal' && extractedErr === undefined
   const usage = acpUsageToRawUsage(result.usage)
+  if (Object.keys(usage).length === 0 && typeof fallbackContextUsed === 'number' && fallbackContextUsed > 0) {
+    usage.input_tokens = fallbackContextUsed
+  }
   return {
     kind: 'result',
     conversationId: sessionId,

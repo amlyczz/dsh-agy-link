@@ -11,6 +11,7 @@ import { stateDir } from '../common/config.ts'
 import {
   accountHasArgon,
   baseModelSlug,
+  type AccountPlanTier,
   type AccountPoolData,
   type FamilyQuotaInfo,
   type ManagedAccount,
@@ -217,6 +218,10 @@ export class AccountPoolManager {
     return this.admin.setAccountAlias(id, alias)
   }
 
+  setAccountPlanTier(id: string, tier: AccountPlanTier | undefined): boolean {
+    return this.admin.setAccountPlanTier(id, tier)
+  }
+
   setAccountEnabled(id: string, enabled: boolean): boolean {
     const wasActive = this.data.activeAccountIds?.google === id || this.data.lastActiveAccountId === id
     const ok = this.admin.setAccountEnabled(id, enabled)
@@ -267,8 +272,8 @@ export class AccountPoolManager {
    * External re-login detected (agy logout + new login): identity-bound state
    * from the PREVIOUS account must not leak onto the new one.
    */
-  resetAccountIdentity(id: string, newEmail: string): void {
-    this.admin.resetAccountIdentity(id, newEmail)
+  resetAccountIdentity(id: string, newEmail: string, resetAlias = false): void {
+    this.admin.resetAccountIdentity(id, newEmail, resetAlias)
   }
 
   clearAuthRequired(id: string, force = false): void {

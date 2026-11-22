@@ -59,4 +59,10 @@
 - `alias` 是卡片上的**显示标签**；`defaultAlias === true` 表示它仍是「自动生成」的占位（`备用 Google 账号 N` / 主账号默认名），界面会按 locale 重新渲染。
 - 用户手动改名必须走 `setAccountAlias()`——它同时 `trim()` 并置 `defaultAlias = false`，否则输入的名字永远不会被显示（界面仍在渲染生成标签）。
 - 路由 `POST /plugins/agy-link/pool/alias` 是唯一写入口：非空、长度上界、未知 id → 404。空名会让卡片无标签，因此服务端直接拒绝而不是静默接受。
-- 锚点：`test/issue152-alias-edit.test.ts`、`test/http-contract.test.ts`（路由表面登记）。
+- **主账号换号自动重置旧别名（issue #152 第二部分）**：当 `systemHome` 主账号通过 `/agy auth` 重新登录为**不同 Google 邮箱**时，`resetAccountIdentity(id, email, true)` 同步重置自定义旧别名并恢复 `defaultAlias = true`，防止卡片仍展示上一个账号的名称。
+- 锚点：`test/issue152-alias-edit.test.ts`、`test/slice3-ssh-tier-143-145-152.test.ts`、`test/http-contract.test.ts`（路由表面登记）。
+
+## 6. 三端免全局钥匙串隔离（`SSH_CONNECTION`）与外部独立登录保护（issue #145）
+
+- **`SSH_CONNECTION` 隔离（`agy >= 1.5`）**：`isolatedHomeEnv()` 为所有带独立 `dir` 的隔离池账号注入 `SSH_CONNECTION="127.0.0.1 0 127.0.0.1 0"`，`agy 1.5+` 将其识别为远程 SSH 会话并直接读写各自 `dir/.gemini/antigravity-cli/antigravity-oauth-token`，三端（含 Windows）绕开全局共享钥匙串/凭据管理器。Windows 下当 `supportsSshIsolation(agyVersion)` 成立时，隔离辅账号免除全局凭据槽排队与 ACP 切号驱逐，且 `QuotaService.readCliUsageFamilies` 可直接为隔离账号（含免费账号，issue #143）执行官方 `agy -p /usage`。
+- **外部独立登录保护（issue #145，`respectExternalSignIn`）**：`src/domain/credentials/external-guard.ts` 追踪插件上次写入 Windows 凭据槽的指纹（`.last-installed-slot.json`）；当配置 `respectExternalSignIn: true` 且检测到用户在独立 `agy` 终端中重新登录了未识别的外部账号时，租约获取前拒绝覆盖并在租约释放后保留外部登录。锚点：`test/slice3-ssh-tier-143-145-152.test.ts`。

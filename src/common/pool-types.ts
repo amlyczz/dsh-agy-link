@@ -2,6 +2,9 @@
 
 export type ModelFamily = 'google' | 'argon' | 'anthropic' | 'openai' | 'unknown'
 
+/** Subscription plan tier inferred from authoritative quota groups / models. */
+export type AccountPlanTier = 'ultra' | 'pro' | 'free' | 'enterprise' | 'unknown'
+
 /** Check if a model identifier belongs to the Gemini 4 Argon family. */
 export function isArgonModel(modelId?: string): boolean {
   if (!modelId) return false
@@ -109,6 +112,8 @@ export interface ManagedAccount {
    * cleared, because its argon cooldowns come from real 429s.
    */
   dedicatedGroups?: ModelFamily[]
+  /** Subscription tier (`ultra` | `pro` | `free` | `enterprise`), inferred from quota/model evidence. */
+  planTier?: AccountPlanTier
   /**
    * Why the last quota refresh produced no authoritative snapshot, and when it
    * may be probed again.

@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import type {
+  AccountPlanTier,
   FamilyQuotaInfo,
   ManagedAccount,
   ModelFamily,
@@ -14,6 +15,7 @@ import type {
 import { quotaSummarySuppressed } from '../../common/pool-types.ts'
 import { QUOTA_FREE_TIER_RETRY_MS, QUOTA_LICENSE_RETRY_MS } from '../../common/timeouts.ts'
 import { shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../../domain/quota/buckets.ts'
+import { inferAccountPlanTier, type PlanTierGroupLike } from '../../domain/quota/tier.ts'
 import type { QuotaSummaryFailure } from './http.ts'
 import {
   buildFamilyQuotas,
@@ -47,6 +49,8 @@ export interface QuotaRefreshPool {
   noteQuotaUnavailable(id: string, state: QuotaUnavailableState): void
   /** Clears that marker once an authoritative snapshot arrives. */
   clearQuotaUnavailable(id: string): void
+  /** Persist inferred subscription tier (optional for lightweight test doubles). */
+  setAccountPlanTier?(id: string, tier: AccountPlanTier | undefined): boolean
 }
 
 /**
@@ -72,6 +76,8 @@ export interface QuotaRefreshDeps {
   credentialFingerprint(raw: string | null | undefined): string | null
   /** The refusal behind the last empty summary (undefined when not tracked). */
   summaryFailure?(): QuotaSummaryFailure | null
+  /** Raw CLI `/usage` groups from the most recent readCliUsageFamilies call. */
+  lastCliUsageGroups?(): readonly PlanTierGroupLike[] | undefined
 }
 
 /** Map the HTTP verdict onto the account-level marker. */
@@ -181,6 +187,13 @@ export async function refreshAccountQuotaPipeline(
       // unreachable · data from <old time>" while the stored quotas kept
       // advancing (issue #151).
       deps.pool.clearQuotaUnavailable(account.id)
+      const cliTier = inferAccountPlanTier({
+        groups: deps.lastCliUsageGroups?.(),
+        quotas: cliFamilies,
+      })
+      if (cliTier !== undefined) {
+        deps.pool.setAccountPlanTier?.(account.id, cliTier)
+      }
       deps.pool.updateAccountQuotas(account.id, cliFamilies, email)
       return cliFamilies
     }
@@ -359,6 +372,18 @@ export async function refreshAccountQuotaPipeline(
       }
       deps.pool.forgetDedicatedGroup(account.id, 'argon')
     }
+  }
+
+  const restTier = inferAccountPlanTier({
+    groups: summaryGroups,
+    quotas: familyQuotas,
+    quotaUnavailable: currentUnavailReason === 'no_summary_access'
+      ? { reason: 'no_summary_access', since: now, retryAfter: now + QUOTA_FREE_TIER_RETRY_MS }
+      : account.quotaUnavailable,
+    modelIds: Object.keys(modelsCatalog),
+  })
+  if (restTier !== undefined) {
+    deps.pool.setAccountPlanTier?.(account.id, restTier)
   }
 
   deps.pool.updateAccountQuotas(account.id, familyQuotas, email)

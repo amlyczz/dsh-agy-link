@@ -80,11 +80,10 @@ function isStillLive(state: string | undefined, rawStatus: string | undefined): 
   // (RUNNING / DONE) while callers and fixtures sometimes hand over the raw
   // lower-case vocabulary. Both spellings mean the same thing.
   const mapped = (state ?? '').toLowerCase()
-  if (mapped === 'running' || mapped === 'active') return true
   if (mapped === 'done' || mapped === 'error' || mapped === 'canceled' || mapped === 'cancelled') return false
+  if (mapped === 'running' || mapped === 'active' || mapped === 'pending' || mapped === 'in_progress') return true
   const status = (rawStatus ?? '').toLowerCase()
   if (status !== '' && ACP_LIVE_STATUSES.has(status)) return true
-  // A bare pending / in_progress in the state slot is the same signal.
   return ACP_LIVE_STATUSES.has(mapped)
 }
 

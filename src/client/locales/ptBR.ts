@@ -79,6 +79,7 @@ export const ptBR: AgyDictionary = {
   'account.models': 'Detalhes por modelo:', 'account.clearCooldown': 'Limpar espera', 'account.clearCooldownDone': 'Espera limpa',
   'account.collapsedCoolingHint': ' ({families} em espera)', 'account.poolHeading': 'Pool de contas ({count})',
   'account.removed': 'Conta removida: {alias}',
+  'plan.ultra': 'Ultra', 'plan.pro': 'Pro', 'plan.free': 'Grátis', 'plan.enterprise': 'Enterprise',
   'quota.fiveHour': 'Cota de 5 horas', 'quota.weekly': 'Cota semanal', 'quota.refreshed': 'Cota atualizada', 'quota.refreshStarted': 'Sincronizando a cota — os números atualizam em breve', 'quota.windowReset': 'Redefinida · disponível',
   'quota.unactivated': 'Não ativada · aqueça para iniciar',
   'quota.refreshInProgress': 'Já existe uma atualização em andamento para esta conta',

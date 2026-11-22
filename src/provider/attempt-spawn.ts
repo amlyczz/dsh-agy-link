@@ -65,12 +65,14 @@ function persistBindingOnResult(
     input.binding?.sentImageIds || input.newlySentImageIds.length > 0
       ? [...new Set([...(input.binding?.sentImageIds ?? []), ...input.newlySentImageIds])]
       : undefined
+  const resolvedCwd = input.binding?.cwd || input.workspaceRoot
   deps.store.set(input.sessionAccountKey, {
     conversationId: finalId,
     lastMessageCount: input.messages.length,
     updatedAt: Date.now(),
     model: input.activeModel,
     ...(mergedImages && mergedImages.length > 0 ? { sentImageIds: mergedImages } : {}),
+    ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
   })
 }
 
@@ -145,15 +147,16 @@ export async function startAttemptProcess(
     // line before startAgyProcess() even returns, and that first line is the
     // proof that agy is past its credential read.
     const slotHandoff = slot.armHandoff()
+    const effectiveCwd = input.persistBinding && input.binding?.cwd ? input.binding.cwd : workspaceRoot
     proc = startAgyProcess({
       bin: input.bin,
       args: spawn.args,
-      cwd: workspaceRoot,
+      cwd: effectiveCwd,
       timeoutMs: cfg.timeoutMs,
       // Wall-clock cap for the whole turn (issue #92): the idle watchdog is
       // re-armed by every output line, so a self-driving loop that keeps
       // printing never trips it. 0 disables (behaviour unchanged).
-      maxTurnMs: cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined,
+      maxTurnMs: 'maxTurnMs' in recorder ? recorder.maxTurnMs : (cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined),
       // A turn that legitimately waits on background work (a build, an
       // integration test, a Docker job it launched) prints `root agent idle;
       // waiting for N background task(s)`; the reaper must not treat that as an

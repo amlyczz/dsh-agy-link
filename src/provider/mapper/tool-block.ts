@@ -24,8 +24,8 @@ export interface ToolCallBlockInput {
   /** Current open-block cursor; the tool block occupies this index. */
   blockIdx: number
   toolCallStates: Map<string, ToolCallState>
-  /** Last per-call usage sample, read at cut time (pure). */
-  finalUsage: () => RawUsage | undefined
+  /** Unconsumed per-call usage sample for this cut, or null/undefined to omit usage (#161). */
+  finalUsage: () => RawUsage | null | undefined
 }
 
 export interface ToolCallBlockResult {
@@ -58,11 +58,9 @@ export function buildToolCallBlock(input: ToolCallBlockInput): ToolCallBlockResu
       })
   const rawCallId = mirrorCallId(input.runId, input.absIndex)
   const assignedCallId = rememberToolCallId(input.toolCallStates, rawCallId, toolName)
-  // Forward the last per-call context sample when there is one. With no sample
-  // the usage chunk is OMITTED rather than sent as 0/0: DSH treats a missing
-  // usage chunk as "no new measurement" (it keeps the previous context
-  // pressure and does not count the step towards decode time), while an
-  // explicit 0/0 resets the meter and drags token speed down (issue #158).
+  // Forward the unconsumed per-call usage sample once; omit `{ type: 'usage' }`
+  // completely on concurrent tool cuts 2..N or when no new sample arrived so
+  // DSH neither double-bills totals nor flashes contextPressure to 0% (#158, #161).
   const trackedCut = input.finalUsage()
   const chunks: StreamChunk[] = [
     { type: 'block-start', index: idx, blockType: 'tool-call' },
@@ -76,7 +74,7 @@ export function buildToolCallBlock(input: ToolCallBlockInput): ToolCallBlockResu
         arguments: argumentsJson,
       },
     },
-    ...(trackedCut !== undefined && Object.keys(trackedCut).length > 0
+    ...(trackedCut !== undefined && trackedCut !== null && Object.keys(trackedCut).length > 0
       ? [{ type: 'usage' as const, usage: usageFromRaw(trackedCut) }]
       : []),
     { type: 'finish', reason: { kind: 'tool-calls' } },

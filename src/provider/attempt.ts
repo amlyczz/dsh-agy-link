@@ -31,7 +31,8 @@ import {
   stripNulBytes,
 } from '../host/runner.ts'
 import { agyHomeDirFor, snapshotAgyLogs, type AgyLogSnapshot } from '../host/agy-log.ts'
-import { acquireCredentialSlot, armSlotHandoff, type SlotHandoff } from '../host/credential-slot.ts'
+import { createAttemptSlot, type AttemptSlot } from './attempt-slot.ts'
+export { createAttemptSlot, type AttemptSlot } from './attempt-slot.ts'
 import { buildAgyEnv, pickProxy } from '../runtime/net/account-env.ts'
 import type { SpawnLimiter } from './spawn-limiter.ts'
 import { resolveModelSlug } from '../host/models.ts'
@@ -76,6 +77,8 @@ export interface AttemptDeps {
   spawnLimiter?: SpawnLimiter
   /** Optional persistent ACP attempt driver injected by host. */
   runAcp?: (deps: AttemptDeps, input: AttemptInput, slot: AttemptSlot) => Promise<RunRecording | null>
+  /** Cached `agy --version` string (enables lock-free SSH_CONNECTION isolation on Windows agy >= 1.5). */
+  agyVersion?: () => string | null
   /** Cross-turn background wake observer (tracks schedule timers & background tasks). */
   backgroundObserver?: BackgroundTurnObserver
   /**
@@ -119,10 +122,9 @@ export interface AttemptInput {
   sessionKey: string
   workspaceRoot: string
   isAux: boolean
+  isBackgroundAux?: boolean
   account: ManagedAccount | undefined
-  /** Prompt BEFORE NUL sanitization (sanitized inside; used by argv/stdin). */
   prompt: string
-  /** Resolved model slug (finalized telemetry / binding writes). */
   model: string
   activeModel: string
   effort: string | undefined
@@ -131,6 +133,7 @@ export interface AttemptInput {
   binding: SessionBinding | undefined
   messages: readonly Message[]
   newlySentImageIds: readonly string[]
+  stagedImages?: readonly { path: string; mediaType: string }[]
   sessionAccountKey: string
   family: ModelFamily
   signal: AbortSignal | undefined
@@ -264,6 +267,7 @@ export interface AttemptRecorder {
   before: DirSnapshot
   streamCid: string | null
   printTimeoutMinutes: number
+  maxTurnMs?: number | undefined
   attachProcess: (proc: RunningProcess) => void
   startTracker?: () => void
   feedLine: (line: string, onEvent: ((ev: AgyEvent) => void) | undefined, onFirstEvent: (() => void) | undefined) => void
@@ -283,6 +287,7 @@ export function createAttemptRecorder(
   initialConversationId?: string,
   trackSubagents = true,
   quotaCtx?: { family: ModelFamily; activeModel: string },
+  isBackgroundAux = false,
 ): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
@@ -290,7 +295,7 @@ export function createAttemptRecorder(
   const before = snapshotConversations(conversationsDir)
   const parser = new StreamJsonParser()
   deps.onParser?.(parser)
-  const watchdog = createToolWatchdog(deps.log, cfg)
+  const watchdog = createToolWatchdog(deps.log, cfg, isBackgroundAux ? { isBackgroundAux: true } : undefined)
   let attachedProc: RunningProcess | null = null
   let pendingQuotaKill = false
   const quotaCtrl = quotaCtx
@@ -324,6 +329,7 @@ export function createAttemptRecorder(
     before,
     streamCid: initialConversationId ?? null,
     printTimeoutMinutes: watchdog.printTimeoutMinutes,
+    maxTurnMs: watchdog.maxTurnMs,
     attachProcess: (proc) => {
       attachedProc = proc
       watchdog.attach(proc)
@@ -390,55 +396,6 @@ export function createAttemptRecorder(
   return state
 }
 
-export interface AttemptSlot {
-  /** Release the concurrency slot + credential lease exactly once. */
-  releaseOnce: () => void
-  /** Arm the narrow credential hand-off (no-op without a lease). */
-  armHandoff: () => SlotHandoff | null
-}
-
-export function createAttemptSlot(
-  concurrencyRelease: (() => void) | null,
-  credentialLease: Awaited<ReturnType<typeof acquireCredentialSlot>>,
-  log: ((msg: string) => void) | undefined,
-): AttemptSlot {
-  let release = concurrencyRelease
-  let released = false
-  let handoff: SlotHandoff | null = null
-  const releaseOnce = (): void => {
-    if (released) return
-    released = true
-    if (handoff !== null) {
-      handoff.dispose()
-    } else {
-      try {
-        credentialLease?.release()
-      } catch {
-        // best-effort
-      }
-    }
-    release?.()
-    release = null
-  }
-  return {
-    releaseOnce,
-    armHandoff: () => {
-      if (credentialLease === undefined) return null
-      handoff = armSlotHandoff({
-        release: () => {
-          try {
-            credentialLease?.release()
-          } catch {
-            // best-effort
-          }
-        },
-        log,
-      })
-      return handoff
-    },
-  }
-}
-
 /** Abort-aware sleep: rejects with the same error text the call sites used. */
 export function abortableDelay(ms: number, signal: AbortSignal | undefined, abortedMessage: string): Promise<void> {
   if (signal?.aborted) return Promise.reject(new LlmError(abortedMessage, Err.AGY_ERROR))
@@ -493,11 +450,14 @@ export function persistBindingOnResult(
     input.binding?.sentImageIds || input.newlySentImageIds.length > 0
       ? [...new Set([...(input.binding?.sentImageIds ?? []), ...input.newlySentImageIds])]
       : undefined
+  const resolvedCwd = input.binding?.cwd || input.workspaceRoot
   deps.store.set(input.sessionAccountKey, {
     conversationId: finalId,
     lastMessageCount: input.messages.length,
     updatedAt: Date.now(),
     model: input.activeModel,
     ...(mergedImages && mergedImages.length > 0 ? { sentImageIds: mergedImages } : {}),
+    ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
   })
 }
+

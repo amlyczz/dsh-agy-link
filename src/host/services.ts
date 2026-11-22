@@ -16,6 +16,7 @@ import { TranslationWorkerPool } from '../features/translation/worker.ts'
 import { ModelCatalog } from './models.ts'
 import { RunRegistry } from './recording.ts'
 import { resolveAgyBin, probeProcess, isolatedHomeEnv } from './runner.ts'
+import { supportsSshIsolation } from '../runtime/agy/env.ts'
 import { SessionStore } from './sessions.ts'
 import { AccountPoolManager } from './pool.ts'
 import { PoolAuthFlow } from './pool-auth.ts'
@@ -41,6 +42,7 @@ import {
   findSessionLogFile,
   readSessionImage,
   resolveSessionGoal,
+  resolveSessionPendingModel,
   resolveSessionPlanMode,
   runTranslationStream,
   syncSessionModelSelection,
@@ -128,12 +130,18 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   )
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
 
-  const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv =>
-    buildAgyEnv({
+  const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv => {
+    const env = buildAgyEnv({
       ...(account === undefined ? {} : { account }),
       cfg: getConfig(),
       telemetryFlags: true,
     })
+    // Prevent a user's AI Studio API key in shell env from polluting `agy models`
+    // subscription model discovery.
+    delete env.GEMINI_API_KEY
+    delete env.GOOGLE_API_KEY
+    return env
+  }
 
   const effortStore = createEffortUnsupportedStore({ stateDir, notifyPicker, log })
 
@@ -201,6 +209,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
           process.platform === 'win32'
           && process.env.NODE_TEST_CONTEXT === undefined
           && Boolean(acc && acc.dir && !acc.systemHome)
+          && !supportsSshIsolation(version())
         const lease = needsWinSlot
           ? await acquireCredentialSlot(acc, pool, {
               baseDir: pool.dir,
@@ -209,6 +218,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
               signal,
               dispatchTimeoutMs: 8_000,
               parallel: getConfig().parallelSameAccount,
+              respectExternalSignIn: getConfig().respectExternalSignIn,
             })
           : undefined
         try {
@@ -254,7 +264,9 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
 
   pool.setCatalog(catalog)
   pool.onAccountSwitch = (newActiveId: string) => {
-    if (process.platform === 'win32') acpPool.evictOtherAccounts(newActiveId)
+    if (process.platform === 'win32' && !supportsSshIsolation(version())) {
+      acpPool.evictOtherAccounts(newActiveId)
+    }
     notifyPicker()
     void catalog.forceRefreshAndNotify(newActiveId).catch(() => undefined)
   }
@@ -408,11 +420,13 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     sessionCwd: (sessionId) => sessionWorkspace(sessionId),
     sessionGoal: (sessionId) => resolveSessionGoal(ctx, sessionId),
     sessionPlanMode: (sessionId) => resolveSessionPlanMode(ctx, sessionId),
+    sessionPendingModel: (sessionId) => resolveSessionPendingModel(ctx, sessionId),
     syncSessionModel: (sessionId, model, effort) => syncSessionModelSelection(ctx, sessionId, model, effort),
     onRun: (info) => { lastRun = info },
     onParser: (p) => { lastParser = p },
     readImage: (ref) => readSessionImage(ctx, dshHome(), ref),
     runAcp: (attemptDeps, attemptInput, slot) => runAcpAttempt(acpPool, attemptDeps, attemptInput, slot),
+    agyVersion: version,
     backgroundObserver: backgroundWakeup,
     appendAcpNotice,
     noteAcpReport: (sessionKey, text, seq) => backgroundWakeup.noteAcpReport(sessionKey, text, seq),

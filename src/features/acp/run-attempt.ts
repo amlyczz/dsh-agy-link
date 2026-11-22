@@ -1,10 +1,10 @@
 // Execute one AttemptInput over the persistent `agy acp` session pool,
 // populating the same RunRecording + finalizeAttempt lifecycle as the CLI path.
-//
 // Failure evidence is per-turn: the process outlives a single prompt, so its
 // stderr ring and its --log-file are sliced from the offsets captured before the
 // prompt. Feeding the whole tail into classifyFailure made an old proxy blip
 // blame a later healthy turn.
+import { readFile } from 'node:fs/promises'
 import type { ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
 import {
   Err,
@@ -20,10 +20,13 @@ import { StreamJsonParser } from '../../host/parser.ts'
 import type { RunRecording } from '../../host/recording.ts'
 import { resolveModelSlug } from '../../host/models.ts'
 import { ensureIsolatedKeychain, type RunOutcome } from '../../host/runner.ts'
+import { supportsSshIsolation } from '../../runtime/agy/env.ts'
 import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { createAttemptRecorder, type AttemptDeps, type AttemptInput, type AttemptSlot } from '../../provider/attempt.ts'
+import { deliverContext } from '../../provider/context-delivery.ts'
 import { classifyFailure, type AttemptFailure } from '../../provider/failure.ts'
 import { finalizeAttempt } from '../../provider/finalize.ts'
+import { buildDigest, wrapLiveRequest } from '../../provider/prompt-text.ts'
 import {
   createLiveQuotaController,
   reportDirectToolQuota,
@@ -36,10 +39,10 @@ import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState }
 import { rebuildAcpSession } from './rebuild.ts'
 import {
   finishAcpAttempt,
-  settleAcpOutcome,
   settleEarlyAbort,
   type AcpPromptOutcome,
 } from './settle.ts'
+import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
 
 /**
  * How long we watch a fresh ACP turn for its first event before handing the
@@ -49,9 +52,27 @@ import {
  */
 const FIRST_OUTPUT_GATE_MS = 20_000
 
+const INVALID_OUTPUT_RE = /model produced invalid output/i
+
 function firstLine(text: string): string {
   const line = text.split('\n').find((l) => l.trim() !== '')
   return (line ?? text).trim().slice(0, 240)
+}
+
+/**
+ * True when an ACP prompt ended with either an empty thinking-only turn (no
+ * visible text and no tool calls) or agy's transient `⚠ Model produced invalid
+ * output.` error, making a single same-session warm nudge worthwhile while
+ * preserving Google's prompt cache.
+ */
+export function shouldSelfHealAcpResult(
+  resEv: ReturnType<typeof acpPromptResultToAgyEvent>,
+  flags: { sawText: boolean; sawThinking: boolean; sawTools: boolean },
+): boolean {
+  if (resEv.kind !== 'result') return false
+  if (flags.sawTools) return false
+  if (INVALID_OUTPUT_RE.test(resEv.error ?? '') || INVALID_OUTPUT_RE.test(resEv.response)) return true
+  return resEv.ok && !flags.sawText && flags.sawThinking && resEv.response.trim() === ''
 }
 
 /**
@@ -90,15 +111,11 @@ async function runAcpPrompt(opts: {
   const streamState = createAcpStreamState()
   /** Anything at all arrived for this turn (including agy's own banners). */
   let emittedAny = false
-  /**
-   * Real model output arrived (text that is not an infrastructure banner, or a
-   * tool call). The first-output gate keys off THIS, not off emittedAny: a
-   * banner-only turn must not hold the gate open for the full window, and a
-   * banner followed by a real answer must still open it.
-   */
+  /** Real model output arrived (text that is not an infrastructure banner, or a tool call). */
   let sawRealOutput = false
-  // Captured BEFORE the prompt: everything the process wrote earlier belongs to
-  // another turn and must not colour this failure.
+  let sawText = false
+  let sawThinking = false
+  let sawTools = false
   const stderrOffset = proc.stderrOffset()
   const logFile = proc.logFilePath
   const logOffset = logSize(logFile)
@@ -127,43 +144,104 @@ async function runAcpPrompt(opts: {
       })
     : null
 
+  const usageTailer = !input.isAux && sid !== ''
+    ? new AcpTranscriptUsageTailer(sid, recorder.rec.accountHome)
+    : null
+  const flushTranscriptUsage = (): number => {
+    if (!usageTailer) return 0
+    const samples = usageTailer.poll()
+    for (const s of samples) {
+      recorder.rec.append({
+        kind: 'step',
+        stepKey: s.stepKey,
+        stepKind: 'text',
+        text: '',
+        state: 'DONE',
+        usage: s.usage,
+        raw: { source: 'acp-transcript' },
+      })
+    }
+    return samples.length
+  }
+
   try {
     subTracker?.start()
     const idleMs = cfg.timeoutMs
     const longToolIdleMs = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes * 60_000 : 0
     const maxTurnMs = cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : 0
-    const result = await proc.prompt({
-      sessionId: sid,
-      text: prompt,
-      timeoutMs: idleMs,
-      idleTimeoutMs: idleMs,
-      longToolIdleMs,
-      maxTurnMs,
-      ...(input.signal ? { signal: input.signal } : {}),
-      onUpdate: (update) => {
-        for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
-          // agy's own failure banner is not "the turn is alive": keeping the
-          // first-output gate closed lets a dead upstream finish, be classified
-          // and be retried over the CLI instead of streaming a fake answer.
-          if (!sawRealOutput && ev.kind !== 'init' && !isAgyFailureBanner(streamState.accumulatedText)) {
-            sawRealOutput = true
-            onFirstOutput?.()
+    const inlineImages: Array<{ data: string; mimeType: string }> = []
+    if (proc.supportsImageBlocks && input.stagedImages && input.stagedImages.length > 0) {
+      for (const img of input.stagedImages) {
+        try {
+          const buf = await readFile(img.path)
+          if (buf.length > 0 && buf.length <= cfg.mediaMaxBytes) {
+            inlineImages.push({ data: buf.toString('base64'), mimeType: img.mediaType })
           }
-          emittedAny = true
-          recorder.rec.append(ev)
-          input.agyOnEvent?.(ev)
-          reportDirectToolQuota(quotaCtrl, ev)
+        } catch {
+          // keep path-based fallback already in prompt
         }
-      },
-    })
+      }
+    }
+    const runOnePrompt = (promptText: string, includeImages: boolean) =>
+      proc.prompt({
+        sessionId: sid,
+        text: promptText,
+        ...(includeImages && inlineImages.length > 0 ? { images: inlineImages } : {}),
+        timeoutMs: idleMs,
+        idleTimeoutMs: idleMs,
+        longToolIdleMs,
+        maxTurnMs,
+        ...(input.signal ? { signal: input.signal } : {}),
+        onUpdate: (update) => {
+          const updateKind = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : ''
+          if (updateKind === 'tool_call' || updateKind === 'tool_call_update' || updateKind === 'usage_update') {
+            flushTranscriptUsage()
+          }
+          for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
+            if (!sawRealOutput && ev.kind !== 'init' && !isAgyFailureBanner(streamState.accumulatedText)) {
+              sawRealOutput = true
+              onFirstOutput?.()
+            }
+            emittedAny = true
+            if (ev.kind === 'step') {
+              if (ev.stepKind === 'text' && ev.text.trim() !== '') sawText = true
+              else if (ev.stepKind === 'thinking' && ev.text.trim() !== '') sawThinking = true
+              else if (ev.stepKind === 'tool') sawTools = true
+            }
+            recorder.rec.append(ev)
+            input.agyOnEvent?.(ev)
+            reportDirectToolQuota(quotaCtrl, ev)
+          }
+        },
+      })
+    let result = await runOnePrompt(prompt, true)
     subTracker?.flush()
-    // A live quota trigger ended the turn on purpose: its error text is the
-    // quota evidence finalizeAttempt needs, not a transport problem.
-    const liveQf = quotaCtrl.failoverState()
+    if (usageTailer && flushTranscriptUsage() === 0 && recorder.rec.lastUsage !== null) {
+      await new Promise((r) => setTimeout(r, 60))
+      flushTranscriptUsage()
+    }
+    let liveQf = quotaCtrl.failoverState()
     if (liveQf !== null) {
       throw new Error(liveQf.rawErrorText)
     }
-    const resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText)
+    let resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText, streamState.lastContextUsed)
+    if (
+      !input.isAux &&
+      !input.signal?.aborted &&
+      !quotaCancelled &&
+      shouldSelfHealAcpResult(resEv, { sawText, sawThinking, sawTools })
+    ) {
+      deps.log?.(`acp self-heal: retrying empty/invalid model output on same session ${sid}`)
+      streamState.accumulatedText = ''
+      result = await runOnePrompt('Continue and provide your response.', false)
+      subTracker?.flush()
+      flushTranscriptUsage()
+      liveQf = quotaCtrl.failoverState()
+      if (liveQf !== null) {
+        throw new Error(liveQf.rawErrorText)
+      }
+      resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText, streamState.lastContextUsed)
+    }
     recorder.rec.append(resEv)
     input.agyOnEvent?.(resEv)
     if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
@@ -311,6 +389,9 @@ export async function runAcpAttempt(
   let proc!: AcpProcess
   let sid = ''
   let prompt = input.prompt
+  const usesSharedSlot =
+    process.platform === 'win32'
+    && !(account?.dir && !account.systemHome && supportsSshIsolation(deps.agyVersion?.() ?? null))
   // Gate 2 allows exactly ONE self-heal: a second mismatch means the slot keeps
   // being stolen (another agy refreshing it hourly), and retrying forever would
   // just burn the wrong account's quota.
@@ -327,10 +408,14 @@ export async function runAcpAttempt(
         agent: (input.agent ?? cfg.agent).trim(),
         preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
         ...(account?.email ? { expectedEmail: account.email } : {}),
+        usesSharedSlot,
       })
       const resumeId = input.persistBinding ? input.binding?.conversationId : undefined
+      // Returning to the original cwd preserves agy's system-prompt prefix and
+      // keeps Google prompt cache hit rate high across turns.
+      const sessionCwd = resumeId && input.binding?.cwd ? input.binding.cwd : workspaceRoot
       const opened = await proc.openSession({
-        cwd: workspaceRoot,
+        cwd: sessionCwd,
         ...(resumeId ? { resumeId } : {}),
         addDirs: input.addDirs,
         model: resolveModelSlug(input.activeModel || cfg.defaultModel),
@@ -353,8 +438,6 @@ export async function runAcpAttempt(
       if (mismatch && !identityRetried && account && deps.reinstallCredentialSlot) {
         identityRetried = true
         deps.log?.(`${msg} — reinstalling the credential slot and retrying the ACP process once`)
-        // The process that loaded the wrong identity must die: its in-run token
-        // refreshes would keep writing the other account back into the slot.
         pool.discardProcess(proc)
         if (deps.reinstallCredentialSlot(account)) continue
         deps.log?.('credential slot could not be reinstalled — failing the turn instead of spending the wrong account')

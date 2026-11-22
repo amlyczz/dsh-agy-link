@@ -7,10 +7,16 @@ import type { RunningProcess } from '../host/runner.ts'
 
 export interface ToolWatchdog {
   printTimeoutMinutes: number
+  maxTurnMs: number | undefined
   attach: (proc: RunningProcess | null) => void
   markEvent: () => void
   trackStep: (ev: AgyEvent) => void
   stop: () => void
+}
+
+export interface ToolWatchdogOptions {
+  /** Bound wall-clock & print-timeout ceilings for background aux calls (compaction/title/review). */
+  isBackgroundAux?: boolean
 }
 
 /**
@@ -35,7 +41,21 @@ const SUBAGENT_COLLAB_TOOLS = new Set(['invoke_subagent', 'send_message', 'run_w
  */
 const BACKGROUND_WAIT_TOOLS = new Set(['schedule'])
 
-function resolveWatchdogBudgets(cfg: PluginConfig) {
+function resolveWatchdogBudgets(cfg: PluginConfig, isBackgroundAux = false) {
+  if (isBackgroundAux) {
+    let printTimeoutMinutes = Math.max(1, Math.min(Math.ceil(cfg.timeoutMs / 60_000), 10))
+    if (cfg.maxTurnMinutes > 0 && printTimeoutMinutes > cfg.maxTurnMinutes) {
+      printTimeoutMinutes = cfg.maxTurnMinutes
+    }
+    const auxWallCap = cfg.timeoutMs > 0 ? Math.min(cfg.timeoutMs, 180_000) : 180_000
+    const maxTurnMs = cfg.maxTurnMinutes > 0 ? Math.min(cfg.maxTurnMinutes * 60_000, auxWallCap) : auxWallCap
+    return {
+      printTimeoutMinutes,
+      longToolIdleMs: cfg.timeoutMs,
+      generationIdleMs: cfg.timeoutMs,
+      maxTurnMs,
+    }
+  }
   const longToolIdleMinutes = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes : 0
   let printTimeoutMinutes = Math.max(
     longToolIdleMinutes > 0 ? longToolIdleMinutes : Math.ceil(cfg.timeoutMs / 60_000),
@@ -46,7 +66,8 @@ function resolveWatchdogBudgets(cfg: PluginConfig) {
   }
   const longToolIdleMs = longToolIdleMinutes > 0 ? longToolIdleMinutes * 60_000 : cfg.timeoutMs
   const generationIdleMs = Math.max(cfg.timeoutMs, 15 * 60_000)
-  return { printTimeoutMinutes, longToolIdleMs, generationIdleMs }
+  const maxTurnMs = cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : undefined
+  return { printTimeoutMinutes, longToolIdleMs, generationIdleMs, maxTurnMs }
 }
 
 function isStepFailedOrCanceled(ev: Extract<AgyEvent, { kind: 'step' }>): boolean {
@@ -104,10 +125,70 @@ function heartbeatMessage(openCount: number, oldestAt: number, sinceOutput: numb
     : 'agy run still working: no new output for ' + mins + 'm (idle budget ' + budget + ') — the turn is waiting on agy; press Stop to cancel'
 }
 
-export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg: PluginConfig): ToolWatchdog {
+function applyWatchdogStep(
+  ev: AgyEvent,
+  deps: {
+    openToolKeys: Set<string>
+    openToolSince: Map<string, number>
+    backgroundWaits: ReturnType<typeof createBackgroundWaits>
+    setAwaitingSubagent: (next: boolean) => void
+    apply: () => void
+    start: () => void
+    stop: () => void
+  },
+): void {
+  if (ev.kind !== 'step') return
+  const { openToolKeys, openToolSince, backgroundWaits, setAwaitingSubagent, apply, start, stop } = deps
+  if (ev.stepKind === 'tool' && ev.tool !== undefined) {
+    if (SUBAGENT_COLLAB_TOOLS.has(ev.tool.name)) {
+      setAwaitingSubagent(!isStepFailedOrCanceled(ev))
+    }
+    // A backgrounded hand-off keeps the root agent waiting even though the
+    // step counts as "completed" for mapper purposes (issue #148).
+    // Only the exemption changes here: the idle BUDGET keeps the normal
+    // generation window because the root agent runs no synchronous tool.
+    backgroundWaits.note(ev.stepKey, ev.tool.name, ev.state, isToolStepCompleted(ev))
+    // Mirror mapper's completion rule: DONE/ERROR/CANCELED/RUNNING state, or legacy events
+    // that carry output/error without an explicit state.
+    const completed = isToolStepCompleted(ev)
+    if (!completed) {
+      if (!openToolKeys.has(ev.stepKey)) {
+        openToolKeys.add(ev.stepKey)
+        openToolSince.set(ev.stepKey, Date.now())
+        apply()
+        start()
+      }
+    } else if (openToolKeys.delete(ev.stepKey)) {
+      openToolSince.delete(ev.stepKey)
+      apply()
+      if (openToolKeys.size === 0) stop()
+    }
+  } else if (ev.stepKind === 'text' || ev.stepKind === 'thinking') {
+    // The root agent spoke again: a pending subagent wait is over.
+    setAwaitingSubagent(false)
+    // When the model resumes generating text or thinking, no tool is running synchronously.
+    // Any previously open tool has completed or backgrounded. Clear openToolKeys so the
+    // idle budget restores to normal generationIdleMs instead of staying raised.
+    // `backgroundWaitKeys` is deliberately NOT cleared: agy asks the model for a
+    // short status line BEFORE it prints the idle line, so this text is part of
+    // the wait, not the end of it (issue #148).
+    if (openToolKeys.size > 0) {
+      openToolKeys.clear()
+      openToolSince.clear()
+      apply()
+      stop()
+    }
+  }
+}
+
+export function createToolWatchdog(
+  log: ((msg: string) => void) | undefined,
+  cfg: PluginConfig,
+  opts?: ToolWatchdogOptions,
+): ToolWatchdog {
   const openToolKeys = new Set<string>()
   const openToolSince = new Map<string, number>()
-  const { printTimeoutMinutes, longToolIdleMs, generationIdleMs } = resolveWatchdogBudgets(cfg)
+  const { printTimeoutMinutes, longToolIdleMs, generationIdleMs, maxTurnMs } = resolveWatchdogBudgets(cfg, opts?.isBackgroundAux === true)
   let runningProc: RunningProcess | null = null
   let awaitingSubagent = false
   let sawAnyEvent = false
@@ -160,6 +241,7 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
   }
   return {
     printTimeoutMinutes,
+    maxTurnMs,
     attach: (proc) => {
       runningProc = proc
       proc?.exemptIdleGrace(idleGraceExempt)
@@ -171,49 +253,15 @@ export function createToolWatchdog(log: ((msg: string) => void) | undefined, cfg
       start()
       apply()
     },
-    trackStep: (ev) => {
-      if (ev.kind !== 'step') return
-      if (ev.stepKind === 'tool' && ev.tool !== undefined) {
-        if (SUBAGENT_COLLAB_TOOLS.has(ev.tool.name)) {
-          setAwaitingSubagent(!isStepFailedOrCanceled(ev))
-        }
-        // A backgrounded hand-off keeps the root agent waiting even though the
-        // step counts as "completed" for mapper purposes (issue #148).
-        // Only the exemption changes here: the idle BUDGET keeps the normal
-        // generation window because the root agent runs no synchronous tool.
-        backgroundWaits.note(ev.stepKey, ev.tool.name, ev.state, isToolStepCompleted(ev))
-        // Mirror mapper's completion rule: DONE/ERROR/CANCELED/RUNNING state, or legacy events
-        // that carry output/error without an explicit state.
-        const completed = isToolStepCompleted(ev)
-        if (!completed) {
-          if (!openToolKeys.has(ev.stepKey)) {
-            openToolKeys.add(ev.stepKey)
-            openToolSince.set(ev.stepKey, Date.now())
-            apply()
-            start()
-          }
-        } else if (openToolKeys.delete(ev.stepKey)) {
-          openToolSince.delete(ev.stepKey)
-          apply()
-          if (openToolKeys.size === 0) stop()
-        }
-      } else if (ev.stepKind === 'text' || ev.stepKind === 'thinking') {
-        // The root agent spoke again: a pending subagent wait is over.
-        setAwaitingSubagent(false)
-        // When the model resumes generating text or thinking, no tool is running synchronously.
-        // Any previously open tool has completed or backgrounded. Clear openToolKeys so the
-        // idle budget restores to normal generationIdleMs instead of staying raised.
-        // `backgroundWaitKeys` is deliberately NOT cleared: agy asks the model for a
-        // short status line BEFORE it prints the idle line, so this text is part of
-        // the wait, not the end of it (issue #148).
-        if (openToolKeys.size > 0) {
-          openToolKeys.clear()
-          openToolSince.clear()
-          apply()
-          stop()
-        }
-      }
-    },
+    trackStep: (ev) => applyWatchdogStep(ev, {
+      openToolKeys,
+      openToolSince,
+      backgroundWaits,
+      setAwaitingSubagent,
+      apply,
+      start,
+      stop,
+    }),
     stop: () => {
       stop()
       awaitingSubagent = false

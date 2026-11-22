@@ -9,9 +9,13 @@
 | 正常回合（已绑定会话） | `sessions.json` 命中当前目标 | 仅**这一轮的新输入** + 未发送过的图片引用 | 单条消息 agy 硬限 192,000 B，我们按 180,000 B 留余量 |
 | 首次接触 / 换号 / 换模型 / 压缩后重播种 | `binding === undefined` 且有历史 | **整段历史摘要**（`buildDigest`），> `contextTransferFileAboveBytes` 时写成临时 `.md` 让 agy 分页读 | `contextTransferMaxChars` 660,000；`.md` 侧 `contextTransferFileMaxBytes` 2,000,000 |
 | 中途与别的模型聊过（外来跨度） | 绑定存在，但水位之后有 foreign assistant 回合 | 仅**外来那段**摘要 | `digestMaxChars` 8,000；字节侧 `contextTransferMaxBytes` 150,000 |
-| 翻译 / 压缩等辅助调用 | `purpose:'translation'` 等 | 一句指令 + 目标文本，逐块 | `translateMaxChars` 8,000/块 |
+| 翻译 / 压缩等辅助调用 | `purpose:'translation'` 等 | 一句指令 + 目标文本，逐块 | `translateMaxChars` 8,000/块；`compaction` 经 `buildCompactionPrompt` 先扣除收尾预算、过滤 `system`/合成消息、工具输出走 8:2 `elideMiddle`、锚定首条人类需求 + 最新回合，严格保证总字节 ≤ `AGY_PROMPT_SAFE_BYTES`（180,000 B）不截尾 |
 
-两条 agy 硬约束决定了装配顺序：单条 user 消息按 **192,000 B 从尾部截断**，所以 live request 必须放**最前面**（`wrapLiveRequest`），摘要排在其后；摘要超过阈值就落成文件引用，避免占用这条通道。
+两条 agy 硬约束决定了装配顺序：单条 user 消息按 **192,000 B 从尾部截断**，所以 live request 必须放**最前面**（`wrapLiveRequest`），摘要排在其后；摘要超过阈值就落成文件引用，避免占用这条通道。压缩提示词（`buildCompactionPrompt`）同样先把固定的 `<conversation_history>` 闭合标签与「严禁调用工具」尾注从 `AGY_PROMPT_SAFE_BYTES` 中扣出，再填充锚点与最新回合，确保闭合指令永不被 `buildSpawnArgs` 截尾丢弃。
+
+### 引用斜杠指令去活化（`defuseQuotedSlashCommands`）
+
+`agy` print 模式会扫描整条 user 消息并展开独立出现的系统斜杠指令（例如历史或技能目录文本里的 `/goal`、`/plan`）；且 `--mode plan` 依赖 `/plan` 展开，不能全局传 `--disable-slash-commands`。因此在构造 `<conversation_history>` 与 `[conversation so far]` 历史摘要时，必须通过 `defuseQuotedSlashCommands()` 把独立的 `agy` 系统斜杠指令（`/goal`、`/plan`、`/compact`、`/schedule`、`/browser`、`/grill-me`、`/teamwork`、`/learn`、`/boost`）改写为 `/ <name>`，同时完整保留文件路径（`/plan/doc.md`、`src/goal.ts`）、URL（`https://example.com/goal`）与带连字符标识符（`/goal-123`），且不触碰 `[CURRENT REQUEST]` 里的实时人类请求。
 
 ## 2. 取舍原则（8:2）
 

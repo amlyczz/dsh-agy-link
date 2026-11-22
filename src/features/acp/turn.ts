@@ -14,6 +14,8 @@ export interface AcpTurnHost {
 export interface AcpPromptOptions {
   sessionId: string
   text: string
+  /** Native inline image content blocks (sent when agy advertises promptCapabilities.image). */
+  images?: readonly { data: string; mimeType: string }[]
   timeoutMs: number
   idleTimeoutMs?: number
   longToolIdleMs?: number
@@ -95,11 +97,18 @@ export async function runAcpTurn(host: AcpTurnHost, opts: AcpPromptOptions): Pro
     }
     return await new Promise<Record<string, unknown>>((resolve, reject) => {
       rejectPrompt = reject
+      const promptBlocks: Array<Record<string, unknown>> =
+        opts.images && opts.images.length > 0
+          ? [
+              ...opts.images.map((img) => ({ type: 'image', data: img.data, mimeType: img.mimeType })),
+              { type: 'text', text: opts.text },
+            ]
+          : [{ type: 'text', text: opts.text }]
       host.request(
         'session/prompt',
         {
           sessionId: opts.sessionId,
-          prompt: [{ type: 'text', text: opts.text }],
+          prompt: promptBlocks,
         },
         0,
       ).then(

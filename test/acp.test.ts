@@ -157,8 +157,8 @@ test('ACP protocol helpers map updates, tool outputs, usage, results, and permis
 
   const text = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } }, st)
   assert.equal(text[0]?.kind, 'step')
-  // issue #158: `used` is context occupancy, not a usage sample — it must not
-  // ride along on streamed steps as input_tokens.
+  // issue #158: `used` is context occupancy, not a usage sample — kept in
+  // lastContextUsed so it never clobbers PromptResponse.usage with 0 output/cache.
   assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage, undefined)
   assert.equal(st.lastContextUsed, 120)
   assert.equal(st.accumulatedText, 'hi')

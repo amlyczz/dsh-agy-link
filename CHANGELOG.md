@@ -14,6 +14,18 @@
   - **Session restore is proven, not assumed.** `session/load` succeeds for ids that do not exist, so a restore now requires replayed events or cached-read tokens; otherwise the binding is dropped, the full history digest is delivered to a new session, and the transcript shows a reset notice.
   - **Empty turns and dead proxies are failures.** Each turn records a stderr offset and a `--log-file` offset before prompting; a turn that emits nothing is classified from that slice only (network / auth) and, when nothing was produced, the process is discarded and the turn retried on `cli -p`.
   - **Windows credential-slot guards.** The slot document's `id_token_email` is verified before the fast path and after every install; the identity agy prints in its own log is checked after the process starts (one reinstall-and-retry, then a hard refusal); pool eviction drains processes that still own background sessions instead of killing them. `/plugins/agy-link/status` reports `drainingProcesses`, `slotOverwriteDetectedCount` and `lastSlotRecoveryAt`.
+- **Cross-turn background wakeup (merges PRs #162, #163, #164, opt-in).** One-shot `schedule` timers, detached background tasks/subagents, and retained ACP sessions can wake the DSH session when finished (`backgroundWakeup: false` by default).
+- **Concurrent multi-tool & single-span usage accounting (fixes #161).** Parallel tool cuts 2..N now omit duplicate `{ type: 'usage' }` chunks (preventing N× token over-billing and 0% context-pressure flashes), and multiple internal LLM calls inside one span take the latest prompt occupancy while summing output/thinking tokens; ACP also tails incremental `transcript.jsonl` usage samples.
+- **Translation card session-anchor fix.** `plugin:agy-link/translation` records now store `turn: null` + `sourceTurn` and project with `location: { kind: 'session' }` + `groupTree: 'turn'`, preventing older-turn translations from hijacking DSH's `currentTurn`, disappearing into 0-tool process groups, or disrupting replies below.
+- **Free-account real weekly quotas, Plan Tier badges & `SSH_CONNECTION` isolation (fixes #143, #145, #152 part 2).**
+  - Isolated pool accounts inject `SSH_CONNECTION` for `agy >= 1.5`, bypassing the shared Windows Credential Manager / OS keyring for lock-free multi-account concurrency and CLI `/usage` polling on isolated & free (`no_summary_access`) accounts.
+  - Free-account `3p-5h` epoch-zero (`1970-01-01`) placeholder buckets are ignored and weekly-only cards hide the bogus 5-hour row so displayed quotas match reality.
+  - Account cards now display inferred subscription badges (**Free / Pro / Ultra / Enterprise**).
+  - Optional `respectExternalSignIn` protects newer standalone `agy` logins in the Windows credential slot before and during leases (#145); re-authenticating the primary with a different Google email resets stale custom aliases (#152 part 2).
+- **Reverse MCP Bridge 4x hardening.** Adds `_meta: { 'antigravity/alwaysLoad': true }`, 18,000-token budget description trimming (preventing `agy`'s 20k tool drops), JS-to-Go-RE2 `pattern` translation, `$ref`/`allOf`/`anyOf`/`const`/empty-enum/array flattening, and native MCP image content blocks.
+- **Prompt cache, anti-429 cloak & stream resilience.** Normalizes model-slug binding checks, forwards `System instructions` once on Turn 1 (avoiding per-turn prefix churn), adds meaning-preserving DSH/Codex system-prompt cloaking (`cloakSystemPrompt`), strips leaked `agy` retry/cut-off boilerplate, classifies low AI credits as hard `RATE_LIMIT`, adds same-session ACP warm self-heal for empty/invalid output turns, and hardens compaction against parent 429 deadlocks.
+- **ACP spare pre-warm, native inline images & advanced 5h/daily/interval warmup.** Adds `AcpSessionPool.warmSpare`, native ACP `image` prompt blocks when advertised, and extends `WarmupService` with 5-hour rolling windows, IANA-timezone daily schedules, fixed-interval triggers, Antigravity sliding-idle reset detection, and a 50-entry audit history.
+- **Expanded `/agy` slash commands & ecosystem bridge filtering.** Adds live `btw` progress, enhanced `/agy goal` idempotency, and workspace-aware slash context.
 
 ### 中文
 
@@ -27,6 +39,18 @@
   - **会话恢复必须被证明**：`session/load` 对不存在的 ID 也会成功，因此只有回放了事件或上报了缓存读取才算恢复；否则丢弃绑定、把完整历史摘要投递给新会话，并在会话里显示重置提示。
   - **空回合与断网都算失败**：每轮 prompt 前记录 stderr 偏移与 `--log-file` 偏移，零产出回合只用本轮切片分类（网络/认证）；确实零产出时销毁坏进程并用 `cli -p` 重跑。
   - **Windows 凭据槽门禁**：槽文档里的 `id_token_email` 在快路径前与每次安装后都会核对；进程启动后核对 agy 自己日志里的身份（一次重装重试，仍不符则硬失败）；池淘汰改为排干仍持有后台会话的进程。`/plugins/agy-link/status` 新增 `drainingProcesses`、`slotOverwriteDetectedCount`、`lastSlotRecoveryAt`。
+- **跨回合后台唤醒（合并 PR #162、#163、#164，默认关闭 opt-in）**：支持一次性 `schedule` 定时器、后台任务/子代理及常驻 ACP 会话在完成后唤醒 DSH 会话。
+- **并发多工具与单 Span 用量精准统计（修复 #161）**：同一次推理触发 N 个并发工具切步时仅首切上报一次 `usage`（杜绝 N 倍重复计费与压力闪零），单 Span 内多次内部响应取最新上下文占用并累加输出/思考 token；ACP 同时增量读取 `transcript.jsonl` 用量样本。
+- **修复点击翻译后译文消失及下方回复异常**：`plugin:agy-link/translation` 持久记录改为写入 `turn: null` 与 `sourceTurn`，前端以 `location: { kind: 'session' }` + `groupTree: 'turn'` 投影，避免翻译旧回合时劫持 DSH `currentTurn`、被 0 工具折叠组吞掉或打乱后续回复。
+- **免费账号真实周配额、订阅等级标识与 `SSH_CONNECTION` 免锁隔离（修复 #143、#145、#152 第二部分）**：
+  - 隔离池账号在 `agy >= 1.5` 下注入 `SSH_CONNECTION`，三端（含 Windows）绕开全局共享钥匙串，实现无锁并发与隔离/免费账号（`no_summary_access`）官方 `agy -p /usage` 真实配额采集。
+  - 过滤免费账号 `3p-5h` 的 Unix 零时间戳占位桶（`1970-01-01`），仅周配额分组自动隐藏伪造的 5 小时进度条，按实际配额展示。
+  - 账号卡片新增订阅等级徽标（**Free / Pro / Ultra / Enterprise**）。
+  - 新增 `respectExternalSignIn` 在租约前后保护独立 `agy` 登录不被覆盖（#145）；主账号重新授权换绑不同 Google 邮箱时自动重置旧自定义别名（#152 第二部分）。
+- **反向 MCP 桥接四重加固**：自动附加 `_meta: { 'antigravity/alwaysLoad': true }`、18,000 token 安全预算渐进裁剪（防止触发 `agy` 20k 丢工具上限）、JS 到 Go RE2 正则转译与降级、`$ref`/`allOf`/`anyOf`/`const`/空 `enum`/无 `items` 数组展平，以及 MCP 工具返回图片的内容块透传。
+- **缓存命中率提升、DSH 防假 429 改写与流式自愈**：归一化模型 slug 避免同模型变体击穿会话绑定、System Prompt 仅首轮注入、新增保义 DSH/Codex 系统提示词改写（`cloakSystemPrompt`）、剥离 `agy` 流式泄露的重试/截断脏文本、细分 AI 积分不足为硬 `RATE_LIMIT`、新增 ACP 空思考/无效输出同会话热自愈，以及压缩期 429 死循环快速熔断与切号。
+- **ACP 备用进程预热、原生内联图片与 5h/每日/间隔预热升级**：新增 `AcpSessionPool.warmSpare` 消除冷启动、支持 `promptCapabilities.image` 原生内联图片块；`WarmupService` 支持 5 小时滚动窗、IANA 时区每日定时、固定间隔触发、Antigravity 滑动空闲重置点检测与 50 条审计日志。
+- **扩展 `/agy` 命令族与生态同步过滤**：新增 `btw` 实时进度、幂等 `/agy goal` 状态流转与上下文感知命令桥接。
 
 ## 0.6.59 (2026-11-22)
 

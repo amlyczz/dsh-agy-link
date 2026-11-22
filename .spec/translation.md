@@ -90,7 +90,7 @@ GET  /plugins/agy-link/translate/state?session=<id>&message=<id>  # 该条回复
 
 ## 6. 持久化与渲染
 
-- 记录类型：`plugin:agy-link/translation`（`ignorable: true`），字段：`version/turn/anchorSeq/text/original?/model/effort/accountId?/sourceModel?/provider/durationMs/createdAt`。
+- 记录类型：`plugin:agy-link/translation`（`ignorable: true`），字段：`version/turn/sourceTurn?/anchorSeq/text/original?/model/effort/accountId?/sourceModel?/provider/durationMs/createdAt`。**新写入记录必须保持 `turn: null`、`sourceTurn: <原回合号>`**，客户端投影（`src/client/translate-record.ts`）必须返回 `location: { kind: 'session' }` 与 `groupTree: 'turn'`——否则当用户中途翻译较早回合时，DSH 的 `ConversationLocationIndex` 会按 `data.turn` 劫持 `currentTurn` 并把卡片吞进可折叠的 0-tool `ProcessGroup`，导致译文消失与后续回复布局错乱。
 - 落库顺序：优先动态 import 宿主提供的 `appendPluginRecord`（non-literal specifier，保持可选）；不可用时**回退到原生 `session.append(type, data)`**。两者都失败才返回 `null`（卡片不落地，其余功能不受影响）。
 - 会话事件读取（`sessionEvents`）：依次尝试 `session.snapshotEvents()`、`session.ownEvents()`，再回退 `.log` / `.events` 数组。**DSH 真实 Session 没有 `.log`**——只读 `.log` 的旧实现会拿到空数组并报 `SESSION_UNAVAILABLE`，这是"点了没反应"的根因之一。
 - **不得在 `session/event` 回调内同步 append**：`Session.append` 在 publication 边界内会拒绝重入；翻译是异步的，落库天然在后续栈。

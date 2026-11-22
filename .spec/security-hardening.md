@@ -24,6 +24,11 @@ Each invariant below is enforced in code AND covered by a regression test.
   behind by crashed processes; `syncMcpBridge()` serializes concurrent starts;
   `registerBridgeMcpConfig()` de-duplicates `(bridge, file)` registrations idempotently
   and `teardownBridgeState()` runs/clears all registered restores once. (test: `test/http-contract.test.ts`)
+- **4x Schema & Budget Hardening (`src/host/mcp-schema.ts`, `src/host/bridge.mjs`)**:
+  - Every exported tool carries `_meta: { 'antigravity/alwaysLoad': true }` so `agy` never hides large MCP tools behind on-demand discovery.
+  - Tool definitions are budgeted under `AGY_MCP_SAFE_TOKEN_BUDGET` (18,000 tokens, safely below `agy`'s 20,000-token hard drop ceiling) by stripping metadata and progressively trimming verbose descriptions without dropping any tool.
+  - Regex `pattern` constraints are converted from JS `\uXXXX` / surrogate pairs to Go RE2 `\x{...}`; RE2-incompatible lookarounds/backreferences are downgraded into `description` notes so `agy` never crashes in `"building toolbox"`.
+  - `$ref` (with cycle guard), `allOf`, nullable `anyOf`/`oneOf`, `const`, empty `enum`, and item-less arrays are flattened; MCP tool results returning images are forwarded as native MCP `image` + `text` content blocks. (test: `test/mcp-schema.test.ts`)
 
 ## One-shot `agy_ask` file inlining (`src/host/oneshot.ts`)
 

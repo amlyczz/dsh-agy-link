@@ -79,6 +79,7 @@ export const en: AgyDictionary = {
   'account.models': 'Per-model details:', 'account.clearCooldown': 'Clear cooldown', 'account.clearCooldownDone': 'Cooldown cleared',
   'account.collapsedCoolingHint': ' ({families} cooling down)', 'account.poolHeading': 'Account Pool ({count})',
   'account.removed': 'Account removed: {alias}',
+  'plan.ultra': 'Ultra', 'plan.pro': 'Pro', 'plan.free': 'Free', 'plan.enterprise': 'Enterprise',
   'quota.fiveHour': '5-hour quota', 'quota.weekly': 'Weekly quota', 'quota.refreshed': 'Quota refreshed', 'quota.refreshStarted': 'Syncing quota — figures update shortly', 'quota.windowReset': 'Reset · available',
   'quota.unactivated': 'Unactivated · warmup to start',
   'quota.refreshInProgress': 'A refresh is already running for this account',

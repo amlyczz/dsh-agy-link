@@ -38,6 +38,8 @@ export interface AcquireInput {
   parallel?: boolean
   proxyUrl?: string
   force?: boolean
+  /** Refuse to overwrite an unrecognised external standalone AGY sign-in in the Windows slot (#145). */
+  respectExternalSignIn?: boolean
 }
 
 // ---- identity evidence -----------------------------------------------------

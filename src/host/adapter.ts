@@ -204,13 +204,20 @@ export class AgyAdapter extends LlmAdapter {
 
   /** Effort, model, and aux-quota self-healing wrapper around streamAttempt (issue #67, PR #100). */
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    let effective = options as AgyGenerateOptions
+    if (effective.purpose === 'compaction' && effective.sessionId !== undefined && this.deps.sessionPendingModel) {
+      const pending = this.deps.sessionPendingModel(String(effective.sessionId))
+      if (pending && pending !== '' && pending !== effective.model) {
+        effective = { ...effective, model: pending }
+      }
+    }
     yield* streamWithEffortRetry({
       streamAttempt: (opts, suppressEffort) => this.streamAttempt(opts, suppressEffort),
       learnEffortUnsupported: (model) => this.learnEffortUnsupported(model),
       catalogAdvertisesEffort: (model) => this.deps.catalog.advertisedEfforts(model).length > 0,
       pool: this.deps.pool,
       defaultModel: () => this.deps.getConfig().defaultModel,
-    }, options as AgyGenerateOptions)
+    }, effective)
   }
 
   private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false): AsyncIterable<StreamChunk> {
@@ -351,6 +358,7 @@ export class AgyAdapter extends LlmAdapter {
       cfg,
       model,
       isAux,
+      allowAuxModelFallback: isCompaction || isTitle,
       sessionKey,
       ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: String(options.reasoningEffort) }),
     })
@@ -542,6 +550,7 @@ export class AgyAdapter extends LlmAdapter {
       minSpawnIntervalMs: this.minSpawnIntervalMs,
       spawnLimiter: this.spawnLimiter,
       ...(this.deps.runAcp === undefined ? {} : { runAcp: this.deps.runAcp }),
+      ...(this.deps.agyVersion === undefined ? {} : { agyVersion: this.deps.agyVersion }),
       ...(this.deps.backgroundObserver === undefined ? {} : { backgroundObserver: this.deps.backgroundObserver }),
       ...(this.deps.appendAcpNotice === undefined ? {} : { appendAcpNotice: this.deps.appendAcpNotice }),
       ...(this.deps.noteAcpReport === undefined ? {} : { noteAcpReport: this.deps.noteAcpReport }),
@@ -554,6 +563,7 @@ export class AgyAdapter extends LlmAdapter {
       sessionKey,
       workspaceRoot,
       isAux,
+      isBackgroundAux: isCompaction || isTitle || isReview,
       account,
       prompt,
       model,
@@ -564,6 +574,7 @@ export class AgyAdapter extends LlmAdapter {
       binding,
       messages,
       newlySentImageIds,
+      ...(plan.stagedImages.length > 0 ? { stagedImages: plan.stagedImages } : {}),
       sessionAccountKey,
       family,
       signal: options.signal,

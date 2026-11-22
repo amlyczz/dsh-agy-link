@@ -14,7 +14,26 @@
 // DSH message list alone — retries and replays stay idempotent with no
 // mutable per-stream state.
 import { randomUUID } from 'node:crypto'
-import { isNonConsumableResultError, type AgyEvent, type RawUsage } from '../common/types.ts'
+import type { AgyEvent, RawUsage } from '../common/types.ts'
+import {
+  AGY_CALL_PREFIX,
+  classifyToolError,
+  hasUsageBreakdown,
+  isConsumableResult,
+  mergeSpanUsage,
+  mirrorCallId,
+  parseMirrorCallId,
+  type ToolErrorKind,
+} from './recording-helpers.ts'
+
+export {
+  AGY_CALL_PREFIX,
+  classifyToolError,
+  hasUsageBreakdown,
+  mirrorCallId,
+  parseMirrorCallId,
+  type ToolErrorKind,
+}
 
 /** Terminal failure recorded when the process ended without a usable result. */
 export interface RecordingFailure {
@@ -29,33 +48,7 @@ export interface RecordingFailure {
   retryAfterMs?: number
 }
 
-/** Status guidance only: retain the original tool error for replay and logs. */
-export type ToolErrorKind = 'missing_file' | 'system_protection' | 'approval' | 'tool_error'
-
-export function classifyToolError(error: string): ToolErrorKind {
-  if (/\b(no such file|file not found|cannot find (?:the )?file|enoent)\b/i.test(error)) return 'missing_file'
-  if (/\b(system protection|protected by (?:the )?system|hardcoded.*protection|cannot bypass.*protection)\b/i.test(error)) return 'system_protection'
-  if (/\b(permission|denied|denial|approval)\b/i.test(error)) return 'approval'
-  return 'tool_error'
-}
-
 const waiters: unique symbol = Symbol('waiters')
-
-function isConsumableResult(ev: { ok: boolean; response: string; error?: string }): boolean {
-  return (ev.ok || ev.response !== '') && !isNonConsumableResultError(ev.ok, ev.error, ev.response)
-}
-
-/**
- * True when a usage sample carries a token breakdown rather than a bare input
- * count. Only such samples may stand in for the result envelope's usage; see
- * `finalUsage` and issue #158.
- */
-export function hasUsageBreakdown(raw: RawUsage): boolean {
-  const positive = (v: number | undefined): boolean => typeof v === 'number' && Number.isFinite(v) && v > 0
-  return positive(raw.output_tokens) || positive(raw.cache_read_tokens) ||
-    positive(raw.cache_write_tokens) || positive(raw.thinking_tokens) ||
-    positive(raw.total_tokens)
-}
 
 /** One agy run's append-only event log plus its settlement state. */
 export class RunRecording {
@@ -67,6 +60,19 @@ export class RunRecording {
   private failure: RecordingFailure | null = null
   private resultConversationId: string | null = null
   private lastStepUsageRaw: RawUsage | null = null
+  /**
+   * Unconsumed per-span usage merged across internal LLM responses within the
+   * current DSH span (issue #161):
+   *   - Prompt-side fields (`input_tokens`, `cache_read_tokens`, `cache_write_tokens`,
+   *     `total_tokens`) take the LAST call so `contextPressure` never doubles.
+   *   - Generation-side fields (`output_tokens`, `thinking_tokens`) sum across
+   *     distinct `stepKey`s (replacing if the same `stepKey` updates cumulatively).
+   * Consumed once by the first cut/result so parallel tool cuts 2..N never
+   * double-bill the same LLM call.
+   */
+  private pendingSpanUsage: RawUsage | null = null
+  private readonly pendingSpanStepGen = new Map<string, { output: number; thinking: number }>()
+  private anyUsageEmitted = false
   /**
    * Per-step generation timing for token-speed statistics: stepKey ->
    * { startedAt, lastAt, outputTokens }. The last usage sample of a step wins
@@ -227,8 +233,16 @@ export class RunRecording {
    * We therefore remember the last per-call step sample and report IT at
    * result time instead of the cumulative envelope.
    */
-  noteStepUsage(raw: RawUsage): void {
+  noteStepUsage(raw: RawUsage, stepKey?: string): void {
     this.lastStepUsageRaw = raw
+    if (Object.keys(raw).length === 0) return
+    const cur = this.pendingSpanUsage
+    const key = stepKey && stepKey !== '' ? stepKey : `__anon_${this.pendingSpanStepGen.size}`
+    const prevGen = this.pendingSpanStepGen.get(key)
+    const nextOut = typeof raw.output_tokens === 'number' && Number.isFinite(raw.output_tokens) ? raw.output_tokens : 0
+    const nextThink = typeof raw.thinking_tokens === 'number' && Number.isFinite(raw.thinking_tokens) ? raw.thinking_tokens : 0
+    this.pendingSpanStepGen.set(key, { output: nextOut, thinking: nextThink })
+    this.pendingSpanUsage = mergeSpanUsage(cur, raw, prevGen, nextOut, nextThink)
   }
 
   get lastUsage(): RawUsage | null {
@@ -236,16 +250,35 @@ export class RunRecording {
   }
 
   /**
+   * Consume the pending usage for the current DSH span (issues #158 & #161).
+   * Returns null when no unconsumed step usage exists (e.g. concurrent tool
+   * cuts 2..N, empty tails, or failure with no sample), so callers omit the
+   * `{ type: 'usage' }` chunk instead of double-billing or flashing 0/0.
+   * When a bare input-only sample was recorded and a full result envelope
+   * arrived, yield to the envelope so context occupancy never shadows real
+   * cached-read / output counts.
+   */
+  consumeSpanUsage(resultRaw?: RawUsage): RawUsage | null {
+    if (this.pendingSpanUsage !== null) {
+      const out = this.pendingSpanUsage
+      this.pendingSpanUsage = null
+      this.pendingSpanStepGen.clear()
+      if (hasUsageBreakdown(out) || !resultRaw || Object.keys(resultRaw).length === 0) {
+        this.anyUsageEmitted = true
+        return out
+      }
+    }
+    if (resultRaw !== undefined && Object.keys(resultRaw).length > 0 && !this.anyUsageEmitted) {
+      this.anyUsageEmitted = true
+      return resultRaw
+    }
+    return null
+  }
+
+  /**
    * The usage to report for the result envelope: the last per-call step sample
    * when it actually carries a token breakdown, otherwise the envelope's own
-   * usage.
-   *
-   * The sample is only preferred when it reports output / cache / thinking
-   * tokens. A sample that carries nothing but an input figure is a context
-   * occupancy reading, not a usage sample: agy's ACP `usage_update` sends
-   * `{ used, size }`, and promoting that to `{inputTokens: used,
-   * outputTokens: 0}` used to shadow the real `PromptResponse.usage` (0%
-   * cache hit, 0 tok/s, inflated uncached input — issue #158).
+   * usage (issue #158).
    */
   finalUsage(resultRaw: RawUsage): RawUsage {
     const step = this.lastStepUsageRaw
@@ -446,34 +479,6 @@ export class RunRecording {
 
 /** Full-args resolver injected into RunRecording (set in RunRegistry.create). */
 export type FullArgsResolver = (eventIndex: number) => Promise<Record<string, unknown> | null>
-
-/** Prefix every mirrored agy tool callId carries; continuation detection key. */
-export const AGY_CALL_PREFIX = 'agytc-'
-
-/** Mint the callId for one recorded tool event. */
-export function mirrorCallId(runId: string, eventIndex: number): string {
-  return AGY_CALL_PREFIX + runId + '-' + String(eventIndex)
-}
-
-/** Parse a callId back into its run coordinates; null when not ours. */
-export function parseMirrorCallId(callId: string): { runId: string; eventIndex: number } | null {
-  if (!callId.startsWith(AGY_CALL_PREFIX)) return null
-  const rest = callId.slice(AGY_CALL_PREFIX.length)
-  // Bridge lifecycle calls (agytc-bridge-goal-..., agytc-bridge-plan-...) are
-  // never mirror tool steps even when their trailing suffix happens to be numeric.
-  if (rest.startsWith('bridge-')) return null
-  // Strip any collision-disambiguation suffix (#toolName) before extracting coordinates
-  const hashIdx = rest.indexOf('#')
-  const baseRest = hashIdx >= 0 ? rest.slice(0, hashIdx) : rest
-  // runId is a uuid (hyphens included), so split from the RIGHT: the last
-  // hyphen separates the event index.
-  const idx = baseRest.lastIndexOf('-')
-  if (idx <= 0) return null
-  const runId = baseRest.slice(0, idx)
-  const n = Number(baseRest.slice(idx + 1))
-  if (!Number.isSafeInteger(n) || n < 0) return null
-  return { runId, eventIndex: n }
-}
 
 const MAX_RETAINED_RUNS = 8
 
