@@ -257,6 +257,7 @@ test('beginPrimary completion clears authRequired and cooldowns on primary accou
 
   let updated = 0
   const slotWrites: string[] = []
+  const keyringWrites: string[] = []
   const flow = new PoolAuthFlow(pool, quota, () => {}, {
     openBrowser: async () => true,
     exchangeCode: async () => ({ access_token: 'primary_acc', refresh_token: '1//primary_rt' }),
@@ -266,6 +267,9 @@ test('beginPrimary completion clears authRequired and cooldowns on primary accou
     // app: a fake login written from here would break the real primary
     // account. Capture the document instead of writing it.
     writeSlot: (raw) => { slotWrites.push(raw); return true },
+    // Same hazard on macOS/Linux, where the login Keychain plays the slot's
+    // role — and where CI actually runs.
+    writeKeyring: (raw) => { keyringWrites.push(raw); return true },
   })
   // Override dir on active flow via beginAccount-safe temp home so real ~ is untouched:
   const tempHome = mkdtempSync(join(tmpdir(), 'agy-primary-home-'))
@@ -279,6 +283,9 @@ test('beginPrimary completion clears authRequired and cooldowns on primary accou
   assert.equal(pool.getAccount(primary.id)?.authRequired, undefined, 'primary login must clear authRequired')
   assert.equal(Object.keys(pool.getAccount(primary.id)?.cooldowns ?? {}).length, 0, 'primary login must clear cooldowns')
   assert.ok(updated >= 1, 'primary login must notify listeners (model picker / UI)')
-  assert.equal(slotWrites.length, 1, 'primary login installs the credential into the slot exactly once')
-  assert.ok(slotWrites[0]?.includes('primary_acc'), 'the slot receives the freshly exchanged token')
+  // Exactly one of the two machine-wide stores is written, decided by the
+  // platform under test (Windows: credential slot, macOS/Linux: Keychain).
+  const installs = process.platform === 'win32' ? slotWrites : keyringWrites
+  assert.equal(installs.length, 1, 'primary login installs the credential into the machine store exactly once')
+  assert.ok(installs[0]?.includes('primary_acc'), 'the machine store receives the freshly exchanged token')
 })

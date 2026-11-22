@@ -93,6 +93,13 @@ export interface PoolAuthFlowDeps {
    * real account (and every ACP turn with it).
    */
   writeSlot?: (raw: string) => boolean
+  /**
+   * Injectable macOS/Linux Keychain writer, the counterpart of `writeSlot`.
+   * Same hazard: the login Keychain entry is machine-wide, so a test that let
+   * a fake primary login reach it would leave the real user signed out of agy.
+   * Tests MUST override it.
+   */
+  writeKeyring?: (raw: string, homeDir: string) => boolean
 }
 
 export class PoolAuthFlow {
@@ -106,6 +113,7 @@ export class PoolAuthFlow {
   private readonly onUpdate?: () => void
   private readonly onIsolatedAccountCommitted?: (account: ManagedAccount) => void
   private readonly writeSlot: (raw: string) => boolean
+  private readonly writeKeyring: (raw: string, homeDir: string) => boolean
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -120,6 +128,7 @@ export class PoolAuthFlow {
     this.onUpdate = deps.onUpdate
     this.onIsolatedAccountCommitted = deps.onIsolatedAccountCommitted
     this.writeSlot = deps.writeSlot ?? ((raw) => writeWindowsCredentialRaw(raw, 'gemini:antigravity'))
+    this.writeKeyring = deps.writeKeyring ?? ((raw, homeDir) => writeSystemKeyringRaw(raw, homeDir))
   }
 
   status(): PoolAuthStatus {
@@ -283,7 +292,7 @@ export class PoolAuthFlow {
             const { homedir } = await import('node:os')
             const primaryFile = writeAgyTokenFile(homedir(), tokens)
             saveCredentialBackup(primaryFile)
-            writeSystemKeyringRaw(readFileSync(primaryFile, 'utf8'), homedir())
+            this.writeKeyring(readFileSync(primaryFile, 'utf8'), homedir())
           } catch {
             // best effort
           }
@@ -414,7 +423,7 @@ export class PoolAuthFlow {
         }
       } else if (flow.primary) {
         try {
-          writeSystemKeyringRaw(readFileSync(tokenFile, 'utf8'), flow.dir)
+          this.writeKeyring(readFileSync(tokenFile, 'utf8'), flow.dir)
         } catch {
           // best-effort
         }
