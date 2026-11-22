@@ -1,12 +1,7 @@
-// Cross-turn background wakeup watcher: keeps one-shot `schedule` timers and
-// detached background work (task logs, completion messages, subagents) alive
-// past the end of a turn and wakes the idle DSH session when they fire, via
-// `sessionController.resolveAgent` + `agent.followup(createUserMessage(...))`.
-//
-// Slice 1 armed one-shot timers. Slice 2 adds the filesystem side: a CLI `-p`
-// process exits while its detached commands, scheduled tasks, and subagents keep
-// running, and their outcome lands in the conversation's brain directory. ACP
-// session retention is slice 3.
+// Cross-turn background wakeup watcher: keeps one-shot `schedule` timers,
+// detached task-log / subagent completions, and persistent ACP updates able to
+// wake an idle DSH session cleanly via `sessionController.resolveAgent` +
+// `agent.followup(createUserMessage(...))`.
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type {
   BackgroundAttemptSettledInfo,
@@ -15,13 +10,15 @@ import type {
 } from '../../common/background-types.ts'
 import type { PluginConfig } from '../../common/types.ts'
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
-import { baselineSessionBrain, pollSessionBrainDir, type WatchedTaskLog } from './brain-poll.ts'
+import { attachAcpWatch, noteAcpReport, type AcpWatchHost } from './acp-watch.ts'
+import { baselineSessionBrain, pollSessionBrainDir } from './brain-poll.ts'
 import {
   buildWakeupMessageText,
   extractAttemptBackgroundSignals,
   matchesTimerCondition,
   type WakeNoticeItem,
 } from './schedule-parse.ts'
+import { createWatchState, type SessionWatchState } from './watch-state.ts'
 
 export interface AgentLike {
   readonly status?: string
@@ -36,82 +33,98 @@ export interface BackgroundWakeWatcherOptions {
   isArchived?: (sessionId: string) => boolean
   getActiveRun?: (sessionId: string) => { isSettled: boolean } | undefined
   /**
-   * Pin an ACP session so the process is not swept while a detached job it
-   * started is still running. Returns the release function.
+   * Keep an ACP session retained so its background work can still report.
+   * `sessionKey` is the DSH session the transcript belongs to; drain notices
+   * need it because agy's own session id means nothing to the host.
    */
-  retainAcpSession?: (sessionId: string) => () => void
+  retainAcpSession?: (sessionId: string, sessionKey: string) => () => void
+  /**
+   * 方案 A: write an ACP post-turn report straight into the session transcript.
+   * Returns true when the host accepted it, in which case no model turn is
+   * spent re-reading text the agent already produced. Returning false (host
+   * without a writable session, or a failed append) degrades to exactly one
+   * coalesced followup — never one wake per chunk.
+   */
+  presentAcpReport?: (sessionId: string, text: string) => Promise<boolean | number>
+  /**
+   * True when the session holds an armed goal. Goal-driven sessions always get
+   * a real turn: a goal is only advanced by the model reading the report.
+   */
+  hasArmedGoal?: (sessionId: string) => boolean | Promise<boolean>
   log?: (msg: string) => void
   pollIntervalMs?: number
   coalesceMs?: number
+  /** Silence after the last agent_message_chunk before the report is delivered. */
+  acpReportSilenceMs?: number
+  /** Shortened window used once a usage_update proves the report is complete. */
+  acpReportUsageGraceMs?: number
+  /** Grace window after a post-turn tool completion, for the agent's own report. */
+  acpToolGraceMs?: number
+  /**
+   * How long the ACP watch stays armed after the last thing it was waiting for
+   * reported. The agent narrates its own completion a beat later; releasing the
+   * watch the instant the tool call lands loses that sentence.
+   */
+  acpReportWindowMs?: number
 }
 
-interface PendingScheduleTimer {
-  key: string
-  prompt: string
-  timerCondition: string
-  timer: NodeJS.Timeout
-}
-
-interface SessionWatchState {
-  sessionKey: string
-  generation: number
-  wakesUsed: number
-  activeTurn: boolean
-  expiresAt: number
-  brainDir: string | null
-  hasActiveTasks: boolean
-  seenMessageKeys: Set<string>
-  knownTaskLogs: Map<string, WatchedTaskLog>
-  knownSubagents: Map<string, string>
-  seenWakeKeys: Set<string>
-  schedules: Map<string, PendingScheduleTimer>
-  acpCleanups: Array<() => void>
-  pendingNotices: WakeNoticeItem[]
-  coalesceTimer: NodeJS.Timeout | null
-  deferTimer: NodeJS.Timeout | null
-  dispatching: boolean
-}
-
-export class BackgroundWakeWatcher implements BackgroundTurnObserver {
+export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHost {
   private readonly sessions = new Map<string, SessionWatchState>()
   private pollTimer: NodeJS.Timeout | null = null
-  private disposed = false
+  disposed = false
   private readonly pollIntervalMs: number
   private readonly coalesceMs: number
+
+  readonly acpReportSilenceMs: number
+  readonly acpReportUsageGraceMs: number
+  readonly acpToolGraceMs: number
+  readonly acpReportWindowMs: number
+  private directPresentations = 0
+  private followupWakes = 0
+
+  get log(): (msg: string) => void {
+    return (msg: string) => this.opts.log?.(msg)
+  }
+
+  get presentAcpReport(): ((sessionKey: string, text: string) => Promise<boolean | number>) | undefined {
+    return this.opts.presentAcpReport
+  }
+
+  get hasArmedGoal(): ((sessionKey: string) => boolean | Promise<boolean>) | undefined {
+    return this.opts.hasArmedGoal
+  }
+
+  get retainAcpSession(): ((sessionId: string, sessionKey: string) => () => void) | undefined {
+    return this.opts.retainAcpSession
+  }
+
+  isArchived(sessionKey: string): boolean {
+    return this.opts.isArchived?.(sessionKey) ?? false
+  }
+
+  countDirectPresentation(): void {
+    this.directPresentations += 1
+  }
 
   constructor(private readonly opts: BackgroundWakeWatcherOptions) {
     this.pollIntervalMs = Math.max(50, opts.pollIntervalMs ?? 2_500)
     this.coalesceMs = Math.max(20, opts.coalesceMs ?? 350)
+    this.acpReportSilenceMs = Math.max(50, opts.acpReportSilenceMs ?? 700)
+    this.acpReportUsageGraceMs = Math.max(50, opts.acpReportUsageGraceMs ?? 350)
+    this.acpToolGraceMs = Math.max(0, opts.acpToolGraceMs ?? 2_200)
+    this.acpReportWindowMs = Math.max(0, opts.acpReportWindowMs ?? 4_000)
   }
 
   private getOrCreateSession(sessionKey: string): SessionWatchState {
     let st = this.sessions.get(sessionKey)
     if (!st) {
-      st = {
-        sessionKey,
-        generation: 0,
-        wakesUsed: 0,
-        activeTurn: false,
-        expiresAt: 0,
-        brainDir: null,
-        hasActiveTasks: false,
-        seenMessageKeys: new Set(),
-        knownTaskLogs: new Map(),
-        knownSubagents: new Map(),
-        seenWakeKeys: new Set(),
-        schedules: new Map(),
-        acpCleanups: [],
-        pendingNotices: [],
-        coalesceTimer: null,
-        deferTimer: null,
-        dispatching: false,
-      }
+      st = createWatchState(sessionKey)
       this.sessions.set(sessionKey, st)
     }
     return st
   }
 
-  /** Reuse an existing state object (later slices keep the same record in a leaf module). */
+  /** Reuse an existing state object (tests and later slices keep the same record). */
   adopt(st: SessionWatchState): void {
     if (this.disposed) return
     const prev = this.sessions.get(st.sessionKey)
@@ -122,8 +135,8 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
   /**
    * Feed one background notice into a session's queue.
    *
-   * Used by the TimerCondition cancel path and by the tests; slice 3 calls it
-   * from the ACP post-turn watcher.
+   * Used by the TimerCondition cancel path, by the brain-poll scanner, and by
+   * tests that need a notice without waiting for the filesystem.
    */
   noteNotice(sessionKey: string, item: WakeNoticeItem): void {
     if (this.disposed || sessionKey === '') return
@@ -140,6 +153,20 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     st.generation += 1
     st.wakesUsed = 0
     this.clearSessionWatches(st)
+  }
+
+  /**
+   * Record a report that was written into the transcript, plus the record seq
+   * it landed at. agy ALSO writes the same narration into the conversation's
+   * .system_generated/messages, so the brain-poll scanner sees it a second time
+   * and would wake the model over a sentence the user already has on screen.
+   * The text is the cross-source dedup key; the seq lets the digest tell the
+   * card apart from the model turn.
+   */
+  noteAcpReport(sessionKey: string, text: string, seq: number): void {
+    const st = this.sessions.get(sessionKey)
+    if (!st) return
+    noteAcpReport(st, text, seq)
   }
 
   onAttemptStart(sessionKey: string): void {
@@ -174,15 +201,24 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     const brainDir = info.conversationId ? findBrainDir(info.conversationId, info.accountHome) : null
     if (brainDir) st.brainDir = brainDir
 
-    // Baseline first: only what appears after this point counts as new.
-    const aliveSubagents = brainDir ? baselineSessionBrain(st, brainDir) : false
+    const aliveSubagents = brainDir ? this.baselineBrainDir(st, brainDir) : false
     const hasPendingTasks = signals.backgroundTools.length > 0 || aliveSubagents
     const maxScheduleDelay = signals.schedules.reduce((m, s) => Math.max(m, s.delayMs), 0)
     const watchWindow = Math.min(ttlMs, Math.max(ttlMs, maxScheduleDelay + 5_000))
 
+    const keepsAcpAlive = hasPendingTasks || signals.schedules.length > 0
     if (signals.schedules.length === 0 && !hasPendingTasks) {
-      if (st.schedules.size === 0 && !st.hasActiveTasks) {
-        this.clearSessionWatches(st)
+      // Nothing new to watch — but a previous turn's background tool may still
+      // be live, or a report may still be waiting out its silence window.
+      // Releasing here would silence the rest of its reports.
+      if (
+        st.schedules.size === 0
+        && !st.hasActiveTasks
+        && st.acpOutstanding.size === 0
+        && st.acpReportTimer === null
+        && st.acpToolGraceTimer === null
+      ) {
+        this.releaseAcp(st)
       }
       return
     }
@@ -195,8 +231,13 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
       this.armScheduleTimer(st, turnGen, s.stepKey, Math.min(s.delayMs, ttlMs), s.prompt, s.timerCondition, info.transport)
     }
 
-    if (info.transport === 'acp' && info.acpProcess && info.acpSessionId && hasPendingTasks) {
-      this.attachAcpWatch(st, info.acpProcess, info.acpSessionId, turnGen)
+    // Keep the ACP session retained whenever ANYTHING is still outstanding —
+    // a background task, a live subagent, or a pending one-shot timer. A pure
+    // timer used to fall through here, so the process could be reaped by the
+    // pool before the timer fired and the wake was lost.
+    if (info.transport === 'acp' && info.acpProcess && info.acpSessionId && keepsAcpAlive) {
+      const outstanding = signals.backgroundTools.map((t) => t.stepKey)
+      this.attachAcpWatch(st, info.acpProcess, info.acpSessionId, turnGen, outstanding)
     }
 
     if (hasPendingTasks && st.brainDir) {
@@ -204,55 +245,8 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     }
   }
 
-  /**
-   * ACP keeps the session alive after the turn returns, so the detached work
-   * announces itself through `session/update` instead of a file. Listening is
-   * the only way to know it finished without polling the process.
-   *
-   * The session is pinned through the pool as well: without that the idle
-   * sweeper could close the process while its background job is still running.
-   */
-  private attachAcpWatch(
-    st: SessionWatchState,
-    proc: NonNullable<BackgroundAttemptSettledInfo['acpProcess']>,
-    sid: string,
-    turnGen: number,
-  ): void {
-    this.releaseAcp(st)
-    const unsub = proc.subscribeSession(sid, (update) => {
-      if (this.disposed || st.generation !== turnGen || st.activeTurn) return
-      const kind = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : ''
-      if (kind === 'tool_call_update') {
-        const status = typeof update.status === 'string' ? update.status.toLowerCase() : ''
-        if (status === 'completed' || status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') {
-          const title = typeof update.title === 'string' && update.title !== '' ? update.title : 'ACP background tool'
-          const callId = typeof update.toolCallId === 'string' ? update.toolCallId : title
-          const wakeKey = `acp-tool:${callId}:${status}`
-          if (st.seenWakeKeys.has(wakeKey)) return
-          st.seenWakeKeys.add(wakeKey)
-          this.enqueueWake(st, { kind: 'acp', label: `${title} (${status})`, detail: `ACP tool ${status}`, sender: callId })
-        }
-      } else if (kind === 'agent_message_chunk') {
-        const content = update.content as { text?: unknown } | undefined
-        const text = typeof content?.text === 'string' ? content.text.trim() : ''
-        if (text !== '') {
-          const wakeKey = `acp-msg:${turnGen}:${text.slice(0, 60)}`
-          if (st.seenWakeKeys.has(wakeKey)) return
-          st.seenWakeKeys.add(wakeKey)
-          this.enqueueWake(st, { kind: 'acp', label: 'ACP post-turn message', detail: text.slice(0, 240) })
-        }
-      }
-    })
-    st.acpCleanups.push(unsub)
-    if (this.opts.retainAcpSession) {
-      st.acpCleanups.push(this.opts.retainAcpSession(sid))
-    }
-  }
-
-  private releaseAcp(st: SessionWatchState): void {
-    for (const fn of st.acpCleanups.splice(0, st.acpCleanups.length)) {
-      try { fn() } catch { /* ignore */ }
-    }
+  private baselineBrainDir(st: SessionWatchState, brainDir: string): boolean {
+    return baselineSessionBrain(st, brainDir)
   }
 
   private armScheduleTimer(
@@ -266,8 +260,6 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
   ): void {
     const existing = st.schedules.get(key)
     if (existing) clearTimeout(existing.timer)
-    // An ACP turn can be followed immediately by the next span; give the
-    // session a moment to settle before the timer is allowed to fire.
     const effectiveDelay = transport === 'acp' ? delayMs + 2_000 : delayMs
     const timer = setTimeout(() => {
       st.schedules.delete(key)
@@ -285,6 +277,16 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     st.schedules.set(key, { key, prompt, timerCondition, timer })
   }
 
+  private attachAcpWatch(
+    st: SessionWatchState,
+    proc: NonNullable<BackgroundAttemptSettledInfo['acpProcess']>,
+    sid: string,
+    turnGen: number,
+    outstanding: readonly string[] = [],
+  ): void {
+    attachAcpWatch(this, st, proc, sid, turnGen, outstanding)
+  }
+
   private ensurePollLoop(): void {
     if (this.pollTimer !== null || this.disposed) return
     this.pollTimer = setInterval(() => this.pollAll(), this.pollIntervalMs)
@@ -299,7 +301,6 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     }
   }
 
-  /** Run one scan now (tests and the `/agy wakeup` command use it). */
   pollNow(): void {
     this.pollAll()
   }
@@ -325,15 +326,15 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
   }
 
   private pollSessionBrain(st: SessionWatchState, brainDir: string): void {
-    const res = pollSessionBrainDir(st, brainDir, (item) => this.enqueueWake(st, item))
+    const delivered = st.acpLastReport === '' ? [] : [st.acpLastReport]
+    const res = pollSessionBrainDir(st, brainDir, (item) => this.enqueueWake(st, item), delivered)
     if (res.stoppedByServer) {
-      // The language server restarted: its jobs are gone, so stop watching.
       st.hasActiveTasks = false
-      this.clearSessionWatches(st)
+      this.releaseAcp(st)
     }
   }
 
-  private cancelMatchingScheduleTimers(st: SessionWatchState, item: WakeNoticeItem): void {
+  cancelMatchingScheduleTimers(st: SessionWatchState, item: WakeNoticeItem): void {
     if (item.kind === 'schedule') return
     for (const [k, s] of Array.from(st.schedules.entries())) {
       if (matchesTimerCondition(s.timerCondition, item.sender ?? item.label)) {
@@ -343,7 +344,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     }
   }
 
-  private enqueueWake(st: SessionWatchState, item: WakeNoticeItem): void {
+  enqueueWake(st: SessionWatchState, item: WakeNoticeItem): void {
     if (this.disposed || this.opts.isArchived?.(st.sessionKey)) return
     this.cancelMatchingScheduleTimers(st, item)
     st.pendingNotices.push(item)
@@ -420,9 +421,15 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
         },
       })
       st.wakesUsed += 1
-      if (st.schedules.size === 0) {
+      // Keep the ACP watch while any background tool call is still live. One
+      // wake is not the end of the turn's work: an 18s command and a subagent
+      // each report separately, and releasing here dropped every report after
+      // the first (the timer wake beat the command's own completion).
+      if (st.schedules.size === 0 && st.acpOutstanding.size === 0) {
         st.hasActiveTasks = false
+        this.releaseAcp(st)
       }
+      this.followupWakes += 1
       agent.followup(msg)
       this.opts.log?.(`[background-wakeup] woken session=${sessionKey} (${summary})`)
     } finally {
@@ -431,10 +438,23 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     }
   }
 
+  releaseAcp(st: SessionWatchState): void {
+    for (const fn of st.acpCleanups.splice(0, st.acpCleanups.length)) {
+      try { fn() } catch { /* ignore */ }
+    }
+  }
+
   private clearSessionWatches(st: SessionWatchState): void {
     st.hasActiveTasks = false
     st.expiresAt = 0
+    st.acpOutstanding.clear()
     st.pendingNotices = []
+    st.acpReportText = ''
+    st.acpReportGen = 0
+    st.acpDeferredTools = []
+    if (st.acpReportTimer !== null) { clearTimeout(st.acpReportTimer); st.acpReportTimer = null }
+    if (st.acpToolGraceTimer !== null) { clearTimeout(st.acpToolGraceTimer); st.acpToolGraceTimer = null }
+    if (st.acpIdleTimer !== null) { clearTimeout(st.acpIdleTimer); st.acpIdleTimer = null }
     for (const s of st.schedules.values()) clearTimeout(s.timer)
     st.schedules.clear()
     if (st.coalesceTimer !== null) { clearTimeout(st.coalesceTimer); st.coalesceTimer = null }
@@ -447,17 +467,22 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver {
     const cfg = this.opts.getConfig()
     let pendingTimers = 0
     let pendingTasks = 0
+    let pendingAcpTools = 0
     let activeWatches = 0
     for (const st of this.sessions.values()) {
       if (st.schedules.size > 0 || st.hasActiveTasks) activeWatches += 1
       pendingTimers += st.schedules.size
       if (st.hasActiveTasks) pendingTasks += 1
+      if (st.acpOutstanding.size > 0) pendingAcpTools += st.acpOutstanding.size
     }
     return {
       enabled: cfg.enabled && cfg.backgroundWakeup,
       activeWatches,
       pendingTimers,
       pendingTasks,
+      directPresentations: this.directPresentations,
+      followupWakes: this.followupWakes,
+      pendingAcpTools,
     }
   }
 

@@ -1,7 +1,16 @@
 // /agy status — binary, version, auth, mode, catalog and binding overview.
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { classifyToolError } from '../recording.ts'
-import { ok, type CommandDeps } from './shared.ts'
+import { ok, type AcpStatusView, type CommandDeps } from './shared.ts'
+
+/** One-line ACP pool summary, including drains and credential-slot recoveries. */
+function describeAcp(s: AcpStatusView): string {
+  const parts = [`${s.activeProcesses} proc`, `${s.sessions} session(s)`]
+  if ((s.drainingProcesses ?? 0) > 0) parts.push(`${s.drainingProcesses} draining`)
+  if ((s.slotOverwriteDetectedCount ?? 0) > 0) parts.push(`slot overwrites: ${s.slotOverwriteDetectedCount}`)
+  if (s.lastSlotRecoveryAt != null) parts.push(`slot recovered ${new Date(s.lastSlotRecoveryAt).toISOString()}`)
+  return ` (${parts.join(', ')})`
+}
 
 export async function renderStatus(deps: CommandDeps): Promise<string> {
   const cfg = deps.cfg()
@@ -32,7 +41,7 @@ export async function renderStatus(deps: CommandDeps): Promise<string> {
     '- auth: ' + (auth ? auth.phase + (auth.message ? ' — ' + auth.message : '') : 'unknown'),
     '- permission mode: ' + cfg.permissionMode + (cfg.permissionMode === 'skip' ? ' — WARNING: agy runs tools without approval' : ''),
     '- sandbox: ' + (cfg.sandbox ? 'on' : 'off'),
-    '- transport: ' + cfg.transport + (cfg.transport === 'acp' && deps.acpStatus ? (() => { const s = deps.acpStatus(); return ` (${s.activeProcesses} proc, ${s.sessions} session(s))`; })() : ''),
+    '- transport: ' + cfg.transport + (cfg.transport === 'acp' && deps.acpStatus ? describeAcp(deps.acpStatus()) : ''),
     '- background wakeup: ' + (cfg.backgroundWakeup ? 'on' : 'off') + (deps.backgroundStatus ? (() => { const w = deps.backgroundStatus(); return ` (watches: ${w.activeWatches}, timers: ${w.pendingTimers}, tasks: ${w.pendingTasks})`; })() : ''),
     ...(cfg.agent.trim() !== '' ? ['- agent: ' + cfg.agent.trim()] : []),
     ...(cfg.agySettings.trim() !== '' ? ['- settings override: ' + cfg.agySettings.trim()] : ''),

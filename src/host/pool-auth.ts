@@ -86,6 +86,20 @@ export interface PoolAuthFlowDeps {
   refreshTokens?: typeof refreshTokens
   onUpdate?: () => void
   onIsolatedAccountCommitted?: (account: ManagedAccount) => void
+  /**
+   * Injectable Windows credential-slot writer. Defaults to the real slot, but
+   * tests MUST override it: the machine-wide slot is shared with the running
+   * app, so a fake login written from a unit test would silently break the
+   * real account (and every ACP turn with it).
+   */
+  writeSlot?: (raw: string) => boolean
+  /**
+   * Injectable macOS/Linux Keychain writer, the counterpart of `writeSlot`.
+   * Same hazard: the login Keychain entry is machine-wide, so a test that let
+   * a fake primary login reach it would leave the real user signed out of agy.
+   * Tests MUST override it.
+   */
+  writeKeyring?: (raw: string, homeDir: string) => boolean
 }
 
 export class PoolAuthFlow {
@@ -98,6 +112,8 @@ export class PoolAuthFlow {
   private readonly refresh: typeof refreshTokens
   private readonly onUpdate?: () => void
   private readonly onIsolatedAccountCommitted?: (account: ManagedAccount) => void
+  private readonly writeSlot: (raw: string) => boolean
+  private readonly writeKeyring: (raw: string, homeDir: string) => boolean
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -111,6 +127,8 @@ export class PoolAuthFlow {
     this.refresh = deps.refreshTokens ?? refreshTokens
     this.onUpdate = deps.onUpdate
     this.onIsolatedAccountCommitted = deps.onIsolatedAccountCommitted
+    this.writeSlot = deps.writeSlot ?? ((raw) => writeWindowsCredentialRaw(raw, 'gemini:antigravity'))
+    this.writeKeyring = deps.writeKeyring ?? ((raw, homeDir) => writeSystemKeyringRaw(raw, homeDir))
   }
 
   status(): PoolAuthStatus {
@@ -264,7 +282,7 @@ export class PoolAuthFlow {
             // Same document the on-disk writer produces — crucially WITH an
             // `expiry`, so a missing field cannot be read as "valid forever".
             const docStr = buildAgyCredentialDoc(tokens)
-            writeWindowsCredentialRaw(docStr, 'gemini:antigravity')
+            this.writeSlot(docStr)
             writePrimaryCredential({ raw: docStr, email, savedAt: Date.now() }, this.pool.dir)
           } catch {
             // best effort
@@ -274,7 +292,7 @@ export class PoolAuthFlow {
             const { homedir } = await import('node:os')
             const primaryFile = writeAgyTokenFile(homedir(), tokens)
             saveCredentialBackup(primaryFile)
-            writeSystemKeyringRaw(readFileSync(primaryFile, 'utf8'), homedir())
+            this.writeKeyring(readFileSync(primaryFile, 'utf8'), homedir())
           } catch {
             // best effort
           }
@@ -399,13 +417,13 @@ export class PoolAuthFlow {
       if (flow.primary && process.platform === 'win32') {
         try {
           const raw = readFileSync(tokenFile, 'utf8')
-          writeWindowsCredentialRaw(raw, 'gemini:antigravity')
+          this.writeSlot(raw)
         } catch {
           // best-effort
         }
       } else if (flow.primary) {
         try {
-          writeSystemKeyringRaw(readFileSync(tokenFile, 'utf8'), flow.dir)
+          this.writeKeyring(readFileSync(tokenFile, 'utf8'), flow.dir)
         } catch {
           // best-effort
         }

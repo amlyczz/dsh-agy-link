@@ -19,6 +19,7 @@ import {
   extractAttemptBackgroundSignals,
   matchesTimerCondition,
 } from '../src/features/background/schedule-parse.ts'
+import { createWatchState } from '../src/features/background/watch-state.ts'
 import { BackgroundWakeWatcher } from '../src/features/background/watcher.ts'
 import { RunRecording } from '../src/host/recording.ts'
 import { setAgyDbDir } from '../src/runtime/agy/db/paths.ts'
@@ -272,12 +273,7 @@ describe('background wakeup watcher: lifecycle edges', () => {
       assert.equal(watcher.status().pendingTimers, 1)
 
       // Same key, different object: the previous timers must be dropped.
-      const replacement = {
-        sessionKey: 'adopt-1', generation: 0, wakesUsed: 0, activeTurn: false, expiresAt: 0,
-        brainDir: null, hasActiveTasks: false, seenMessageKeys: new Set<string>(),
-        knownTaskLogs: new Map(), knownSubagents: new Map<string, string>(), seenWakeKeys: new Set<string>(),
-        schedules: new Map(), acpCleanups: [], pendingNotices: [], coalesceTimer: null, deferTimer: null, dispatching: false,
-      }
+      const replacement = createWatchState('adopt-1')
       watcher.adopt(replacement)
       assert.equal(watcher.status().pendingTimers, 0)
       // Adopting the same object again is a no-op rather than a self-clear.
@@ -302,7 +298,15 @@ describe('background wakeup watcher: lifecycle edges', () => {
       watcher.onAttemptSettled({ sessionKey: 'off-1', conversationId: 'c', transport: 'cli', recording: rec, failure: null, superseded: false })
       watcher.pollNow()
       await new Promise((r) => setTimeout(r, 100))
-      assert.deepEqual(watcher.status(), { enabled: false, activeWatches: 0, pendingTimers: 0, pendingTasks: 0 })
+      assert.deepEqual(watcher.status(), {
+        enabled: false,
+        activeWatches: 0,
+        pendingTimers: 0,
+        pendingTasks: 0,
+        directPresentations: 0,
+        followupWakes: 0,
+        pendingAcpTools: 0,
+      })
     } finally {
       watcher.dispose()
     }

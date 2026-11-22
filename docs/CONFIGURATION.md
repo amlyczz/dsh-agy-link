@@ -17,7 +17,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `sandbox` | `DSH_AGY_SANDBOX` | `false` | Run `agy` with OS terminal sandboxing (`--sandbox`) |
 | `agent` | `DSH_AGY_AGENT` | `''` (agy default) | Default custom Markdown agent name (`--agent`) |
 | `agySettings` | `DSH_AGY_SETTINGS` | `''` | Inline JSON object or file path passed to `agy --settings` |
-| `transport` | `DSH_AGY_TRANSPORT` | `cli` | `cli` (short-lived `-p`) or `acp` (persistent `agy acp` stdio session pool with automatic pre-stream CLI fallback) |
+| `transport` | `DSH_AGY_TRANSPORT` | `cli` | `cli` runs one-shot `agy -p` per turn (background work dies with the process); `acp` keeps one persistent `agy acp` process per account and session, so background commands, subagents and timers keep running after a turn ends and report back on their own. Opt-in: `/agy config transport acp`, `/agy transport acp` or the settings page switch it at runtime. A pre-stream ACP failure and a no-output ACP turn fall back to `cli` automatically |
 | `syncAccountCustomizations` | `DSH_AGY_SYNC_CUSTOMIZATIONS` | `true` | Mirror primary `plugins`, `skills`, `rules`, `agents`, and MCP config into isolated pool accounts (credentials/keychains never touched) |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | `''` (session cwd) | Workspace root passed to agy |
 
@@ -42,7 +42,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `maxTurnMinutes` | `DSH_AGY_MAX_TURN_MINUTES` | `0` | Hard wall-clock cap per turn (0 = unlimited); bounds a self-driving turn that never goes idle |
 | `longToolIdleMinutes` | `DSH_AGY_LONG_TOOL_IDLE_MINUTES` | `240` | Idle budget while a tool step is open; `0` keeps `timeoutMs` so wedged tools fail fast |
 | `idleGraceMinutes` | `DSH_AGY_IDLE_GRACE_MINUTES` | `10` | Grace before the `root agent idle; waiting for N background task(s)` reaper kills the agy tree; `0` disables the reaper (the activity watchdog and `maxTurnMinutes` still bound the turn) |
-| `backgroundWakeup` | `DSH_AGY_BACKGROUND_WAKEUP` | `false` | Opt-in. When on, wake idle DSH sessions across turns as a one-shot `schedule` timer expires, a detached task/subagent finishes, or a persistent ACP session emits a background completion update. Off by default because a session that speaks on its own after the turn is a behaviour change every user has to ask for; enable it in Settings → Runtime controls, with `/agy config wakeup on`, or with `DSH_AGY_BACKGROUND_WAKEUP=1` |
+| `backgroundWakeup` | `DSH_AGY_BACKGROUND_WAKEUP` | `false` | Opt-in. When on, idle DSH sessions wake across turns when a one-shot `schedule` timer expires, a detached task/subagent finishes, or a persistent ACP session emits a background completion update. Enable with the settings switch, `/agy config wakeup on`, or `DSH_AGY_BACKGROUND_WAKEUP=1` |
 | `backgroundWakeupTtlMinutes` | `DSH_AGY_BACKGROUND_WAKEUP_TTL_MINUTES` | `30` | Max window (minutes, 1–240) to keep post-turn background watches and one-shot `schedule` timers alive |
 | `backgroundWakeupMaxPerSession` | `DSH_AGY_BACKGROUND_WAKEUP_MAX_PER_SESSION` | `12` | Max automatic background wakeups per session between human turns (1–100) |
 | `dispatchTimeoutMinutes` | `—` | `15` | Cap on waiting for the Windows credential slot before backing off and retrying; `0` waits indefinitely |
@@ -92,7 +92,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `proxyUrl` | `DSH_AGY_PROXY_URL` | `''` | Global proxy for agy processes; per-account proxies take precedence |
 | `quotaPollIntervalMs` | `DSH_AGY_QUOTA_POLL_INTERVAL_MS` | `3600000` | Background quota poll interval (minimum 60 s) |
-| `quotaViaCli` | `DSH_AGY_QUOTA_VIA_CLI` | `true` | Prefer the agy CLI path for quota queries. The CLI is only spawned once the account's access token has at least two minutes of life left (refreshed up front when it does not); otherwise that round falls back to the REST quota endpoint |
+| `quotaViaCli` | `DSH_AGY_QUOTA_VIA_CLI` | `true` | Prefer the agy CLI path for quota queries |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in weekly-quota warmup |
 | `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | Models used for warmup probes |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refresh agy's update-check timestamp before every spawn to stop the `--bg-updater` console flash chain |

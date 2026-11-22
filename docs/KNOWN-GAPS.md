@@ -38,6 +38,40 @@ Deliberate v1 boundaries and upstream-behavior notes.
     the wrong account when the primary cannot be verified.
   - Cross-process coordination uses an atomic lockfile (`acquireCrossProcessSlotLock`) alongside the in-process mutex so concurrent local hosts (`dsh web` + `dsh-agy-image` CLI) serialize slot transitions cleanly.
 
+## ACP transport (opt-in)
+
+`agy acp` is a long-lived JSON-RPC process per account and session. It stays
+opt-in: `transport` defaults to `cli`, and you switch with
+`/agy config transport acp` or Settings → Runtime controls. That is what
+makes background work survive a turn: a `run_command`, an `invoke_subagent` or a
+`schedule` timer keeps running inside the process after `session/prompt` returns
+and pushes its result later as `tool_call_update` / `agent_message_chunk`.
+
+- **Only `pending` / `in_progress` at turn end counts as background work.** ACP
+  never reports `RUNNING`; the CLI's flag does not exist here. A tool call whose
+  final update already arrived (`completed` / `failed` / `cancelled`) is NOT
+  reported, so a finished job cannot produce a spurious wakeup.
+- **Autonomous reports are presented, not re-run (scheme A).** agy's own
+  post-turn text is merged over a short silence window (700 ms after the last
+  chunk, 350 ms after `usage_update`) and written into the transcript as a
+  plugin record, which the chat renders as a card. No extra turn, no extra
+  quota. Two exceptions still wake the session with a real turn: an armed Goal
+  (it must advance) and a silent completion with no text at all.
+- **A session that cannot be restored is rebuilt, never silently emptied.**
+  `session/load` succeeds even for an id that does not exist, so a restore only
+  counts when the server actually replayed events or reported cached reads.
+  Otherwise the binding is dropped, the full history digest is delivered to a
+  fresh session, and the transcript shows a reset notice.
+- **A turn with no output is a failure, not an empty success.** The per-process
+  `--log-file` slice is classified (network / auth) before falling back to
+  `cli -p`, so a dead proxy can no longer look like a completed turn.
+- **One credential slot, three guards.** The slot document's `id_token_email`
+  is checked before a fast path and after every install; the identity agy
+  prints in its own log (`applyAuthResult: email=...`) is verified after the
+  process starts, with one reinstall-and-retry; and the primary credential is
+  re-asserted once a drained secondary process exits. A process that still
+  reports the wrong account is refused instead of billing it.
+
 ## Credential injection: what agy actually supports (verified 2026-10-17)
 
 The clean fix for the Windows boundary above would be per-process credential

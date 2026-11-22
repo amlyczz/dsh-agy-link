@@ -247,6 +247,15 @@ export const en: AgyDictionary = {
   'tsl.failed': 'Translation failed',
   'tsl.retry': 'Retry',
   'tsl.empty': 'Nothing to translate',
+  'acp.reportBadge': 'agy background report',
+  'acp.reportHint': 'Pushed by agy · no extra turn spent',
+  'acp.drainBadge': 'agy background task stopped',
+  'acp.resetBadge': 'agy session rebuilt',
+  'acp.resetText':
+    'The persistent ACP session was reset (agy could not find it any more); a new session was created and the conversation history was carried over.',
+  'acp.drainText':
+    'Background tasks on the previous account were stopped because the credential slot switched accounts.',
+  'acp.noticeHint': 'agy channel notice',
   'tsl.collapse': 'Collapse',
   'tsl.expand': 'Expand',
 }

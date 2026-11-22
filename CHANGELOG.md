@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.60 (2026-11-22)
+
+### English
+
+- **The persistent ACP channel is hardened end to end, and it stays opt-in.**
+  - **Usage accounting is honest under ACP (issue #158).** agy's `usage_update` only carries `{ used, size }` — a context-occupancy figure, not a token sample. Promoting it to `{inputTokens: used, outputTokens: 0}` shadowed the real `PromptResponse.usage`, which zeroed the cache-hit rate and the token speed and inflated the uncached input count. It is now recorded separately (`lastContextUsed`) and a step sample only wins over the result envelope when it carries an output/cache/thinking breakdown.
+  - **No more placeholder `0/0` usage.** A tool cut or a failed turn with no measurement omits the usage chunk instead of sending zeros, so DSH keeps the previous context pressure and does not count the step towards decode time. When no step reports output tokens, token speed falls back to the envelope's own output count over the run's wall clock instead of showing 0 tok/s.
+  - **The transport default is still `cli`.** ACP keeps one `agy acp` process per account and session, so background commands, subagents and timers survive the end of a turn — but switching every install's transport by default is a behaviour change an upgrade did not ask for. Turn it on with `/agy config transport acp`, `/agy transport acp`, `DSH_AGY_TRANSPORT=acp`, or the settings page; a pre-stream failure and a no-output turn fall back to `cli -p` automatically.
+  - **Background wakeup is opt-in too.** `backgroundWakeup` now defaults to `false`; enable it with the settings switch, `/agy config wakeup on`, or `DSH_AGY_BACKGROUND_WAKEUP=1`.
+  - **Background work is detected by the status ACP actually reports.** ACP never sends `RUNNING`; a tool call still `pending`/`in_progress` when the turn ends is background work, and a call whose terminal update already arrived is never reported twice. A session that only holds a `schedule` timer now stays retained too, so the timer cannot be reaped by pool eviction.
+  - **Autonomous reports are presented instead of re-run (scheme A).** Post-turn `agent_message_chunk` text is merged over a silence window (700 ms after the last chunk, 350 ms after `usage_update`) and written into the transcript as a plugin record rendered as a card — no extra turn, no extra quota, no duplicate wakeup racing a `tool_call_update`. Only an armed Goal or a silent (text-free) completion still wakes the session.
+  - **Session restore is proven, not assumed.** `session/load` succeeds for ids that do not exist, so a restore now requires replayed events or cached-read tokens; otherwise the binding is dropped, the full history digest is delivered to a new session, and the transcript shows a reset notice.
+  - **Empty turns and dead proxies are failures.** Each turn records a stderr offset and a `--log-file` offset before prompting; a turn that emits nothing is classified from that slice only (network / auth) and, when nothing was produced, the process is discarded and the turn retried on `cli -p`.
+  - **Windows credential-slot guards.** The slot document's `id_token_email` is verified before the fast path and after every install; the identity agy prints in its own log is checked after the process starts (one reinstall-and-retry, then a hard refusal); pool eviction drains processes that still own background sessions instead of killing them. `/plugins/agy-link/status` reports `drainingProcesses`, `slotOverwriteDetectedCount` and `lastSlotRecoveryAt`.
+
+### 中文
+
+- **ACP 常驻链路全面加固，但保持 opt-in（默认仍走 CLI）。**
+  - **ACP 下的用量统计恢复真实（issue #158）**：agy 的 `usage_update` 只带 `{ used, size }`，那是上下文占用而不是 token 样本；把它当成 `{inputTokens: used, outputTokens: 0}` 会顶掉真实的 `PromptResponse.usage`，导致缓存命中率与输出速度长期为 0、未命中 token 虚高。现在它单独记录为 `lastContextUsed`，只有带 output/cache/thinking 分项的样本才会优先于 result 信封。
+  - **不再发占位的 0/0 用量**：工具切步或失败回合没有测量值时直接省略 usage 块，DSH 会沿用上一次的上下文压力、也不把该步计入解码时间；整轮都没有 output 样本时，输出速度改用 result 信封的输出量除以实际耗时，不再显示 0 tok/s。
+  - **传输默认仍是 `cli`**：ACP 会为每个账号与会话保留一个 `agy acp` 进程，后台命令、子代理与定时器因此能跨回合存活——但把所有人的传输方式默认换掉，是升级不该强加的行为变化。需要时用 `/agy config transport acp`、`/agy transport acp`、`DSH_AGY_TRANSPORT=acp` 或设置页开启；启动失败与零产出回合会自动回退 `cli -p`。
+  - **后台唤醒同样是 opt-in**：`backgroundWakeup` 默认改为 `false`，用设置页开关、`/agy config wakeup on` 或 `DSH_AGY_BACKGROUND_WAKEUP=1` 开启。
+  - **按 ACP 真实状态识别后台任务**：ACP 从不发送 `RUNNING`；回合结束时仍是 `pending`/`in_progress` 的工具才算后台任务，已收到终态更新的工具不会重复上报。仅有 `schedule` 定时器的会话现在也会保留，不再被池淘汰回收。
+  - **自主汇报直接呈现，不再重复跑一轮（方案 A）**：回合后的 `agent_message_chunk` 文本按静默窗口合并（末片后 700ms，或 `usage_update` 后 350ms），作为插件记录写入会话并由聊天渲染成卡片——不额外消耗回合与额度，也不会和 `tool_call_update` 撞车重复唤醒。只有已武装 Goal 或完全无文本的静默完成才真正唤醒会话。
+  - **会话恢复必须被证明**：`session/load` 对不存在的 ID 也会成功，因此只有回放了事件或上报了缓存读取才算恢复；否则丢弃绑定、把完整历史摘要投递给新会话，并在会话里显示重置提示。
+  - **空回合与断网都算失败**：每轮 prompt 前记录 stderr 偏移与 `--log-file` 偏移，零产出回合只用本轮切片分类（网络/认证）；确实零产出时销毁坏进程并用 `cli -p` 重跑。
+  - **Windows 凭据槽门禁**：槽文档里的 `id_token_email` 在快路径前与每次安装后都会核对；进程启动后核对 agy 自己日志里的身份（一次重装重试，仍不符则硬失败）；池淘汰改为排干仍持有后台会话的进程。`/plugins/agy-link/status` 新增 `drainingProcesses`、`slotOverwriteDetectedCount`、`lastSlotRecoveryAt`。
+
 ## 0.6.59 (2026-11-22)
 
 ### English

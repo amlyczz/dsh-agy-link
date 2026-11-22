@@ -413,7 +413,10 @@ test('a Stop mid-flight marks the binding interrupted and the next prompt carrie
   const prevMode = process.env.FAKE_AGY_MODE
   const prevDelay = process.env.FAKE_AGY_DELAY_MS
   process.env.FAKE_AGY_MODE = 'slow-init'
-  process.env.FAKE_AGY_DELAY_MS = '300'
+  // Wide enough that the abort always lands BEFORE the fake result: at 300ms a
+  // coverage-instrumented run could spawn, stream, and finish inside the window,
+  // which wrote a successful (non-interrupted) binding and made this flake.
+  process.env.FAKE_AGY_DELAY_MS = '3000'
   const { adapter, store } = makeAdapter()
   const ctrl = new AbortController()
   const iter = adapter.stream(opts([msg('user', 'FIRST-QUESTION')], { sessionId: 'sess-abort' as never, signal: ctrl.signal }))[Symbol.asyncIterator]()
@@ -424,13 +427,7 @@ test('a Stop mid-flight marks the binding interrupted and the next prompt carrie
   } finally {
     try { while (!(await iter.next()).done) { /* drain the aborted stream */ } } catch { /* aborted streams may reject */ }
   }
-  // Wait for the FLAG, not for "any binding": the binding row is written when the
-  // run starts, so under load this read the pre-abort snapshot and the assertion
-  // raced the finalize write (flaked in full-suite runs).
-  const binding = await waitFor(() => {
-    const b = store.get('sess-abort')
-    return b?.interrupted === true ? b : undefined
-  })
+  const binding = await waitFor(() => store.get('sess-abort'))
   assert.equal(binding.interrupted, true, 'an interrupted turn must be flagged so the next prompt can say so')
 
   // Next turn: the boundary must precede the newest request, otherwise agy's

@@ -54,6 +54,19 @@ export function isToolResultMessage(m: Message): boolean {
   )
 }
 
+/**
+ * Source kind used by the memory plugin (dsh-mnemon) for the snapshots it
+ * injects as `role: 'user'`. Such a snapshot is not harness telemetry — it must
+ * ride along with the turn — but it must never become the turn's task text.
+ */
+const MEMORY_SNAPSHOT_SOURCE_KIND = 'dsh-mnemon'
+
+/** The message's source.kind, when it declares one. */
+function sourceKindOf(m: Message): string | undefined {
+  const kind = (m as unknown as ForeignSource).source?.kind
+  return typeof kind === 'string' ? kind : undefined
+}
+
 /** Flatten visible text, including nested tool-result payloads. */
 export function textOf(m: Message): string {
   if (typeof m.content === 'string') return m.content
@@ -100,6 +113,19 @@ export function isForeignAssistant(m: Message, currentConvId?: string): boolean 
  * or reminder block, causing agy to completely ignore the user's latest input
  * (e.g. session-c65a826e where 42 time samples were appended).
  */
+/** The record dsh-agy-link appends for an ACP report the agent wrote itself. */
+export const ACP_REPORT_SOURCE_KIND = 'plugin:agy-link/acp-report'
+
+/**
+ * True for the 方案 A card: agy's own post-turn narration, written into the
+ * transcript as a plugin record. It is not harness noise — it is the agent's
+ * words about work that finished after the turn — so the digest keeps it.
+ */
+export function isAcpReportMessage(m: Message): boolean {
+  const kind = (m as unknown as ForeignSource).source?.kind
+  return kind === ACP_REPORT_SOURCE_KIND
+}
+
 export function isSyntheticHarnessMessage(m: Message): boolean {
   if (isToolResultMessage(m)) return false
   const src = (m as unknown as ForeignSource).source
@@ -119,6 +145,10 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
     ) {
       return true
     }
+    // An ACP report is the agent's own narration of background work that
+    // finished after the turn; dropping it would hide the outcome from a later
+    // context rebuild (session reset / CLI fallback).
+    if (kind === ACP_REPORT_SOURCE_KIND) return false
     // Each DSH context producer names its own kind (`plugin:memory`,
     // `plugin:recall`, …) — dsh-llm has no shared catch-all `plugin` kind.
     if (kind.startsWith('plugin:')) return true
@@ -162,6 +192,11 @@ export function latestUserTaskText(messages: readonly Message[]): string {
     if (m === undefined) continue
     if (isSyntheticHarnessMessage(m)) continue
     if (isToolResultMessage(m) || m.role === 'assistant' || m.role === 'system') continue
+    // A memory-plugin snapshot arrives as role:user and is not marked
+    // synthetic, so it would otherwise displace the real task text. Skip it
+    // HERE only: isSyntheticHarnessMessage must keep it (the snapshot has to
+    // ride along with the first turn, issue #158).
+    if (sourceKindOf(m) === MEMORY_SNAPSHOT_SOURCE_KIND) continue
     if (m.role === 'user') {
       return textOf(m).trim()
     }
@@ -267,6 +302,9 @@ function collectMediaRefs(m: Message, out: MediaRefLike[]): void {
 
 function digestLabel(m: Message): string {
   if (isToolResultMessage(m)) return 'Tool result: '
+  // Label it as background narration so a later turn does not mistake it for a
+  // reply to whatever the user asked in the meantime.
+  if (isAcpReportMessage(m)) return 'Assistant (background report): '
   return m.role === 'user' ? 'User: ' : 'Assistant: '
 }
 
