@@ -279,6 +279,13 @@ export class RunRecording {
    * The usage to report for the result envelope: the last per-call step sample
    * when it actually carries a token breakdown, otherwise the envelope's own
    * usage (issue #158).
+   *
+   * The sample is only preferred when it reports output / cache / thinking
+   * tokens. A sample that carries nothing but an input figure is a context
+   * occupancy reading, not a usage sample: agy's ACP `usage_update` sends
+   * `{ used, size }`, and promoting that to `{inputTokens: used, outputTokens: 0}`
+   * used to shadow the real `PromptResponse.usage` (0% cache hit, 0 tok/s,
+   * inflated uncached input — issue #158).
    */
   finalUsage(resultRaw: RawUsage): RawUsage {
     const step = this.lastStepUsageRaw

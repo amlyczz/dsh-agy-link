@@ -58,9 +58,13 @@ export function buildToolCallBlock(input: ToolCallBlockInput): ToolCallBlockResu
       })
   const rawCallId = mirrorCallId(input.runId, input.absIndex)
   const assignedCallId = rememberToolCallId(input.toolCallStates, rawCallId, toolName)
-  // Forward the unconsumed per-call usage sample once; omit `{ type: 'usage' }`
-  // completely on concurrent tool cuts 2..N or when no new sample arrived so
-  // DSH neither double-bills totals nor flashes contextPressure to 0% (#158, #161).
+  // Forward the last per-call sample when there is one. With no sample the
+  // usage chunk is OMITTED rather than sent as 0/0: DSH treats a missing
+  // usage chunk as "no new measurement" (it keeps the previous context
+  // pressure and does not count the step towards decode time), while an
+  // explicit 0/0 resets the meter and drags token speed down (issue #158).
+  // Concurrent tool cuts 2..N of the same turn therefore forward no sample at
+  // all, so DSH neither double-bills totals nor flashes context pressure (#161).
   const trackedCut = input.finalUsage()
   const chunks: StreamChunk[] = [
     { type: 'block-start', index: idx, blockType: 'tool-call' },

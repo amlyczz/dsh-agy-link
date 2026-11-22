@@ -39,8 +39,7 @@ export interface AcpStreamState {
   /**
    * Latest context-window occupancy from `usage_update`. Diagnostic only: it
    * never reaches DSH's token meter, because "context used" is not "tokens
-   * billed this call" (issue #158).
-   */
+   * billed this call" (issue #158).   */
   lastContextUsed: number
   toolArgsByCallId: Map<string, { name: string; args: unknown }>
 }
@@ -174,9 +173,15 @@ export function acpUpdateToAgyEvents(
     // Only populate state.lastUsage when the update actually includes detailed
     // token breakdowns; agy 1.5.x only sends `{ used, size }` here (#158).
     const detailed = acpUsageToRawUsage(update)
-    const snakeCached = num(update.cached_read_tokens)
-    if (snakeCached !== undefined && detailed.cache_read_tokens === undefined) {
-      detailed.cache_read_tokens = snakeCached
+    // A cache-read or output count, when a future agy version does send one,
+    // still counts as a real sample. Both spellings are accepted.
+    const cachedRead = num(update.cachedReadTokens) ?? num(update.cache_read_tokens)
+    if (cachedRead !== undefined && detailed.cache_read_tokens === undefined) {
+      detailed.cache_read_tokens = cachedRead
+    }
+    const outputTokens = num(update.outputTokens) ?? num(update.output_tokens)
+    if (outputTokens !== undefined && detailed.output_tokens === undefined) {
+      detailed.output_tokens = outputTokens
     }
     if (
       detailed.output_tokens !== undefined ||
@@ -185,8 +190,7 @@ export function acpUpdateToAgyEvents(
       detailed.thinking_tokens !== undefined
     ) {
       state.lastUsage = { ...state.lastUsage, ...detailed }
-    }
-    return []
+    }    return []
   }
   if (kind === 'tool_call' || kind === 'tool_call_update') {
     const callId = typeof update.toolCallId === 'string' && update.toolCallId !== '' ? update.toolCallId : `acp-tc-${Date.now()}`

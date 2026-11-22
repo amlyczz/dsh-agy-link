@@ -150,3 +150,34 @@ test('readAgyUsage never throws and returns null when binary is missing or fails
   })
   assert.equal(result, null)
 })
+
+// issue #169: the CLI /usage path must use the SAME Argon rule as the REST
+// summary path fixed in #130/#131 — a shared "Gemini Models" group whose
+// DESCRIPTION merely enumerates "Gemini 4 Argon" is not a dedicated pool.
+test('issue #169: a shared Gemini group is not argon just because its description lists Argon', () => {
+  const shared: AgyUsageGroup[] = [{
+    name: 'Gemini Models',
+    description: 'Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Orchestrator (Neon), Orchestrator (Argon), Gemini 3.8 Flash',
+    buckets: [
+      { id: 'gemini-weekly', window: 'weekly', remainingFraction: 0.9963 },
+      { id: 'gemini-5h', window: '5h', remainingFraction: 0.9853 },
+    ],
+  } as never]
+  const families = usageGroupsToFamilies(shared as never)
+  assert.ok(families.google, 'the shared group must land in the google family')
+  assert.equal(families.argon, undefined, 'it must NOT be written into the argon family')
+})
+
+test('issue #169: a real dedicated Argon group is still recognised', () => {
+  const dedicated: AgyUsageGroup[] = [{
+    name: 'Gemini 4 Argon',
+    description: 'Models within this group: Gemini 4 Argon',
+    buckets: [{ id: 'argon-weekly', window: 'weekly', remainingFraction: 0.5 }],
+  } as never]
+  assert.ok(usageGroupsToFamilies(dedicated as never).argon, 'by group name')
+  const byBucket: AgyUsageGroup[] = [{
+    name: 'Some pool',
+    buckets: [{ id: 'argon-5h', window: '5h', remainingFraction: 0.5 }],
+  } as never]
+  assert.ok(usageGroupsToFamilies(byBucket as never).argon, 'by bucket id')
+})

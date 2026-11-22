@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.63 (2026-11-22)
+## 0.6.64 (2026-11-22)
 
 ### English
 
@@ -12,7 +12,7 @@
 - **只有 Flash 的付费套餐不再被误标成 Free。** 之前只要 Gemini 分组描述里只有「Flash」就判 Free，可该账号明明有 5 小时窗口——Free 是「只有周额度」，**有 5 小时窗口就是付费**。现在按每个档位的定义性证据判定：Argon 独立成桶 ⇒ Pro；Argon 折进共享的 Gemini 分组 ⇒ Ultra；有任何 5 小时窗口 ⇒ Pro；只有周额度 ⇒ Free。若已存档位丢失了它自己的定义性证据（5 小时账号标着 Free、或完全没有 Argon 却标着 Ultra），判为陈旧并重算；而从 CLI 分组里正确识别出的 Pro/Ultra 不会被更弱的探测降级。开机时与每次配额更新都会纠正。
 - **重复 Google 账号可见。** 同一个账号可能在池里出现两次（主账号 + 隔离副本，或重复添加），两者共享**同一份配额与同一份凭据身份**，于是容量被算成两倍、Windows 凭据槽在两行同一个人之间反复改写。现在有兄弟账号的卡片会显示 **重复** 徽标并列出其它别名，开机整洁日志会告警，`/agy doctor` 会列出所有重复组。
 
-## 0.6.62 (2026-11-22)
+## 0.6.63 (2026-11-22)
 
 ### English
 
@@ -28,7 +28,7 @@
 - **Windows 代理环境变量不再大小写重复。** 把 `HTTPS_PROXY` 写在继承来的 `https_proxy` 旁边，会让每个子进程的环境块出现两个仅大小写不同的键，导致 PowerShell 的 `env:` 提供程序报「已添加了具有相同键的项」、`Start-Process` 直接失败。Windows 现在收敛为单个大写键（其环境变量查询本就大小写不敏感），POSIX 仍保留两种拼写。配置代理时会自动把 `127.0.0.1`、`localhost`、`::1` 加入 `NO_PROXY`，MCP 桥接、媒体路由与 OAuth 回调不再走代理。
 - **`/agy doctor` 报告启动开销。** 报告新增 MCP 注册表清单（每次 agy 启动都会 fork 全部）、`@latest` 未锁定版本条目（每次启动都要重新解析 npm 版本，约 1.4 s）、陈旧 presence 锁数量，以及有隔离 home 的账号数。
 
-## 0.6.61 (2026-11-22)
+## 0.6.62 (2026-11-22)
 
 ### English
 
@@ -42,59 +42,53 @@
 - **点名字即可重命名。** 去掉独立的「重命名」按钮：账号卡片标题里的名称本身就是编辑入口（点击，或聚焦后按 Enter/空格，即展开行内输入框），名称的 tooltip 同时提示可重命名。
 - **重新登录按钮常驻。** 「重新登录」不再只在认证失败后才出现——所有账号都会显示，便于对健康账号主动重新认证、换绑 Google 身份，或刷新被服务端吊销的 token；真正需要认证的账号仍保持高亮主按钮样式。
 
+## 0.6.61 (2026-11-22)
+
+### English
+
+- **Fix(quota): the CLI `/usage` path now uses the same Argon rule as the REST summary path (fixes #169).** v0.6.38 taught the summary chain that a dedicated Argon pool is proven only by the group **name** or a bucket id — a shared `Gemini Models` group merely *enumerates* its members ("… Gemini 4 Argon …") in its description. The **CLI** mapping (`usageGroupsToFamilies`) was missed by that fix and still matched `desc.includes('argon')`, so on the default `quotaViaCli` path the whole Gemini pool was written into the `argon` family: `google` froze at an old snapshot, an extra Argon bar appeared, chatting with Gemini 4 Neon drained *Argon*, and `dedicatedGroups: ["argon"]` poisoned account selection and the cooldown gate. Both paths now agree, and a real dedicated Argon group (by name or `argon-*` bucket) is still recognised.
+- Also widened one timing guard in `test/proxy-keychain.test.ts` (`durationMs < 2000` → a bound that only distinguishes "fired on the 400ms budget" from "fired on the 15-minute idle budget"). It was measuring machine load: a saturated host reported 9.7s while `timedOut` stayed correct.
+
+### 中文
+
+- **修复(配额)：CLI `/usage` 路径改用与 REST summary 路径相同的 Argon 判据（修复 #169）。** v0.6.38 已让 summary 链路认识到：**独立 Argon 池只由组名或 bucket id 证明**——共享的 `Gemini Models` 组只是在 description 里*枚举*成员（"… Gemini 4 Argon …"）。但那次修复**漏了 CLI 侧的映射**（`usageGroupsToFamilies`），它仍匹配 `desc.includes('argon')`，于是在默认的 `quotaViaCli` 路径上整个 Gemini 池被写进 `argon` 族：`google` 冻结在旧快照、多出一条 Argon 条、用 Gemini 4 Neon 聊天却掉 Argon 的额度、`dedicatedGroups: ["argon"]` 还会污染选号与冷却闸门。现在两条路径判据一致，且真实独立 Argon 组（按组名或 `argon-*` bucket）仍能识别。
+- 顺带放宽了 `test/proxy-keychain.test.ts` 里一处时序断言（`durationMs < 2000` → 只区分「按 400ms 预算触发」还是「按 15 分钟空闲预算触发」）。它实际在测机器负载：饱和的宿主上报了 9.7 秒，而 `timedOut` 始终正确。
+
 ## 0.6.60 (2026-11-22)
 
 ### English
 
-- **The persistent ACP channel is hardened end to end, and it stays opt-in.**
-  - **Usage accounting is honest under ACP (issue #158).** agy's `usage_update` only carries `{ used, size }` — a context-occupancy figure, not a token sample. Promoting it to `{inputTokens: used, outputTokens: 0}` shadowed the real `PromptResponse.usage`, which zeroed the cache-hit rate and the token speed and inflated the uncached input count. It is now recorded separately (`lastContextUsed`) and a step sample only wins over the result envelope when it carries an output/cache/thinking breakdown.
-  - **No more placeholder `0/0` usage.** A tool cut or a failed turn with no measurement omits the usage chunk instead of sending zeros, so DSH keeps the previous context pressure and does not count the step towards decode time. When no step reports output tokens, token speed falls back to the envelope's own output count over the run's wall clock instead of showing 0 tok/s.
-  - **The transport default is still `cli`.** ACP keeps one `agy acp` process per account and session, so background commands, subagents and timers survive the end of a turn — but switching every install's transport by default is a behaviour change an upgrade did not ask for. Turn it on with `/agy config transport acp`, `/agy transport acp`, `DSH_AGY_TRANSPORT=acp`, or the settings page; a pre-stream failure and a no-output turn fall back to `cli -p` automatically.
-  - **Background wakeup is opt-in too.** `backgroundWakeup` now defaults to `false`; enable it with the settings switch, `/agy config wakeup on`, or `DSH_AGY_BACKGROUND_WAKEUP=1`.
-  - **Background work is detected by the status ACP actually reports.** ACP never sends `RUNNING`; a tool call still `pending`/`in_progress` when the turn ends is background work, and a call whose terminal update already arrived is never reported twice. A session that only holds a `schedule` timer now stays retained too, so the timer cannot be reaped by pool eviction.
-  - **Autonomous reports are presented instead of re-run (scheme A).** Post-turn `agent_message_chunk` text is merged over a silence window (700 ms after the last chunk, 350 ms after `usage_update`) and written into the transcript as a plugin record rendered as a card — no extra turn, no extra quota, no duplicate wakeup racing a `tool_call_update`. Only an armed Goal or a silent (text-free) completion still wakes the session.
-  - **Session restore is proven, not assumed.** `session/load` succeeds for ids that do not exist, so a restore now requires replayed events or cached-read tokens; otherwise the binding is dropped, the full history digest is delivered to a new session, and the transcript shows a reset notice.
-  - **Empty turns and dead proxies are failures.** Each turn records a stderr offset and a `--log-file` offset before prompting; a turn that emits nothing is classified from that slice only (network / auth) and, when nothing was produced, the process is discarded and the turn retried on `cli -p`.
-  - **Windows credential-slot guards.** The slot document's `id_token_email` is verified before the fast path and after every install; the identity agy prints in its own log is checked after the process starts (one reinstall-and-retry, then a hard refusal); pool eviction drains processes that still own background sessions instead of killing them. `/plugins/agy-link/status` reports `drainingProcesses`, `slotOverwriteDetectedCount` and `lastSlotRecoveryAt`.
-- **Cross-turn background wakeup (merges PRs #162, #163, #164, opt-in).** One-shot `schedule` timers, detached background tasks/subagents, and retained ACP sessions can wake the DSH session when finished (`backgroundWakeup: false` by default).
-- **Concurrent multi-tool & single-span usage accounting (fixes #161).** Parallel tool cuts 2..N now omit duplicate `{ type: 'usage' }` chunks (preventing N× token over-billing and 0% context-pressure flashes), and multiple internal LLM calls inside one span take the latest prompt occupancy while summing output/thinking tokens; ACP also tails incremental `transcript.jsonl` usage samples.
-- **Translation card session-anchor fix.** `plugin:agy-link/translation` records now store `turn: null` + `sourceTurn` and project with `location: { kind: 'session' }` + `groupTree: 'turn'`, preventing older-turn translations from hijacking DSH's `currentTurn`, disappearing into 0-tool process groups, or disrupting replies below.
-- **Free-account real weekly quotas, Plan Tier badges & `SSH_CONNECTION` isolation (fixes #143, #145, #152 part 2).**
-  - Isolated pool accounts inject `SSH_CONNECTION` for `agy >= 1.5`, bypassing the shared Windows Credential Manager / OS keyring for lock-free multi-account concurrency and CLI `/usage` polling on isolated & free (`no_summary_access`) accounts.
-  - Free-account `3p-5h` epoch-zero (`1970-01-01`) placeholder buckets are ignored and weekly-only cards hide the bogus 5-hour row so displayed quotas match reality.
-  - Account cards now display inferred subscription badges (**Free / Pro / Ultra / Enterprise**).
-  - Optional `respectExternalSignIn` protects newer standalone `agy` logins in the Windows credential slot before and during leases (#145); re-authenticating the primary with a different Google email resets stale custom aliases (#152 part 2).
-- **Reverse MCP Bridge 4x hardening.** Adds `_meta: { 'antigravity/alwaysLoad': true }`, 18,000-token budget description trimming (preventing `agy`'s 20k tool drops), JS-to-Go-RE2 `pattern` translation, `$ref`/`allOf`/`anyOf`/`const`/empty-enum/array flattening, and native MCP image content blocks.
-- **Prompt cache, anti-429 cloak & stream resilience.** Normalizes model-slug binding checks, forwards `System instructions` once on Turn 1 (avoiding per-turn prefix churn), adds meaning-preserving DSH/Codex system-prompt cloaking (`cloakSystemPrompt`), strips leaked `agy` retry/cut-off boilerplate, classifies low AI credits as hard `RATE_LIMIT`, adds same-session ACP warm self-heal for empty/invalid output turns, and hardens compaction against parent 429 deadlocks.
-- **ACP spare pre-warm, native inline images & advanced 5h/daily/interval warmup.** Adds `AcpSessionPool.warmSpare`, native ACP `image` prompt blocks when advertised, and extends `WarmupService` with 5-hour rolling windows, IANA-timezone daily schedules, fixed-interval triggers, Antigravity sliding-idle reset detection, and a 50-entry audit history.
-- **Expanded `/agy` slash commands & ecosystem bridge filtering.** Adds live `btw` progress, enhanced `/agy goal` idempotency, and workspace-aware slash context.
-- **Eliminate false-positive `Error: unknown tool "agy_tool"` errors.** `AgyAdapter` / `EventMapper` now check `agy_tool` liveness dynamically (respecting plugin disposal order, `tools` service availability, and per-agent `tools.restrict` visibility) before emitting mirror tool cuts; historical or reload-boundary `unknown tool "agy_tool"` results are scrubbed in history digests and rendered as non-error reload notices instead of red tool failures.
+- **Fix(acp): report the real token usage instead of the context-window figure (merges PR #165, fixes #158).** agy 1.5.x's `usage_update` carries only `{ used, size }` — a context-window occupancy figure, **not** a usage sample. Writing `used` into `input_tokens` made the run's final usage `{ inputTokens: used, outputTokens: 0 }`, which zeroed the cache-hit rate and the token speed and inflated the uncached input count (multi-step runs accumulated 10M+). `used` is now recorded as a diagnostic-only `lastContextUsed` and never promoted to a usage sample; a future update that really carries cache-read/output counts is still honoured. 178 lines of new tests.
+- **Feat(wakeup): cross-turn background wakeup, opt-in (merges PR #164, supersedes #156).** When an agy `schedule` timer, a detached task/subagent, or a persistent ACP update finishes **after** the turn returned, an idle DSH session can now be woken with a followup prompt. Three slices in one PR: keep one-shot `schedule` timers alive across turns, wake on detached task/message/subagent completion, and keep an ACP session alive while its background work runs.
+  - **It is off by default** (`backgroundWakeup: false`): a session that speaks on its own after the turn is a behaviour change every user has to ask for. Turn it on in Settings → Runtime controls, with `/agy wakeup <on|off|status>`, or `DSH_AGY_BACKGROUND_WAKEUP=1`.
+  - Guardrails: 30-minute TTL, at most 12 wakeups per session between real human turns, archived sessions skipped, an active run blocks the wake, message ids de-duplicated, and language-server restart notices ignored so dead CLI subagents cannot cause retry loops.
 
 ### 中文
 
-- **ACP 常驻链路全面加固，但保持 opt-in（默认仍走 CLI）。**
-  - **ACP 下的用量统计恢复真实（issue #158）**：agy 的 `usage_update` 只带 `{ used, size }`，那是上下文占用而不是 token 样本；把它当成 `{inputTokens: used, outputTokens: 0}` 会顶掉真实的 `PromptResponse.usage`，导致缓存命中率与输出速度长期为 0、未命中 token 虚高。现在它单独记录为 `lastContextUsed`，只有带 output/cache/thinking 分项的样本才会优先于 result 信封。
-  - **不再发占位的 0/0 用量**：工具切步或失败回合没有测量值时直接省略 usage 块，DSH 会沿用上一次的上下文压力、也不把该步计入解码时间；整轮都没有 output 样本时，输出速度改用 result 信封的输出量除以实际耗时，不再显示 0 tok/s。
-  - **传输默认仍是 `cli`**：ACP 会为每个账号与会话保留一个 `agy acp` 进程，后台命令、子代理与定时器因此能跨回合存活——但把所有人的传输方式默认换掉，是升级不该强加的行为变化。需要时用 `/agy config transport acp`、`/agy transport acp`、`DSH_AGY_TRANSPORT=acp` 或设置页开启；启动失败与零产出回合会自动回退 `cli -p`。
-  - **后台唤醒同样是 opt-in**：`backgroundWakeup` 默认改为 `false`，用设置页开关、`/agy config wakeup on` 或 `DSH_AGY_BACKGROUND_WAKEUP=1` 开启。
-  - **按 ACP 真实状态识别后台任务**：ACP 从不发送 `RUNNING`；回合结束时仍是 `pending`/`in_progress` 的工具才算后台任务，已收到终态更新的工具不会重复上报。仅有 `schedule` 定时器的会话现在也会保留，不再被池淘汰回收。
-  - **自主汇报直接呈现，不再重复跑一轮（方案 A）**：回合后的 `agent_message_chunk` 文本按静默窗口合并（末片后 700ms，或 `usage_update` 后 350ms），作为插件记录写入会话并由聊天渲染成卡片——不额外消耗回合与额度，也不会和 `tool_call_update` 撞车重复唤醒。只有已武装 Goal 或完全无文本的静默完成才真正唤醒会话。
-  - **会话恢复必须被证明**：`session/load` 对不存在的 ID 也会成功，因此只有回放了事件或上报了缓存读取才算恢复；否则丢弃绑定、把完整历史摘要投递给新会话，并在会话里显示重置提示。
-  - **空回合与断网都算失败**：每轮 prompt 前记录 stderr 偏移与 `--log-file` 偏移，零产出回合只用本轮切片分类（网络/认证）；确实零产出时销毁坏进程并用 `cli -p` 重跑。
-  - **Windows 凭据槽门禁**：槽文档里的 `id_token_email` 在快路径前与每次安装后都会核对；进程启动后核对 agy 自己日志里的身份（一次重装重试，仍不符则硬失败）；池淘汰改为排干仍持有后台会话的进程。`/plugins/agy-link/status` 新增 `drainingProcesses`、`slotOverwriteDetectedCount`、`lastSlotRecoveryAt`。
-- **跨回合后台唤醒（合并 PR #162、#163、#164，默认关闭 opt-in）**：支持一次性 `schedule` 定时器、后台任务/子代理及常驻 ACP 会话在完成后唤醒 DSH 会话。
-- **并发多工具与单 Span 用量精准统计（修复 #161）**：同一次推理触发 N 个并发工具切步时仅首切上报一次 `usage`（杜绝 N 倍重复计费与压力闪零），单 Span 内多次内部响应取最新上下文占用并累加输出/思考 token；ACP 同时增量读取 `transcript.jsonl` 用量样本。
-- **修复点击翻译后译文消失及下方回复异常**：`plugin:agy-link/translation` 持久记录改为写入 `turn: null` 与 `sourceTurn`，前端以 `location: { kind: 'session' }` + `groupTree: 'turn'` 投影，避免翻译旧回合时劫持 DSH `currentTurn`、被 0 工具折叠组吞掉或打乱后续回复。
-- **免费账号真实周配额、订阅等级标识与 `SSH_CONNECTION` 免锁隔离（修复 #143、#145、#152 第二部分）**：
-  - 隔离池账号在 `agy >= 1.5` 下注入 `SSH_CONNECTION`，三端（含 Windows）绕开全局共享钥匙串，实现无锁并发与隔离/免费账号（`no_summary_access`）官方 `agy -p /usage` 真实配额采集。
-  - 过滤免费账号 `3p-5h` 的 Unix 零时间戳占位桶（`1970-01-01`），仅周配额分组自动隐藏伪造的 5 小时进度条，按实际配额展示。
-  - 账号卡片新增订阅等级徽标（**Free / Pro / Ultra / Enterprise**）。
-  - 新增 `respectExternalSignIn` 在租约前后保护独立 `agy` 登录不被覆盖（#145）；主账号重新授权换绑不同 Google 邮箱时自动重置旧自定义别名（#152 第二部分）。
-- **反向 MCP 桥接四重加固**：自动附加 `_meta: { 'antigravity/alwaysLoad': true }`、18,000 token 安全预算渐进裁剪（防止触发 `agy` 20k 丢工具上限）、JS 到 Go RE2 正则转译与降级、`$ref`/`allOf`/`anyOf`/`const`/空 `enum`/无 `items` 数组展平，以及 MCP 工具返回图片的内容块透传。
-- **消除 `Error: unknown tool "agy_tool"` 误报**：`AgyAdapter` / `EventMapper` 在每次切割工具步骤前动态校验 `agy_tool` 注册与当前 Agent 作用域可见性（兼容 `tools.restrict` 与 PTC 模式），插件卸载时先置位 `pluginDisposing` 再关闭 ACP/注销工具，避免重载窗口切出无效调用；历史及边界竞态产生的 `unknown tool "agy_tool"` 结果在历史摘要与工具卡片中统一降级为中性提示而非标红报错。
-- **缓存命中率提升、DSH 防假 429 改写与流式自愈**：归一化模型 slug 避免同模型变体击穿会话绑定、System Prompt 仅首轮注入、新增保义 DSH/Codex 系统提示词改写（`cloakSystemPrompt`）、剥离 `agy` 流式泄露的重试/截断脏文本、细分 AI 积分不足为硬 `RATE_LIMIT`、新增 ACP 空思考/无效输出同会话热自愈，以及压缩期 429 死循环快速熔断与切号。
-- **ACP 备用进程预热、原生内联图片与 5h/每日/间隔预热升级**：新增 `AcpSessionPool.warmSpare` 消除冷启动、支持 `promptCapabilities.image` 原生内联图片块；`WarmupService` 支持 5 小时滚动窗、IANA 时区每日定时、固定间隔触发、Antigravity 滑动空闲重置点检测与 50 条审计日志。
-- **扩展 `/agy` 命令族与生态同步过滤**：新增 `btw` 实时进度、幂等 `/agy goal` 状态流转与上下文感知命令桥接。
+- **修复(acp)：报告真实的 token 用量，而不是上下文窗口占用（合并 PR #165，修复 #158）。** agy 1.5.x 的 `usage_update` 只携带 `{ used, size }`——这是**上下文窗口占用**，不是用量样本。把 `used` 写进 `input_tokens`，会让该轮最终用量变成 `{ inputTokens: used, outputTokens: 0 }`，于是缓存命中率与输出速度归零、未缓存输入虚高（多步运行可累加到 10M+）。现在 `used` 只作为诊断字段 `lastContextUsed` 记录，绝不提升为用量样本；若未来版本真的携带 cache-read/output 计数，仍会被采纳。新增 178 行测试。
+- **特性(唤醒)：跨轮后台唤醒，可选开启（合并 PR #164，取代 #156）。** 当 agy 的 `schedule` 定时器、游离任务/子代理、或持久 ACP 更新在**回合结束之后**才完成时，空闲的 DSH 会话现在可以被一条 followup prompt 唤醒。一个 PR 内含三片：让一次性 `schedule` 定时器跨轮存活、在游离任务/消息/子代理完成时唤醒、在 ACP 会话仍有后台工作时保活。
+  - **默认关闭**（`backgroundWakeup: false`）：会话在回合结束后自己说话，是每个用户都必须主动要求的行为变更。可在 设置 → 运行时控制、`/agy wakeup <on|off|status>`、或 `DSH_AGY_BACKGROUND_WAKEUP=1` 开启。
+  - 护栏：30 分钟 TTL、每会话在两次真人回合之间最多 12 次唤醒、归档会话跳过、活跃 run 阻止唤醒、消息 id 去重、语言服务器重启通知被忽略（避免死掉的 CLI 子代理引发重试循环）。
+
+## 0.6.60 (2026-11-22)
+
+### English
+
+- **Fix(usage): the ACP transport reports the real token usage again (closes #158).** `agy acp` streams `session/update` with `usage_update` carrying only `{ used, size }` — the context-window occupancy at the end of an internal call, not a measurement of the call. The plugin promoted that number to `input_tokens`, and since a run reports `lastStepUsageRaw ?? resultRaw`, the placeholder shadowed the real `PromptResponse.usage`: the cache-hit rate stayed at 0%, the token speed read 0 tok/s, and the uncached input count was inflated (one multi-step turn could add up to 10M+).
+  - **`src/features/acp/protocol.ts`**: `usage_update` now records `used` in a new diagnostic field `lastContextUsed` and leaves `lastUsage` alone. An update that really carries `outputTokens` / `cachedReadTokens` still counts as a sample.
+  - **`src/host/recording.ts`**: `finalUsage()` prefers the last per-call sample only when it carries a token breakdown (`hasUsageBreakdown()`: output / cache read / cache write / thinking / total). An input-only sample now yields to the envelope, so the per-call-vs-cumulative protection the class was built for still holds.
+  - **Token speed has an honest fallback**: when no step reported output tokens, `speedStats()` measures the envelope's output count over the run's own event span (never below a 500 ms window) instead of reporting 0 tok/s.
+  - **No more placeholder `0/0` usage chunks**: a tool cut or a failed turn with no measurement now omits the usage chunk. DSH reads an absent chunk as "no new measurement", while an explicit `0/0` resets the context meter and drags the speed down.
+- **Regression tests**: `test/usage-acp.test.ts` (11 cases) pins the whole chain — a context reading never rides along on streamed steps, an update with real counts still does, a full ACP turn's final usage equals the `PromptResponse` usage, an input-only sample yields to the envelope, the no-measurement cases emit no chunk, and the speed fallback reports the envelope rate.
+
+### 中文
+
+- **修复(用量)：ACP 传输重新上报真实的 token 用量（关闭 #158）。** `agy acp` 的 `session/update` 里，`usage_update` 只带 `{ used, size }`——那是内部调用结束时的**上下文占用**，不是这次调用的用量。插件曾把它写进 `input_tokens`，而一次运行上报的是 `lastStepUsageRaw ?? resultRaw`，于是这个占位值盖掉了真实的 `PromptResponse.usage`：缓存命中率长期 0%、输出速度显示 0 tok/s、未命中 token 虚高（多步切分可累加到 10M+）。
+  - **`src/features/acp/protocol.ts`**：`usage_update` 改为把 `used` 记进新的诊断字段 `lastContextUsed`，不再碰 `lastUsage`；确实携带 `outputTokens` / `cachedReadTokens` 的更新仍算真实样本。
+  - **`src/host/recording.ts`**：`finalUsage()` 只在最后一条 per-call 样本确实带分项计数时才优先（`hasUsageBreakdown()`：output / cache read / cache write / thinking / total），只有 input 的样本让位给信封值——这个类原本要防的「per-call 与累计值混用」依然成立。
+  - **输出速度有了诚实的兜底**：没有任何 step 报过 output token 时，`speedStats()` 用信封的 output 数除以本轮事件跨度（窗口不小于 500ms）计算，而不是报 0 tok/s。
+  - **不再发占位的 `0/0` usage chunk**：没有测量的工具切步或失败回合直接省略该 chunk。DSH 把「没有 chunk」理解为「没有新的测量」，而显式 `0/0` 会重置上下文计量并把速度拖到 0。
+- **回归测试**：`test/usage-acp.test.ts`（11 个用例）钉住整条链路——上下文读数不会附着在流式 step 上、带真实计数的更新仍算样本、整轮 ACP 的最终 usage 与 `PromptResponse` 一致、只有 input 的样本让位给信封、无测量的两种情况不发 chunk、速度兜底给出信封速率。
 
 ## 0.6.59 (2026-11-22)
 

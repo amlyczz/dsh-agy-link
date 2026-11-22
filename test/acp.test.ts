@@ -157,19 +157,17 @@ test('ACP protocol helpers map updates, tool outputs, usage, results, and permis
 
   const text = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } }, st)
   assert.equal(text[0]?.kind, 'step')
-  // issue #158: `used` is context occupancy, not a usage sample — kept in
-  // lastContextUsed so it never clobbers PromptResponse.usage with 0 output/cache.
-  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage, undefined)
+  // issue #158: `used` is context occupancy, never a token sample — it lives in
+  // lastContextUsed so it can never clobber PromptResponse.usage with 0 output/cache.  assert.equal((text[0] as Extract<AgyEvent, { kind: 'step' }>).usage, undefined)
   assert.equal(st.lastContextUsed, 120)
   assert.equal(st.accumulatedText, 'hi')
 
-  // A usage_update that DOES carry real counts (future agy) is still recorded.
-  acpUpdateToAgyEvents('s1', { sessionUpdate: 'usage_update', used: 130, cachedReadTokens: 90, outputTokens: 7 }, st)
+  // An update that really reports token counts still feeds the sample.
+  acpUpdateToAgyEvents('s1', { sessionUpdate: 'usage_update', used: 120, outputTokens: 7, cachedReadTokens: 90 }, st)
   assert.equal(st.lastUsage.cache_read_tokens, 90)
   assert.equal(st.lastUsage.output_tokens, 7)
   const text2 = acpUpdateToAgyEvents('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '!' } }, st)
   assert.equal((text2[0] as Extract<AgyEvent, { kind: 'step' }>).usage?.output_tokens, 7)
-
   const startTool = acpUpdateToAgyEvents('s1', {
     sessionUpdate: 'tool_call',
     toolCallId: 'c1',

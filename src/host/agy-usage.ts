@@ -153,9 +153,13 @@ export function usageGroupsToFamilies(
   for (const group of groups) {
     const name = group.name.toLowerCase()
     const desc = (group.description ?? '').toLowerCase()
-    const hasArgonBucket = group.buckets.some((b) => b.id.toLowerCase().includes('argon') || (b.name ?? '').toLowerCase().includes('argon'))
-    // Only group name or bucket id/name may prove a dedicated Argon pool (issue #130).
-    // Ultra plans enumerate "Gemini 4 Argon" inside the shared Gemini Models description.
+    const hasArgonBucket = group.buckets.some((b) => b.id.toLowerCase().includes('argon'))
+    // A dedicated Argon POOL is proven only by the group NAME or a bucket id —
+    // a shared "Gemini Models" group's description merely ENUMERATES its members
+    // ("… Gemini 4 Argon …"), which is evidence of family membership, not of a
+    // separate pool. Using it here misfiled the whole Gemini pool as argon on the
+    // CLI path, freezing `google` at an old snapshot and cooling the wrong family
+    // (issue #169 — the CLI twin of #130/#131).
     const isArgon = name.includes('argon') || hasArgonBucket
     const isGoogle = !isArgon && (name.includes('gemini') || desc.includes('gemini'))
     const is3P = name.includes('claude') || name.includes('gpt') || desc.includes('claude') || desc.includes('gpt')

@@ -551,13 +551,13 @@ export class EventMapper {
     yield* this.flushPendingEmbed()
     const close = this.closeOpen()
     if (close) yield close
-    // No sample means "no measurement", not "zero tokens": emitting 0/0 would
-    // reset DSH's context meter on a failed turn (issues #158 & #161).
+    // Prefer the unconsumed span sample (#161 multi-cut accounting); fall back
+    // to the result envelope's own usage (#158). No sample means no measurement,
+    // not zero tokens: emitting 0/0 would reset the context meter on a failed turn.
     const tracked = this.opts.usage?.consumeSpanUsage
       ? this.opts.usage.consumeSpanUsage()
       : this.opts.usage?.finalUsage({})
-    if (tracked !== null && tracked !== undefined && Object.keys(tracked).length > 0) {
-      yield { type: 'usage', usage: usageFromRaw(tracked) }
+    if (tracked !== null && tracked !== undefined && Object.keys(tracked).length > 0) {      yield { type: 'usage', usage: usageFromRaw(tracked) }
     }
     const failure: LlmFailure = {
       message,
