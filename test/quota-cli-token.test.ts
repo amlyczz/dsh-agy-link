@@ -224,3 +224,31 @@ test('a token that cannot be brought into the window makes the CLI quota read st
   assert.equal(await read(primary), null, 'no spawn at all: the REST path answers this round')
   assert.equal(refreshes, 1, 'the refresh was attempted once before giving up')
 })
+test('prepareIsolatedCliToken refreshes the isolated token file but never writes the credential slot', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-cli-token-isolated-'))
+  const pool = new AccountPoolManager(dir)
+  const isolated = pool.createAccountSlot('Isolated')
+  let storedReads = 0
+  let slotWrites = 0
+
+  class DyingIsolatedService extends QuotaService {
+    override async getStoredToken() {
+      storedReads++
+      return { accessToken: 'ya29.iso', refreshToken: '1//ISO', expiryMs: Date.now() + (storedReads === 1 ? 5_000 : 3_600_000) }
+    }
+    override async getValidAccessToken() {
+      return 'ya29.iso'
+    }
+  }
+
+  const svc = new DyingIsolatedService(pool, () => '', () => null, {
+    bin: () => 'agy',
+    syncSlot: () => {
+      slotWrites++
+      return true
+    },
+  })
+  assert.equal(await svc.prepareIsolatedCliToken(isolated), true)
+  assert.equal(storedReads, 2, 'read, refresh, re-read')
+  assert.equal(slotWrites, 0, 'SSH isolation reads the token file; the Windows slot is not touched')
+})

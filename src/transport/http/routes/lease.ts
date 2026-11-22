@@ -93,7 +93,14 @@ function withBody(req: unknown, res: unknown, fn: (body: Record<string, unknown>
 
 export function register(reg: RouteRegistrar, services: HostServices, port?: number): () => void {
   const { pool, getConfig, log } = services
-  const registry = new ExternalLeaseRegistry({ pool, getConfig, log })
+  const registry = new ExternalLeaseRegistry({
+    pool,
+    getConfig,
+    log,
+    // Late-bound: only an acquire needs them.
+    agyVersion: () => services.resolveVersion(),
+    prepareIsolatedToken: (account) => services.quota.prepareIsolatedCliToken(account),
+  })
 
   reg({
     kind: 'exact',

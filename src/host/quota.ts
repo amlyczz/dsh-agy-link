@@ -311,6 +311,11 @@ export class QuotaService {
     }
   }
 
+  /** Same safety-window prep for an SSH-isolated account run elsewhere (external lease): it reads only its own token file, so the slot is never written. */
+  prepareIsolatedCliToken(account: ManagedAccount): Promise<boolean> {
+    return this.prepareCliToken(account, false)
+  }
+
   /**
    * Bring the credential `agy` would load into the safety window, or refuse.
    *
@@ -320,8 +325,8 @@ export class QuotaService {
    * is what agy loads (the on-disk document is only a mirror); `syncSlot` does
    * that and is wired by the host, which owns the mutex we are already holding.
    */
-  private async prepareCliToken(account: ManagedAccount): Promise<boolean> {
-    const syncSlot = this.cliDeps.syncSlot;
+  private async prepareCliToken(account: ManagedAccount, withSlotSync = true): Promise<boolean> {
+    const syncSlot = withSlotSync ? this.cliDeps.syncSlot : undefined;
     return prepareCliTokenImpl({
       readStored: () => this.getStoredToken(account, true),
       // Ask for the SAME window the gate below enforces: the default 60s buffer
