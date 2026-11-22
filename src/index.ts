@@ -20,7 +20,7 @@ import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool, MIRROR_TOOL_NAME } from './host/mirror-tool.ts'
 import { runAgyOnce } from './host/oneshot.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
-import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv, parseVersion, probeProcess } from './host/runner.ts'
+import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv } from './host/runner.ts'
 import { agyNotInstalledMessage } from './provider/call-context.ts'
 import { sweepDir } from './host/media.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, startMcpBridge, teardownBridgeState, type ToolsServiceLike } from './host/mcp-bridge.ts'
@@ -101,8 +101,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     }
     versionProbePromise = (async () => {
       try {
-        const v = await probeProcess(currentBin, ['--version'], 10_000, undefined, undefined, getConfig().suppressAgyAutoUpdate)
-        services.status.version = parseVersion(v.stdout)
+        services.status.version = await services.resolveVersion()
         setRuntimeAgyVersion(services.status.version)
         catalog.syncAgyVersion(services.status.version)
         if (services.status.version && compareVersions(services.status.version, MIN_AGY_VERSION) < 0) {

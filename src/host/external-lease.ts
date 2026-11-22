@@ -11,10 +11,17 @@
 // `acquireCredentialSlot` and the shared failure settlement — so an external
 // run is just one more slot holder. No switching logic lives here.
 //
+// An isolated account on agy >= 1.5 never touches the slot, exactly like the
+// provider/ACP/warmup/quota paths: `SSH_CONNECTION` (in `isolatedHomeEnv`)
+// makes agy read the account's own token file, so the lease only prepares that
+// file and hands the caller the env. The primary account, and isolated accounts
+// on older agy, take the slot.
+//
 // Leases are in memory only: a host restart drops them (the slot itself is
 // restored by the normal boot hygiene) and clients re-acquire.
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { writeFileAtomicSync } from '../common/atomic-write.ts'
 import type { PluginConfig } from '../common/types.ts'
@@ -29,6 +36,14 @@ import {
 } from './credential-slot.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { ensureIsolatedKeychain } from './runner.ts'
+import {
+  ensureLoopbackNoProxy,
+  foldProxyEnvCase,
+  isolatedHomeEnv,
+  proxyEnvFor,
+  supportsSshIsolation,
+  withAgyQuietEnv,
+} from '../runtime/agy/env.ts'
 import { settleRunFailure, settleSlotUnavailable } from './run-settlement.ts'
 
 export const LEASE_DEFAULT_TTL_MS = 120_000
@@ -57,6 +72,7 @@ export interface LeaseAccountView {
   email: string
   alias: string
   primary: boolean
+  isolated: boolean
   home: string
   proxyUrl: string
 }
@@ -66,6 +82,10 @@ export interface LeaseGrant {
   leaseId: string
   ttlMs: number
   expiresAt: number
+  /** True when this lease holds the Windows credential slot. */
+  slot: boolean
+  /** Exactly the variables the caller sets on its agy process (never the host's own env). */
+  env: Record<string, string>
   account: LeaseAccountView
 }
 
@@ -90,6 +110,7 @@ export interface LeaseSummary {
   email: string
   acquiredAt: number
   expiresAt: number
+  slot: boolean
 }
 
 type AcquireSlotFn = typeof acquireCredentialSlot
@@ -98,6 +119,10 @@ export interface LeaseRegistryDeps {
   pool: AccountPoolManager
   getConfig: () => PluginConfig
   log: (msg: string) => void
+  /** The agy version, probed when not known yet (decides SSH isolation). */
+  agyVersion: () => Promise<string | null>
+  /** Bring an isolated account's own token file into the CLI safety window (QuotaService). */
+  prepareIsolatedToken: (account: ManagedAccount) => Promise<boolean>
   /** Test seam; defaults to the real `acquireCredentialSlot`. */
   acquireSlot?: AcquireSlotFn
   now?: () => number
@@ -145,6 +170,26 @@ function isPrimary(account: ManagedAccount): boolean {
   return Boolean(account.systemHome) || !account.dir
 }
 
+/** HOME the plugin's own runs give this account: the host profile for the primary, else its isolated dir. */
+function leaseHome(account: ManagedAccount): string {
+  return isPrimary(account) ? homedir() : account.dir
+}
+
+/**
+ * The agy env for one leased account, from the same helpers the provider uses:
+ * isolated HOME (+ SSH_CONNECTION), proxy (case-folded on Windows), loopback
+ * NO_PROXY and the quiet/headless switches. Nothing from the host's env.
+ */
+export function leaseAgyEnv(account: ManagedAccount, proxyUrl: string, platform: string = process.platform): Record<string, string> {
+  const env: NodeJS.ProcessEnv = isPrimary(account) ? {} : { ...isolatedHomeEnv(account.dir) }
+  Object.assign(env, proxyEnvFor(proxyUrl))
+  ensureLoopbackNoProxy(env)
+  foldProxyEnvCase(env, platform)
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(withAgyQuietEnv(env))) if (typeof v === 'string') out[k] = v
+  return out
+}
+
 function truncateUtf8(text: string, maxBytes: number): string {
   const buf = Buffer.from(text, 'utf8')
   if (buf.length <= maxBytes) return text
@@ -182,7 +227,7 @@ export class ExternalLeaseRegistry {
     if (pinId || pinDir) {
       const account = pinId
         ? pool.getAccount(pinId)
-        : pool.getAccounts().find((a) => a.dir !== '' && samePath(a.dir, pinDir!))
+        : pool.getAccounts().find((a) => samePath(leaseHome(a), pinDir!))
       if (!account) return fail(404, 'account_not_found', 'no pool account matches ' + (pinId ? 'accountId' : 'accountDir'))
       if (!account.enabled || account.authRequired) {
         return fail(409, 'account_unavailable', 'account ' + account.id + ' is ' + (account.enabled ? 'waiting for re-login' : 'disabled'))
@@ -237,6 +282,7 @@ export class ExternalLeaseRegistry {
       email: e.account.email ?? '',
       acquiredAt: e.acquiredAt,
       expiresAt: e.expiresAt,
+      slot: e.slot !== undefined,
     }))
   }
 
@@ -269,28 +315,37 @@ export class ExternalLeaseRegistry {
     const waitMs = opts.deadline - this.now()
     if (waitMs <= 0) return { kind: 'done', result: fail(504, 'slot_timeout', 'timed out waiting for the agy credential slot') }
     const proxyUrl = account.proxyUrl || cfg.proxyUrl || detectSystemProxy() || ''
+    // Resolve the version before deciding; an unknown version keeps the slot (safe on every agy).
+    const sshIsolated = !isPrimary(account) && supportsSshIsolation(await this.deps.agyVersion().catch(() => null))
     let slot: SlotLease | undefined
-    try {
-      slot = await this.acquireSlot(account, pool, {
-        baseDir: pool.dir,
-        ...(proxyUrl !== '' ? { proxyUrl } : {}),
-        log,
-        signal: this.abort.signal,
-        dispatchTimeoutMs: waitMs,
-        parallel: cfg.parallelSameAccount,
-        respectExternalSignIn: cfg.respectExternalSignIn,
-      })
-    } catch (e) {
-      if (e instanceof SlotUnavailableError) {
-        settleSlotUnavailable(pool, account, opts.family, opts.model, e)
-        return { kind: 'unavailable', error: e.message }
+    if (sshIsolated) {
+      // Same prep as the CLI quota read: agy started with a dying token falls back to interactive OAuth.
+      // A failed prep leaves the pool untouched, as it does there.
+      const ready = await this.deps.prepareIsolatedToken(account).catch(() => false)
+      if (!ready) return { kind: 'unavailable', error: 'account ' + account.id + ': its token could not be refreshed into the CLI safety window' }
+    } else {
+      try {
+        slot = await this.acquireSlot(account, pool, {
+          baseDir: pool.dir,
+          ...(proxyUrl !== '' ? { proxyUrl } : {}),
+          log,
+          signal: this.abort.signal,
+          dispatchTimeoutMs: waitMs,
+          parallel: cfg.parallelSameAccount,
+          respectExternalSignIn: cfg.respectExternalSignIn,
+        })
+      } catch (e) {
+        if (e instanceof SlotUnavailableError) {
+          settleSlotUnavailable(pool, account, opts.family, opts.model, e)
+          return { kind: 'unavailable', error: e.message }
+        }
+        if (e instanceof WaitTimeoutError) {
+          return { kind: 'done', result: fail(504, 'slot_timeout', 'timed out waiting for the agy credential slot') }
+        }
+        if (e instanceof AbortedWaitError) return { kind: 'done', result: fail(503, 'shutting_down', 'the lease service is shutting down') }
+        // e.g. the primary identity could not be verified over the network: retryable, account untouched.
+        return { kind: 'done', result: fail(502, 'slot_error', e instanceof Error ? e.message : String(e)) }
       }
-      if (e instanceof WaitTimeoutError) {
-        return { kind: 'done', result: fail(504, 'slot_timeout', 'timed out waiting for the agy credential slot') }
-      }
-      if (e instanceof AbortedWaitError) return { kind: 'done', result: fail(503, 'shutting_down', 'the lease service is shutting down') }
-      // e.g. the primary identity could not be verified over the network: retryable, account untouched.
-      return { kind: 'done', result: fail(502, 'slot_error', e instanceof Error ? e.message : String(e)) }
     }
     if (this.disposed) {
       slot?.release()
@@ -309,7 +364,7 @@ export class ExternalLeaseRegistry {
       slot,
     }
     this.leases.set(entry.leaseId, entry)
-    log(`[agy-link] external lease ${entry.leaseId.slice(0, 8)} granted to ${sanitizeHolder(opts.holder)} on account ${account.id}`)
+    log(`[agy-link] external lease ${entry.leaseId.slice(0, 8)} granted to ${sanitizeHolder(opts.holder)} on account ${account.id}${slot ? ' (slot)' : ''}`)
     return {
       kind: 'done',
       result: {
@@ -317,12 +372,15 @@ export class ExternalLeaseRegistry {
         leaseId: entry.leaseId,
         ttlMs: entry.ttlMs,
         expiresAt: entry.expiresAt,
+        slot: slot !== undefined,
+        env: leaseAgyEnv(account, proxyUrl),
         account: {
           id: account.id,
           email: account.email ?? '',
           alias: account.alias,
           primary: isPrimary(account),
-          home: isPrimary(account) ? '' : account.dir,
+          isolated: !isPrimary(account),
+          home: leaseHome(account),
           proxyUrl,
         },
       },

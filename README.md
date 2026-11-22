@@ -198,7 +198,11 @@ dsh plugin --profile web add dsh-agy-link
 
 ## 🔌 外部进程凭据租约 API（External credential lease）
 
-Windows 上所有 `agy.exe` 共用同一个凭据管理器条目 `gemini:antigravity`，改 HOME/USERPROFILE 只换会话目录、不换身份。插件自己的运行会协调这个槽，但**自己启动官方 `agy` 的外部进程**（例如需要扛过 DSH 重启的长任务 runner）看不到插件内存里的计数：插件可能在它运行途中切换槽位，它也无法以池内备用账号身份运行。租约 API 让外部进程成为槽的一名普通持有者——选号、取槽和失败结算复用插件自身运行的同一套逻辑。
+Windows 上所有 `agy.exe` 共用同一个凭据管理器条目 `gemini:antigravity`，改 HOME/USERPROFILE 只换会话目录、不换身份。插件自己的运行会协调这个槽，但**自己启动官方 `agy` 的外部进程**（例如需要扛过 DSH 重启的长任务 runner）看不到插件内存里的计数：插件可能在它运行途中切换槽位，它也无法以池内备用账号身份运行。租约 API 让外部进程参与同一套协调——选号、取槽和失败结算复用插件自身运行的同一套逻辑。
+
+**两种租约**（与插件自己的 provider / ACP / 预热 / 配额路径一致）：
+- **隔离备用账号 + agy ≥ 1.5**：**不占凭据槽**（`slot: false`）。返回的 `env` 含 `SSH_CONNECTION`，agy 因此只读该账号自己的 token 文件，可与其它账号无锁并行。发放前插件会把这个 token 文件刷新进 CLI 安全窗口（与 CLI 配额读取同一逻辑：带着快过期的 token 启动的 agy 可能回退到交互式浏览器登录）。agy 版本未知时先探测再决定；探测失败按占槽处理（对任何版本都安全）。
+- **主账号，或 agy < 1.5 的隔离账号**：在租约期间持有凭据槽（`slot: true`，同号并行快路径 / 切号交接照旧）。
 
 **发现端点**：插件拿到 web 端口后原子写入 `<号池目录>/.link-endpoint.json`（号池目录即 `pool.json` 所在目录，默认 `~/.dsh/agy-accounts`，设了 `DSH_STATE_DIR` 时为 `$DSH_STATE_DIR/agy-accounts`）：`{"url":"http://127.0.0.1:<port>/plugins/agy-link","pid":<pid>,"startedAt":<epoch ms>}`。插件卸载时仅当文件仍是本进程写的才删除。
 
@@ -206,15 +210,16 @@ Windows 上所有 `agy.exe` 共用同一个凭据管理器条目 `gemini:antigra
 
 | 端点 | 请求体 | 成功响应 | 错误 |
 | --- | --- | --- | --- |
-| `POST /lease/acquire` | `holder`（必填，≤200 字符）、`model?`、`accountId?` / `accountDir?`（**钉住**账号：续接对话必须回到拥有它的账号）、`ttlMs?`（默认 120000，夹到 15000–600000）、`waitMs?`（等槽上限，默认同 one-shot：`dispatchTimeoutMinutes × 60000`，未配置时 60000，最大 1 小时） | `{ ok, leaseId, ttlMs, expiresAt, account: { id, email, alias, primary, home, proxyUrl } }` | `400 invalid_json/invalid_request` · `404 account_not_found` · `409 account_unavailable`（钉住的账号已停用 / 需重登 / 槽拒绝交接）· `503 no_account`（附 `retryAfterMs`，已知时）· `504 slot_timeout` · `502 slot_error`（如主账号身份暂时无法在线核验，可重试） |
+| `POST /lease/acquire` | `holder`（必填，≤200 字符）、`model?`、`accountId?` / `accountDir?`（**钉住**账号：续接对话必须回到拥有它的账号）、`ttlMs?`（默认 120000，夹到 15000–600000）、`waitMs?`（等槽上限，默认同 one-shot：`dispatchTimeoutMinutes × 60000`，未配置时 60000，最大 1 小时） | `{ ok, leaseId, ttlMs, expiresAt, slot, env, account: { id, email, alias, primary, isolated, home, proxyUrl } }` | `400 invalid_json/invalid_request` · `404 account_not_found` · `409 account_unavailable`（钉住的账号已停用 / 需重登 / 槽拒绝交接 / token 无法刷新进安全窗口）· `503 no_account`（附 `retryAfterMs`，已知时）· `504 slot_timeout` · `502 slot_error`（如主账号身份暂时无法在线核验，可重试） |
 | `POST /lease/renew` | `leaseId`、`ttlMs?` | `{ ok, expiresAt }` | `404 lease_not_found`（未知或已过期） |
 | `POST /lease/release` | `leaseId`、`ok?`、`error?`（截断到 8 KiB）、`model?` | `{ ok, outcome }`，`outcome ∈ success / quota / tos / model_unsupported / eligibility / auth / other / none` | `404 lease_not_found` |
-| `GET /lease` | — | `{ leases: [{ leaseId, holder, accountId, email, acquiredAt, expiresAt }] }`（诊断用） | — |
+| `GET /lease` | — | `{ leases: [{ leaseId, holder, accountId, email, acquiredAt, expiresAt, slot }] }`（诊断用） | — |
 
 使用要点：
-- **钉住账号**时只检查「存在、启用、未标记需重登」，不看冷却；不钉住时按插件自身的调度规则选号，槽拒绝交接会按 one-shot 的规则结算后换下一个账号（同一账号不会试两次）。
-- 用返回的 `account` 启动 agy：`home` 为空表示主账号（用正常用户目录）；非空时把 `HOME`/`USERPROFILE`、`GEMINI_CLI_HOME=<home>/.gemini`、`ANTIGRAVITY_GEMINI_DIR=<home>/.gemini`、`ANTIGRAVITY_APP_DATA_DIR=<home>/.gemini/antigravity-cli` 指向它（与插件自己的隔离账号环境一致）；`proxyUrl` 非空时设为代理。
-- 运行期间按 TTL 定期 `renew`；结束后**恰好一次** `release`：`ok: true` 记一次成功，`ok: false` 加 agy 的错误文本按插件 one-shot 失败分类结算（TOS 隔离、额度冷却、模型不支持、地区资格、登出），省略 `ok` 只释放不结算。
+- **钉住账号**时只检查「存在、启用、未标记需重登」，不看冷却；不钉住时按插件自身的调度规则选号，槽拒绝交接（按 one-shot 规则结算）或 token 无法就绪时换下一个账号（同一账号不会试两次）。
+- 启动 agy 时把返回的 `env` **原样叠加**到自己的进程环境上：隔离账号的 `HOME`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`/`GEMINI_CLI_HOME`/`ANTIGRAVITY_*`/`SSH_CONNECTION`（与插件 `isolatedHomeEnv` 相同）、代理变量（Windows 上只保留大写一种写法）、含本机回环地址的 `NO_PROXY`，以及 `AGY_CLI_*`/`BROWSER`/`CI` 静默无头开关。`env` 不包含宿主自身的其它环境变量。`account.proxyUrl` 照旧返回。
+- `account.home` 是插件自己运行该账号时用的 HOME：隔离账号是它的独立目录，**主账号是插件宿主的用户目录（`os.homedir()`）**。主账号的 agy 对话就存在这里（例如 DSH-ASA 启动器会把宿主的 USERPROFILE 指到自己的数据目录），所以要续接主账号的对话时，调用方应据此自行设置 `HOME`/`USERPROFILE`；主账号的 `env` 里不含任何 HOME 重定位变量。用 `accountDir` 钉住时，传入主账号的 `home` 也能钉住主账号（规范化比较，Windows 不区分大小写）。
+- 运行期间按 TTL 定期 `renew`（不占槽的租约同样需要）；结束后**恰好一次** `release`：`ok: true` 记一次成功，`ok: false` 加 agy 的错误文本按插件 one-shot 失败分类结算（TOS 隔离、额度冷却、模型不支持、地区资格、登出），省略 `ok` 只释放不结算。
 - 租约只存在内存：**DSH 宿主重启会丢失全部租约**，客户端应重新 `acquire`（读新的 `.link-endpoint.json`）。过期未续的租约由后台清扫释放且不结算。非 Windows 上没有共享槽，取槽是空操作，但选号、TTL 与结算照常工作。
 
 ---
@@ -255,7 +260,7 @@ Windows 上所有 `agy.exe` 共用同一个凭据管理器条目 `gemini:antigra
 ## 📚 相关文档
 
 - [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) — 全量配置键、环境变量与默认值参考（唯一真相源）
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — 分层架构、Provider 流水线与 35 个 HTTP 路由模块
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — 分层架构、Provider 流水线与 40 个 HTTP 路由模块
 - [docs/AUTH.md](./docs/AUTH.md) — PKCE OAuth、Token 导入、平台钥匙串隔离与脱敏机制
 - [docs/SECURITY-NOTES.md](./docs/SECURITY-NOTES.md) — 威胁模型、路由限域、`/embed` CSP 与 MCP 桥接边界
 - [docs/HEADLESS-PERMISSIONS.md](./docs/HEADLESS-PERMISSIONS.md) — `dsh headless` 最小权限配置指南

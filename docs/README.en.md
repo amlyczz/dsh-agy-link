@@ -132,6 +132,32 @@ dsh-agy-image -p "change the background to night" -i ./day.png -n night_scene --
   - Ecosystem: `/agy plugins [list|enable <id>|disable <id>]`, `/agy mcp`, `/agy skills`, `/agy agents [list|use <name>|off]`, `/agy sync-ecosystem`
   - Session & workflow bridges: `/agy goal [status|set|edit|pause|resume|complete|clear]`, `/agy session [info|clear]`, `/agy btw <question>`, `/agy fork [list|restore <id>|<prompt>]`, `/agy grill [topic]` (`/agy grill-me`), `/agy learn [--apply] [focus]`, `/agy compact [focus]`, `/agy doctor`
 
+## 🔌 External credential lease API
+
+On Windows every `agy.exe` reads one Credential Manager entry, `gemini:antigravity`; HOME/USERPROFILE only move conversation storage, not identity. The plugin coordinates that slot for its own runs, but a process that **launches the official `agy` itself** (for example a long-job runner that must survive a DSH restart) cannot see the plugin's in-memory counters: the slot may be swapped under it, and it can never run as a pool secondary. The lease API lets such a process join the same coordination — account selection, slot handling and failure settlement reuse the plugin's own code.
+
+**Two kinds of lease** (same rule as the provider / ACP / warmup / quota paths):
+- **Isolated secondary account on agy >= 1.5**: the Windows slot is **not** taken (`slot: false`). The returned `env` carries `SSH_CONNECTION`, so agy reads only that account's own token file and runs lock-free beside other accounts. Before granting, the plugin brings that token file into the CLI safety window (the same code as the CLI quota read: agy started with a dying token can fall back to interactive browser login). An unknown agy version is probed first; a failed probe falls back to taking the slot, which is safe on every version.
+- **Primary account, or an isolated account on agy < 1.5**: the lease holds the slot (`slot: true`; same-account fast path / identity switch as usual).
+
+**Discovery**: once the web port is known the plugin atomically writes `<pool dir>/.link-endpoint.json` (the directory holding `pool.json`: `~/.dsh/agy-accounts`, or `$DSH_STATE_DIR/agy-accounts`): `{"url":"http://127.0.0.1:<port>/plugins/agy-link","pid":<pid>,"startedAt":<epoch ms>}`. On unload it is removed only if it still names this process.
+
+JSON in and out; every error is `{ "ok": false, "code": "...", "error": "..." }`. Browser requests with a non-loopback `Origin` get `403 cross_origin`.
+
+| Endpoint | Body | Success | Errors |
+| --- | --- | --- | --- |
+| `POST /lease/acquire` | `holder` (required, ≤200 chars), `model?`, `accountId?` / `accountDir?` (**pin** the account: a continuation must return to the account that owns its conversation), `ttlMs?` (default 120000, clamped 15000–600000), `waitMs?` (slot wait; default as one-shot: `dispatchTimeoutMinutes × 60000`, else 60000; max 1 h) | `{ ok, leaseId, ttlMs, expiresAt, slot, env, account: { id, email, alias, primary, isolated, home, proxyUrl } }` | `400 invalid_json/invalid_request` · `404 account_not_found` · `409 account_unavailable` (pinned account disabled / needs re-login / slot refused / token not refreshable into the safety window) · `503 no_account` (with `retryAfterMs` when known) · `504 slot_timeout` · `502 slot_error` (e.g. the primary identity could not be verified online; retryable) |
+| `POST /lease/renew` | `leaseId`, `ttlMs?` | `{ ok, expiresAt }` | `404 lease_not_found` (unknown or expired) |
+| `POST /lease/release` | `leaseId`, `ok?`, `error?` (truncated to 8 KiB), `model?` | `{ ok, outcome }`, `outcome ∈ success / quota / tos / model_unsupported / eligibility / auth / other / none` | `404 lease_not_found` |
+| `GET /lease` | — | `{ leases: [{ leaseId, holder, accountId, email, acquiredAt, expiresAt, slot }] }` (diagnostics) | — |
+
+Notes:
+- A **pinned** account must exist, be enabled and not need re-login; cooldowns are not checked. Unpinned, the plugin's own scheduler picks; a refused slot (settled as one-shot settles it) or a token that cannot be readied moves on to the next account, never the same account twice.
+- Overlay the returned `env` **as is** onto your agy process: for isolated accounts `HOME`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`/`GEMINI_CLI_HOME`/`ANTIGRAVITY_*`/`SSH_CONNECTION` (identical to the plugin's `isolatedHomeEnv`), the proxy variables (one uppercase spelling on Windows), `NO_PROXY` with the loopback hosts, and the quiet/headless `AGY_CLI_*`/`BROWSER`/`CI` switches. It never contains the host's own environment. `account.proxyUrl` is still returned.
+- `account.home` is the HOME the plugin's own runs use for the account: the isolated dir, or **for the primary the plugin host's user profile (`os.homedir()`)**. The primary's agy conversations live there (the DSH-ASA launcher, for example, points the host's USERPROFILE at its own data directory), so to continue a primary conversation the caller sets `HOME`/`USERPROFILE` from it itself; the primary's `env` carries no HOME-relocation variables. Pinning by `accountDir` with the primary's `home` pins the primary (normalized; case-insensitive on Windows).
+- `renew` within the TTL while running (no-slot leases too), then `release` **exactly once**: `ok: true` records a success, `ok: false` plus agy's error text settles the pool through the plugin's one-shot failure classification (TOS quarantine, quota cooldown, unsupported model, eligibility, signed out); omitting `ok` only releases.
+- Leases are in memory only: **a DSH host restart drops every lease**; clients re-acquire (re-read `.link-endpoint.json`). Expired leases are swept without settlement. Off Windows there is no shared slot, so taking it is a no-op; selection, TTL and settlement still work.
+
 ## ⚙️ Configuration
 
 Every key, environment variable, default and advanced option lives in **one place**: [CONFIGURATION.md](./CONFIGURATION.md). The README deliberately does not duplicate that table.
@@ -155,7 +181,7 @@ Common entry points: `/plugin`, the Antigravity settings panel, `DSH_AGY_*` envi
 ## 📚 Documentation
 
 - [CONFIGURATION.md](./CONFIGURATION.md) — Complete configuration keys, environment variables, and defaults
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Layering, provider pipeline, and the 35 HTTP routes
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — Layering, provider pipeline, and the 40 HTTP routes
 - [AUTH.md](./AUTH.md) — PKCE OAuth, token import, keychain isolation, and redaction
 - [SECURITY-NOTES.md](./SECURITY-NOTES.md) — Threat model, route confinement, `/embed` CSP, and MCP bridge guardrails
 - [HEADLESS-PERMISSIONS.md](./HEADLESS-PERMISSIONS.md) — Least-privilege setup for `dsh headless`

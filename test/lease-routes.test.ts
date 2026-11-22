@@ -18,7 +18,13 @@ function setup(t: test.TestContext, port?: number) {
   const pool = new AccountPoolManager(dir)
   const second = pool.createAccountSlot('Second')
   const routes: Route[] = []
-  const services = { pool, getConfig: () => defaultConfig(), log: () => undefined } as unknown as HostServices
+  const services = {
+    pool,
+    getConfig: () => defaultConfig(),
+    log: () => undefined,
+    resolveVersion: async () => '1.5.12',
+    quota: { prepareIsolatedCliToken: async () => true },
+  } as unknown as HostServices
   const dispose = register((r) => routes.push(r), services, port)
   t.after(() => {
     dispose()
@@ -105,11 +111,14 @@ test('lease routes: acquire → list → renew → release, then 404 lease_not_f
   assert.equal(account.id, s.second.id)
   assert.equal(account.home, s.second.dir)
   assert.equal(account.primary, false)
+  assert.equal(account.isolated, true)
   assert.equal(typeof account.proxyUrl, 'string')
+  assert.equal(a.json.slot, false, 'agy >= 1.5 isolated account: no slot')
+  assert.equal((a.json.env as Record<string, string>).SSH_CONNECTION, '127.0.0.1 0 127.0.0.1 0')
   const leaseId = a.json.leaseId as string
 
   const list = await s.call('/lease', 'GET')
-  assert.deepEqual((list.json.leases as Array<Record<string, unknown>>).map((l) => [l.leaseId, l.holder, l.accountId]), [[leaseId, 'conductor', s.second.id]])
+  assert.deepEqual((list.json.leases as Array<Record<string, unknown>>).map((l) => [l.leaseId, l.holder, l.accountId, l.slot]), [[leaseId, 'conductor', s.second.id, false]])
 
   const renew = await s.call('/lease/renew', 'POST', { leaseId })
   assert.equal(renew.status, 200)
