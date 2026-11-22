@@ -11,7 +11,8 @@ import type {
 import type { PluginConfig } from '../../common/types.ts'
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
 import { attachAcpWatch, noteAcpReport, type AcpWatchHost } from './acp-watch.ts'
-import { baselineSessionBrain, pollSessionBrainDir } from './brain-poll.ts'
+import { baselineSessionBrain, pollSessionBrainDir, type WatchedTaskLog } from './brain-poll.ts'
+import { AGY_LINK_NOTICE_KIND, agyLinkNoticeSource } from '../../common/agy-link-source.ts'
 import {
   buildWakeupMessageText,
   extractAttemptBackgroundSignals,
@@ -405,7 +406,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
         return
       }
       const nextTurn = agent.inbox?.nextTurn
-      if (Array.isArray(nextTurn) && nextTurn.some((m) => m?.source?.plugin === 'agy-link' && m?.source?.form === 'notice')) {
+      if (Array.isArray(nextTurn) && nextTurn.some((m) => m?.source?.kind === AGY_LINK_NOTICE_KIND && m?.source?.form === 'notice')) {
         return
       }
 
@@ -413,12 +414,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
       const { summary, text } = buildWakeupMessageText(items)
       const msg = createUserMessage({
         content: [{ type: 'text', text }],
-        source: {
-          kind: 'plugin',
-          plugin: 'agy-link',
-          form: 'notice',
-          summary: boundContextSummary(summary),
-        },
+        source: agyLinkNoticeSource(boundContextSummary(summary)),
       })
       st.wakesUsed += 1
       // Keep the ACP watch while any background tool call is still live. One
