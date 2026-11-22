@@ -92,6 +92,8 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 | `no_license` | 403 且正文含 license | **整个账号**退出后台轮询 | 6h（新许可随时可能到达） |
 | `no_summary_access` | 403 且 `status = PERMISSION_DENIED`（免费账号无 5h 窗口） | **仅汇总请求**；`fetchAvailableModels` / 用户额度照常 | 7 天（对齐周配额周期） |
 
+**「独立 Argon 池」的判据只有一条，两条链路必须共用（#130/#131/#169）**：组**名**或 bucket 的 id/displayName 含 argon。**description 不是证据**——agy 的共享 `Gemini Models` 组会在 description 里枚举成员（"… Gemini 4 Argon …"），用它会把整个 Gemini 池误判为独立 Argon 池。该规则适用于 **REST summary** 与 **CLI `/usage`** 两条路径（`summaryHasArgonGroup` / `ingestSummaryGroups` / `usageGroupsToFamilies`）；description 仅可用于**正向家族归类**（如含 gemini → google），不得用于证明"独立池"。
+
 **判定顺序不可颠倒（#142）**：真实 403 正文可能**同时**含 `license` 字样与 `PERMISSION_DENIED`。`status` 是结构化的 API 级结论，必须优先于 message 文本匹配；若先匹配 license 正则，免费档分支就变成死码。仅含 license 字样而无该 status 时仍判 `no_license`——两个分支都要有测试保证可达。
 
 - `quotaSummarySuppressed(account)` 对两类都返回 true（都意味着「先别打那个端点」）。

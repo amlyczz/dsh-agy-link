@@ -287,7 +287,11 @@ test('watchdog: stderr chatter does NOT keep an offline run alive', async () => 
   if (outcome === null) p.kill('abort')
   assert.ok(outcome, 'run should settle')
   assert.equal(outcome!.timedOut, true)
-  assert.ok(outcome!.durationMs < 2000, `took ${outcome!.durationMs}ms`)
+  // Upper bound only proves the watchdog fired on its 400ms budget rather than
+  // the 15-minute idle budget. Making it tight measured machine load, not
+  // behaviour: a saturated host pushed this to 9.7s while `timedOut` stayed
+  // correct (see the SIGKILL-escalation test for the same pattern).
+  assert.ok(outcome!.durationMs < 60000, `took ${outcome!.durationMs}ms`)
 })
 
 test('watchdog: stdout activity DOES keep the run alive', async () => {

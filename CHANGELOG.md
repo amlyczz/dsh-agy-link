@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.61 (2026-11-22)
+
+### English
+
+- **Fix(quota): the CLI `/usage` path now uses the same Argon rule as the REST summary path (fixes #169).** v0.6.38 taught the summary chain that a dedicated Argon pool is proven only by the group **name** or a bucket id — a shared `Gemini Models` group merely *enumerates* its members ("… Gemini 4 Argon …") in its description. The **CLI** mapping (`usageGroupsToFamilies`) was missed by that fix and still matched `desc.includes('argon')`, so on the default `quotaViaCli` path the whole Gemini pool was written into the `argon` family: `google` froze at an old snapshot, an extra Argon bar appeared, chatting with Gemini 4 Neon drained *Argon*, and `dedicatedGroups: ["argon"]` poisoned account selection and the cooldown gate. Both paths now agree, and a real dedicated Argon group (by name or `argon-*` bucket) is still recognised.
+- Also widened one timing guard in `test/proxy-keychain.test.ts` (`durationMs < 2000` → a bound that only distinguishes "fired on the 400ms budget" from "fired on the 15-minute idle budget"). It was measuring machine load: a saturated host reported 9.7s while `timedOut` stayed correct.
+
+### 中文
+
+- **修复(配额)：CLI `/usage` 路径改用与 REST summary 路径相同的 Argon 判据（修复 #169）。** v0.6.38 已让 summary 链路认识到：**独立 Argon 池只由组名或 bucket id 证明**——共享的 `Gemini Models` 组只是在 description 里*枚举*成员（"… Gemini 4 Argon …"）。但那次修复**漏了 CLI 侧的映射**（`usageGroupsToFamilies`），它仍匹配 `desc.includes('argon')`，于是在默认的 `quotaViaCli` 路径上整个 Gemini 池被写进 `argon` 族：`google` 冻结在旧快照、多出一条 Argon 条、用 Gemini 4 Neon 聊天却掉 Argon 的额度、`dedicatedGroups: ["argon"]` 还会污染选号与冷却闸门。现在两条路径判据一致，且真实独立 Argon 组（按组名或 `argon-*` bucket）仍能识别。
+- 顺带放宽了 `test/proxy-keychain.test.ts` 里一处时序断言（`durationMs < 2000` → 只区分「按 400ms 预算触发」还是「按 15 分钟空闲预算触发」）。它实际在测机器负载：饱和的宿主上报了 9.7 秒，而 `timedOut` 始终正确。
+
 ## 0.6.60 (2026-11-22)
 
 ### English
