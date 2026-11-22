@@ -7,6 +7,7 @@
 
 import { buildAccountModelRows, type AccountModelDisplayItem } from '../../common/account-models.ts';
 import type { AccountPlanTier, AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
+import { renderDuplicateBadge } from './duplicate-badge.ts';
 import { resolveAccountPlanTier } from '../../common/plan-tier.ts';
 import {
 	QUOTA_FAMILIES,
@@ -315,6 +316,7 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 			},
 			title: t('status.disabled'),
 		}, uiIcon('power', 10, '#64748b'), t('status.disabled')) : null,
+		renderDuplicateBadge(t, acc, ctx.accounts),
 	];
 }
 

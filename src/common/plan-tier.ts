@@ -59,6 +59,54 @@ function hasWeeklyBucket(g: PlanTierGroupLike): boolean {
   })
 }
 
+export interface PlanTierEvidence {
+  /** Argon has its OWN group/bucket (Pro splits Argon into a separate weekly bucket). */
+  argonDedicated: boolean
+  /** Argon is folded into the shared Gemini Models group (Ultra). */
+  argonShared: boolean
+  /** A 5-hour rolling window exists. Free accounts are weekly-ONLY. */
+  has5h: boolean
+  hasWeekly: boolean
+}
+
+/** Collect the tier-defining evidence from groups + quotas. Exported for reconciliation. */
+export function collectPlanTierEvidence(input: {
+  groups?: readonly PlanTierGroupLike[]
+  quotas?: Partial<Record<ModelFamily, FamilyQuotaInfo>>
+  dedicatedGroups?: readonly ModelFamily[]
+  modelIds?: readonly string[]
+}): PlanTierEvidence {
+  const groups = input.groups ?? []
+  const quotas = input.quotas ?? {}
+  const modelIds = (input.modelIds ?? []).map((m) => m.toLowerCase())
+
+  const argonDedicated =
+    groups.some(isDedicatedArgonGroup) ||
+    quotas.argon !== undefined ||
+    (input.dedicatedGroups?.includes('argon') === true)
+
+  const geminiGroup = groups.find(isGeminiGroup)
+  const sharedDesc = `${geminiGroup ? groupDesc(geminiGroup) : ''} ${(quotas.google?.description ?? '').toLowerCase()}`
+  const argonInSharedDesc =
+    sharedDesc.includes('argon') ||
+    modelIds.some((id) => id.includes('argon')) ||
+    (quotas.google?.models ?? []).some((m) => m.modelId.toLowerCase().includes('argon'))
+  const argonShared = !argonDedicated && argonInSharedDesc
+
+  const has5h = geminiGroup
+    ? hasFiveHourBucket(geminiGroup)
+    : typeof quotas.google?.remainingFraction === 'number' ||
+      groups.some((g) => hasFiveHourBucket(g)) ||
+      Object.values(quotas).some((q) => typeof q?.remainingFraction === 'number')
+  const hasWeekly = geminiGroup
+    ? hasWeeklyBucket(geminiGroup)
+    : typeof quotas.google?.weeklyFraction === 'number' ||
+      groups.some((g) => hasWeeklyBucket(g)) ||
+      Object.values(quotas).some((q) => typeof q?.weeklyFraction === 'number')
+
+  return { argonDedicated, argonShared, has5h, hasWeekly }
+}
+
 export function inferAccountPlanTier(input: {
   groups?: readonly PlanTierGroupLike[]
   quotas?: Partial<Record<ModelFamily, FamilyQuotaInfo>>
@@ -67,67 +115,67 @@ export function inferAccountPlanTier(input: {
   modelIds?: readonly string[]
 }): AccountPlanTier | undefined {
   const groups = input.groups ?? []
-  const quotas = input.quotas ?? {}
-  const modelIds = (input.modelIds ?? []).map((m) => m.toLowerCase())
 
   for (const g of groups) {
     const combined = `${groupName(g)} ${groupDesc(g)}`
     if (/\b(?:enterprise|business|workspace)\b/i.test(combined)) return 'enterprise'
   }
 
-  const hasDedicatedArgon =
-    groups.some(isDedicatedArgonGroup) ||
-    quotas.argon !== undefined ||
-    (input.dedicatedGroups?.includes('argon') === true)
+  const ev = collectPlanTierEvidence(input)
 
-  // If the summary was explicitly refused as free-tier (`no_summary_access`)
-  // and no fresh groups proved Pro/Ultra, treat it as Free even if stale
-  // legacy `dedicatedGroups: ['argon']` remained from before downgrade.
-  if (groups.length === 0 && input.quotaUnavailable?.reason === 'no_summary_access') {
-    return 'free'
-  }
+  // Free = weekly-only, or an explicit refusal with no paid window in evidence.
+  // A 5-hour window is the paid marker: no free account has one.
+  if (input.quotaUnavailable?.reason === 'no_summary_access' && !ev.has5h) return 'free'
 
-  if (hasDedicatedArgon) return 'pro'
+  // Pro splits Argon into its own bucket; Ultra folds Argon into the shared
+  // Gemini Models bucket (visible only in that group's description).
+  if (ev.argonDedicated) return 'pro'
+  if (ev.argonShared) return 'ultra'
 
-  const geminiGroup = groups.find(isGeminiGroup)
-  const geminiDesc = (geminiGroup ? groupDesc(geminiGroup) : (quotas.google?.description ?? '')).toLowerCase()
-  const geminiHas5h = geminiGroup
-    ? hasFiveHourBucket(geminiGroup)
-    : typeof quotas.google?.remainingFraction === 'number'
-  const geminiHasWeekly = geminiGroup
-    ? hasWeeklyBucket(geminiGroup)
-    : typeof quotas.google?.weeklyFraction === 'number'
-
-  const googleModels = (quotas.google?.models ?? []).map((m) => m.modelId.toLowerCase())
-  const allModelIds = [...modelIds, ...googleModels]
-  const hasArgonModel = geminiDesc.includes('argon') || allModelIds.some((id) => id.includes('argon'))
-  const hasGemini4Model =
-    /gemini\s*4|neon|carbon|hydrogen|argon/i.test(geminiDesc) ||
-    allModelIds.some((id) => /gemini-4|neon|carbon|hydrogen|argon/.test(id))
-
-  if (hasArgonModel && geminiHas5h) return 'ultra'
-
-  if (input.quotaUnavailable?.reason === 'no_summary_access') return 'free'
-  if (geminiHasWeekly && !geminiHas5h && !hasGemini4Model) return 'free'
-
-  if (hasGemini4Model && geminiHas5h) return 'pro'
-
-  if (geminiDesc !== '' && !hasGemini4Model && geminiDesc.includes('flash') && !geminiDesc.includes('pro')) {
-    return 'free'
-  }
+  // Any paid 5-hour window without Argon evidence is a Pro subscription. Do NOT
+  // call a Flash-only Gemini group free: Flash models ship on paid plans too,
+  // and the account in front of us carries a 5h window, which Free never has.
+  if (ev.has5h) return 'pro'
+  if (ev.hasWeekly) return 'free'
 
   return undefined
+}
+
+/**
+ * True when a PERSISTED tier is contradicted by the evidence in front of us, in
+ * which case the stored value is stale and must be recomputed.
+ *
+ * Each tier has one defining marker, so an absent marker invalidates the tier:
+ *  - `free` requires "no 5-hour window" (Free is weekly-only),
+ *  - `ultra` requires Argon folded into the shared bucket,
+ * Pro / Enterprise are never auto-downgraded here: a weaker probe must not erase
+ * a tier that a richer probe (CLI `/usage` groups) legitimately detected.
+ */
+export function isStalePlanTier(tier: AccountPlanTier, ev: PlanTierEvidence): boolean {
+  if (tier === 'free') return ev.has5h
+  if (tier === 'ultra') return !ev.argonShared && !ev.argonDedicated
+  return false
 }
 
 export function resolveAccountPlanTier(
   acc: ManagedAccount,
   discoveredModelIds?: readonly string[],
 ): AccountPlanTier | undefined {
-  if (acc.planTier && acc.planTier !== 'unknown') return acc.planTier
-  return inferAccountPlanTier({
+  const evidence = collectPlanTierEvidence({
+    quotas: acc.quotas,
+    dedicatedGroups: acc.dedicatedGroups,
+    modelIds: discoveredModelIds,
+  })
+  const inferred = inferAccountPlanTier({
     quotas: acc.quotas,
     dedicatedGroups: acc.dedicatedGroups,
     quotaUnavailable: acc.quotaUnavailable,
     modelIds: discoveredModelIds,
   })
+  const persisted = acc.planTier && acc.planTier !== 'unknown' ? acc.planTier : undefined
+  if (persisted === undefined) return inferred
+  // A stored tier that its own defining marker contradicts is stale (e.g. a
+  // "free" badge on an account that clearly has a 5-hour paid window).
+  if (isStalePlanTier(persisted, evidence)) return inferred ?? persisted
+  return persisted
 }

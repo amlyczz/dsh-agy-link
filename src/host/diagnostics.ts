@@ -5,6 +5,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describeStartupCost } from './boot-maintenance.ts'
+import { findDuplicateEmailGroups } from '../common/account-duplicates.ts'
 import { agyMcpConfigPath } from './mcp-bridge.ts'
 import { stateDir } from '../common/config.ts'
 import type { PluginConfig } from '../common/types.ts'
@@ -119,6 +120,16 @@ export function writeDoctorReport(deps: DoctorDeps): string {
   lines.push('- conversation bindings: ' + Object.keys(bindings).length)
   for (const [k, b] of Object.entries(bindings)) {
     lines.push('  - ' + k + ' -> ' + b.conversationId + ' @ ' + new Date(b.updatedAt).toISOString())
+  }
+  if (deps.accounts !== undefined) {
+    // Duplicate Google identities: one quota, one credential slot, two rows.
+    try {
+      for (const group of findDuplicateEmailGroups(deps.accounts() as never)) {
+        lines.push('- duplicate account: ' + group.email + ' -> ' + group.aliases.join(', ') + ' (shares one quota; remove the extra row)')
+      }
+    } catch {
+      // diagnostics must never fail the command
+    }
   }
   if (deps.accounts !== undefined) {
     // Why startup was slow, and what the next spawn will still pay.

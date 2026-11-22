@@ -147,6 +147,7 @@ export const en: AgyDictionary = {
   'account.disableTitle': 'Disable this account (skip in rotation)',
   'account.enabledToast': 'Account enabled: {alias}',
   'account.disabledToast': 'Account disabled: {alias}',
+  'status.duplicate': 'Duplicate', 'status.duplicateTitle': 'The same Google account appears twice in the pool (one quota, one credential)',
   'status.disabled': 'Disabled',
   'header.warmup': 'Auto Warmup',
   'header.warmingUp': 'Warming up...',

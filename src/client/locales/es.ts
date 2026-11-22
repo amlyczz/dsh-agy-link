@@ -147,6 +147,7 @@ export const es: AgyDictionary = {
   'account.disableTitle': 'Deshabilitar esta cuenta (ignorar en rotación)',
   'account.enabledToast': 'Cuenta habilitada: {alias}',
   'account.disabledToast': 'Cuenta deshabilitada: {alias}',
+  'status.duplicate': 'Duplicada', 'status.duplicateTitle': 'La misma cuenta de Google aparece dos veces en el pool (una cuota, una credencial)',
   'status.disabled': 'Deshabilitado',
   'header.warmup': 'Precalentamiento',
   'header.warmingUp': 'Calentando...',

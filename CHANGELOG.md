@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.63 (2026-11-22)
+
+### English
+
+- **Plan tier badge is now correct for Flash-only paid plans.** A paid account whose quota shows a 5-hour window was badged **Free** because the Gemini group description only mentions "Flash" — Free is weekly-ONLY, so a 5-hour window is the paid marker. Tiers are now derived from defining evidence: Argon in its own bucket ⇒ Pro, Argon folded into the shared Gemini group ⇒ Ultra, any 5-hour window ⇒ Pro, weekly-only ⇒ Free. A stored tier whose own defining marker has disappeared is treated as stale and recomputed (a "Free" badge on a 5-hour account, or an "Ultra" badge with no Argon anywhere), while a Pro/Enterprise tier detected from richer CLI groups is never downgraded by a weaker probe. Corrected at boot and on every quota update.
+- **Duplicate Google accounts are surfaced.** The same account can sit in the pool twice (primary + isolated copy, or a re-add); both share ONE quota and one credential identity, so capacity is over-reported and the Windows credential slot thrashes between two rows that are the same person. Cards with a sibling now carry a **Duplicate** badge naming the other aliases, boot hygiene logs a warning, and `/agy doctor` lists every duplicate group.
+
+### 中文
+
+- **只有 Flash 的付费套餐不再被误标成 Free。** 之前只要 Gemini 分组描述里只有「Flash」就判 Free，可该账号明明有 5 小时窗口——Free 是「只有周额度」，**有 5 小时窗口就是付费**。现在按每个档位的定义性证据判定：Argon 独立成桶 ⇒ Pro；Argon 折进共享的 Gemini 分组 ⇒ Ultra；有任何 5 小时窗口 ⇒ Pro；只有周额度 ⇒ Free。若已存档位丢失了它自己的定义性证据（5 小时账号标着 Free、或完全没有 Argon 却标着 Ultra），判为陈旧并重算；而从 CLI 分组里正确识别出的 Pro/Ultra 不会被更弱的探测降级。开机时与每次配额更新都会纠正。
+- **重复 Google 账号可见。** 同一个账号可能在池里出现两次（主账号 + 隔离副本，或重复添加），两者共享**同一份配额与同一份凭据身份**，于是容量被算成两倍、Windows 凭据槽在两行同一个人之间反复改写。现在有兄弟账号的卡片会显示 **重复** 徽标并列出其它别名，开机整洁日志会告警，`/agy doctor` 会列出所有重复组。
+
 ## 0.6.62 (2026-11-22)
 
 ### English

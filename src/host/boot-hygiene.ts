@@ -7,6 +7,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileAtomicSync } from '../common/atomic-write.ts'
 import { detectSystemProxy } from './wincred.ts'
+import { resolveAccountPlanTier } from '../common/plan-tier.ts'
+import { findDuplicateEmailGroups } from '../common/account-duplicates.ts'
 import { ensureIsolatedKeychain, purgeStaleIsolatedKeychain, repairMacSystemKeychain } from './runner.ts'
 import { unwrapGoKeyringPayload } from '../runtime/agy/keychain.ts'
 import { resolvePrimaryCredential, findDuplicateCredentialIdentities } from './credential-slot.ts'
@@ -56,10 +58,37 @@ export function runBootHygiene(services: HostServices): void {
   } catch {
     // best-effort hygiene
   }
+  // Heal a stale plan-tier badge: an account whose quota shows a 5-hour window
+  // is not Free, and one with no Argon evidence at all is not Ultra. Cheap and
+  // pure (no spawn), so it belongs on the load path — the badge must be right on
+  // the very first render, not after a quota refresh.
+  try {
+    let healed = 0
+    for (const acc of pool.getAccounts()) {
+      const resolved = resolveAccountPlanTier(acc)
+      if (resolved !== undefined && resolved !== acc.planTier) {
+        pool.setAccountPlanTier(acc.id, resolved)
+        healed++
+      }
+    }
+    if (healed > 0) log('corrected ' + healed + ' stale plan-tier badge(s)')
+  } catch {
+    // best-effort
+  }
+  // The same Google account can be present twice (primary + isolated copy): both
+  // share one quota and one credential identity, so the pool over-reports capacity.
+  try {
+    for (const group of findDuplicateEmailGroups(pool.getAccounts())) {
+      log('WARNING: the same Google account is in the pool more than once (' + group.email + '): ' + group.aliases.join(', ') + ' — remove the extra row')
+    }
+  } catch {
+    // best-effort
+  }
   // Staging/log sweeps and the ecosystem mirror are NOT done here: on a pool of
   // 8 accounts they are hundreds of file stats plus a full copy into every
   // isolated home, all before the first frame. scheduleBootMaintenance() runs
-  // them once, deferred (see boot-maintenance.ts).  // Provision per-account login keychains for isolated pool homes (macOS):
+  // them once, deferred (see boot-maintenance.ts).
+  // Provision per-account login keychains for isolated pool homes (macOS):
   // without one, agy's keyring save pops the system "create login keychain"
   // password dialog on every token refresh. Idempotent; pre-existing homes
   // from older versions are covered here too.

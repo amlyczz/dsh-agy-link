@@ -33,6 +33,7 @@ import {
   type AccountIneligibilityReason,
 } from '../domain/accounts/selection.ts'
 import { QUOTA_FAMILIES, normalizeModelFamily } from '../common/quota-bench.ts'
+import { resolveAccountPlanTier } from '../common/plan-tier.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { ensureIsolatedKeychain } from './runner.ts'
 
@@ -370,6 +371,14 @@ export class AccountPoolManager {
       ...quotas,
     }
     if (email) acc.email = email
+
+    // Heal a PERSISTED tier that the fresh evidence contradicts: an account
+    // whose quota now shows a 5-hour window is not Free, and one with no Argon
+    // evidence at all is not Ultra. resolveAccountPlanTier() only overrides a
+    // stored tier whose defining marker is missing, so a legit Ultra detected
+    // from richer CLI groups is never downgraded here.
+    const healed = resolveAccountPlanTier(acc)
+    if (healed !== undefined && acc.planTier !== healed) acc.planTier = healed
 
     // If an updated family has exhausted its quota, proactively advance to the next account
     const now = Date.now()

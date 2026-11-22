@@ -147,6 +147,7 @@ export const zh = {
   'account.disableTitle': '停用此账号（切号与调度时跳过）',
   'account.enabledToast': '已启用账号：{alias}',
   'account.disabledToast': '已停用账号：{alias}',
+  'status.duplicate': '重复账号', 'status.duplicateTitle': '同一个 Google 账号在池中重复出现（共享同一份配额与凭据）',
   'status.disabled': '已停用',
   'header.warmup': '一键预热',
   'header.warmingUp': '预热中',

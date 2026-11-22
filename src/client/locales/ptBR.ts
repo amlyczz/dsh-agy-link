@@ -147,6 +147,7 @@ export const ptBR: AgyDictionary = {
   'account.disableTitle': 'Desativar esta conta (ignorar na rotação)',
   'account.enabledToast': 'Conta ativada: {alias}',
   'account.disabledToast': 'Conta desativada: {alias}',
+  'status.duplicate': 'Duplicada', 'status.duplicateTitle': 'A mesma conta do Google aparece duas vezes no pool (uma cota, uma credencial)',
   'status.disabled': 'Desativado',
   'header.warmup': 'Pré-aquecimento',
   'header.warmingUp': 'Aquecendo...',
