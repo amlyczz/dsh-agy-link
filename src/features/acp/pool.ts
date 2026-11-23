@@ -502,11 +502,13 @@ export class AcpSessionPool {
   evictIdle(now = Date.now()): number {
     let evicted = 0
     for (const [k, p] of [...this.procs.entries()]) {
-      if (!p.isAlive() || (now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p))) {
-        this.procs.delete(k)
-        this.closeProc(p, false)
-        evicted++
-      }
+      const alive = p.isAlive()
+      const idleFor = now - p.lastUsedAt
+      if (alive && (idleFor <= this.idleTtlMs || p.hasActivePrompt?.() || this.hasRetainedSession(p))) continue
+      this.procs.delete(k)
+      if (alive) this.opts.log?.(`[acp-pool] evicting idle process pid=${p.pid} after ${Math.floor(idleFor / 1_000)}s`)
+      this.closeProc(p, false)
+      evicted++
     }
     evicted += this.closeFinishedDrains(now)
     evicted += this.sweepStrays(now, true).reaped

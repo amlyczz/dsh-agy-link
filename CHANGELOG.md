@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(acp): the process pool no longer evicts an in-flight foreground prompt as idle (fixes #182).** `AcpProcess.lastUsedAt` only updated on outbound JSON-RPC writes, so a foreground `session/prompt` running longer than `idleTtlMs` (default 15 min) with `backgroundWakeup` off could be closed mid-turn by `AcpSessionPool.evictIdle()`. `AcpProcess` now tracks active foreground prompts (`hasActivePrompt()`) and refreshes `lastUsedAt` when the last active prompt settles; `evictIdle()` skips processes with active prompts and logs the PID and elapsed idle time on actual idle eviction.
+
+### 中文
+
+- **修复(acp)：进程池不再将正在处理前台请求的进程当作空闲回收（修复 #182）。** 此前 `AcpProcess.lastUsedAt` 仅在出站 JSON-RPC 写入时更新，当关闭后台唤醒且单个前台 `session/prompt` 运行超过 `idleTtlMs`（默认 15 分钟）时，`AcpSessionPool.evictIdle()` 会中途关闭该活跃进程。现在 `AcpProcess` 追踪进行中的前台 prompt（`hasActivePrompt()`），并在最后一个活跃 prompt 结束时刷新 `lastUsedAt`；`evictIdle()` 跳过有活跃前台请求的进程，且在真正空闲回收时记录进程 PID 与空闲时长。
+
 ## 0.6.72 (2026-11-23)
 
 ### English
