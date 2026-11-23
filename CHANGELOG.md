@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(client): the translate button no longer spins forever when it mounts during an auto-translation.** On mount the button asks `/translate/state`; a `busy` answer (a translation running in this session that the page did not start, typically auto-translate) set the spinner, and nothing ever asked again: no request of the page's own would settle it, so it kept spinning after the card had landed until the panel remounted. While the host answers `busy`, the button now asks again every 3 s and settles to ✓ on `ready`, or back to the clickable icon on `idle` (the run failed or was cancelled).
+
+### 中文
+
+- **修复(客户端)：在自动翻译进行中挂载的「译成人话」按钮不再一直转圈。** 按钮挂载时会问一次 `/translate/state`；回答 `busy`（本会话有翻译在跑，但不是本页发起的，通常是自动翻译）时按钮转圈，之后再也不问：本页没有任何请求会结束它，译文卡片出来后它仍一直转，直到面板重新挂载。现在宿主回答 `busy` 时，按钮每 3 秒再问一次：`ready` 变 ✓，`idle`（翻译失败或取消）回到可点。
+
 ## 0.6.70 (2026-11-23)
 
 ### English
