@@ -34,7 +34,7 @@ import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { createPoolQuotaHooks } from '../provider/quota-failover.ts'
 import { PREFERRED_IMAGE_QUOTA_MODEL } from '../common/model-lineup.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
-import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
+import { agyMcpConfigPath, registerBridgeMcpConfig, type BridgeRegistryState } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
 import { acquireCredentialSlot, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
 import { buildCliQuotaDeps } from './quota-cli-deps.ts'
@@ -291,7 +291,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     void catalog.forceRefreshAndNotify(newActiveId).catch(() => undefined)
   }
 
-  const bridgeState: { bridge: McpBridge | null; restores: Array<() => void> } = { bridge: null, restores: [] }
+  const bridgeState: BridgeRegistryState = { bridge: null, restores: [], log }
   const ecosystem = new EcosystemService({ pool, getConfig, log })
   const auth = new AuthHelper(bin, () => getConfig().suppressAgyAutoUpdate)
   const poolAuth = new PoolAuthFlow(pool, quota, log, {

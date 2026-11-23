@@ -130,6 +130,7 @@ export const zh = {
   'models.hint': '点击勾选要显示的模型；一个都不勾表示全部显示。进行中的会话不受影响。',
   'header.refreshQuota': '刷新额度', 'header.refreshing': '刷新中',
   'console.close': '关闭（Esc）', 'header.badgeTitle': 'Antigravity：{count} 个账号已就绪 · 点击打开控制台', 'header.badgeLoading': 'Antigravity · 点击打开控制台', 'header.subagents': '{running}/{total} 子代理',
+  'header.model': '模型', 'header.quotaStale': '窗口已重置 · 数据偏旧', 'header.familyNoAccount': '{family} 家族当前没有可用账号',
   'subagent.title': '子代理', 'subagent.running': '运行中', 'subagent.empty': '暂无子代理', 'subagent.triggerTitle': '查看子代理',
   'account.type.agy': 'Google Antigravity (CLI / OAuth)',
   'account.loginType': '登录方式：',

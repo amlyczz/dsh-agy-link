@@ -65,6 +65,19 @@ export function providerRetryPolicyFor(pool: AccountPoolManager | undefined) {
   }
 }
 
+/**
+ * Codes whose recording is DEAD for good: the process that owned the run is
+ * gone or produced nothing usable, so replaying the recording can only repeat
+ * the identical error. A fresh attempt, on the other hand, spawns a new
+ * `agy acp` and can still finish the turn.
+ */
+const REVIVABLE_FAILURE_CODES: ReadonlySet<string> = new Set([Err.TIMEOUT, Err.PROCESS_EXIT, Err.INVALID_OUTPUT])
+
+/** True when a settled recording died of a process-level failure a fresh spawn can survive. */
+export function isRevivableFailure(code: string | undefined): boolean {
+  return code !== undefined && REVIVABLE_FAILURE_CODES.has(code)
+}
+
 export interface EffortRetryDeps {
   streamAttempt: (options: AgyGenerateOptions, suppressEffort: boolean) => AsyncIterable<StreamChunk>
   learnEffortUnsupported: (model: string) => void

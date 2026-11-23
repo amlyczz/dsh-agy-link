@@ -130,6 +130,7 @@ export const en: AgyDictionary = {
   'models.hint': 'Click to tick the models to show; ticking none shows them all. Ongoing sessions are unaffected.',
   'header.refreshQuota': 'Refresh quota', 'header.refreshing': 'Refreshing...',
   'console.close': 'Close (Esc)', 'header.badgeTitle': 'Antigravity: {count} accounts ready · click to open the console', 'header.badgeLoading': 'Antigravity · click to open the console', 'header.subagents': '{running}/{total} subagents',
+  'header.model': 'model', 'header.quotaStale': 'window reset · data is old', 'header.familyNoAccount': 'no account can serve the {family} family right now',
   'subagent.title': 'Subagents', 'subagent.running': 'Running', 'subagent.empty': 'No subagents', 'subagent.triggerTitle': 'View subagents',
   'account.type.agy': 'Google Antigravity (CLI / OAuth)',
   'account.loginType': 'Login Method:',

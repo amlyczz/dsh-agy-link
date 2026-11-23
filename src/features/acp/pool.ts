@@ -253,6 +253,7 @@ export class AcpSessionPool {
     let oldestAny: string | null = null
     let oldestAnyAt = Infinity
     for (const [k, p] of this.procs) {
+      if (p.isBusy) continue // mid-turn, never a victim
       if (p.lastUsedAt < oldestAnyAt) {
         oldestAnyAt = p.lastUsedAt
         oldestAny = k
@@ -499,10 +500,15 @@ export class AcpSessionPool {
     return this.sweepStrays(now, poolIdle).strays
   }
 
+  /** A live turn is never idle: re-stamp it; otherwise TTL + no retained session. */
+  private shouldEvict(p: AcpProcess, now: number): boolean {
+    if (p.isBusy) { p.lastUsedAt = now; return false }
+    return now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p)
+  }
   evictIdle(now = Date.now()): number {
     let evicted = 0
     for (const [k, p] of [...this.procs.entries()]) {
-      if (!p.isAlive() || (now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p))) {
+      if (!p.isAlive() || this.shouldEvict(p, now)) {
         this.procs.delete(k)
         this.closeProc(p, false)
         evicted++

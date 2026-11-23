@@ -130,6 +130,7 @@ export const es: AgyDictionary = {
   'models.hint': 'Haz clic para marcar los modelos que quieres ver; sin ninguno marcado se muestran todos. Las sesiones en curso no se ven afectadas.',
   'header.refreshQuota': 'Actualizar cuota', 'header.refreshing': 'Actualizando...',
   'console.close': 'Cerrar (Esc)', 'header.badgeTitle': 'Antigravity: {count} cuentas listas · haga clic para abrir la consola', 'header.badgeLoading': 'Antigravity · haga clic para abrir la consola', 'header.subagents': '{running}/{total} subagentes',
+  'header.model': 'modelo', 'header.quotaStale': 'ventana restablecida · datos antiguos', 'header.familyNoAccount': 'ninguna cuenta puede servir la familia {family} ahora',
   'subagent.title': 'Subagentes', 'subagent.running': 'En ejecución', 'subagent.empty': 'Sin subagentes', 'subagent.triggerTitle': 'Ver subagentes',
   'account.type.agy': 'Google Antigravity (CLI / OAuth)',
   'account.loginType': 'Tipo de inicio de sesión:',

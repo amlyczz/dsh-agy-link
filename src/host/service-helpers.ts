@@ -135,7 +135,36 @@ export function resolveSessionPlanMode(ctx: Context, sessionId: string): boolean
  * Resolve the session's latest selected Antigravity model from `model/selection`
  * session events so background compaction honors user model switches when DSH
  * passes stale `lastUsed` metadata.
+ *
+ * Split out of `resolveSessionPendingModel` so a caller that already holds the
+ * session object (the HTTP session-view route) can read the SAME event stream
+ * without reaching for `ctx`.
  */
+export function latestAgyModelOf(session: unknown): string | undefined {
+  try {
+    type SessionWithEvents = {
+      log?: readonly { type: string; data?: unknown }[]
+      snapshotEvents?(): readonly { type: string; data?: unknown }[]
+      ownEvents?(): readonly { type: string; data?: unknown }[]
+      events?: readonly { type: string; data?: unknown }[]
+    }
+    if (!session) return undefined
+    const s = session as SessionWithEvents
+    const evs = s.snapshotEvents?.() ?? s.ownEvents?.() ?? s.log ?? s.events
+    if (!evs) return undefined
+    for (let i = evs.length - 1; i >= 0; i--) {
+      const ev = evs[i]
+      if (ev?.type !== 'model/selection' || !ev.data || typeof ev.data !== 'object') continue
+      const d = ev.data as { provider?: unknown; model?: unknown }
+      if (d.provider !== PROVIDER_ID) return undefined
+      return typeof d.model === 'string' && d.model.trim() !== '' ? d.model.trim() : undefined
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function resolveSessionPendingModel(ctx: Context, sessionId: string): string | undefined {
   if (sessionId === '') return undefined
   try {
@@ -147,18 +176,7 @@ export function resolveSessionPendingModel(ctx: Context, sessionId: string): str
     }
     const sessions = (ctx.get('sessions') as { get(id: unknown): SessionWithEvents | undefined } | undefined)
       ?? (ctx as unknown as { sessions?: { get(id: unknown): SessionWithEvents | undefined } }).sessions
-    const session = sessions?.get(sessionId)
-    if (!session) return undefined
-    const evs = session.snapshotEvents?.() ?? session.ownEvents?.() ?? session.log ?? session.events
-    if (!evs) return undefined
-    for (let i = evs.length - 1; i >= 0; i--) {
-      const ev = evs[i]
-      if (ev?.type !== 'model/selection' || !ev.data || typeof ev.data !== 'object') continue
-      const d = ev.data as { provider?: unknown; model?: unknown }
-      if (d.provider !== PROVIDER_ID) return undefined
-      return typeof d.model === 'string' && d.model.trim() !== '' ? d.model.trim() : undefined
-    }
-    return undefined
+    return latestAgyModelOf(sessions?.get(sessionId))
   } catch {
     return undefined
   }

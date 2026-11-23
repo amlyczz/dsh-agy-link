@@ -243,10 +243,6 @@ export class PoolAdmin {
   }
 
   /**
-   * Record the account a run actually spawned with. The console derives its
-   * single "in use" badge from this; exactly one account runs agy at a time.
-   */
-  /**
    * Record the account a run ACTUALLY used, scoped to its model family.
    *
    * Family-scoped on purpose: the console's per-family "当前使用" badge must

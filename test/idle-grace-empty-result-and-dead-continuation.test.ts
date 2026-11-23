@@ -348,3 +348,80 @@ console.log(JSON.stringify({ event: 'result', status: 'OK', conversation_id: 'co
     rmSync(workDir, { recursive: true, force: true })
   }
 })
+
+test('AgyAdapter revives a continuation whose recording settled with PROCESS_EXIT instead of replaying it', async () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'agy-revivable-cont-'))
+  try {
+    const fakeBin = join(workDir, 'fake-agy.mjs')
+    writeFileSync(
+      fakeBin,
+      `#!${process.execPath}
+console.log(JSON.stringify({ event: 'init', conversation_id: 'conv-revived' }))
+console.log(JSON.stringify({ event: 'result', status: 'OK', conversation_id: 'conv-revived', response: 'retry spawned a fresh process', usage: { input_tokens: 10, output_tokens: 5 } }))
+`,
+    )
+    chmodSync(fakeBin, 0o755)
+
+    const cfg: PluginConfig = { ...resolveConfig({}, {}, {}), permissionMode: 'plan', timeoutMs: 10_000 }
+    const store = new SessionStore(join(workDir, 'sessions.json'))
+    const catalog = new ModelCatalog(async () => { throw new Error('no discovery') }, cfg.fallbackModels, 300_000)
+    const runs = new RunRegistry()
+    const warnings: string[] = []
+    const adapter = new AgyAdapter({
+      getConfig: () => cfg,
+      catalog,
+      store,
+      bin: () => fakeBin,
+      acquire: () => Promise.resolve(() => {}),
+      runs,
+      log: (m) => warnings.push(m),
+    })
+
+    // Live shape (2026-11-23): the idle sweep killed the child mid-turn, so the
+    // recording settled with PROCESS_EXIT while a mirrored tool result was
+    // already in history. Replaying it failed in ~8ms five times.
+    const deadRec = runs.create()
+    deadRec.append({
+      kind: 'step',
+      stepKey: '1',
+      stepKind: 'tool',
+      state: 'DONE',
+      text: '',
+      tool: { name: 'read_file', output: 'ok' },
+      raw: {},
+    })
+    deadRec.settle({ kind: 'error', code: 'PROCESS_EXIT', message: 'agy acp exited (code=1, signal=null):' })
+
+    const callId = mirrorCallId(deadRec.runId, 0)
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'do work' }] },
+      { role: 'assistant', content: [{ type: 'tool-call', id: callId, name: 'agy_tool', arguments: '{}' }] },
+      { role: 'tool', toolCallId: callId, content: [{ type: 'text', text: 'ok' }] },
+    ] as unknown as Message[]
+    const options: GenerateOptions = {
+      provider: 'antigravity',
+      model: 'gemini-3.8-flash',
+      messages,
+      tools: [{ name: 'agy_tool', description: '', parameters: {} } as never],
+      sessionId: 'sess-revivable' as never,
+    } as GenerateOptions
+
+    const started = Date.now()
+    const chunks = await collect(adapter.stream(options))
+    const finish = chunks.find((c) => c.type === 'finish') as { type: 'finish'; reason: { kind: string } } | undefined
+    assert.equal(finish?.reason.kind, 'stop', 'a fresh spawn must be able to finish the step')
+    assert.equal(runs.get(deadRec.runId), undefined, 'the dead recording must be forgotten')
+    const text = chunks
+      .filter((c): c is Extract<StreamChunk, { type: 'text-delta' }> => c.type === 'text-delta')
+      .map((c) => c.text)
+      .join('')
+    assert.equal(text, 'retry spawned a fresh process')
+    assert.ok(
+      warnings.some((w) => w.includes('fresh process')),
+      'must log that the recorded run could not be resumed',
+    )
+    assert.ok(Date.now() - started > 0)
+  } finally {
+    rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+  }
+})

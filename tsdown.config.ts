@@ -40,6 +40,21 @@ export default defineConfig([
     },
   },
   {
+    // Schema doctor: a transparent stdio MCP proxy that repairs third-party
+    // tool schemas before `agy` forwards them to Google (one array without
+    // `items` used to fail every turn with 400 INVALID_ARGUMENT).
+    entry: { "mcp-sanitize": "src/host/mcp-sanitize-shim.ts" },
+    outDir: "dist",
+    format: ["esm"],
+    platform: "node",
+    target: "es2024",
+    dts: false,
+    clean: false,
+    fixedExtension: false,
+    external: [/^node:/],
+    outputOptions: { entryFileNames: "mcp-sanitize.mjs" },
+  },
+  {
     // Headless image CLI (`dsh-agy-image`): one self-contained ESM file. It
     // deliberately bundles @deepseek-ai/dsh-llm (the adapter's base classes and
     // stream types) so the CLI can drive the SAME AgyAdapter outside the DSH

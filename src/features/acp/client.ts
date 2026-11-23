@@ -61,6 +61,8 @@ interface PendingRpc {
   resolve: (res: Record<string, unknown>) => void
   reject: (err: Error) => void
   timer?: NodeJS.Timeout
+  /** RPC name: lets `isBusy` tell a long turn from a short control request. */
+  method: string
 }
 
 export class AcpProcess extends EventEmitter {
@@ -107,6 +109,16 @@ export class AcpProcess extends EventEmitter {
   isAlive(): boolean { return this.alive && this.child !== null }
   /** Live child pid, or null before start / after exit (stray reconciliation). */
   get pid(): number | null { return this.child?.pid ?? null }
+  /**
+   * A `session/prompt` is still in flight: the child is mid-turn, however quiet
+   * it has been. The idle sweep used to read that silence as "idle" and kill
+   * live 15-minute turns (`agy acp exited (code=1, signal=null)`), after which
+   * every retry replayed the dead recording (2026-11-23).
+   */
+  get isBusy(): boolean {
+    for (const p of this.pending.values()) if (p.method === 'session/prompt') return true
+    return false
+  }
   get sessionCount(): number { return this.openSessions.size }
   /** Tail of the process stderr (diagnostics / crash messages). */
   get stderr(): string { return this.stderrBuffer.slice(-4096) }
@@ -252,6 +264,10 @@ export class AcpProcess extends EventEmitter {
     } catch {
       return
     }
+    // ANY inbound frame is activity: a mid-turn stream of `session/update`
+    // events used to leave `lastUsedAt` frozen at the prompt's send time, so a
+    // long mirrored-tool run looked idle for 15 minutes and was evicted.
+    this.lastUsedAt = Date.now()
     if ((typeof msg.id === 'number' || typeof msg.id === 'string') && typeof msg.method === 'string') {
       this.handleServerRequest(msg.id, msg.method, (msg.params ?? {}) as Record<string, unknown>)
       return
@@ -309,7 +325,7 @@ export class AcpProcess extends EventEmitter {
           }, timeoutMs)
         : undefined
       timer?.unref?.()
-      this.pending.set(id, { resolve, reject, ...(timer ? { timer } : {}) })
+      this.pending.set(id, { resolve, reject, method, ...(timer ? { timer } : {}) })
       try {
         this.writeLine({ jsonrpc: '2.0', id, method, params })
       } catch (e) {

@@ -100,7 +100,10 @@ test('pure-text aux calls run in a neutral, cacheable dir instead of the project
   for (const purpose of ['session-title', 'compaction', 'translation'] as const) {
     const { context } = ctx({ purpose, ...(purpose === 'translation' ? { agyTranslateSession: { setup: 'p', text: 't' } } : {}) })
     assert.equal(context.neutralAuxWorkspace, true, purpose + ' must use the neutral dir')
-    assert.ok(context.workspaceRoot.endsWith('/agy-link/aux-cwd'), purpose + ' cwd: ' + context.workspaceRoot)
+    // Separator-agnostic: the neutral dir is a real path under the plugin state
+    // dir, so Windows yields `…\agy-link\aux-cwd` (the old assert baked in `/`).
+    const normalized = context.workspaceRoot.replaceAll('\\', '/')
+    assert.ok(normalized.endsWith('/agy-link/aux-cwd'), purpose + ' cwd: ' + context.workspaceRoot)
   }
   const chat = ctx()
   assert.equal(chat.context.neutralAuxWorkspace, false)

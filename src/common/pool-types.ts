@@ -475,10 +475,13 @@ export interface AccountPoolData {
   /** Currently active account id per model family for sticky sequential drain */
   activeAccountIds?: Partial<Record<ModelFamily, string>>
   /**
-   * Account of the most recent agy spawn — the single source of truth for the
-   * console's "in use" badge. Per-family pointers above are an internal
-   * scheduling detail: families can legitimately sit stale on accounts that
-   * are not running anything (that badge showed two accounts at once).
+   * Account of the most recent agy spawn that belonged to the `google` family.
+   *
+   * NOT the account a session is using: selection is per family, so the
+   * console reads `activeAccountIds[family]` (a real per-family pin) and the
+   * conversation header reads `/session-view` (family of the selected model).
+   * Kept for the `google` readouts that predate family scoping and for
+   * last-resort fallbacks.
    */
   lastActiveAccountId?: string
   /** Timestamp of the most recent explicit user account switch/pin (overrides older session stickiness) */

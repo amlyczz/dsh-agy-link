@@ -100,7 +100,18 @@ export interface StatusPayload {
 	imageEffort?: string;
 	imageOutputDir?: string;
 	bindings?: number;
-	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
+	/**
+	 * Host summary of the most recent run. Diagnostic only: no client surface
+	 * reads it today, and its shape is the host's (`processOk`/`processCode`),
+	 * not a boolean `ok`/`code` pair.
+	 */
+	lastRun?: {
+		processOk: boolean
+		processCode: string
+		durationMs: number
+		model: string
+		toolErrors: readonly string[]
+	} | null;
 }
 
 const STATUS_CACHE_KEY = 'dsh_agy_status_cache';

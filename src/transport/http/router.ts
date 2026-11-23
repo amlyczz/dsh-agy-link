@@ -1,9 +1,10 @@
-// The plugin's HTTP surface: registers all 29 /plugins/agy-link/* routes with
-// the host webServer and returns one disposer that tears every route down.
+// The plugin's HTTP surface: registers every /plugins/agy-link/* route with
+// the host webServer and returns one disposer that tears them all down.
 // Route bodies live in ./routes/*; this module only wires them up.
 import type { HostServices } from '../../host/services.ts'
 import type { RouteRegistrar, WebServerLike } from './respond.ts'
 import { register as registerStatus } from './routes/status.ts'
+import { register as registerSessionView } from './routes/session-view.ts'
 import { register as registerPool } from './routes/pool.ts'
 import { register as registerAuth } from './routes/auth.ts'
 import { register as registerConfig } from './routes/config.ts'
@@ -21,6 +22,7 @@ export function registerRoutes(webServer: WebServerLike, services: HostServices)
     if (typeof d === 'function') disposers.push(d)
   }
   registerStatus(reg, services)
+  registerSessionView(reg, services)
   registerPool(reg, services)
   registerAuth(reg, services)
   registerConfig(reg, services)

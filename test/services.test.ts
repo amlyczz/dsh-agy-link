@@ -1,4 +1,4 @@
-// Coverage for the composition factory `createHostServices`.
+﻿// Coverage for the composition factory `createHostServices`.
 //
 // This exercises the REAL factory (no mocking of the module) against a temp
 // DSH home/state dir so it never reads or writes the developer's ~/.dsh or
@@ -81,7 +81,9 @@ test('returns the full services shape with sane defaults', (t) => {
   assert.equal(services.lastRun, null)
   assert.equal(typeof services.lastParser, 'object')
   assert.equal(services.hostDir, '')
-  assert.deepEqual(services.bridgeState, { bridge: null, restores: [] })
+  assert.equal(services.bridgeState.bridge, null)
+  assert.deepEqual(services.bridgeState.restores, [])
+  assert.equal(typeof services.bridgeState.log, 'function')
   assert.deepEqual({ ...services.webServerPort }, {})
   assert.equal(services.webServerPort.current, undefined)
   assert.equal(services.status.version, null)
@@ -384,7 +386,9 @@ test('constructing does not spawn agy and stays inside the temp HOME', (t) => {
   // The factory resolves the binary by filesystem probe, never by executing it.
   assert.equal(services.bin(), bin)
   assert.equal(existsSync(marker), false, 'agy was not spawned during construction or bin resolution')
-  assert.deepEqual(services.bridgeState, { bridge: null, restores: [] })
+  assert.equal(services.bridgeState.bridge, null)
+  assert.deepEqual(services.bridgeState.restores, [])
+  assert.equal(typeof services.bridgeState.log, 'function')
 })
 
 test('issue #139: activeCwds reads the session store list() (DSH has no values())', (t) => {

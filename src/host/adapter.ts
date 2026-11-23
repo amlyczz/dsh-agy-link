@@ -11,7 +11,7 @@ import { EffortPolicy } from '../provider/effort-policy.ts'
 import { FailoverBudget } from '../provider/failover-budget.ts'
 import { SpawnLimiter } from '../provider/spawn-limiter.ts'
 import { listAvailableModels, resolveModelInfo, type ModelResolutionDeps } from '../provider/model-resolution.ts'
-import { providerRetryPolicyFor, streamWithEffortRetry } from '../provider/retry-policy.ts'
+import { providerRetryPolicyFor, streamWithEffortRetry, isRevivableFailure } from '../provider/retry-policy.ts'
 import { deliverContext } from '../provider/context-delivery.ts'
 export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
@@ -275,7 +275,8 @@ export class AgyAdapter extends LlmAdapter {
       const deadFailure = rec !== undefined && rec.isSettled ? rec.failureInfo : null
       const mirrorLive = policy.mirrorTools && hasToolSupport && (this.deps.isMirrorToolAvailable?.(sessionKey) ?? true)
       const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, mirrorLive)
-      if (rec !== undefined && !deadNoResult && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
+      const deadRevivable = deadFailure !== null && isRevivableFailure(deadFailure.code)
+      if (rec !== undefined && !deadNoResult && !deadRevivable && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
         yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
         return
       }
@@ -286,7 +287,7 @@ export class AgyAdapter extends LlmAdapter {
           deadNoResult
             ? 'agy run ' + continuation.runId + ' settled without a consumable result — retrying this step instead of replaying it'
             : 'agy run ' + continuation.runId + ' settled in ' + (deadFailure?.code ?? '') + ' — retrying this step instead of replaying it'
-              + (deadFailure?.code === Err.NETWORK && this.sharesSingleEgress() ? ' on the same account (shared egress)' : ' on another account'),
+              + (deadRevivable ? ' with a fresh process' : (deadFailure?.code === Err.NETWORK && this.sharesSingleEgress() ? ' on the same account (shared egress)' : ' on another account')),
         )
       } else {
         this.warnOnce(

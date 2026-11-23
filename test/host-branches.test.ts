@@ -322,6 +322,31 @@ test('account-selection: ineligible sticky account falls through to selectAccoun
   assert.equal(out.account?.id, 'acc_x')
 })
 
+test('account-selection: win32 + parallelSameAccount still honours a bound session over the pool pointer', async () => {
+  // The pack-share rule exists so sessions with NO binding converge on one
+  // credential slot. It must not override a session that already ran on an
+  // account: that silently hops a live conversation between accounts (the
+  // adapter-level regression is 'session sticks to current account').
+  const stickyAcc = account('acc_sticky')
+  const poolAcc = account('acc_pool')
+  const { pool, calls } = selPool({ accounts: [stickyAcc, poolAcc], select: () => poolAcc, lastActive: 'acc_pool' })
+  const { deps } = selectionDeps(pool, { 's1:acc_sticky': { conversationId: 'c', lastMessageCount: 0, updatedAt: 5 } })
+  const restore = setPlatform('win32')
+  try {
+    const out = await selectSessionAccount({
+      deps,
+      cfg: cfgSelect({ parallelSameAccount: true }),
+      model: 'gemini-3.8-flash',
+      isAux: false,
+      sessionKey: 's1',
+    })
+    assert.equal(out.account?.id, 'acc_sticky', 'the session keeps the account it already ran on')
+    assert.deepEqual(calls.select, [], 'the pool candidate is not consulted when a binding is usable')
+  } finally {
+    restore()
+  }
+})
+
 test('account-selection: win32 + parallelSameAccount pins the pool candidate directly', async () => {
   const a = account('acc_w')
   const { pool } = selPool({ accounts: [a], select: () => a })

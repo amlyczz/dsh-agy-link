@@ -35,6 +35,7 @@ try {
 /** The frozen route surface: kind + path, exactly as the client half polls it. */
 const EXPECTED_ROUTES: ReadonlyArray<readonly [kind: string, path: string]> = [
   ['exact', '/plugins/agy-link/status'],
+  ['exact', '/plugins/agy-link/session-view'],
   ['exact', '/plugins/agy-link/auth'],
   ['exact', '/plugins/agy-link/auth-code'],
   ['exact', '/plugins/agy-link/auth-cancel'],
@@ -450,6 +451,60 @@ test('/status answers 200 with the client-visible shape', async () => {
   assert.equal(body.poolWideCatalog, false)
 })
 
+test('/session-view answers for the family of the model this session selected', async () => {
+  const ele = {
+    id: 'acc_ele',
+    alias: 'ele',
+    email: 'ele@example.com',
+    dir: '/tmp/ele',
+    enabled: true,
+    createdAt: 1,
+    cooldowns: {},
+    quotas: { argon: { weeklyFraction: 0.58, weeklyResetTime: new Date(Date.now() + 86_400_000).toISOString(), updatedAt: Date.now() } },
+  }
+  const poolData = {
+    version: 1,
+    mode: 'sequential',
+    defaultCooldownMs: 900_000,
+    maxCooldownMs: 3_600_000,
+    activeAccountIds: { argon: 'acc_ele' },
+    resolvedActiveAccountIds: { argon: 'acc_ele' },
+    accounts: [ele],
+  }
+  const pool = {
+    getPoolData: () => poolData,
+    getAccounts: () => [ele],
+    getAccount: (id: string) => (id === 'acc_ele' ? ele : undefined),
+  }
+  // The session's own selection outranks the configured default model.
+  const sessionsSvc = () => ({
+    get: () => ({ log: [{ type: 'model/selection', data: { provider: 'antigravity', model: 'gemini-4-argon-high' } }] }),
+  })
+  const setup = () => {
+    const webServer = fakeWebServer()
+    registerRoutes(webServer, fakeServices({ pool, sessionsSvc } as never))
+    return { call: (path: string, req: unknown) => invoke(routeFor(webServer.routes, path), req) }
+  }
+
+  const captured = await setup().call('/plugins/agy-link/session-view', fakeReq('GET', '/?session=session-1'))
+  assert.equal(captured.status(), 200)
+  const body = captured.json() as Record<string, unknown>
+  assert.equal(body.family, 'argon')
+  assert.equal(body.accountId, 'acc_ele')
+  assert.equal(body.alias, 'ele')
+  assert.equal(body.percent, 58)
+  assert.equal(body.window, 'weekly')
+  assert.equal(body.model, 'gemini-4-argon-high')
+
+  // No session id: the configured default decides, and no account is invented
+  // for a family that has no pointer.
+  const fallback = await setup().call('/plugins/agy-link/session-view', fakeReq('GET'))
+  const fallbackBody = fallback.json() as Record<string, unknown>
+  assert.equal(fallbackBody.model, 'gemini-3-flash')
+  assert.equal(fallbackBody.family, 'google')
+  assert.equal(fallbackBody.accountId, null)
+})
+
 test('/status forwards an explicit UI visibility opt-out (issue #105)', async () => {
   const webServer = fakeWebServer()
   registerRoutes(webServer, fakeServices({}, { showHeaderBadge: false, showTranslateAction: false }))
@@ -539,8 +594,8 @@ test('every POST-only route rejects GET/PUT/DELETE with 405 before touching serv
       assert.deepEqual(captured.json(), { error: 'POST only' }, path + ' ' + method)
     }
   }
-  // 24 POST-only + 11 GET/method-agnostic routes = 35 routes total.
-  assert.equal(POST_ONLY_ROUTES.length + 11, EXPECTED_ROUTES.length)
+  // 24 POST-only + 12 GET/method-agnostic routes = 36 routes total.
+  assert.equal(POST_ONLY_ROUTES.length + 12, EXPECTED_ROUTES.length)
 })
 
 test('GET-style routes do not gate on method (current contract, asserted verbatim)', async (t) => {
@@ -550,6 +605,7 @@ test('GET-style routes do not gate on method (current contract, asserted verbati
   const s = setup({ hostDir: root }, {})
   const cases: Array<[string, string, number]> = [
     ['/plugins/agy-link/status', '/', 200],
+    ['/plugins/agy-link/session-view', '/?session=s', 200],
     ['/plugins/agy-link/pool', '/', 200],
     ['/plugins/agy-link/translate/pending', '/', 200],
     ['/plugins/agy-link/translate/turn', '/?session=s&turn=1', 200],

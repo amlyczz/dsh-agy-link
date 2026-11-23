@@ -58,8 +58,14 @@ export interface AccountSelectionResult {
   activeModel: string
 }
 
-/** Session affinity: reuse the account this session last ran for THIS family, if eligible and not superseded by a manual switch. */
-function stickyAccount(
+/**
+ * Session affinity: reuse the account this session last ran for THIS family, if eligible and not superseded by a manual switch.
+ *
+ * Exported because the header badge must describe the SAME account the
+ * scheduler would pick. A second, badge-local copy of this rule is exactly how
+ * the readout drifted from reality (reported 2026-11-23).
+ */
+export function stickyAccount(
   deps: AccountSelectionDeps,
   family: ModelFamily,
   sessionKey: string,
@@ -251,20 +257,25 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
 
   const pool = deps.pool
   let account: ManagedAccount | undefined
-  // Windows has one global credential slot; align sessions to the pool's
-  // active candidate so they share it lock-free (parallelSameAccount).
-  if (pool !== undefined && !isAux && sessionKey !== '' && process.platform === 'win32' && cfg.parallelSameAccount) {
-    account = pool.selectAccount(family, activeModel) ?? undefined
-  }
   const avoid = new Set(input.avoidAccountIds ?? [])
   const quotaModel = (input.quotaModel ?? '').trim()
   const quotaClear = (acc: ManagedAccount | undefined): acc is ManagedAccount =>
     acc !== undefined &&
     !avoid.has(acc.id) &&
     (quotaModel === '' || isModelQuotaClear(acc, family, quotaModel, Date.now()))
-  if (account === undefined && pool !== undefined && !isAux && sessionKey !== '') {
+  // Session affinity comes FIRST on every platform: the account this session
+  // already ran on is the one its credential slot most likely still holds, and
+  // hopping accounts mid-conversation swaps that slot and the quota the user is
+  // watching (spec: "Turn 2 MUST stay on Turn 1's account while it has quota").
+  // The Windows pack-share below therefore only decides for sessions that have
+  // no usable binding — a fresh session still follows the pool's candidate so
+  // concurrent runs keep sharing one credential slot.
+  if (pool !== undefined && !isAux && sessionKey !== '') {
     const sticky = stickyAccount(deps, family, sessionKey, activeModel)
     if (quotaClear(sticky)) account = sticky
+  }
+  if (account === undefined && pool !== undefined && !isAux && sessionKey !== '' && process.platform === 'win32' && cfg.parallelSameAccount) {
+    account = pool.selectAccount(family, activeModel) ?? undefined
   }
   if (account === undefined && pool !== undefined) {
     if (quotaModel !== '' && typeof pool.findAccount === 'function') {

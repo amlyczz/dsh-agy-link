@@ -9,6 +9,7 @@ import { buildAccountModelRows, type AccountModelDisplayItem } from '../../commo
 import type { AccountPlanTier, AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
 import { renderDuplicateBadge } from './duplicate-badge.ts';
 import { resolveFamilyActiveIds, resolveFamilyPinnedIds } from './active-account-ids.ts';
+import { accountDisplayAlias as aliasOf, type AliasTranslator } from './account-alias.ts';
 import { resolveAccountPlanTier } from '../../common/plan-tier.ts';
 import {
 	QUOTA_FAMILIES,
@@ -189,10 +190,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 
 /** Card label: a generated default alias is re-rendered in the active locale. */
 function accountDisplayAlias(acc: ManagedAccount, accIndex: number, t: Translator): string {
-	// `defaultAlias === undefined` on legacy rows still carrying the old Chinese default.
-	const legacyDefault = acc.defaultAlias === undefined && acc.systemHome && acc.alias === '主账号 (系统登录)';
-	if (!acc.defaultAlias && !legacyDefault) return acc.alias;
-	return acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accIndex + 1 });
+	return aliasOf(t as unknown as AliasTranslator, acc, accIndex);
 }
 
 interface CardHeaderCtx {

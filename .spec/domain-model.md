@@ -27,6 +27,7 @@
 | **Quota Model（第二配额维度）** | 生图请求同时受「驱动聊天模型」与「图片模型桶」约束；`quotaModel` 就是后者。 | `quotaModel`、`isModelQuotaClear()` |
 | **Sticky Pointer（粘性指针）** | 每族当前使用的账号；正常聊天尽量粘住，只有不可用才前进。 | `activeAccountIds[family]`、`lastActiveAccountId` |
 | **Local Rotation（局部轮换）** | 一次生图请求内部的换号：用 `avoidAccountIds` + `findAccount()`，**不移动**粘性指针。 | `ImageService.runAttempts` |
+| **Session Binding（会话绑定）** | 某个 DSH 会话在某族上实际跑过的账号（`store` 的 `<sessionKey>:<accountId>`）。**仍可用时压过族粘性指针**：会话不应在对话中途悄悄换号。 | `stickyAccount()` |
 | **Quota Hops（换号预算）** | 一次请求内允许因配额再试的账号数上限（`min(启用账号数-1,16)`）。 | `poolQuotaHops` |
 | **Failover（失败接管）** | 冷却/暂停当前账号并切到下一个可用账号；TOS 终态**永不**跨账号。 | `quota-failover.ts` |
 
@@ -39,6 +40,7 @@
 5. **无可用账号时必须显式报错**，严禁 `account = undefined` 回落系统主账号。
 6. **启动迁移**清掉历史遗留的「模型级 429 写出的族冷却」。
 7. **用户「清除冷却」** = 清该族冷却 + 该账号全部模型桶（`quotaGateClearedAt` 仅用于主动让路）。
+8. **会话绑定先于平台策略**：`selectSessionAccount()` 在所有平台都先走 `stickyAccount()`；Windows 的「同账号打包」（`parallelSameAccount`）只用于**没有可用绑定**的新会话，用来让并发回合共用一个凭据槽。绑定账号被烧掉/冷却后才落到 `selectAccount()`（该族账本正常前进）。
 
 ## 3. 传输与上下文
 

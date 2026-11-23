@@ -8,6 +8,7 @@ import { postPool } from '../api.ts';
 import type { StatusPayload } from '../status.ts';
 import type { ShowToast } from '../ui/Toast.ts';
 import type { Translator } from './useTranslation.ts';
+import { accountDisplayAlias, type AliasTranslator } from '../sections/account-alias.ts';
 
 export interface AccountsDeps {
 	status: StatusPayload | null;
@@ -159,10 +160,8 @@ function lifecycleActions(
 		}
 		await refresh();
 		setLoadingAction(null);
-		const legacyDefault = acc.defaultAlias === undefined && acc.systemHome && acc.alias === '主账号 (系统登录)';
-		const displayAlias = acc.defaultAlias || legacyDefault
-			? acc.systemHome ? t('account.defaultAlias') : acc.alias
-			: acc.alias;
+		const accounts = deps.status?.pool?.accounts ?? [];
+		const displayAlias = accountDisplayAlias(deps.t as unknown as AliasTranslator, acc, accounts.indexOf(acc));
 		showToast(t(nextState ? 'account.enabledToast' : 'account.disabledToast', { alias: displayAlias }), 'success');
 	};
 

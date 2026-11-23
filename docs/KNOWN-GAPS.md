@@ -217,6 +217,27 @@ reference-counted slot is the strongest isolation the plugin can provide.
   (upstream issue #36).
 - First unauthenticated call takes ~60-70s to fail (agy waits for a pasted
   code); later failures are faster.
+- **A third-party MCP server registered directly in agy used to kill every
+  turn with `INVALID_ARGUMENT` — wrapped now, with one gap left.**
+  `<agy home>/.gemini/config/mcp_config.json` is agy's own registry; servers
+  listed there are loaded by agy itself, and the tool schemas they return are
+  forwarded to Gemini verbatim. Google's validator rejects the WHOLE request
+  when one declaration has an array without `items`
+  (`GenerateContentRequest.tools[0].function_declarations[N].parameters
+  .properties[args].items: missing field`). Measured 2026-11-23: godot-mcp
+  3.1.0 declares 12 such arrays (`args`, `vertices`, `normals`, `uvs`,
+  `indices`, `points`, `methods`, `cells`, `tracks`). The **schema doctor**
+  (`dist/mcp-sanitize.mjs` + `writeMcpConfig()` wrapping) now proxies every
+  foreign stdio entry and repairs `tools/list`, and drops agy's stale per-tool
+  descriptors so the next spawn refetches; verified 0 item-less arrays across
+  all 217 declared tools. Remaining gap: entries the plugin cannot wrap —
+  `url`-based (http/sse) servers, a spec larger than
+  `MAX_WRAPPED_SPEC_CHARS`, and a plugin that is removed while wrapped entries
+  are still in a foreign host's registry (they are unwrapped once the last
+  `dsh-tools-*` entry leaves, and every wrapper carries its original spec, so
+  recovery never needs the plugin). For those, dropping the duplicate entries
+  from agy's registry remains the manual mitigation (DSH's MCP bundles expose
+  the same tools through the hardened bridge).
 
 ## Fallbacks
 
