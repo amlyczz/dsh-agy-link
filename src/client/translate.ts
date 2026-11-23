@@ -15,7 +15,7 @@
 // shared translate-context) so each surface stays reviewable; this file keeps
 // the install entry point and re-exports the original public API.
 
-import { STYLE_ID, win, service, TRANSLATION_KIND, type ClientContextLike } from './translate-context.ts'
+import { STYLE_ID, win, TRANSLATION_KIND, registerConversationDefinitions, type ClientContextLike } from './translate-context.ts'
 import { injectStyles, TranslationCard } from './translate-card.ts'
 import { TranslateAction, TIP_ID } from './translate-state.ts'
 import { translationDefinition } from './translate-record.ts'
@@ -25,27 +25,9 @@ export { renderMarkdown } from './translate-card.ts'
 export { actionStateOf, setActionState, subscribeActionState } from './translate-state.ts'
 export { translationDefinition }
 
-interface ConversationEventsLike {
-	register(definition: Record<string, unknown>): undefined | (() => void)
-}
-
-interface ConversationLike {
-	events?: ConversationEventsLike
-}
-
 export function installTranslationUi(ctx: ClientContextLike, localeNs: string): () => void {
 	injectStyles()
-	const disposers: Array<() => void> = []
-
-	const conversation = service<ConversationLike>(ctx, 'uiConversation')
-	if (conversation?.events !== undefined && typeof conversation.events.register === 'function') {
-		try {
-			const dispose = conversation.events.register(translationDefinition())
-			if (typeof dispose === 'function') disposers.push(dispose)
-		} catch (e) {
-			console.warn('[dsh-agy-link] translation definition registration failed:', e)
-		}
-	}
+	const disposers: Array<() => void> = [registerConversationDefinitions(ctx, 'translation', () => [translationDefinition()])]
 
 	try {
 		// Keyed slot: the key IS the row identity (one card renderer per node kind).

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Fix(client): translation and ACP cards register once `uiConversation` exists, instead of racing boot.** The client boot entry only waits for `slots` and `locale`, so the host can apply this plugin before `dsh-client-ui-conversation` has provided its service. `installTranslationUi` / `installAcpCards` looked the service up once; when it was not there yet they registered nothing and logged nothing, so every `plugin:agy-link/translation` record stayed in the session while no card was ever rendered (seen on DSH desktop 0.2.2-rc.3: the conversation event registry held 34 Definitions and none was `agy-translation`, although the records had reached the renderer). Both now register through `ctx.inject(['uiConversation'], …)` — the host's own pattern — and re-register if the service is provided again; a composition without `inject` keeps the immediate lookup. Already-persisted records render as soon as the fixed client loads; nothing in the session log changes.
+
+### 中文
+
+- **修复(客户端)：翻译卡片与 ACP 卡片改为等 `uiConversation` 就绪后注册，不再和启动顺序赛跑。** 客户端 boot 条目只等 `slots` 和 `locale`，宿主可能在 `dsh-client-ui-conversation` 提供服务之前就应用本插件。`installTranslationUi` / `installAcpCards` 只查一次服务，没查到就什么也不注册、也不留日志：`plugin:agy-link/translation` 记录照常写进会话，但一张卡片都不显示（DSH 桌面版 0.2.2-rc.3 实测：会话事件注册表里有 34 个 Definition，没有 `agy-translation`，而记录本身已经到了渲染进程）。现在两者都通过 `ctx.inject(['uiConversation'], …)`（宿主自己的写法）注册，服务重新提供时会重新注册；没有 `inject` 的环境仍走即时查找。修复后的客户端一加载，已落库的翻译就会显示，会话日志不做任何改动。
+
 ## 0.6.67 (2026-11-23)
 
 ### English

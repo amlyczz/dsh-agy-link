@@ -211,6 +211,60 @@ test('client registers the translation conversation definition', () => {
   assert.equal(definition.match({ type: 'assistant/message', seq: 7 }), null)
 })
 
+test('definitions register once uiConversation is provided after the client applied', () => {
+  // The client boot entry only waits for slots/locale, so the host can apply this
+  // plugin before dsh-client-ui-conversation provides its service. Registration
+  // must follow the service instead of looking it up once.
+  const registered: string[] = []
+  const unregistered: string[] = []
+  // Shaped like the host's ConversationEventRegistry: `register` reads `this`,
+  // so a detached call (`const r = events.register; r(def)`) fails here too.
+  class Registry {
+    add(definition: Definition) {
+      registered.push(definition.kind)
+      return () => void unregistered.push(definition.kind)
+    }
+    register(definition: Definition) {
+      return this.add(definition)
+    }
+  }
+  const conversation = { events: new Registry() }
+  let provided = false
+  const pending: Array<(scope: unknown) => unknown> = []
+  const scopeEffects: Array<() => void> = []
+  const scope = {
+    get: (name: string) => (name === 'uiConversation' && provided ? conversation : undefined),
+    effect(setup: () => () => void) {
+      scopeEffects.push(setup())
+    },
+  }
+  const ctx = {
+    locale: { register: () => () => undefined, bind: () => (key: string) => key, addLanguage: () => () => undefined, subscribe: () => () => undefined },
+    get: scope.get,
+    inject(deps: string[], apply: (scope: unknown) => unknown) {
+      // The bundle runs in a vm context: copy its array into this realm before a strict compare.
+      assert.deepEqual([...deps], ['uiConversation'])
+      pending.push(apply)
+      return { dispose: () => undefined }
+    },
+    effect(callback: () => (() => void) | void) {
+      callback()
+    },
+    slots: { inject: (_name: string, callback: () => () => void) => void callback(), register: () => () => undefined },
+  }
+  loadPlugin().plugin.apply(ctx)
+  assert.deepEqual(registered, [], 'nothing can register before the service exists')
+  assert.equal(pending.length, 2, 'translation and ACP definitions both wait for uiConversation')
+
+  provided = true
+  for (const apply of pending) apply(scope)
+  assert.deepEqual(registered.sort(), ['agy-acp-notice', 'agy-acp-report', 'agy-translation'])
+
+  // The service going away disposes the scope effects, which must unregister.
+  for (const dispose of scopeEffects) dispose()
+  assert.deepEqual(unregistered.sort(), ['agy-acp-notice', 'agy-acp-report', 'agy-translation'])
+})
+
 test('definition projects the record into a node anchored at the reply', () => {
   const { definitions } = mount()
   const definition = definitions.find((d) => d.kind === 'agy-translation')!
