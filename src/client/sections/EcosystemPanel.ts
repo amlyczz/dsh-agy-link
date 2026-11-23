@@ -6,6 +6,7 @@ import { getJson, postJson } from '../api.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import { h, useEffect, useState } from '../react.ts';
 import { S } from '../styles.ts';
+import { uiIcon } from '../icons.ts';
 import { Button } from '../ui/Button.ts';
 import type { ToastType } from '../ui/Toast.ts';
 
@@ -21,6 +22,17 @@ function summaryBadge(key: string, text: string): unknown {
 	return h('span', { key, style: S.badgeTag }, text);
 }
 
+/** One row shape for every ecosystem group, so lists read as one surface. */
+const listRowStyle = {
+	display: 'flex', alignItems: 'baseline', gap: '8px',
+	padding: '4px 8px', borderRadius: '6px',
+	background: 'var(--agy-bg-subbox)', border: '1px solid var(--agy-border-subbox)',
+};
+
+function groupHeading(text: string): unknown {
+	return h('div', { style: { fontWeight: 600, fontSize: '11.5px', color: 'var(--agy-text-secondary)' } }, text);
+}
+
 function renderPluginsGroup(
 	t: Translator,
 	snap: EcosystemSnapshot,
@@ -29,17 +41,11 @@ function renderPluginsGroup(
 ): unknown {
 	if (snap.plugins.length === 0) return null;
 	return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-		h('div', { style: { fontWeight: 600, fontSize: '11.5px', color: 'var(--agy-text-secondary)' } },
-			t('eco.plugins', { count: snap.plugins.length }),
-		),
+		groupHeading(t('eco.plugins', { count: snap.plugins.length })),
 		...snap.plugins.map((p) =>
 			h('div', {
 				key: 'pl-' + p.id,
-				style: {
-					display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-					padding: '4px 8px', borderRadius: '6px',
-					background: 'var(--agy-bg-subbox)', border: '1px solid var(--agy-border-subbox)',
-				},
+				style: { ...listRowStyle, alignItems: 'center', justifyContent: 'space-between' },
 			},
 				h('div', { style: { minWidth: 0, flex: '1 1 0' } },
 					h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--agy-text-primary)' } },
@@ -70,18 +76,12 @@ function renderAgentsGroup(
 ): unknown {
 	if (snap.agents.length === 0) return null;
 	return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-		h('div', { style: { fontWeight: 600, fontSize: '11.5px', color: 'var(--agy-text-secondary)' } },
-			t('eco.agents', { count: snap.agents.length }),
-		),
+		groupHeading(t('eco.agents', { count: snap.agents.length })),
 		...snap.agents.map((a) => {
 			const active = currentAgent.trim() === a.name;
 			return h('div', {
 				key: 'ag-' + a.name + ':' + a.source,
-				style: {
-					display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-					padding: '4px 8px', borderRadius: '6px',
-					background: 'var(--agy-bg-subbox)', border: '1px solid var(--agy-border-subbox)',
-				},
+				style: { ...listRowStyle, alignItems: 'center', justifyContent: 'space-between' },
 			},
 				h('div', { style: { minWidth: 0, flex: '1 1 0' } },
 					h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--agy-text-primary)' } }, `${a.name} (${a.source})`),
@@ -104,20 +104,19 @@ function renderCompactSummaryList(
 	snap: EcosystemSnapshot,
 ): unknown {
 	const items: unknown[] = [];
+	const row = (key: string, label: string, names: readonly string[]): unknown =>
+		h('div', { key, style: listRowStyle },
+			h('span', { style: { fontSize: '11.5px', fontWeight: 600, color: 'var(--agy-text-primary)', flexShrink: 0 } }, label),
+			h('span', { style: { ...S.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, names.join(', ')),
+		);
 	if (snap.mcpServers.length > 0) {
-		items.push(h('div', { key: 'mcp', style: S.muted },
-			`${t('eco.mcp', { count: snap.mcpServers.length })}: ${snap.mcpServers.map((m) => m.name).join(', ')}`,
-		));
+		items.push(row('mcp', t('eco.mcp', { count: snap.mcpServers.length }), snap.mcpServers.map((m) => m.name)));
 	}
 	if (snap.skills.length > 0) {
-		items.push(h('div', { key: 'skills', style: S.muted },
-			`${t('eco.skills', { count: snap.skills.length })}: ${snap.skills.map((s) => s.name).join(', ')}`,
-		));
+		items.push(row('skills', t('eco.skills', { count: snap.skills.length }), snap.skills.map((s) => s.name)));
 	}
 	if (snap.rules.length > 0) {
-		items.push(h('div', { key: 'rules', style: S.muted },
-			`${t('eco.rules', { count: snap.rules.length })}: ${snap.rules.map((r) => r.name).join(', ')}`,
-		));
+		items.push(row('rules', t('eco.rules', { count: snap.rules.length }), snap.rules.map((r) => r.name)));
 	}
 	if (items.length === 0 && snap.plugins.length === 0 && snap.agents.length === 0) {
 		items.push(h('div', { key: 'empty', style: S.muted }, t('eco.empty')));
@@ -194,25 +193,32 @@ export function EcosystemPanel(props: EcosystemPanelProps): unknown {
 			),
 			h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 } },
 				h(Button, {
-					variant: 'default',
+					variant: 'primary',
 					size: 'sm',
 					className: 'agy-btn',
 					disabled: syncing,
 					onClick: () => void handleSync(),
 				}, syncing ? t('eco.syncing') : t('eco.syncNow')),
+				// Same collapse affordance as the account cards: dashed row + chevron.
 				h(Button, {
-					variant: 'default',
+					variant: 'dashed',
 					size: 'sm',
-					className: 'agy-btn',
+					style: {
+						gap: '4px',
+						color: expanded ? 'var(--dsw-alias-state-business-primary, #3b82f6)' : 'var(--agy-text-secondary)',
+					},
 					onClick: () => {
 						const next = !expanded;
 						setExpanded(next);
 						if (next && !snap) void loadSnapshot();
 					},
-				}, expanded ? t('eco.collapse') : t('eco.expand')),
+				},
+					uiIcon(expanded ? 'chevronUp' : 'chevronDown', 10),
+					h('span', null, expanded ? t('eco.collapse') : t('eco.expand')),
+				),
 			),
 		),
-		badges.length > 0 ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '5px' } }, ...badges) : null,
+		badges.length > 0 ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } }, ...badges) : null,
 		expanded && snap
 			? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '4px', borderTop: '1px solid var(--agy-border-divider)' } },
 				renderPluginsGroup(t, snap, togglingPlugin, (id, en) => void handleTogglePlugin(id, en)),
