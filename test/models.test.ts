@@ -61,7 +61,11 @@ test('parseModelsOutput handles dotted current-gen slugs', () => {
 // for the reported bug: DSH listed a bogus `gemini-4-hydrogen-xhigh` MODEL
 // because the fold did not know `xhigh`, while agy's own picker shows it as
 // the "Extra" level of Gemini 4 Hydrogen.
-const AGY_157_MODELS = [
+const AGY_1515_MODELS = [
+  'gemini-4-neon-high\tGemini 4 Neon (High)',
+  'gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)',
+  'gemini-4-neon-medium\tGemini 4 Neon (Medium)',
+  'gemini-4-neon-low\tGemini 4 Neon (Low)',
   'gemini-4-argon-medium\tGemini 4 Argon (Medium)',
   'gemini-4-argon-high\tGemini 4 Argon (High)',
   'gemini-4-argon-low\tGemini 4 Argon (Low)',
@@ -69,6 +73,7 @@ const AGY_157_MODELS = [
   'gemini-4-hydrogen-xhigh\tGemini 4 Hydrogen (XHigh)',
   'gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)',
   'gemini-4-hydrogen-low\tGemini 4 Hydrogen (Low)',
+  'gemini-pro-orchestrator-neon\tOrchestrator (Neon)',
   'gemini-pro-orchestrator-g1-pro\tOrchestrator (Argon)',
   'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
   'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
@@ -82,13 +87,15 @@ const AGY_157_MODELS = [
   'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
 ].join('\n')
 
-test('REGRESSION: the DSH catalog is agy 1.5.7 folded — no effort leaks in as a model', () => {
-  const folded = foldEfforts(parseModelsOutput(AGY_157_MODELS))
+test('REGRESSION: the DSH catalog is agy 1.5.15 folded — no effort leaks in as a model', () => {
+  const folded = foldEfforts(parseModelsOutput(AGY_1515_MODELS))
   assert.deepEqual(
     folded.map((m) => [m.id, m.efforts]),
     [
+      ['gemini-4-neon', ['low', 'medium', 'high', 'xhigh']],
       ['gemini-4-argon', ['low', 'medium', 'high']],
       ['gemini-4-hydrogen', ['low', 'medium', 'high', 'xhigh']],
+      ['gemini-pro-orchestrator-neon', null],
       ['gemini-pro-orchestrator-g1-pro', null],
       ['gemini-3.8-flash', ['low', 'medium', 'high']],
       ['claude-opus-5-5', ['low', 'medium', 'high']],
@@ -106,18 +113,20 @@ test('REGRESSION: the DSH catalog is agy 1.5.7 folded — no effort leaks in as 
 test('the offline fallback lineup is the same set the live discovery produces', () => {
   // A fallback that disagrees with discovery is a bug the user only sees when
   // signed out — keep them byte-identical in id and effort set.
-  const discovered = foldEfforts(parseModelsOutput(AGY_157_MODELS)).map((m) => [m.id, m.efforts])
+  const discovered = foldEfforts(parseModelsOutput(AGY_1515_MODELS)).map((m) => [m.id, m.efforts])
   const fallback = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS).map((m) => [m.id, m.efforts])
   assert.deepEqual(fallback, discovered)
 })
 
-test('fallback catalog mirrors agy 1.5.7 exactly — nothing agy does not list', () => {
+test('fallback catalog mirrors agy 1.5.15 exactly — nothing agy does not list', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
   const ids = cat.map((e) => e.id)
-  // Ground truth: `agy models` on 1.5.7, in its own order.
+  // Ground truth: `agy models` on 1.5.15, in its own order.
   assert.deepEqual(ids, [
+    'gemini-4-neon',
     'gemini-4-argon',
     'gemini-4-hydrogen',
+    'gemini-pro-orchestrator-neon',
     'gemini-pro-orchestrator-g1-pro',
     'gemini-3.8-flash',
     'claude-opus-5-5',

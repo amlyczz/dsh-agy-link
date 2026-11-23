@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.69 (2026-11-23)
+
+### English
+
+- **Fix(models): refresh the offline lineup to agy 1.5.15 — `Gemini 4 Neon` and `Orchestrator (Neon)` were missing (issue #174).** The signed-out fallback list mirrored `agy models` on **1.5.7**; agy has since added `gemini-4-neon` (low/medium/high/xhigh) and a second orchestrator role model, `gemini-pro-orchestrator-neon`. Anyone signed out — or on a machine where `agy models` fails, which is exactly when the fallback matters — could not pick Neon at all. The lineup and its test fixture now mirror 1.5.15, verified against **both** `agy models` and the ACP `session/new` → `models.availableModels` payload (they agree exactly, 23 entries).
+- **Docs(models): record what the orchestrator entries actually are, and what agy does not expose.** `gemini-pro-orchestrator-neon` / `-g1-pro` are *role* models: selecting one runs the session on Antigravity's orchestrator. They carry no effort tiers, and the desktop app's **Orchestrator Model / Executor Model** pair is not reachable from the CLI or ACP — the ACP `configOptions` carries only `model`, `thought_level` and `mode`. That is now written next to the lineup so the next person does not go looking again.
+
+### 中文
+
+- **修复(模型)：离线模型列表刷新到 agy 1.5.15 —— 此前缺 `Gemini 4 Neon` 与 `Orchestrator (Neon)`（issue #174）。** 未登录时的兜底列表镜像的是 **1.5.7** 的 `agy models`；agy 之后新增了 `gemini-4-neon`（low/medium/high/xhigh）与第二个编排器角色模型 `gemini-pro-orchestrator-neon`。任何未登录、或 `agy models` 取失败的用户（而兜底列表恰恰是在这种时候起作用）都根本选不到 Neon。列表与测试基准已更新到 1.5.15，并同时用 `agy models` 与 ACP 的 `session/new` → `models.availableModels` 双向核对（两者完全一致，共 23 项）。
+- **文档(模型)：写清编排器条目到底是什么、以及 agy 没有暴露什么。** `gemini-pro-orchestrator-neon` / `-g1-pro` 是**角色**模型：选中它会让会话跑在 Antigravity 的编排器上。它们没有档位，而桌面端的 **Orchestrator Model / Executor Model** 两段式设置无法从 CLI 或 ACP 触达——ACP 的 `configOptions` 只有 `model`、`thought_level`、`mode`。这一点已写在列表旁边，避免下一个人再去找一遍。
+
 ## 0.6.68 (2026-11-23)
 
 ### English
