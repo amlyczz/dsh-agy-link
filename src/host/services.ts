@@ -15,7 +15,7 @@ import { TranslationService, TRANSLATION_RECORD_TYPE, type TranslationRecord } f
 import { TranslationWorkerPool } from '../features/translation/worker.ts'
 import { ModelCatalog } from './models.ts'
 import { RunRegistry } from './recording.ts'
-import { resolveAgyBin, probeProcess, isolatedHomeEnv } from './runner.ts'
+import { resolveAgyBin, probeProcess, isolatedHomeEnv, parseVersion } from './runner.ts'
 import { supportsSshIsolation } from '../runtime/agy/env.ts'
 import { SessionStore } from './sessions.ts'
 import { AccountPoolManager } from './pool.ts'
@@ -97,6 +97,19 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     return binCache
   }
   const version = () => versionCache
+  // One `agy --version` probe shared by the boot probe and lease acquisition
+  // (a lease must never guess whether SSH isolation applies). A failed probe
+  // rejects and is retried by the next caller.
+  let versionProbe: Promise<string | null> | null = null
+  const resolveVersion = (): Promise<string | null> => {
+    if (versionCache !== null) return Promise.resolve(versionCache)
+    const b = bin()
+    if (!b) return Promise.resolve(null)
+    versionProbe ??= probeProcess(b, ['--version'], 10_000, undefined, undefined, getConfig().suppressAgyAutoUpdate)
+      .then((v) => (versionCache = parseVersion(v.stdout)))
+      .finally(() => { versionProbe = null })
+    return versionProbe
+  }
   const store = new SessionStore(join(stateDir(), 'sessions.json'))
   const pool = new AccountPoolManager()
   for (const account of pool.getAccounts()) {
@@ -555,7 +568,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   })
 
   return {
-    getConfig, log, notifyPicker, bin, version, status, store, pool, quota, warmup, semaphore,
+    getConfig, log, notifyPicker, bin, version, resolveVersion, status, store, pool, quota, warmup, semaphore,
     catalog, auth, poolAuth, runs, adapter, acpPool, backgroundWakeup, ecosystem, imageService, translation, translationWorkers, setOverride,
     readEffortUnsupported: effortStore.read,
     rememberEffortUnsupported: effortStore.remember,

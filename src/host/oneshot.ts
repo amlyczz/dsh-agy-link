@@ -1,20 +1,7 @@
 // One-shot text runner shared by the agy_ask tool: spawn agy, collect the
 // final response text (streamed text steps, else the result envelope), and
 // surface the conversation id so the caller can continue later.
-import {
-  extractQuotaErrorModel,
-  isHardQuotaResultError,
-  isNonConsumableResultError,
-  isTransientBurstRateLimit,
-  looksLikeAuthFailure,
-  looksLikeEligibilityFailure,
-  looksLikeHardRateLimit,
-  isModelScopedQuotaFailure,
-  looksLikeTosViolation,
-  parseResetDurationMs,
-  shouldMarkAuthRequired,
-  type PluginConfig,
-} from '../common/types.ts'
+import type { PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import {
@@ -33,7 +20,8 @@ import {
   stripNulBytes,
 } from './runner.ts'
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
-import { parseEffortUnsupported, parseModelNotRecognized, sameModelId } from '../provider/effort-policy.ts'
+import { parseEffortUnsupported, sameModelId } from '../provider/effort-policy.ts'
+import { settleRunFailure, settleSlotUnavailable } from './run-settlement.ts'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -201,9 +189,7 @@ async function runSingleOneShotAttempt(opts: {
       }
       if (e instanceof SlotUnavailableError) {
         if (pool && account) {
-          const isPrimaryAccount = Boolean(account.systemHome) || !account.dir
-          if (e.target !== 'primary' || isPrimaryAccount) pool.markAuthRequired(account.id, e.message)
-          else pool.advanceAccount(account.id, family, model)
+          settleSlotUnavailable(pool, account, family, model, e)
           if (canRetry && pool.selectAccount(family, model) !== null) {
             return { kind: 'retry', error: e.message, durationMs: 0 }
           }
@@ -297,79 +283,25 @@ async function runSingleOneShotAttempt(opts: {
       .join(' ')
       .trim()
 
-    if (looksLikeTosViolation(rawErr) || looksLikeTosViolation(resultText)) {
-      if (pool && account) pool.markAuthRequired(account.id, rawErr || resultText)
-      return {
-        kind: 'done',
-        result: { ok: false, text: '', conversationId, ...accountTag, error: rawErr || resultText || 'TOS_VIOLATION', durationMs: outcome.durationMs },
+    const failure = settleRunFailure(pool, account, family, model, {
+      rawErr,
+      resultText,
+      resultOk,
+      ...(resultError !== undefined ? { resultError } : {}),
+      text,
+      sawAuthFailure: parser.stats.sawAuthFailure,
+      effortRefusedModel: effort ? parseEffortUnsupported(rawErr) : null,
+    })
+    if (failure !== null) {
+      if (failure.kind === 'effort') {
+        return { kind: 'effort-refused', refusedModel: failure.refusedModel, durationMs: outcome.durationMs }
       }
-    }
-
-    if (effort) {
-      const refusedModel = parseEffortUnsupported(rawErr)
-      if (refusedModel !== null) {
-        return { kind: 'effort-refused', refusedModel, durationMs: outcome.durationMs }
+      // TOS is terminal and a non-consumable policy failure would fail on any account.
+      const retryable = failure.kind !== 'tos' && failure.kind !== 'non_consumable'
+      if (retryable && canRetry && pool && pool.selectAccount(family, model) !== null) {
+        return { kind: 'retry', error: failure.error, durationMs: outcome.durationMs }
       }
-    }
-
-    const hardQuota =
-      isHardQuotaResultError(resultOk !== false, resultError, resultText)
-      || (looksLikeHardRateLimit(rawErr) && !isTransientBurstRateLimit(rawErr))
-    const modelScopedQuota = isModelScopedQuotaFailure(rawErr)
-    if (hardQuota) {
-      const errModel = extractQuotaErrorModel(rawErr)
-      const modelFam = errModel ? modelFamilyOf(errModel) : undefined
-      const targetFam: ModelFamily = modelFam && modelFam !== 'unknown' ? modelFam : family
-      const resetMs = parseResetDurationMs(rawErr)
-      const resetIso = resetMs && resetMs > 0 ? new Date(Date.now() + resetMs).toISOString() : undefined
-      if (pool && account) {
-        if (modelScopedQuota) pool.advanceAccount(account.id, targetFam, model)
-        else pool.recordFailure(account.id, targetFam, rawErr || 'quota exhausted', resetIso)
-        if (targetFam !== family) pool.advanceAccount(account.id, family, model)
-      }
-      const errMsg = rawErr || 'Antigravity quota / rate limit reached'
-      if (canRetry && pool && pool.selectAccount(family, model) !== null) {
-        return { kind: 'retry', error: errMsg, durationMs: outcome.durationMs }
-      }
-      return { kind: 'done', result: { ok: false, text: '', conversationId, ...accountTag, error: errMsg, durationMs: outcome.durationMs } }
-    }
-
-    if (rawErr !== '' && (text === '' || resultOk === false)) {
-      const badModel = parseModelNotRecognized(rawErr)
-      if (badModel !== null && pool && account) {
-        if (typeof pool.markModelUnsupported === 'function') {
-          pool.markModelUnsupported(account.id, badModel)
-        }
-        pool.advanceAccount(account.id, family, model)
-        if (canRetry && pool.selectAccount(family, model) !== null) {
-          return { kind: 'retry', error: rawErr, durationMs: outcome.durationMs }
-        }
-        return { kind: 'done', result: { ok: false, text: '', conversationId, ...accountTag, error: rawErr, durationMs: outcome.durationMs } }
-      }
-    }
-
-    const nonConsumable = resultOk === false && isNonConsumableResultError(false, resultError, resultText)
-    if (nonConsumable || text === '') {
-      if (looksLikeEligibilityFailure(rawErr)) {
-        if (pool && account) pool.advanceAccount(account.id, family, model)
-        if (canRetry && pool && pool.selectAccount(family, model) !== null) {
-          return { kind: 'retry', error: rawErr, durationMs: outcome.durationMs }
-        }
-        return { kind: 'done', result: { ok: false, text: '', conversationId, ...accountTag, error: rawErr, durationMs: outcome.durationMs } }
-      }
-      if (looksLikeAuthFailure(rawErr) || parser.stats.sawAuthFailure) {
-        if (pool && account && shouldMarkAuthRequired('AUTH', rawErr)) {
-          pool.noteAuthFailure(account.id, rawErr)
-          pool.advanceAccount(account.id, family, model)
-        }
-        if (canRetry && pool && pool.selectAccount(family, model) !== null) {
-          return { kind: 'retry', error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs }
-        }
-        return { kind: 'done', result: { ok: false, text: '', conversationId, ...accountTag, error: 'agy is not signed in — run /agy auth', durationMs: outcome.durationMs } }
-      }
-      if (nonConsumable) {
-        return { kind: 'done', result: { ok: false, text: '', conversationId, ...accountTag, error: rawErr || resultText, durationMs: outcome.durationMs } }
-      }
+      return { kind: 'done', result: { ok: false, text: '', conversationId, ...accountTag, error: failure.error, durationMs: outcome.durationMs } }
     }
 
     if (outcome.code !== 0 && text === '') {
