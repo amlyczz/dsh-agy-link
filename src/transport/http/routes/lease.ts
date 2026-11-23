@@ -6,8 +6,10 @@
 import type { HostServices } from '../../../host/services.ts'
 import {
   ExternalLeaseRegistry,
+  hasLeaseBearer,
   LEASE_MAX_HOLDER_LEN,
   LEASE_MAX_WAIT_MS,
+  newLeaseToken,
   removeLinkEndpoint,
   writeLinkEndpoint,
   type LeaseFailure,
@@ -59,10 +61,17 @@ function sendFailure(res: unknown, f: LeaseFailure): void {
 }
 
 /**
- * Method + origin gate shared by every lease route. Browsers attach `Origin` to
- * cross-site requests; a webpage must not be able to hold or settle the slot.
+ * Token + origin + method gate shared by every lease route. A lease hands out an
+ * account's environment (its token directory) and spends its quota, so loopback
+ * is not enough: the caller must present the token published in the 0600
+ * discovery file, checked before anything else answers. Browsers attach `Origin`
+ * to cross-site requests; a webpage must not be able to hold or settle the slot.
  */
-function rejected(req: unknown, res: unknown, method: 'GET' | 'POST'): boolean {
+function rejected(req: unknown, res: unknown, method: 'GET' | 'POST', token: string): boolean {
+  if (!hasLeaseBearer((req as HttpRequestLike).headers?.['authorization'], token)) {
+    sendJson(res as RawRes, 401, { ok: false, code: 'unauthorized', error: 'send Authorization: Bearer <token> from .link-endpoint.json' })
+    return true
+  }
   if (isCrossOriginBlocked(req as HttpRequestLike)) {
     sendJson(res as RawRes, 403, { ok: false, code: 'cross_origin', error: 'cross-origin requests are not allowed' })
     return true
@@ -93,6 +102,8 @@ function withBody(req: unknown, res: unknown, fn: (body: Record<string, unknown>
 
 export function register(reg: RouteRegistrar, services: HostServices, port?: number): () => void {
   const { pool, getConfig, log } = services
+  // Only the discovery file carries it: with no file (port unknown) nobody can lease.
+  const token = newLeaseToken()
   const registry = new ExternalLeaseRegistry({
     pool,
     getConfig,
@@ -106,7 +117,7 @@ export function register(reg: RouteRegistrar, services: HostServices, port?: num
     kind: 'exact',
     path: BASE + '/acquire',
     handler: (req, res) => {
-      if (rejected(req, res, 'POST')) return
+      if (rejected(req, res, 'POST', token)) return
       // The wait itself is bounded inside the registry; this is only the backstop.
       withBody(req, res, async (body) => {
         const holder = optString(body, 'holder', LEASE_MAX_HOLDER_LEN)?.trim() ?? ''
@@ -143,7 +154,7 @@ export function register(reg: RouteRegistrar, services: HostServices, port?: num
     kind: 'exact',
     path: BASE + '/renew',
     handler: (req, res) => {
-      if (rejected(req, res, 'POST')) return
+      if (rejected(req, res, 'POST', token)) return
       withBody(req, res, (body) => {
         const leaseId = requiredLeaseId(body)
         const ttlMs = optNumber(body, 'ttlMs')
@@ -158,7 +169,7 @@ export function register(reg: RouteRegistrar, services: HostServices, port?: num
     kind: 'exact',
     path: BASE + '/release',
     handler: (req, res) => {
-      if (rejected(req, res, 'POST')) return
+      if (rejected(req, res, 'POST', token)) return
       withBody(req, res, (body) => {
         const leaseId = requiredLeaseId(body)
         const ok = optBoolean(body, 'ok')
@@ -179,7 +190,7 @@ export function register(reg: RouteRegistrar, services: HostServices, port?: num
     kind: 'exact',
     path: BASE,
     handler: (req, res) => {
-      if (rejected(req, res, 'GET')) return
+      if (rejected(req, res, 'GET', token)) return
       sendJson(res as RawRes, 200, { leases: registry.list() })
     },
   })
@@ -188,7 +199,7 @@ export function register(reg: RouteRegistrar, services: HostServices, port?: num
   const poolDir = (pool as { dir?: unknown }).dir
   if (typeof port === 'number' && port > 0 && typeof poolDir === 'string' && poolDir !== '') {
     try {
-      endpoint = writeLinkEndpoint(poolDir, port)
+      endpoint = writeLinkEndpoint(poolDir, port, token)
     } catch (e) {
       log('lease discovery file not written: ' + (e instanceof Error ? e.message : String(e)))
     }

@@ -19,8 +19,8 @@
 //
 // Leases are in memory only: a host restart drops them (the slot itself is
 // restored by the normal boot hygiene) and clients re-acquire.
-import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { writeFileAtomicSync } from '../common/atomic-write.ts'
@@ -442,16 +442,46 @@ export interface LinkEndpoint {
   url: string
   pid: number
   startedAt: number
+  /** Bearer token every /lease* request must carry; new on each plugin start. */
+  token: string
 }
 
 export function linkEndpointPath(poolDir: string): string {
   return join(poolDir, LINK_ENDPOINT_FILE)
 }
 
-/** Publish where external callers reach the lease API (atomic replace). */
-export function writeLinkEndpoint(poolDir: string, port: number, now = Date.now()): LinkEndpoint {
-  const endpoint: LinkEndpoint = { url: `http://127.0.0.1:${port}/plugins/agy-link`, pid: process.pid, startedAt: now }
-  writeFileAtomicSync(linkEndpointPath(poolDir), JSON.stringify(endpoint) + '\n')
+/** 256-bit lease API token, generated once per plugin start. */
+export function newLeaseToken(): string {
+  return randomBytes(32).toString('hex')
+}
+
+/** Constant-time check of an `Authorization: Bearer <token>` header. */
+export function hasLeaseBearer(header: unknown, token: string): boolean {
+  if (typeof header !== 'string' || token === '') return false
+  const m = /^Bearer[ \t]+(\S+)[ \t]*$/i.exec(header)
+  if (m === null) return false
+  const given = Buffer.from(m[1]!)
+  const expected = Buffer.from(token)
+  return given.length === expected.length && timingSafeEqual(given, expected)
+}
+
+/**
+ * Publish where external callers reach the lease API and the token they must
+ * send (atomic replace, mode 0600). On POSIX the file must end up owned by this
+ * user and unreadable by others, or it is removed and the API stays unreachable.
+ * Windows has no mode bits: the file inherits the pool directory's ACL.
+ */
+export function writeLinkEndpoint(poolDir: string, port: number, token: string, now = Date.now()): LinkEndpoint {
+  const endpoint: LinkEndpoint = { url: `http://127.0.0.1:${port}/plugins/agy-link`, pid: process.pid, startedAt: now, token }
+  const file = linkEndpointPath(poolDir)
+  writeFileAtomicSync(file, JSON.stringify(endpoint) + '\n', 0o600)
+  if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+    const st = statSync(file)
+    if (st.uid !== process.getuid() || (st.mode & 0o077) !== 0) {
+      rmSync(file, { force: true })
+      throw new Error('lease discovery file is not private to this user: ' + file)
+    }
+  }
   return endpoint
 }
 

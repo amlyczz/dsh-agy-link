@@ -205,9 +205,9 @@ Windows 上所有 `agy.exe` 共用同一个凭据管理器条目 `gemini:antigra
 - **隔离备用账号 + agy ≥ 1.5**：**不占凭据槽**（`slot: false`）。返回的 `env` 含 `SSH_CONNECTION`，agy 因此只读该账号自己的 token 文件，可与其它账号无锁并行。发放前插件会把这个 token 文件刷新进 CLI 安全窗口（与 CLI 配额读取同一逻辑：带着快过期的 token 启动的 agy 可能回退到交互式浏览器登录）。agy 版本未知时先探测再决定；探测失败按占槽处理（对任何版本都安全）。
 - **主账号，或 agy < 1.5 的隔离账号**：在租约期间持有凭据槽（`slot: true`，同号并行快路径 / 切号交接照旧）。
 
-**发现端点**：插件拿到 web 端口后原子写入 `<号池目录>/.link-endpoint.json`（号池目录即 `pool.json` 所在目录，默认 `~/.dsh/agy-accounts`，设了 `DSH_STATE_DIR` 时为 `$DSH_STATE_DIR/agy-accounts`）：`{"url":"http://127.0.0.1:<port>/plugins/agy-link","pid":<pid>,"startedAt":<epoch ms>}`。插件卸载时仅当文件仍是本进程写的才删除。
+**发现端点**：插件拿到 web 端口后原子写入 `<号池目录>/.link-endpoint.json`（号池目录即 `pool.json` 所在目录，默认 `~/.dsh/agy-accounts`，设了 `DSH_STATE_DIR` 时为 `$DSH_STATE_DIR/agy-accounts`）：`{"url":"http://127.0.0.1:<port>/plugins/agy-link","pid":<pid>,"startedAt":<epoch ms>,"token":"<64 位十六进制>"}`，文件权限 `0600`（POSIX 上写完会校验属主与权限，不符即删除文件、接口不可用；Windows 继承号池目录的 ACL）。`token` 每次插件启动重新生成，插件卸载时仅当文件仍是本进程写的才删除。
 
-所有请求/响应都是 JSON；错误统一为 `{ "ok": false, "code": "...", "error": "..." }`。带非本机 `Origin` 的浏览器请求一律 `403 cross_origin`。
+**鉴权**：所有 `/lease*` 请求都必须带 `Authorization: Bearer <token>`（取自同一次读到的 `.link-endpoint.json`），缺失或不符一律 `401 unauthorized`，且在来源与方法检查之前判定；拿不到发现文件就无法租号。所有请求/响应都是 JSON；错误统一为 `{ "ok": false, "code": "...", "error": "..." }`。带非本机 `Origin` 的浏览器请求一律 `403 cross_origin`。
 
 | 端点 | 请求体 | 成功响应 | 错误 |
 | --- | --- | --- | --- |

@@ -3,7 +3,7 @@
 // directly with fake req/res; the slot is a no-op under node:test.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { AccountPoolManager } from '../src/host/pool.ts'
@@ -11,9 +11,10 @@ import { defaultConfig } from '../src/common/types.ts'
 import type { HostServices } from '../src/host/services.ts'
 import type { Route } from '../src/transport/http/respond.ts'
 import { register } from '../src/transport/http/routes/lease.ts'
-import { linkEndpointPath } from '../src/host/external-lease.ts'
+import { hasLeaseBearer, linkEndpointPath } from '../src/host/external-lease.ts'
 
-function setup(t: test.TestContext, port?: number) {
+/** `port: null` registers without a discovery file (and so without a reachable token). */
+function setup(t: test.TestContext, port: number | null = 43210) {
   const dir = mkdtempSync(join(tmpdir(), 'agy-lease-routes-'))
   const pool = new AccountPoolManager(dir)
   const second = pool.createAccountSlot('Second')
@@ -25,12 +26,15 @@ function setup(t: test.TestContext, port?: number) {
     resolveVersion: async () => '1.5.12',
     quota: { prepareIsolatedCliToken: async () => true },
   } as unknown as HostServices
-  const dispose = register((r) => routes.push(r), services, port)
+  const dispose = register((r) => routes.push(r), services, port ?? undefined)
+  const token = port === null ? '' : (JSON.parse(readFileSync(linkEndpointPath(dir), 'utf8')) as { token: string }).token
   t.after(() => {
     dispose()
     rmSync(dir, { recursive: true, force: true })
   })
-  const call = async (path: string, method: string, body?: unknown, headers: Record<string, string> = {}) => {
+  // Every call carries the published token unless the test passes its own `authorization`.
+  const call = async (path: string, method: string, body?: unknown, extra: Record<string, string> = {}) => {
+    const headers: Record<string, string> = { authorization: 'Bearer ' + token, ...extra }
     const route = routes.find((r) => r.path === '/plugins/agy-link' + path)
     assert.ok(route, 'route registered: ' + path)
     let status = 0
@@ -54,8 +58,39 @@ function setup(t: test.TestContext, port?: number) {
     await done
     return { status, json: JSON.parse(text) as Record<string, unknown> }
   }
-  return { dir, pool, second, routes, dispose, call }
+  return { dir, pool, second, routes, dispose, call, token }
 }
+
+test('lease routes: no or wrong bearer token → 401 before the origin and method gates', async (t) => {
+  const s = setup(t)
+  assert.match(s.token, /^[0-9a-f]{64}$/)
+  const wrong = 'f'.repeat(64) === s.token ? 'e'.repeat(64) : 'f'.repeat(64)
+  const denied: Array<Record<string, string>> = [
+    { authorization: '' },
+    { authorization: 'Bearer' },
+    { authorization: 'Bearer ' + wrong },
+    { authorization: 'Bearer ' + s.token.slice(0, 63) },
+    { authorization: 'Basic ' + s.token },
+    { authorization: 'Bearer ' + wrong, origin: 'https://evil.example' },
+  ]
+  for (const [path, method] of [['/lease/acquire', 'POST'], ['/lease/renew', 'POST'], ['/lease/release', 'POST'], ['/lease', 'GET'], ['/lease/acquire', 'GET']] as const) {
+    for (const headers of denied) {
+      const r = await s.call(path, method, { holder: 'h', leaseId: 'x' }, headers)
+      assert.equal(r.status, 401, path + ' ' + method + ' ' + JSON.stringify(headers))
+      assert.equal(r.json.code, 'unauthorized')
+      assert.equal(JSON.stringify(r.json).includes(s.token), false, 'the token never echoes back')
+    }
+  }
+  // The scheme name is case-insensitive (RFC 9110); nothing was leased by the denied calls.
+  const list = await s.call('/lease', 'GET', undefined, { authorization: 'bearer ' + s.token })
+  assert.deepEqual([list.status, list.json.leases], [200, []])
+})
+
+test('lease routes: without a discovery file the API is unreachable', async (t) => {
+  const s = setup(t, null)
+  const r = await s.call('/lease/acquire', 'POST', { holder: 'h' })
+  assert.equal(r.status, 401)
+})
 
 test('lease routes: method and cross-origin gates answer the {ok,code,error} envelope', async (t) => {
   const s = setup(t)
@@ -147,18 +182,41 @@ test('lease routes: pinned unknown account → 404, nothing selectable → 503 w
   assert.equal('status' in none.json, false, 'the HTTP status is not echoed in the body')
 })
 
-test('lease routes: discovery file is written for a known port and removed on dispose', (t) => {
+test('lease routes: discovery file is private, carries the token, and is removed on dispose', (t) => {
   const s = setup(t, 43210)
   const file = linkEndpointPath(s.dir)
   const doc = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
   assert.equal(doc.url, 'http://127.0.0.1:43210/plugins/agy-link')
   assert.equal(doc.pid, process.pid)
   assert.equal(typeof doc.startedAt, 'number')
+  assert.equal(doc.token, s.token)
+  if (process.platform !== 'win32') {
+    const st = statSync(file)
+    assert.equal(st.mode & 0o777, 0o600)
+    assert.equal(st.uid, process.getuid!())
+  }
   s.dispose()
   assert.equal(existsSync(file), false)
 })
 
+test('lease routes: each plugin start publishes a new token', (t) => {
+  const a = setup(t, 43210)
+  const b = setup(t, 43211)
+  assert.notEqual(a.token, b.token)
+})
+
 test('lease routes: no port → no discovery file', (t) => {
-  const s = setup(t)
+  const s = setup(t, null)
   assert.equal(existsSync(linkEndpointPath(s.dir)), false)
+})
+
+test('hasLeaseBearer: exact token only, constant-time compare', () => {
+  const tok = 'a'.repeat(64)
+  assert.equal(hasLeaseBearer('Bearer ' + tok, tok), true)
+  assert.equal(hasLeaseBearer('Bearer   ' + tok + '  ', tok), true)
+  assert.equal(hasLeaseBearer('Bearer ' + tok + 'a', tok), false)
+  assert.equal(hasLeaseBearer('Bearer ' + tok + ' extra', tok), false)
+  assert.equal(hasLeaseBearer(['Bearer ' + tok], tok), false)
+  assert.equal(hasLeaseBearer(undefined, tok), false)
+  assert.equal(hasLeaseBearer('Bearer ', ''), false, 'an empty token never authorizes')
 })

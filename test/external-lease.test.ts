@@ -10,6 +10,7 @@ import { AccountPoolManager } from '../src/host/pool.ts'
 import { defaultConfig, type PluginConfig } from '../src/common/types.ts'
 import { SlotUnavailableError, WaitTimeoutError, type ResolveOptions } from '../src/host/credential-slot.ts'
 import type { ManagedAccount } from '../src/common/pool-types.ts'
+import { getValidAccessToken, type QuotaTokenDeps } from '../src/features/quota/token.ts'
 import {
   ExternalLeaseRegistry,
   LEASE_DEFAULT_TTL_MS,
@@ -290,9 +291,9 @@ test('dispose releases every lease and refuses new ones', async (t) => {
 test('discovery file: atomic write, removed only while it still names this pid and url', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-endpoint-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const ep = writeLinkEndpoint(dir, 4567, 42)
+  const ep = writeLinkEndpoint(dir, 4567, 'tok', 42)
   assert.deepEqual(JSON.parse(readFileSync(linkEndpointPath(dir), 'utf8')), {
-    url: 'http://127.0.0.1:4567/plugins/agy-link', pid: process.pid, startedAt: 42,
+    url: 'http://127.0.0.1:4567/plugins/agy-link', pid: process.pid, startedAt: 42, token: 'tok',
   })
   // Another host took over the file: leave it alone.
   writeFileSync(linkEndpointPath(dir), JSON.stringify({ ...ep, pid: ep.pid + 1 }))
@@ -385,4 +386,28 @@ test('leaseAgyEnv: proxy folded to one case on Windows, loopback NO_PROXY, quiet
   const posix = leaseAgyEnv(acc, '', 'linux')
   assert.equal(posix.HTTPS_PROXY, undefined)
   assert.equal(posix.no_proxy, '127.0.0.1,localhost,::1')
+})
+
+test('concurrent leases of one account share a single token read/refresh (no racing token-file writes)', async () => {
+  // prepareIsolatedCliToken → getValidAccessToken is single-flight per account:
+  // overlapping acquires (and the plugin's own runs) await one in-flight attempt,
+  // and a refresh is persisted with an atomic rename, so the file is never torn.
+  let reads = 0
+  let release: () => void = () => undefined
+  const gate = new Promise<void>((r) => { release = r })
+  const deps = {
+    getStoredToken: async () => {
+      reads++
+      await gate
+      return { accessToken: 'at', expiryMs: Date.now() + 3_600_000 }
+    },
+  } as unknown as QuotaTokenDeps
+  const account = { id: 'acc-1', dir: '/tmp/acc-1' } as ManagedAccount
+  const inFlight = new Map<string, Promise<string | null>>()
+  const a = getValidAccessToken(deps, account, inFlight)
+  const b = getValidAccessToken(deps, account, inFlight)
+  release()
+  assert.deepEqual(await Promise.all([a, b]), ['at', 'at'])
+  assert.equal(reads, 1)
+  assert.equal(inFlight.size, 0, 'the slot is freed once settled')
 })

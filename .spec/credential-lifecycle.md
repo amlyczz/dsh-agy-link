@@ -107,6 +107,8 @@
 - **钉住账号**：`accountId` 或 `accountDir`（Windows 下路径大小写/尾分隔符不敏感；与主账号的 `os.homedir()` 相同的目录钉住主账号）钉住续接对话所属账号；只要求存在、启用、未 `authRequired`，**不检查冷却**。不钉住时 `SlotUnavailableError` 按 one-shot 规则结算（`markAuthRequired`，或主账号重申失败的隔离辅账号只 advance）后换下一个可选账号，同一账号不试两次。
 - **等待有界**：`waitMs` 默认与 one-shot 相同（`dispatchTimeoutMinutes × 60000`，未配置 60000），上限 1 小时；多次换号共享同一截止时间，剩余时间耗尽即 `slot_timeout`，绝不传 `0`（`0` 对槽表示无限等待）。
 - **生命周期**（两种租约相同）：租约仅在内存；DSH 宿主重启全部丢失，客户端重新 acquire。TTL 默认 120s、夹到 15s–600s；`unref` 的清扫器每 5s 释放过期租约且**不结算**并记日志。`release` 恰好释放一次槽；`dispose` 中止排队中的取槽、释放全部租约、移除路由与发现文件。租约 id 为 128 位 `crypto.randomBytes`。
-- **发现文件**：`<pool.dir>/.link-endpoint.json`（`{url,pid,startedAt}`，原子写）；卸载时仅当文件仍指向本进程 pid 与 url 才删除，另一个宿主接管后不误删。
+- **发现文件**：`<pool.dir>/.link-endpoint.json`（`{url,pid,startedAt,token}`，原子写，mode `0600`；POSIX 上写后校验属主为本用户且组/其他无权限，否则删除文件并放弃发布）；卸载时仅当文件仍指向本进程 pid 与 url 才删除，另一个宿主接管后不误删。
+- **鉴权**：`token` 为每次插件启动的 256 位随机值（`newLeaseToken()`），只写在发现文件里。所有 `/lease*` 路由先用 `hasLeaseBearer()`（`timingSafeEqual`）校验 `Authorization: Bearer <token>`，不符即 `401 unauthorized`，再做来源与方法检查。理由：租约交出账号的 env（令牌目录）并预支其配额，回环地址只说明同机、不说明可信。没有端口就没有发现文件，也就没有人能租号。
+- **并发刷新**：同一账号的多个租约（以及插件自己的 ACP/CLI 运行）经 `prepareIsolatedCliToken` → `getValidAccessToken` 共用一个按账号的在途 Promise（`tokenRefreshInFlight`），同一时刻只有一次读取/刷新；刷新结果经 `writeFileAtomicSync` 原子改名写盘，不会写坏令牌文件。
 - **非 Windows**：取槽为空操作（`undefined` 租约），选号、TTL 与结算照常。测试运行（`NODE_TEST_CONTEXT`）下默认取槽同样为空操作，永不触碰真实凭据管理器。
 - 锚点：`test/external-lease.test.ts`、`test/lease-routes.test.ts`、`test/run-settlement.test.ts`。

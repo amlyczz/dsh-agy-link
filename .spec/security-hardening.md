@@ -47,6 +47,12 @@ Each invariant below is enforced in code AND covered by a regression test.
 (GET) let a local process hold the Windows credential slot and settle account state,
 so they are gated more strictly than the console routes:
 
+- **Bearer token first**: every lease route requires `Authorization: Bearer <token>`,
+  where the token is a per-start 256-bit random value published only in the `0600`
+  discovery file `<pool dir>/.link-endpoint.json` (owner and mode verified on POSIX).
+  A missing or wrong token is **401 `unauthorized`**, decided before the origin and
+  method gates and compared with `timingSafeEqual`. A lease hands out an account's
+  environment and spends its quota; loopback only means "same machine".
 - Cross-origin browser requests (`Origin` present and not loopback / `app://` /
   `file://`, same `isCrossOriginBlocked()` as `/media`) get **403 `cross_origin`**: a
   webpage must not be able to hold the slot or quarantine an account.
