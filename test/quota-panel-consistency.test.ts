@@ -112,3 +112,18 @@ test('the note reports the OLDEST family stamp, never the freshest', () => {
   const stamp = `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
   assert.ok(tree.includes(stamp), `expected the oldest stamp ${stamp} in ${tree}`)
 })
+
+test('a predicted family shows the muted badge AND the pin action', () => {
+  const tree = renderToStaticMarkup(renderFamilyQuotaBar(t, 'Gemini', 'google', {
+    id: 'acc_1', alias: 'a', dir: '', enabled: true, createdAt: 1, cooldowns: {},
+    quotas: {
+      google: {
+        remainingFraction: 0.8,
+        resetTime: new Date(Date.now() + 3_600_000).toISOString(),
+        updatedAt: Date.now(),
+      },
+    },
+  } as never, false, { isActive: true, predicted: true, canSetActive: true, onSetActive: () => {} }))
+  assert.ok(tree.includes('account.predictedInUse'), 'said out loud that it is only predicted')
+  assert.ok(tree.includes('account.setActive'), 'and pinnable, so it can be made real')
+})

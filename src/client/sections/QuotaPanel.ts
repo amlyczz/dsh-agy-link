@@ -276,9 +276,10 @@ function renderFamilyHeaderActions(
 	if (familyActions?.isActive) {
 		// A family with no real pin resolves to "who WOULD be picked". Calling that
 		// "当前使用" is what made the panel contradict the running session; the
-		// predicted case says so explicitly.
-		const label = familyActions.predicted ? t('account.predictedInUse') : t('status.inUse');
-		return h('span', {
+		// predicted case says so explicitly, and offers the pin so it can be made real.
+		const predicted = familyActions.predicted === true;
+		const label = predicted ? t('account.predictedInUse') : t('status.inUse');
+		const badge = h('span', {
 			key: 'fam-active',
 			title: label,
 			style: {
@@ -293,23 +294,36 @@ function renderFamilyHeaderActions(
 				whiteSpace: 'nowrap',
 				flexShrink: 0,
 			},
-		}, uiIcon('zap', 10, familyActions.predicted ? 'var(--agy-text-secondary)' : '#10b981'), label);
+		}, uiIcon('zap', 10, predicted ? 'var(--agy-text-secondary)' : '#10b981'), label);
+		if (!predicted) return badge;
+		return h('div', { key: 'fam-predicted', style: { display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0 } },
+			badge,
+			familyActions.canSetActive && familyActions.onSetActive ? setActiveButton(t, familyActions) : null,
+		);
 	}
 	if (familyActions?.canSetActive && familyActions.onSetActive) {
-		return h(Button, {
-			key: 'fam-set-active',
-			variant: 'default',
-			size: 'sm',
-			className: 'agy-btn',
-			style: { gap: '3px', fontSize: '10.5px', padding: '1px 6px', height: '20px', flexShrink: 0 },
-			title: t('account.setActive'),
-			disabled: familyActions.settingActive,
-			onClick: familyActions.onSetActive,
-		}, ...(familyActions.settingActive
-			? [Spinner(), t('account.settingActive')]
-			: [uiIcon('zap', 10), ` ${t('account.setActive')}`]));
+		return setActiveButton(t, familyActions);
 	}
 	return null;
+}
+
+/** The per-family "设为当前" pin, shared by the plain and predicted paths. */
+function setActiveButton(
+	t: (key: AgyLocaleKey) => string,
+	familyActions: FamilyBarActions,
+): unknown {
+	return h(Button, {
+		key: 'fam-set-active',
+		variant: 'default',
+		size: 'sm',
+		className: 'agy-btn',
+		style: { gap: '3px', fontSize: '10.5px', padding: '1px 6px', height: '20px', flexShrink: 0 },
+		title: t('account.setActive'),
+		disabled: familyActions.settingActive,
+		onClick: familyActions.onSetActive,
+	}, ...(familyActions.settingActive
+		? [Spinner(), t('account.settingActive')]
+		: [uiIcon('zap', 10), ` ${t('account.setActive')}`]));
 }
 
 /**

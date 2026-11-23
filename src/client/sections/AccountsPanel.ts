@@ -88,15 +88,16 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		const isFullyCooling = isAccountFullyCooling(acc, now);
 		const isSyncing = loadingAction === `refresh:${acc.id}` || loadingAction === 'refresh:all' || quotaRefreshing.includes(acc.id);
 		const isWarming = loadingAction === `warmup:${acc.id}` || (warmupState?.running === true && warmupState.activeAccountIds.includes(acc.id));
-		const hasAnyActiveFamily = Boolean(
-			acc.enabled &&
-			!isAuthRequired &&
-			QUOTA_FAMILIES.some((fam) =>
-				(fam !== 'argon' || acc.quotas.argon !== undefined) &&
-				!isFamilyCooling(acc, fam, now) &&
-				activeIds[fam] === acc.id,
-			),
+		// A real pin is "in use" (blue); a mere eligibility RESOLUTION is a
+		// prediction with a quieter accent. Only always-visible families count.
+		const frameFamilies = QUOTA_FAMILIES.filter((fam) =>
+			(fam === 'google' || fam === 'argon') &&
+			(fam !== 'argon' || acc.quotas.argon !== undefined) &&
+			acc.enabled && !isAuthRequired && !isFamilyCooling(acc, fam, now) &&
+			activeIds[fam] === acc.id,
 		);
+		const hasPinnedFamily = frameFamilies.some((fam) => pinnedIds[fam] === acc.id);
+		const hasPredictedFamily = !hasPinnedFamily && frameFamilies.length > 0;
 		const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : isFullyCooling ? '#f59e0b' : '#10b981';
 		const isEditingProxy = editingProxyId === acc.id;
 		const isEditingAlias = editingAliasId === acc.id;
@@ -108,9 +109,12 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			cursor: 'default',
 			padding: '10px 14px',
 			marginBottom: '8px',
-			...(hasAnyActiveFamily ? {
+			...(hasPinnedFamily ? {
 				borderColor: 'var(--dsw-alias-state-business-primary, #3b82f6)',
 				boxShadow: 'var(--agy-shadow-card-primary)',
+			} : hasPredictedFamily ? {
+				// "预计使用": a quiet violet, no glow — never mistakable for "in use".
+				borderColor: 'rgba(139, 92, 246, 0.45)',
 			} : {}),
 			...(!acc.enabled ? { opacity: 0.72 } : {}),
 		};
@@ -123,8 +127,11 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		const renderQuotaBar = (label: string, familyKey: QuotaFamily): unknown => {
 			const cooling = isFamilyCooling(acc, familyKey, now);
 			const isFamActive = Boolean(acc.enabled && !isAuthRequired && !cooling && activeIds[familyKey] === acc.id);
-			const isFamPredicted = Boolean(isFamActive && pinnedIds[familyKey] !== acc.id);
-			const canSetFamActive = Boolean(acc.enabled && !isAuthRequired && !cooling && activeIds[familyKey] !== acc.id);
+			const isFamPinned = Boolean(isFamActive && pinnedIds[familyKey] === acc.id);
+			const isFamPredicted = Boolean(isFamActive && !isFamPinned);
+			// A prediction must be pinnable, otherwise the account serves a family
+			// with no way to confirm it.
+			const canSetFamActive = Boolean(acc.enabled && !isAuthRequired && !cooling && !isFamPinned);
 			return renderFamilyQuotaBar(t, label, familyKey, acc, isSyncing, {
 				isActive: isFamActive,
 				predicted: isFamPredicted,
