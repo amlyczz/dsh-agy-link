@@ -208,8 +208,8 @@ describe('Gemini enum hygiene', () => {
         onlyEmpty: { type: 'string', enum: [''] },
       },
     }) as { properties: Record<string, { enum?: unknown[] }> }
-    assert.deepEqual(clean.properties.permission.enum, ['read', 'write', 'admin'])
-    assert.deepEqual(clean.properties.mode.enum, ['a'])
-    assert.equal(clean.properties.onlyEmpty.enum, undefined)
+    assert.deepEqual(clean.properties.permission?.enum, ['read', 'write', 'admin'])
+    assert.deepEqual(clean.properties.mode?.enum, ['a'])
+    assert.equal(clean.properties.onlyEmpty?.enum, undefined)
   })
 })
