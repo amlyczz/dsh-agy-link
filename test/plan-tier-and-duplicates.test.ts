@@ -121,3 +121,33 @@ test('a unique pool reports no duplicates and no siblings', () => {
   assert.deepEqual(findDuplicateEmailGroups(accounts), [])
   assert.equal(duplicateAccountIds(accounts).size, 0)
 })
+
+test('a free account reporting the unmetered 100% 5h placeholder is NOT Pro', () => {
+  // Live 2026-11-23: a Free account (no Argon, 13 models) was badged "Pro" because
+  // it reported a 5h bucket at 100% whose reset was always ~5h away — the
+  // unmetered placeholder, not a paid window.
+  const now = Date.now()
+  const freeWithPlaceholder = {
+    google: {
+      remainingFraction: 1,
+      resetTime: new Date(now + 4.8 * 3_600_000).toISOString(),
+      weeklyFraction: 0.63,
+      weeklyResetTime: new Date(now + 6 * 86_400_000).toISOString(),
+    },
+  } as never
+  assert.equal(inferAccountPlanTier({ quotas: freeWithPlaceholder, now }), 'free')
+  assert.equal(resolveAccountPlanTier(acc({ quotas: freeWithPlaceholder, planTier: 'free' })), 'free')
+})
+
+test('a 5h window that was actually used still proves a paid plan', () => {
+  const now = Date.now()
+  const paid = {
+    google: {
+      remainingFraction: 0.62,
+      resetTime: new Date(now + 3 * 3_600_000).toISOString(),
+      weeklyFraction: 0.9,
+      weeklyResetTime: new Date(now + 5 * 86_400_000).toISOString(),
+    },
+  } as never
+  assert.equal(inferAccountPlanTier({ quotas: paid, now }), 'pro')
+})

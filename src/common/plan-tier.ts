@@ -45,6 +45,19 @@ function isGeminiGroup(g: PlanTierGroupLike): boolean {
   return groupName(g).includes('gemini') || groupDesc(g).includes('gemini')
 }
 
+/**
+ * The UNMETERED 5-hour placeholder a free-tier account reports: frozen at 100%
+ * with a reset that is always ~5h away. It is not a paid window — reading it as
+ * one badged a free account "Pro" purely because of the placeholder
+ * (2026-11-23). A real 5-hour window that has been used is < 100%.
+ */
+function isUnmetered5hPlaceholder(q: FamilyQuotaInfo | undefined, now: number): boolean {
+  if (typeof q?.remainingFraction !== 'number' || q.remainingFraction < 0.999) return false
+  if (typeof q.resetTime !== 'string' || q.resetTime === '') return false
+  const ms = Date.parse(q.resetTime) - now
+  return ms > 4.5 * 3_600_000 && ms < 5.2 * 3_600_000
+}
+
 function hasFiveHourBucket(g: PlanTierGroupLike): boolean {
   return (g.buckets ?? []).some((b) => {
     const w = (b.window ?? b.id ?? b.bucketId ?? '').toLowerCase()
@@ -75,8 +88,11 @@ export function collectPlanTierEvidence(input: {
   quotas?: Partial<Record<ModelFamily, FamilyQuotaInfo>>
   dedicatedGroups?: readonly ModelFamily[]
   modelIds?: readonly string[]
+  /** Clock for placeholder detection; defaults to now. */
+  now?: number
 }): PlanTierEvidence {
   const groups = input.groups ?? []
+  const now = input.now ?? Date.now()
   const quotas = input.quotas ?? {}
   const modelIds = (input.modelIds ?? []).map((m) => m.toLowerCase())
 
@@ -95,9 +111,9 @@ export function collectPlanTierEvidence(input: {
 
   const has5h = geminiGroup
     ? hasFiveHourBucket(geminiGroup)
-    : typeof quotas.google?.remainingFraction === 'number' ||
+    : (typeof quotas.google?.remainingFraction === 'number' && !isUnmetered5hPlaceholder(quotas.google, now)) ||
       groups.some((g) => hasFiveHourBucket(g)) ||
-      Object.values(quotas).some((q) => typeof q?.remainingFraction === 'number')
+      Object.values(quotas).some((q) => typeof q?.remainingFraction === 'number' && !isUnmetered5hPlaceholder(q, now))
   const hasWeekly = geminiGroup
     ? hasWeeklyBucket(geminiGroup)
     : typeof quotas.google?.weeklyFraction === 'number' ||
@@ -113,6 +129,8 @@ export function inferAccountPlanTier(input: {
   dedicatedGroups?: readonly ModelFamily[]
   quotaUnavailable?: QuotaUnavailableState
   modelIds?: readonly string[]
+  /** Clock for placeholder detection; defaults to now. */
+  now?: number
 }): AccountPlanTier | undefined {
   const groups = input.groups ?? []
 
