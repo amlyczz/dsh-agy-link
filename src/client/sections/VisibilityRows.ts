@@ -24,7 +24,7 @@ function visibilityRow(o: VisibilityRowOptions): unknown {
 	return h(Row, {
 		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
 			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, o.t(o.label)),
-			h('span', { style: S.muted }, o.t(o.desc)),
+			h('span', { style: S.mutedLine, title: o.t(o.desc) }, o.t(o.desc)),
 		),
 		right: segGroup([
 			h(Button, {

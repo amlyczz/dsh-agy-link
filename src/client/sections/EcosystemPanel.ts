@@ -85,7 +85,7 @@ function renderAgentsGroup(
 			},
 				h('div', { style: { minWidth: 0, flex: '1 1 0' } },
 					h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--agy-text-primary)' } }, `${a.name} (${a.source})`),
-					a.description ? h('div', { style: S.muted }, a.description) : null,
+					a.description ? h('div', { style: S.mutedLine, title: a.description }, a.description) : null,
 				),
 				h(Button, {
 					variant: active ? 'primary' : 'default',
@@ -189,7 +189,7 @@ export function EcosystemPanel(props: EcosystemPanelProps): unknown {
 		h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } },
 			h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
 				h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('eco.heading')),
-				h('span', { style: S.muted }, t('eco.desc')),
+				h('span', { style: S.mutedLine, title: t('eco.desc') }, t('eco.desc')),
 			),
 			h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 } },
 				h(Button, {

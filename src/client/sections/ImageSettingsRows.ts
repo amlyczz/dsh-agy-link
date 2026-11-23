@@ -23,7 +23,7 @@ export function renderImageRow(
 		h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
 			h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
 				h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.image')),
-				h('span', { style: S.muted }, t('config.imageDesc')),
+				h('span', { style: S.mutedLine, title: t('config.imageDesc') }, t('config.imageDesc')),
 			),
 			h('div', { style: S.cfgRowRight },
 				h(Select, {

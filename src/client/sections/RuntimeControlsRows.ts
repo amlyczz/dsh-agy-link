@@ -19,7 +19,7 @@ export interface RuntimeControlsProps {
 function rowCaption(title: string, desc: string): unknown {
 	return h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
 		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, title),
-		h('span', { style: S.muted }, desc),
+		h('span', { style: S.mutedLine, title: desc }, desc),
 	);
 }
 

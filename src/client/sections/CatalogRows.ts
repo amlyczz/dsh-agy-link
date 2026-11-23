@@ -19,7 +19,7 @@ export function renderPoolWideCatalogRow(args: {
 	return h(Row, {
 		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
 			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.poolWideCatalog')),
-			h('span', { style: S.muted }, t('config.poolWideCatalogDesc')),
+			h('span', { style: S.mutedLine, title: t('config.poolWideCatalogDesc') }, t('config.poolWideCatalogDesc')),
 		),
 		right: segGroup([
 			h(Button, {

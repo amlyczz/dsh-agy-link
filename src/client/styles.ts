@@ -191,9 +191,12 @@ export const S: Record<string, Record<string, unknown>> = {
 		borderRadius: '7px',
 		padding: '3px',
 		border: '1px solid var(--agy-seg-group-border)',
+		// The cluster shrinks as ONE unit; the label column absorbs the squeeze.
+		flexShrink: 0,
+		whiteSpace: 'nowrap',
 	},
 	segBtn: {
-		padding: '4px 10px',
+		padding: '3px 9px',
 		borderRadius: '4px',
 		border: 'none',
 		background: 'transparent',
@@ -201,9 +204,12 @@ export const S: Record<string, Record<string, unknown>> = {
 		cursor: 'pointer',
 		fontSize: '11.5px',
 		fontWeight: 600,
+		// A squeezed segmented button used to break 开启 into 开 / 启 on two lines.
+		whiteSpace: 'nowrap',
+		flexShrink: 0,
 	},
 	segBtnActive: {
-		padding: '4px 10px',
+		padding: '3px 9px',
 		borderRadius: '4px',
 		border: 'none',
 		background: 'var(--agy-seg-btn-active-bg)',
@@ -212,6 +218,8 @@ export const S: Record<string, Record<string, unknown>> = {
 		fontSize: '11.5px',
 		fontWeight: 700,
 		boxShadow: '0 2px 4px rgba(37, 99, 235, 0.4)',
+		whiteSpace: 'nowrap',
+		flexShrink: 0,
 	},
 	input: {
 		flex: '1',
@@ -224,6 +232,12 @@ export const S: Record<string, Record<string, unknown>> = {
 		outline: 'none',
 	},
 	muted: { color: 'var(--agy-text-tertiary)', fontSize: '11.5px' },
+	// Row descriptions: one line, ellipsised, full copy in the title tooltip.
+	// Long prose on every row is what made the settings page feel crowded.
+	mutedLine: {
+		color: 'var(--agy-text-tertiary)', fontSize: '11.5px',
+		overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+	},
 	// Right-hand control cluster of a settings row: the toggle and the dropdowns
 	// wrap as ONE unit, so a narrow panel moves them under the label instead of
 	// squeezing the description into a column of two characters.

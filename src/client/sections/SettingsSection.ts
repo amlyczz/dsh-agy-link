@@ -415,14 +415,14 @@ function renderRuntimeConfig(
 	const { setCfg, setMode, setSelectedModels, copyImageCommand, showToast } = actions;
 	const caption = (text: string, desc?: string): unknown => h('div', { style: { display: 'flex', flexDirection: 'column' } },
 		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, text),
-		desc !== undefined ? h('span', { style: S.muted }, desc) : null,
+		desc !== undefined ? h('span', { style: S.mutedLine, title: desc }, desc) : null,
 	);
 
-	return h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--agy-border-divider)' } },
-		h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+	return h('div', { style: { marginTop: '14px', paddingTop: '10px', borderTop: '1px solid var(--agy-border-divider)' } },
+		h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
 			h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
 				h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.runtimeTitle')),
-				h('span', { style: S.muted }, t('config.runtimeDesc')),
+				h('span', { style: S.mutedLine, title: t('config.runtimeDesc') }, t('config.runtimeDesc')),
 			),
 			h(Row, {
 				left: h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('pool.label')),
@@ -456,7 +456,7 @@ function renderRuntimeConfig(
 				style: { gap: '10px' },
 				left: h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
 					h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.autoTranslate')),
-					h('span', { style: S.muted }, t('config.autoTranslateDesc')),
+					h('span', { style: S.mutedLine, title: t('config.autoTranslateDesc') }, t('config.autoTranslateDesc')),
 				),
 				right: h('div', { style: S.cfgRowRight },
 					segGroup([
