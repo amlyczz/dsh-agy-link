@@ -467,7 +467,9 @@ test('action state survives a remount and re-derives from the session record', (
   assert.match(source, /ACTION_STATE = /)
   assert.match(source, /ACTION_INFLIGHT = /)
   assert.match(source, /agy-link\/translate\/state/)
-  assert.match(source, /state === ["']ready["'] \? ["']done["']/)
+  assert.match(source, /state === ["']ready["']\)\s*\{?\s*setActionState\(key, ["']done["']\)/)
+  // A busy answer keeps probing until the record lands (behaviour: client-dom.test.ts).
+  assert.match(source, /setTimeout\(probe, BUSY_POLL_MS\)/)
 })
 
 test('a panel remount mid-flight still settles to done (no forever spinner)', async () => {

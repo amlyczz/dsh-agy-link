@@ -745,6 +745,53 @@ test('translate action: click posts, transitions to done, and early-returns whil
 	setActionState(ACTION_KEY, 'idle');
 });
 
+test('translate action: a reply busy on mount (auto-translate) keeps probing and settles, no stuck spinner', async () => {
+	const replies = ['busy', 'busy', 'ready'];
+	let stateCalls = 0;
+	setGlobal('fetch', async (url: unknown) => {
+		if (String(url).includes('/translate/state')) {
+			const state = replies[Math.min(stateCalls, replies.length - 1)];
+			stateCalls++;
+			return { ok: true, status: 200, json: async () => ({ state }) };
+		}
+		return { ok: true, status: 200, json: async () => ({ showTranslateAction: true }) };
+	});
+	// Capture only the busy re-probe (3 s); everything else keeps real timers.
+	const realSetTimeout = globalThis.setTimeout;
+	const pending: Array<() => void> = [];
+	setGlobal('setTimeout', (fn: () => void, ms?: number, ...rest: unknown[]) => {
+		if (ms === 3_000) { pending.push(fn); return 0; }
+		return realSetTimeout(fn, ms, ...rest);
+	});
+	const fire = async (): Promise<void> => {
+		await act(async () => { pending.splice(0).forEach((fn) => fn()); await wait(5); });
+	};
+	setActionState(ACTION_KEY, 'idle');
+	const { container, root } = await mount(createElement(TranslateAction, { messageId: 'msg-dom', sessionId: 'sess-dom' }));
+	await act(async () => { await wait(5); });
+	const btn = () => container.querySelector('.agy-tsl-icon') as HTMLButtonElement;
+	assert.equal(btn().getAttribute('data-state'), 'working', 'host busy on mount shows the spinner');
+	assert.equal(pending.length, 1, 'a re-probe is scheduled while busy');
+	await fire();
+	assert.equal(btn().getAttribute('data-state'), 'working');
+	await fire();
+	assert.equal(btn().getAttribute('data-state'), 'done', 'the spinner settles once the record lands');
+	assert.equal(stateCalls, 3);
+	assert.equal(pending.length, 0, 'probing stops once settled');
+	await act(() => { root.unmount(); });
+
+	// The host finishing without a record (failed) releases the spinner.
+	replies.splice(0, replies.length, 'busy', 'idle');
+	stateCalls = 0;
+	setActionState(ACTION_KEY, 'idle');
+	const second = await mount(createElement(TranslateAction, { messageId: 'msg-dom', sessionId: 'sess-dom' }));
+	await act(async () => { await wait(5); });
+	await fire();
+	assert.equal((second.container.querySelector('.agy-tsl-icon') as HTMLButtonElement).getAttribute('data-state'), 'idle');
+	await act(() => { second.root.unmount(); });
+	setActionState(ACTION_KEY, 'idle');
+});
+
 test('translate action: hidden by showTranslateAction=false and restored live (issue #105)', async () => {
 	let visible = false;
 	setGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ showTranslateAction: visible }) }));

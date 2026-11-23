@@ -12,6 +12,8 @@ import { isUiVisible, useAgyStatus } from './status.ts'
 import { geminiMark } from './translate-card.ts'
 
 const TRANSLATE_REQUEST_TIMEOUT_MS = 180_000
+/** Re-probe interval while the host reports a reply busy (auto-translate in flight). */
+const BUSY_POLL_MS = 3_000
 
 async function postTranslate(body: Record<string, unknown>): Promise<{ ok?: boolean; text?: string; error?: string; code?: string; model?: string; effort?: string } | null> {
 	try {
@@ -318,19 +320,38 @@ export const TranslateAction = (props?: Record<string, unknown>): unknown => {
 	useEffect(() => subscribeActionState(key, (next) => setState(next)), [key])
 
 	// A remount must not lose a finished translation: ask the session whether a
-	// durable record already exists for this reply.
+	// durable record already exists for this reply. While the host reports it busy
+	// (an auto-translation this page did not start), keep asking: no request of
+	// ours will settle that spinner, so it used to stick until the next remount.
 	useEffect(() => {
 		if (messageId === '' || sessionId === '') return
 		let alive = true
-		void getMessageState(sessionId, messageId).then((res) => {
-			if (!alive || res === null) return
-			const next: ActionState | null =
-				res.state === 'ready' ? 'done' : res.state === 'busy' ? 'working' : null
-			if (next === null) return
-			setActionState(key, next)
-		})
+		let sawBusy = false
+		let timer: ReturnType<typeof setTimeout> | undefined
+		const probe = (): void => {
+			void getMessageState(sessionId, messageId).then((res) => {
+				if (!alive) return
+				if (res === null) {
+					if (sawBusy) timer = setTimeout(probe, BUSY_POLL_MS)
+					return
+				}
+				if (res.state === 'ready') {
+					setActionState(key, 'done')
+				} else if (res.state === 'busy') {
+					sawBusy = true
+					setActionState(key, 'working')
+					timer = setTimeout(probe, BUSY_POLL_MS)
+				} else if (sawBusy) {
+					// The host finished without a record (failed or cancelled): release
+					// the spinner this probe raised so the reply can be translated again.
+					setActionState(key, 'idle')
+				}
+			})
+		}
+		probe()
 		return () => {
 			alive = false
+			if (timer !== undefined) clearTimeout(timer)
 		}
 	}, [key, messageId, sessionId])
 
