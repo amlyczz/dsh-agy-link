@@ -61,6 +61,67 @@ export function service<T>(ctx: ClientContextLike, name: string): T | undefined 
 	}
 }
 
+interface ConversationServiceLike {
+	events?: { register?: (definition: Record<string, unknown>) => undefined | (() => void) }
+}
+
+type ScopeLike = ClientContextLike & { effect?: (setup: () => () => void, label?: string) => unknown }
+
+/**
+ * Register conversation Definitions once `uiConversation` exists, and again
+ * whenever it is provided anew.
+ *
+ * The client boot entry only waits for `slots` and `locale`, so this plugin can
+ * apply before dsh-client-ui-conversation has provided the service. A one-shot
+ * lookup then registers nothing for the whole page lifetime: the persisted
+ * records stay in the session but no card is ever projected. `ctx.inject` is
+ * the host's own pattern for this; a composition without it (tests, older
+ * hosts) keeps the immediate lookup.
+ */
+export function registerConversationDefinitions(
+	ctx: ClientContextLike,
+	label: string,
+	definitions: () => Array<Record<string, unknown>>,
+): () => void {
+	const registerAll = (scope: ClientContextLike): (() => void) => {
+		// Keep the receiver: the host's registry is a class whose `register` uses `this`.
+		const events = service<ConversationServiceLike>(scope, 'uiConversation')?.events
+		if (typeof events?.register !== 'function') return () => {}
+		const disposers: Array<() => void> = []
+		for (const definition of definitions()) {
+			try {
+				const dispose = events.register(definition)
+				if (typeof dispose === 'function') disposers.push(dispose)
+			} catch (e) {
+				console.warn(`[dsh-agy-link] ${label} definition registration failed:`, e)
+			}
+		}
+		return () => {
+			for (const dispose of disposers) {
+				try {
+					dispose()
+				} catch {
+					// already torn down with the conversation service
+				}
+			}
+		}
+	}
+	const inject = ctx['inject']
+	if (typeof inject !== 'function') return registerAll(ctx)
+	const fiber = (inject as (deps: string[], apply: (scope: ScopeLike) => unknown) => unknown).call(ctx, ['uiConversation'], (scope) => {
+		if (typeof scope.effect !== 'function') return registerAll(scope)
+		scope.effect(() => registerAll(scope), `agy-link: ${label} definitions`)
+		return undefined
+	}) as { dispose?: () => unknown } | undefined
+	return () => {
+		try {
+			fiber?.dispose?.()
+		} catch {
+			// the plugin fiber already disposed it
+		}
+	}
+}
+
 /** The session the visible conversation belongs to. */
 export function currentSessionId(ctx: ClientContextLike): string {
 	const uiSession = service<{ current?: { value?: Record<string, unknown> } }>(ctx, 'uiSession')

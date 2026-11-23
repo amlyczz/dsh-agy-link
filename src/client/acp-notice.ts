@@ -8,7 +8,7 @@
 // the translation card does — the text stays visible, the transcript stays
 // append-only, and nothing enters the model-visible surface.
 
-import { h, service, win, type ClientContextLike } from './translate-context.ts'
+import { h, registerConversationDefinitions, win, type ClientContextLike } from './translate-context.ts'
 import { translateOr } from './i18n-bridge.ts'
 
 export const ACP_REPORT_KIND = 'agy-acp-report'
@@ -203,16 +203,7 @@ export function installAcpCards(ctx: ClientContextLike, localeNs: string): () =>
 	const teardowns: Array<() => void> = []
 	// Definitions are what turn the persisted records into chat nodes; a host
 	// without uiConversation simply shows no cards for them.
-	try {
-		const conversation = service<{ events?: { register?: (def: unknown) => () => void } }>(ctx, 'uiConversation')
-		const register = conversation?.events?.register
-		if (typeof register === 'function') {
-			teardowns.push(register(acpReportDefinition()))
-			teardowns.push(register(acpNoticeDefinition()))
-		}
-	} catch (e) {
-		console.warn('[dsh-agy-link] acp definitions unavailable:', e)
-	}
+	teardowns.push(registerConversationDefinitions(ctx, 'acp', () => [acpReportDefinition(), acpNoticeDefinition()]))
 	try {
 		teardowns.push(
 			ctx.slots.inject('conversation.chat.node', () =>
