@@ -5,6 +5,7 @@ import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistra
 const PERMISSION_MODES = new Set(['skip', 'auto', 'plan', 'accept-edits'])
 const TRANSPORTS = new Set(['cli', 'acp'])
 const WARMUP_WINDOWS = new Set(['weekly', '5h', 'both'])
+const TRANSLATE_DISPLAYS = new Set(['card', 'replace'])
 
 function validateConfigValue(key: string, value: unknown): string | null {
   if (key === 'hiddenModels') {
@@ -32,6 +33,11 @@ function validateConfigValue(key: string, value: unknown): string | null {
     return typeof value === 'string' && TRANSPORTS.has(value)
       ? null
       : 'transport must be cli or acp'
+  }
+  if (key === 'translateDisplay') {
+    return typeof value === 'string' && TRANSLATE_DISPLAYS.has(value)
+      ? null
+      : 'translateDisplay must be card or replace'
   }
   if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'auxNeutralWorkspace') {
     return typeof value === 'boolean' ? null : `${key} must be a boolean`
@@ -103,7 +109,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'cloakSystemPrompt', 'respectExternalSignIn', 'auxNeutralWorkspace',
           'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels',
           'autoWarmup', 'warmupModels', 'warmupWindows', 'warmupDailyTime', 'warmupTimezone', 'warmupIntervalHours', 'warmupMaxProbesPerRun',
-          'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
+          'autoTranslate', 'translateDisplay', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',
           'quotaPollIntervalMs',

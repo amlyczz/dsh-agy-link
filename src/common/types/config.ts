@@ -11,6 +11,7 @@ export type PermissionMode = 'skip' | 'auto' | 'plan' | 'accept-edits'
 export type AgyTransportMode = 'cli' | 'acp'
 
 export type WarmupWindowMode = 'weekly' | '5h' | 'both'
+export type TranslateDisplayMode = 'card' | 'replace'
 
 
 export interface PluginConfig {
@@ -231,6 +232,13 @@ export interface PluginConfig {
    * session record, rendered as a labelled Gemini card under that reply.
    */
   autoTranslate: boolean
+  /**
+   * How a translated reply is shown (default `card`). `card` keeps the reply and
+   * adds the Gemini card under it; `replace` shows the translation in the
+   * reply's place, with a toggle back to the original. Display only: the
+   * session (and so the model's own context) always keeps the original text.
+   */
+  translateDisplay: TranslateDisplayMode
   /** Model used for translation (default: the preferred Gemini Flash; falls back through the live catalog). */
   translateModel: string
   /**
@@ -419,6 +427,7 @@ export function defaultConfig(): PluginConfig {
     // Translation is strictly opt-in: it spends quota on every completed
     // turn, so the default must never silently start billing a user.
     autoTranslate: false,
+    translateDisplay: 'card',
     translateModel: PREFERRED_GEMINI_FLASH,
     // Default to 'low': real agy measurements give ~12s cold / ~4-9s warm at low
     // vs ~33s at medium and ~45s at high, and plain-language rewriting needs

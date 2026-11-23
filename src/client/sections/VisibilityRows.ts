@@ -41,7 +41,35 @@ function visibilityRow(o: VisibilityRowOptions): unknown {
 	});
 }
 
-/** Returns two rows; React flattens the array inside the parent's children. */
+/** Card under the reply, or the translation shown in the reply's place (display only). */
+function translateDisplayRow(o: {
+	t: Translator;
+	mode: 'card' | 'replace';
+	loadingAction: string | null;
+	setCfg: (key: string, value: unknown) => Promise<void>;
+}): unknown {
+	const busy = o.loadingAction === 'config:translateDisplay';
+	return h(Row, {
+		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
+			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, o.t('config.translateDisplay')),
+			h('span', { style: S.mutedLine, title: o.t('config.translateDisplayDesc') }, o.t('config.translateDisplayDesc')),
+		),
+		right: segGroup([
+			h(Button, {
+				variant: o.mode === 'card' ? 'segActive' : 'seg',
+				disabled: busy,
+				onClick: () => void o.setCfg('translateDisplay', 'card'),
+			}, o.t('config.translateDisplayCard')),
+			h(Button, {
+				variant: o.mode === 'replace' ? 'segActive' : 'seg',
+				disabled: busy,
+				onClick: () => void o.setCfg('translateDisplay', 'replace'),
+			}, o.t('config.translateDisplayReplace')),
+		]),
+	});
+}
+
+/** Returns the display rows; React flattens the array inside the parent's children. */
 export function renderVisibilityRows(args: {
 	t: Translator;
 	status: StatusPayload;
@@ -64,5 +92,6 @@ export function renderVisibilityRows(args: {
 			key: 'showTranslateAction',
 			visible: args.status.showTranslateAction !== false,
 		}),
+		translateDisplayRow({ ...common, mode: args.status.translateDisplay === 'replace' ? 'replace' : 'card' }),
 	];
 }
