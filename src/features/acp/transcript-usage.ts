@@ -23,13 +23,40 @@ function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
-function extractUsageFromRecord(rec: Record<string, unknown>): RawUsage | null {
-  const raw =
+/**
+ * Pull token counters out of one transcript record.
+ *
+ * agy has written them in two shapes: nested (`usage`, `token_usage`,
+ * `metadata.usage`) and, since 1.5.12 for `PLANNER_RESPONSE`, FLAT on the
+ * record itself. Only reading the nested ones returned null for every ACP
+ * step, so the context meter fell back to an estimate that grew with each
+ * tool step (issue #175: 3.1M shown against a 1.0M window).
+ */
+const COUNTER_KEYS = [
+  'input_tokens', 'inputTokens', 'prompt_tokens',
+  'output_tokens', 'outputTokens', 'completion_tokens',
+  'cache_read_tokens', 'cachedReadTokens', 'cached_content_token_count',
+  'cache_write_tokens', 'cachedWriteTokens',
+  'thinking_tokens', 'thoughtTokens', 'thoughts_token_count',
+  'total_tokens', 'totalTokens',
+] as const
+
+function hasAnyCounter(rec: Record<string, unknown>): boolean {
+  return COUNTER_KEYS.some((k) => num(rec[k]) !== undefined)
+}
+
+export function extractUsageFromRecord(rec: Record<string, unknown>): RawUsage | null {
+  const nested =
     (rec.usage && typeof rec.usage === 'object' ? (rec.usage as Record<string, unknown>) : null) ??
     (rec.token_usage && typeof rec.token_usage === 'object' ? (rec.token_usage as Record<string, unknown>) : null) ??
     (rec.metadata && typeof rec.metadata === 'object' && (rec.metadata as Record<string, unknown>).usage && typeof (rec.metadata as Record<string, unknown>).usage === 'object'
       ? ((rec.metadata as Record<string, unknown>).usage as Record<string, unknown>)
       : null)
+  // Flat records carry the counters as siblings of step_index/type/status, so
+  // the record itself is a candidate — but only when it actually holds a
+  // counter, otherwise every non-usage step would look like an empty sample.
+  const flat = hasAnyCounter(rec) ? rec : null
+  const raw = nested ?? flat
   if (!raw) return null
   const input = num(raw.input_tokens) ?? num(raw.inputTokens) ?? num(raw.prompt_tokens)
   const output = num(raw.output_tokens) ?? num(raw.outputTokens) ?? num(raw.completion_tokens)

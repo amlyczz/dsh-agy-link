@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.68 (2026-11-23)
+
+### English
+
+- **Fix(acp): read the FLAT token counters agy writes on `PLANNER_RESPONSE` (fixes #175).** The transcript tailer only looked inside `usage` / `token_usage` / `metadata.usage`; since 1.5.12 agy writes the counters as siblings of `step_index`/`type`/`status`, so every ACP step produced no sample and the context meter fell back to an estimate that grew with each tool step — reported as `3.1M / 1.0M (100%)` on a 19-step turn, dropping back to `294.3k` on the next turn with no tools. The record itself is now a candidate, but only when it actually carries a counter, so non-usage steps still yield nothing.
+- **Fix(client): register the conversation Definitions through `ctx.inject` instead of a one-shot lookup (merges PR #177, fixes #176).** The client boot entry declares only `inject: ["slots", "locale"]`, so DSH may apply this plugin before `dsh-client-ui-conversation` provides `uiConversation`. `installTranslationUi` / `installAcpCards` looked the service up once; when it was missing they registered nothing **and logged nothing**, for the whole page lifetime — translation records kept reaching the renderer but no card was ever projected. Both now use `ctx.inject(['uiConversation'], scope => scope.effect(...))` and register events with their receiver.
+
+### 中文
+
+- **修复(acp)：读取 agy 在 `PLANNER_RESPONSE` 上写入的顶层 token 计数（修复 #175）。** 转录跟随器此前只在 `usage` / `token_usage` / `metadata.usage` 里找；而 1.5.12 起 agy 把计数平铺在 `step_index`/`type`/`status` 旁边，于是 ACP 每一步都取不到样本，上下文计量回退成"随工具步数增长"的估算——报告者在 19 步的那轮看到 `3.1M / 1.0M (100%)`，下一轮无工具时又跌回 `294.3k`。现在记录本身也是候选，但**只有真的带计数字段时**才采纳，非用量步骤仍返回空。
+- **修复(client)：用 `ctx.inject` 注册会话 Definition，而不是一次性查找（合并 PR #177，修复 #176）。** 客户端启动入口只声明了 `inject: ["slots", "locale"]`，因此 DSH 可能在本插件之后才提供 `uiConversation`。`installTranslationUi` / `installAcpCards` 只在 apply 时查一次；服务缺失时**什么都不注册、也不打日志**，且持续整个页面生命周期——翻译记录照常进渲染器，却永远没有卡片。两者现在都改用 `ctx.inject(['uiConversation'], scope => scope.effect(...))` 并用 receiver 注册事件。
+
 ## Unreleased
 
 ### English
