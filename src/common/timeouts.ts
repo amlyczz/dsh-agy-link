@@ -66,6 +66,19 @@ export const QUOTA_LICENSE_RETRY_MS = 6 * 3600_000
 export const QUOTA_FREE_TIER_RETRY_MS = 7 * 24 * 3600_000
 
 /**
+ * How long a refused summary stays suppressed for an account that has ALREADY
+ * reported a 5-hour window.
+ *
+ * `no_summary_access` is the *shape* of a free-tier refusal (no 5h bucket), not
+ * proof of a free plan. A paid account can still get 403 PERMISSION_DENIED
+ * transiently, and freezing it for a week left its Gemini/Claude rows stuck on
+ * a multi-day-old snapshot while Argon kept advancing — the mixed-age card
+ * reported 2026-11-23. Re-probe hourly instead; one extra request per hour per
+ * refused account is far below the anti-ban budget this module protects.
+ */
+export const QUOTA_SUMMARY_REFUSED_RETRY_MS = 1 * 3600_000
+
+/**
  * Same-egress parallelism for a user-initiated pool sweep. Antigravity's risk
  * control correlates accounts by source IP, so this stays deliberately small;
  * the scheduler still spaces every account start by the organic jitter, and the

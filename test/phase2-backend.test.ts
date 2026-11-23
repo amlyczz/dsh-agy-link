@@ -58,7 +58,7 @@ test('computeQuotaPacing classifies surplus, on_track, burning_fast, reset and u
   assert.equal(reset.status, 'reset')
 })
 
-test('orderByExpiry ignores second-level resetTime jitter in same cohort and prefers higher surplus + Argon fallback', () => {
+test('orderByExpiry ignores second-level resetTime jitter in same cohort and prefers higher surplus', () => {
   const now = Date.parse('2026-11-18T12:00:00Z')
   const accDrained = makeAcc({
     id: 'acc_drained',
@@ -87,10 +87,29 @@ test('orderByExpiry ignores second-level resetTime jitter in same cohort and pre
   const ordered = orderByExpiry(pool, pool, 'google', undefined, now)
   assert.equal(ordered[0]?.id, 'acc_surplus')
 
-  // Argon shared-bucket fallback when quotas.argon is absent (Ultra/folded plan)
-  assert.ok(Number.isFinite(nextQuotaResetAt(accSurplus, 'argon')))
+  // Argon keeps its OWN book: an account with no `argon` row has an UNKNOWN
+  // argon reset (NaN), and that Gemini surplus must never stand in for it.
+  assert.equal(
+    Number.isNaN(nextQuotaResetAt(accSurplus, 'argon')),
+    true,
+    'no argon row -> unknown argon reset, never the Gemini one',
+  )
   const orderedArgon = orderByExpiry(pool, pool, 'argon', undefined, now)
-  assert.equal(orderedArgon[0]?.id, 'acc_surplus')
+  assert.equal(orderedArgon.length, 2, 'unknown-reset accounts stay orderable, just deprioritised')
+
+  // A real argon row must outrank an unknown one.
+  const accWithArgon = makeAcc({
+    id: 'acc_with_argon',
+    quotas: {
+      argon: { weeklyFraction: 0.9, weeklyResetTime: new Date(now + 3 * 24 * 3_600_000).toISOString() },
+    },
+  })
+  const withArgon = [...pool, accWithArgon]
+  assert.equal(
+    orderByExpiry(withArgon, withArgon, 'argon', undefined, now)[0]?.id,
+    'acc_with_argon',
+    'a known argon reset beats accounts with no argon row',
+  )
 })
 
 test('PoolAdmin.recordSuccess never erases terminal TOS_VIOLATION quarantine', () => {

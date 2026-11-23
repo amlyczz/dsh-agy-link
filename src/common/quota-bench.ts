@@ -66,9 +66,9 @@ export function isWeeklyQuotaBenched(
  * cached row is no newer than that stamp, so a fresh poll always re-arms it.
  */
 export function isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number, model?: string): boolean {
-  // Argon falls back to the plain Gemini row once the backend folds it into
-  // the shared Gemini group (agy >= 1.5.5 stops emitting a dedicated group).
-  const quota = acc.quotas?.[family] ?? (family === 'argon' ? acc.quotas?.google : undefined)
+  // Argon has its own quota book; an absent row is "unknown", never a mirror of
+  // the shared-looking Gemini row (.spec/quota-and-risk-control.md).
+  const quota = acc.quotas?.[family]
   if (!quota) return false
   const clearedAt = acc.quotaGateClearedAt?.[family]
   if (is5hQuotaBenched(quota, clearedAt, now) || isWeeklyQuotaBenched(quota, clearedAt, now)) return true
@@ -86,13 +86,13 @@ export function accountHasActiveCooldown(acc: ManagedAccount, now: number): bool
 
 /**
  * True when any family reported on the account is benched by its quota snapshot.
- * Skips the synthesized `argon -> google` fallback when the account has no dedicated
- * `quotas.argon` row, since `google` itself already reflects that shared bucket.
+ *
+ * Each family is judged on its OWN row only. An account with no `argon` row is
+ * not Argon-benched (unknown ≠ drained) — a drained Gemini pool must never
+ * bench Argon, because the two are separate quota books.
  */
 export function accountHasQuotaBench(acc: ManagedAccount, now: number): boolean {
-  return QUOTA_FAMILIES.some(
-    (fam) => (fam !== 'argon' || acc.quotas?.argon !== undefined) && isQuotaBenched(acc, fam, now),
-  )
+  return QUOTA_FAMILIES.some((fam) => isQuotaBenched(acc, fam, now))
 }
 
 /** True when a family has an active local 429 cooldown timer on this account. */

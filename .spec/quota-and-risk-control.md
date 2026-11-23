@@ -80,8 +80,34 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - 若把「description 含 argon」当作证据，共享 Gemini 池会被写进 `argon` 族：`google` 丢掉 weekly、面板出现假 `Argon` 行，且 `noteDedicatedGroup('argon')` 会污染选号与 `shouldReleaseOrphanedCooldown()`。
 - 判据只有两个：**组 `displayName` 含 argon**，或 **bucket 的 `bucketId`/`displayName` 含 argon**（如 `argon-weekly`）。`summaryHasArgonGroup()` 与 `ingestSummaryGroups()` 的 `isArgon` 都遵守此规则。
 - `description` 仍可参与**正向**家族归类（含 gemini → google），但不得用于判定「独立池」。
-- 「Argon 已并入 Gemini」的折叠场景（argon 组不存在）行为不变。
-- 测试：`test/domain-quota.test.ts`（description 枚举形态必须归 google 且保留 weekly；`Gemini 4 Argon` 组名与 `argon-weekly` bucket 仍识别）。
+- 「Argon 组不存在」**不再**意味着它与 Gemini 共用一池；见下一节，缺失即未知，绝不继承。
+- 测试：`test/domain-quota.test.ts`（description 枚举形态必须归 google 且保留 weekly；`Gemini 4 Argon` 组名 与 `argon-weekly` bucket 仍识别）。
+
+## Argon 与 Gemini 是两本独立配额账（禁止任何跨族 fallback）
+
+**第一原则：`argon` 与 `google` 永远不互相顶替。一个族没有自己的数据时，答案是"未知"，不是"抄另一个族的"。**
+
+实测反证（2026-11-23，7 个账号的 `pool.json`）：6 个拥有独立 `argon` 组的账号里，`elegantmanco` 的 `google` 5h 已到 `0%` 而 `argon` 周额度仍是 `100%`，`simplegod158` 的 `google` 周额度已到 `0%` 而 `argon` 周额度仍是 `100%`。若二者共用一池，这些数字不可能分叉。所有账号的 `google.models` 中也**不含任何 argon 模型**（`argon-in-google = []`）。
+
+禁止的四处具体写法（历史上同一表达式被复制了四份）：
+
+| 位置 | 旧行为（已删除） | 新行为 |
+| --- | --- | --- |
+| `src/domain/accounts/selection.ts` `effectiveFamilyQuota()` | `quotas[family] ?? quotas.google`（argon 时） | 只读 `quotas[family]` |
+| `src/common/quota-bench.ts` `isQuotaBenched()` | 同上 | 只读 `quotas[family]` |
+| `src/common/account-models.ts` 模型行 fallback | 同上 | 只读 `quotas[family]` |
+| `src/domain/quota/parse.ts` `ingestModelCatalog()` | `argonSharesGemini` 把 argon 模型行归档进 `google` 且丢弃其读数 | 永远按 `modelFamilyOf()` 的真实族归档 |
+
+语义后果（有意为之，不是退化）：
+
+- **缺失 argon 行 = 未知**：`isQuotaBenched()` 返回 `false`（不因 gemini 见底而误判 argon 让路），`nextQuotaResetAt()` 返回 `NaN`，`orderByExpiry()` 把未知重置排在有已知重置的账号之后。
+- **argon 行唯一的替代数据源是 argon 自己的模型行**（2026-11-23 决策）：后端不发 `argon` 组但模型列表里有 `gemini-4-argon-*` 时，用这些模型行自己的周额度读数建 `argon` 行，绝不读 `google` 的聚合值。
+  - 已知取舍：若某个 agy 版本（如 1.5.5）把 argon 折叠进共享 Gemini 桶，argon 模型行的读数就是该桶的镜像，此时 `argon` 行会呈现镜像值。这是「绝不跨族借用」换来的代价，优于把健康 argon 判死或把见底 argon 放过。
+  - 反向也不允许：`google` 的模型列表里不再出现 argon 行，避免 Gemini 面板被 argon 污染。
+- **`accountHasArgon()` 仍保留 `google.models` 里出现 argon 模型的判据**：这不是 fallback，而是为了兼容旧版本已把 argon 模型行落盘进 `google.models` 的历史数据（以及 `agy` 把 argon 成员列进共享组 catalog 的形态）。
+- **argon 模型行只出现在 `argon` 族**：gemini 模型面板不再混入 argon 行。
+- `refresh.ts` 的 dedicated-group 记账**不变**：只有组名/bucket 名才是「独立池」证据；无组时清除 argon 行与冷却，因此「无组 + 有未读数」不会残留成假 argon 行。
+- 锚点：`test/argon-independence.test.ts`；同时更新 `test/account-models.test.ts`、`test/phase2-backend.test.ts`、`test/quota.test.ts` 中守着旧折叠行为的断言。
 
 ## 额度汇总被拒绝的两类终态（issue #137）
 
@@ -90,7 +116,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 | 判定 | 触发 | 压制对象 | 周期 |
 | --- | --- | --- | --- |
 | `no_license` | 403 且正文含 license | **整个账号**退出后台轮询 | 6h（新许可随时可能到达） |
-| `no_summary_access` | 403 且 `status = PERMISSION_DENIED`（免费账号无 5h 窗口） | **仅汇总请求**；`fetchAvailableModels` / 用户额度照常 | 7 天（对齐周配额周期） |
+| `no_summary_access` | 403 且 `status = PERMISSION_DENIED` | **仅汇总请求**；`fetchAvailableModels` / 用户额度照常 | **有 5h 证据**（已上报过 5 小时窗口）= 1 小时；**无 5h 证据** = 7 天（对齐周配额周期） |
 
 **「独立 Argon 池」的判据只有一条，两条链路必须共用（#130/#131/#169）**：组**名**或 bucket 的 id/displayName 含 argon。**description 不是证据**——agy 的共享 `Gemini Models` 组会在 description 里枚举成员（"… Gemini 4 Argon …"），用它会把整个 Gemini 池误判为独立 Argon 池。该规则适用于 **REST summary** 与 **CLI `/usage`** 两条路径（`summaryHasArgonGroup` / `ingestSummaryGroups` / `usageGroupsToFamilies`）；description 仅可用于**正向家族归类**（如含 gemini → google），不得用于证明"独立池"。
 
@@ -99,8 +125,23 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - `quotaSummarySuppressed(account)` 对两类都返回 true（都意味着「先别打那个端点」）。
 - `accountPollSuppressed(account)` 只对 `no_license` 返回 true；`shouldPollAccount()` 用它决定账号是否完全退出轮询——免费账号**必须继续轮询**，否则模型列表会被冻结。
 - 手动刷新（`force`）绕过压制，用户升级后可立即恢复。
-- UI 对 `no_summary_access` 显示「免费账号 · 仅限周配额」，不显示通用失败（四语言 locale）。
+- UI 对 `no_summary_access` **必须区分是否真有 5h 窗口**（四语言 locale）：
+  - 无 5h 证据 → 「免费账号 · 仅限周配额（汇总接口被拒绝）」。
+  - **有 5h 证据 → 绝不能写「免费账号」**：该账号同一张卡片上还挂着 Pro 徽章和 5 小时额度条，文案与事实互相打脸（2026-11-23 实测 4/7 账号出现）。改用中性的「汇总接口被拒绝（403 PERMISSION_DENIED）· 5 小时/周汇总未更新」。
+  - 判定依据必须与 `resolveAccountPlanTier` 一致（`!ev.has5h`），不得另起一套。
 - 锚点：`test/issue137-free-tier-summary.test.ts`（分类、两类压制边界、轮询不变式、周期常量）。
+
+## 卡片一致性：同一张卡不得自相矛盾（2026-11-23）
+
+账号卡片同时展示「套餐徽章 + 各模型族配额条 + 失败提示 + 时间戳」，四者来自不同字段，必须彼此自洽。
+
+1. **文案不得与可见数值冲突**：标着 Pro 徽章、挂着 5 小时额度条的账号，不得被写成「免费账号」。判定依据统一走 `resolveAccountPlanTier` 的 `ev.has5h`，见上一节。
+2. **重置时间已过期的窗口不得裸奔**：`resetTime` 已过 = 窗口已滚动，缓存的 `remainingFraction` 描述的是**上一个**窗口。
+   - `>= 100%` → 「已重置 · 可用」（既有行为）。
+   - `< 100%` → **必须**标「窗口已重置 · 数据停留在 {该族 updatedAt}」，绝不能只渲染一个不带任何时间标记的百分比（实测：91% 且采用 33 小时前的边界，看起来像实时数据）。
+   - 锚点：`test/quota-panel-consistency.test.ts`。
+3. **按族合并写入意味着单卡多时间戳是合法的**：`updateAccountQuotas()` 逐族合并，某族刷新失败不会清掉其它族。`mergeFallbackFamilyQuota` 在摘要非权威时**保留上一份完整值及其 `updatedAt`**，因此「argon 刚刷新、google 停在两天前」是预期状态——正因为它是预期状态，UI 才必须逐族标出新鲜度，而不能让整卡看起来同一时刻。
+4. **不要用「按最新时间戳渲染」抹平差异**：把整卡的 `updatedAt` 取最大值会让旧族伪装成新数据，属于伪造新鲜度。
 
 ## 刷新成功后必须清除 unavailable 标记（issue #151）
 

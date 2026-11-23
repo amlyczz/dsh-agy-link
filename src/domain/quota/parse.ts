@@ -7,7 +7,7 @@ import {
   type ModelFamily,
   type ModelQuotaInfo,
 } from '../../common/pool-types.ts'
-import { isStale5hBucket, pickFamilyQuota, sameQuotaWindow, summaryHasArgonGroup } from './buckets.ts'
+import { isStale5hBucket, pickFamilyQuota, sameQuotaWindow } from './buckets.ts'
 
 export interface DiscoveredModelEntry {
   quotaInfo?: {
@@ -216,26 +216,22 @@ function ingestModelCatalog(params: {
   prevQuotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>
   now: number
   summaryAuthoritative: boolean
-  argonGroupPresent: boolean
   familyQuotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>
   stale5hFamilies: Set<ModelFamily>
 }): Partial<Record<ModelFamily, ModelQuotaInfo[]>> {
-  const { modelsCatalog, prevQuotas, now, summaryAuthoritative, argonGroupPresent, familyQuotas, stale5hFamilies } = params
+  const { modelsCatalog, prevQuotas, now, summaryAuthoritative, familyQuotas, stale5hFamilies } = params
   const familyModels: Partial<Record<ModelFamily, ModelQuotaInfo[]>> = {}
   for (const [modelId, entry] of Object.entries(modelsCatalog)) {
     const quotaFamily = modelFamilyOf(modelId)
     if (quotaFamily === 'unknown') continue
-    // Without a dedicated Argon group there is no Argon pool to report: the
-    // model row describes the shared Gemini bucket. Keep the row under
-    // `google` (so `accountHasArgon()` still sees "this account lists an
-    // argon model" and the model picker detail stays truthful) but never
-    // invent an `argon` family for it. Only an AUTHORITATIVE summary (one
-    // that returned groups but no Argon group) may prove the fold; with no
-    // summary at all the legacy projection is kept so Argon access and its
-    // quota gate never disappear on a failed poll.
-    const argonSharesGemini =
-      quotaFamily === 'argon' && !argonGroupPresent && summaryAuthoritative
-    const fam: ModelFamily = argonSharesGemini ? 'google' : quotaFamily
+    // Always file a model under its TRUE family. Argon and Gemini are separate
+    // quota books (.spec/quota-and-risk-control.md): re-homing an Argon model
+    // into `google` both polluted the Gemini model list and silently discarded
+    // the Argon reading, while letting a Gemini row stand in for Argon benched
+    // healthy accounts on a drained Gemini pool. The SUMMARY shape (which
+    // groups the backend happened to return) is not evidence about which pool
+    // an individual model bills against.
+    const fam: ModelFamily = quotaFamily
     const resetTime = entry.quotaInfo?.resetTime
     const remaining = parseBucketFraction(entry.quotaInfo?.remainingFraction, resetTime)
 
@@ -248,12 +244,6 @@ function ingestModelCatalog(params: {
       remainingFraction: remaining,
       resetTime,
     })
-
-    // The shared-Argon row is listed for identity only. Its number carries
-    // no window label and mirrors the same bucket the summary already
-    // reports, so folding it into the Gemini fractions could only bench
-    // Gemini on a derived value.
-    if (argonSharesGemini) continue
 
     const isStale = stale5hFamilies.has(fam)
     // Fallback for family fraction if summary was unavailable.
@@ -344,7 +334,6 @@ export function buildFamilyQuotas(params: {
 
   // 1. Ingest official weekly & 5h limits from retrieveUserQuotaSummary
   const summaryGroups = collectSummaryGroups(summary)
-  const argonGroupPresent = summaryHasArgonGroup(summaryGroups)
   if (summaryGroups.length > 0) {
     ingestSummaryGroups(summaryGroups, now, familyQuotas, stale5hFamilies)
   }
@@ -356,7 +345,6 @@ export function buildFamilyQuotas(params: {
       prevQuotas,
       now,
       summaryAuthoritative: summaryGroups.length > 0,
-      argonGroupPresent,
       familyQuotas,
       stale5hFamilies,
     })

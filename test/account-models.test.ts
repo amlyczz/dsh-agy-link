@@ -43,7 +43,7 @@ test('buildAccountModelRows uses authoritative catalog without duplicates or int
           { modelId: 'claude-opus-5-5-medium', displayName: 'Claude Opus 5.5 (Medium)', remainingFraction: 0.6 },
         ],
       },
-      // No dedicated argon quota row -> Argon models inherit shared google bucket if no per-model match!
+      // No dedicated argon quota row -> Argon must stay UNKNOWN, never inherit the Gemini bucket.
     },
   })
 
@@ -68,7 +68,11 @@ test('buildAccountModelRows uses authoritative catalog without duplicates or int
   const argon = rows.find((r) => r.id === 'gemini-4-argon')!
   assert.equal(argon.family, 'argon')
   assert.equal(argon.familyLabel, 'Argon')
-  assert.equal(argon.remainingFraction, 0.9, 'inherits shared google bucket when acc.quotas.argon is absent')
+  assert.equal(
+    argon.remainingFraction,
+    undefined,
+    'Argon must NOT inherit the Gemini bucket when acc.quotas.argon is absent (separate quota books)',
+  )
 
   const orchestrator = rows.find((r) => r.id === 'gemini-pro-orchestrator-neon')!
   assert.equal(orchestrator.name, 'Orchestrator (Neon)')

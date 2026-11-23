@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.67 (2026-11-23)
+
+### English
+
+- **Fix(quota): Argon and Gemini are independent quota books — no cross-family borrowing.** Argon's quota row used to fall back to the Gemini row whenever the summary omitted a dedicated `Gemini 4 Argon` group, in four places (eligibility/ordering, single-model bench, model-row display, and family ingestion, which re-homed Argon model rows under `google`). On agy 1.5.14 they are provably separate: accounts whose Gemini weekly pool had hit 0% still reported Argon weekly at 100%, and no account lists an Argon model under `google`. The borrow could therefore bench a healthy Argon on a drained Gemini pool or mask a drained Argon behind a full one. Absent Argon data is now "unknown" (not benched, unknown reset, ordered after known resets) and Argon model rows are filed under `argon` only; when the backend omits the group, Argon's own model-row weekly reading becomes its row, never the Gemini aggregate.
+- **Fix(ui): a quota card can no longer contradict itself.** (1) A Pro account carrying a 5h bar was labelled "free-tier account · weekly quota only" — the notice now picks neutral wording whenever the account has 5h evidence, matching `resolveAccountPlanTier`. (2) A quota row whose reset boundary had already passed rendered a bare percentage with no time marker (a 33-hour-stale 91% looked live) — it now reads "window already reset · data from <time>", and only a full 100% reads "reset · available". (3) A paid account refused with `403 PERMISSION_DENIED` was frozen for a week (the free-tier cadence), leaving its Gemini rows on a multi-day-old snapshot while Argon kept advancing — it now re-probes hourly, while genuinely free-tier accounts keep the 7-day cadence.
+- **Behavior note: a single card may legitimately show families of different ages.** `updateAccountQuotas` merges per family and `mergeFallbackFamilyQuota` keeps the last complete value when the summary is not authoritative, so "Argon just refreshed, Gemini is two days old" is expected. The UI therefore surfaces each row's own freshness instead of dressing them up as one instant.
+
+### 中文
+
+- **修复(配额)：Argon 与 Gemini 是两本独立配额账，禁止跨族借用。** 当汇总里没有独立的 `Gemini 4 Argon` 组时，Argon 的配额行会回退去读 Gemini 行——这个错误被复制在四个地方（选号排序/资格判断、单模型让路、模型行展示、以及把 Argon 模型行归到 `google` 族的摄入逻辑）。在 agy 1.5.14 上二者可证明是独立的：Gemini 周额度已打到 0% 的账号，Argon 周额度仍是 100%，且没有任何账号把 Argon 模型列在 `google` 下。因此这种借用会把健康的 Argon 拖下水、或把见底的 Argon 掩护起来。现在缺失的 Argon 数据一律视为「未知」（不判让路、重置时间未知、排在有已知重置的账号之后），Argon 模型行只归 `argon` 族；后端不发该组时，用 Argon 自己模型行的周额度读数建行，绝不读 Gemini 聚合值。
+- **修复(界面)：同一张配额卡片不会再自相矛盾。** （1）挂着 5 小时额度条的 Pro 账号曾被写成「免费账号 · 仅限周配额」——现在只要账号有 5h 证据就改用中性文案，与 `resolveAccountPlanTier` 口径一致。（2）重置时间已过期的窗口此前只渲染一个不带任何时间标记的百分比（一个 33 小时前的 91% 看起来像实时数据）——现在写「窗口已重置 · 数据停留在 <时间>」，只有满 100% 才写「已重置 · 可用」。（3）付费账号收到 `403 PERMISSION_DENIED` 后曾被按免费号冻结 7 天，导致其 Gemini 行停在数天前的快照、而 Argon 还在推进——现在付费号改为每小时重探，真正的免费号仍保持 7 天节奏。
+- **行为说明：一张卡片上出现不同新鲜度的族是合理的。** `updateAccountQuotas` 按族合并，`mergeFallbackFamilyQuota` 在摘要非权威时保留上一份完整值，所以「Argon 刚刷新、Gemini 是两天前的」属于预期状态。界面因此改为逐行标注各自的真实数据时间，而不是伪装成同一时刻。
+- **测试：** 新增 12 条（Argon 独立性、卡片一致性、付费号 1 小时重探），并更新守着旧折叠行为的既有用例。
+
+
 ## 0.6.66 (2026-11-22)
 
 ### English

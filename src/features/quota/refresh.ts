@@ -13,7 +13,7 @@ import type {
   QuotaUnavailableState,
 } from '../../common/pool-types.ts'
 import { quotaSummarySuppressed } from '../../common/pool-types.ts'
-import { QUOTA_FREE_TIER_RETRY_MS, QUOTA_LICENSE_RETRY_MS } from '../../common/timeouts.ts'
+import { QUOTA_FREE_TIER_RETRY_MS, QUOTA_LICENSE_RETRY_MS, QUOTA_SUMMARY_REFUSED_RETRY_MS } from '../../common/timeouts.ts'
 import { shouldReleaseOrphanedCooldown, summaryHasArgonGroup } from '../../domain/quota/buckets.ts'
 import { inferAccountPlanTier, type PlanTierGroupLike } from '../../domain/quota/tier.ts'
 import type { QuotaSummaryFailure } from './http.ts'
@@ -310,7 +310,16 @@ export async function refreshAccountQuotaPipeline(
       const previous = account.quotaUnavailable
       // A free-tier refusal tracks the weekly window; an unlicensed account is
       // re-probed sooner because a fresh licence can arrive at any time.
-      const retryMs = reason === 'no_summary_access' ? QUOTA_FREE_TIER_RETRY_MS : QUOTA_LICENSE_RETRY_MS
+      // `no_summary_access` describes the free-tier SHAPE, not a proven free
+      // plan: an account that already reported a 5-hour window is a paid account
+      // being refused transiently. Freezing it for a week left its Gemini row on
+      // a multi-day-old snapshot while Argon kept advancing (2026-11-23).
+      const has5hEvidence = Object.values(account.quotas ?? {}).some(
+        (q) => typeof q?.remainingFraction === 'number',
+      )
+      const retryMs = reason === 'no_summary_access'
+        ? (has5hEvidence ? QUOTA_SUMMARY_REFUSED_RETRY_MS : QUOTA_FREE_TIER_RETRY_MS)
+        : QUOTA_LICENSE_RETRY_MS
       deps.pool.noteQuotaUnavailable(account.id, {
         reason,
         since: previous?.reason === reason ? previous.since : now,
@@ -378,7 +387,13 @@ export async function refreshAccountQuotaPipeline(
     groups: summaryGroups,
     quotas: familyQuotas,
     quotaUnavailable: currentUnavailReason === 'no_summary_access'
-      ? { reason: 'no_summary_access', since: now, retryAfter: now + QUOTA_FREE_TIER_RETRY_MS }
+      ? {
+        reason: 'no_summary_access',
+        since: now,
+        retryAfter: now + (Object.values(account.quotas ?? {}).some((q) => typeof q?.remainingFraction === 'number')
+          ? QUOTA_SUMMARY_REFUSED_RETRY_MS
+          : QUOTA_FREE_TIER_RETRY_MS),
+      }
       : account.quotaUnavailable,
     modelIds: Object.keys(modelsCatalog),
   })

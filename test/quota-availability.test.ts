@@ -22,7 +22,7 @@ import { AccountPoolManager } from '../src/host/pool.ts'
 import { QuotaService } from '../src/host/quota.ts'
 import { AGY_ENDPOINTS } from '../src/host/oauth.ts'
 import { shouldPollAccount } from '../src/common/pool-types.ts'
-import { QUOTA_ENDPOINT_DOWN_MS, QUOTA_FREE_TIER_RETRY_MS, QUOTA_LICENSE_RETRY_MS } from '../src/common/timeouts.ts'
+import { QUOTA_ENDPOINT_DOWN_MS, QUOTA_FREE_TIER_RETRY_MS, QUOTA_LICENSE_RETRY_MS, QUOTA_SUMMARY_REFUSED_RETRY_MS } from '../src/common/timeouts.ts'
 import {
   EndpointHealth,
   endpointHealthKey,
@@ -215,6 +215,31 @@ test('a PERMISSION_DENIED summary records quotaUnavailable=no_summary_access on 
     // ...and the retry window expiring re-arms the summary probe itself.
     pool.getAccount(id)!.quotaUnavailable = { ...state!, retryAfter: 0 }
     assert.equal(shouldPollAccount(pool.getAccount(id)!), true, 'the retry window expiring re-arms polling')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a paid account refused on the summary re-probes hourly, not after a week', async () => {
+  // `no_summary_access` is the SHAPE of a free-tier refusal, not proof of a free
+  // plan. An account that already reported a 5-hour window is paid; freezing it
+  // for 7 days left its Gemini row on a multi-day-old snapshot while Argon kept
+  // advancing (the mixed-age card reported 2026-11-23).
+  const { pool, dir, id } = makeIsolatedAccount('paid-refused')
+  try {
+    // Stamp the email too: an identity mismatch would reset (wipe) the quotas
+    // before the failure path ever sees the 5h evidence.
+    pool.updateAccountQuotas(id, {
+      google: { remainingFraction: 0.91, resetTime: new Date(Date.now() + 3_600_000).toISOString(), updatedAt: Date.now() },
+    }, 'dao@example.com')
+    const svc = new StubQuotaService(pool, () => new Response(LICENSE_403_BODY, { status: 403 }))
+    const before = Date.now()
+    await svc.refreshAccountQuota(pool.getAccount(id)!, true)
+
+    const state = pool.getAccount(id)!.quotaUnavailable
+    assert.equal(state?.reason, 'no_summary_access', 'the diagnosis itself stays accurate')
+    assert.ok(state!.retryAfter <= before + QUOTA_SUMMARY_REFUSED_RETRY_MS + 1_000, 'a paid account is not frozen for a week')
+    assert.ok(state!.retryAfter < before + QUOTA_FREE_TIER_RETRY_MS)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -133,7 +133,10 @@ function projectFromAuthoritativeCatalog(
 
     let stats = pickQuotaStats(matched)
     if (stats.remainingFraction === undefined && !stats.resetTime) {
-      const bucket = acc.quotas?.[family] ?? (family === 'argon' ? acc.quotas?.google : undefined)
+      // Family-level fallback reads THIS model's own family row only. Argon and
+      // Gemini keep separate books, so an Argon model must never display (or be
+      // gated by) the Gemini pool's remaining fraction.
+      const bucket = acc.quotas?.[family]
       const frac = typeof bucket?.remainingFraction === 'number'
         ? bucket.remainingFraction
         : typeof bucket?.weeklyFraction === 'number'

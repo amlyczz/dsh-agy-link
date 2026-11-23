@@ -329,19 +329,17 @@ export function renderFamilyQuotaBar(
 	const has5h = typeof info?.remainingFraction === 'number' && Number.isFinite(info.remainingFraction);
 	const pct5h = has5h ? Math.max(0, Math.min(100, Math.round(info!.remainingFraction! * 100))) : -1;
 	const w5h = formatQuotaWindow(t, info?.resetTime);
-	const expiredFull5h = w5h.expired && has5h && pct5h >= 100;
 
 	// Weekly limit
 	const hasWeekly = typeof info?.weeklyFraction === 'number' && Number.isFinite(info.weeklyFraction);
 	const pctWeekly = hasWeekly ? Math.max(0, Math.min(100, Math.round(info!.weeklyFraction! * 100))) : -1;
 	const wWeekly = formatQuotaWindow(t, info?.weeklyResetTime);
-	const expiredFullWeekly = wWeekly.expired && hasWeekly && pctWeekly >= 100;
 
 	const c5h = getQuotaColors(pct5h);
 	const cWeekly = getQuotaColors(pctWeekly);
 
-	const note5h = w5h.resetText ? w5h.resetText : expiredFull5h ? t('quota.windowReset') : '';
-	const noteWeekly = wWeekly.resetText ? wWeekly.resetText : expiredFullWeekly ? t('quota.windowReset') : '';
+	const note5h = w5h.resetText ? w5h.resetText : staleResetNote(t, w5h.expired, has5h, pct5h, info?.updatedAt);
+	const noteWeekly = wWeekly.resetText ? wWeekly.resetText : staleResetNote(t, wWeekly.expired, hasWeekly, pctWeekly, info?.updatedAt);
 	const isActive = Boolean(!cooling && familyActions?.isActive);
 	const borderColor = isActive
 		? 'var(--dsw-alias-state-business-primary, #3b82f6)'
@@ -383,6 +381,29 @@ export function renderFamilyQuotaBar(
 	);
 }
 
+/**
+ * Note for a quota row whose reset boundary is ALREADY IN THE PAST.
+ *
+ * A passed boundary means the window rolled over, so the stored fraction
+ * describes the PREVIOUS window, not the current one. At 100% that is exactly
+ * "reset · available". Below 100% the row used to render a bare percentage with
+ * no time marker at all, which reads as a live figure — reported 2026-11-23 on
+ * an account stuck at 91% whose 5-hour boundary had passed 33 hours earlier.
+ */
+function staleResetNote(
+	t: (key: AgyLocaleKey, vars?: Record<string, string | number>) => string,
+	expired: boolean,
+	hasValue: boolean,
+	percent: number,
+	updatedAt?: number,
+): string {
+	if (!expired || !hasValue) return '';
+	if (percent >= 100) return t('quota.windowReset');
+	return typeof updatedAt === 'number' && updatedAt > 0
+		? t('quota.windowResetStale', { time: formatSnapshotStamp(updatedAt) })
+		: '';
+}
+
 /** Short absolute stamp for "this data is from …" notes (past tense). */
 function formatSnapshotStamp(ms: number): string {
 	const d = new Date(ms);
@@ -410,7 +431,15 @@ export function renderQuotaUnavailableNote(
 	if (!state) return null;
 	const stamps = Object.values(acc.quotas).map((q) => q?.updatedAt ?? 0).filter((ts) => ts > 0);
 	const oldest = stamps.length > 0 ? Math.min(...stamps) : 0;
-	const reason = t(`quota.unavailable.${state.reason}` as AgyLocaleKey);
+	// `no_summary_access` only DESCRIBES a free-tier shape when the account has no
+	// 5-hour window at all. A paid account that already reported one is being
+	// refused transiently; calling it "free-tier" contradicted its own Pro badge
+	// and 5h bar in the SAME card (reported 2026-11-23).
+	const has5hEvidence = Object.values(acc.quotas).some((q) => typeof q?.remainingFraction === 'number');
+	const reasonKey = state.reason === 'no_summary_access' && has5hEvidence
+		? 'quota.unavailable.no_summary_access_paid'
+		: `quota.unavailable.${state.reason}`;
+	const reason = t(reasonKey as AgyLocaleKey);
 	const isCritical = state.reason === 'validation_required' || state.reason === 'tos_violation';
 	const toneText = isCritical ? 'var(--agy-quota-low-text)' : 'var(--agy-quota-med-text)';
 	const toneBg = isCritical ? 'var(--agy-quota-low-bg)' : 'var(--agy-quota-med-bg)';

@@ -78,7 +78,12 @@ export function isAccountEligible(
 }
 
 function effectiveFamilyQuota(acc: ManagedAccount, family: ModelFamily): FamilyQuotaInfo | undefined {
-  return acc.quotas?.[family] ?? (family === 'argon' ? acc.quotas?.google : undefined)
+  // Argon and Gemini are INDEPENDENT quota books (see
+  // .spec/quota-and-risk-control.md). Never borrow `google`'s numbers for
+  // `argon`: an absent row means "unknown", not "same as Gemini". Borrowing
+  // would either bench a healthy Argon on a drained Gemini pool or mask a
+  // drained Argon behind a full Gemini one.
+  return acc.quotas?.[family]
 }
 
 /** Reset timestamps within 5m belong to the same reset cohort (avoids 1-60s clock jitter). */
