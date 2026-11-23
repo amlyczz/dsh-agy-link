@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.75 (2026-11-24)
+
+### English
+
+- **Fix(acp): a foreground turn is never evicted from the process pool (merges PR #184, fixes #182).** `AcpProcess.lastUsedAt` only moved on outbound JSON-RPC writes. During a single `session/prompt` that runs longer than `idleTtlMs` (default 15 minutes) the server only pushes `session/update`, so nothing re-stamped the process: the 60-second sweep read it as idle and closed it **mid-turn**, killing long multi-step workflows. The pool now refuses to evict a process with an in-flight prompt (and re-stamps it), the idle window restarts when the last prompt settles, and an actual eviction logs the pid plus how long it had been idle.
+
+### 中文
+
+- **修复(acp)：正在跑前台回合的进程不再被进程池回收（合并 PR #184，修复 #182）。** `AcpProcess.lastUsedAt` 只在出站 JSON-RPC 写入时更新。当单个 `session/prompt` 运行超过 `idleTtlMs`（默认 15 分钟）时，服务端只会持续推送 `session/update`，没有任何东西刷新该时间戳：于是每 60 秒一次的清扫把它判为空闲并**在回合中途关掉**，长链多步工作流因此被强行中断。现在进程池会拒绝回收仍有在飞 prompt 的进程（并重新打时间戳），最后一个 prompt 结束时会重置空闲窗口，真正发生回收时也会记录 pid 与已空闲时长。
+
 ## 0.6.74 (2026-11-24)
 
 ### English

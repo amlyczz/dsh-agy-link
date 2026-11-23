@@ -112,12 +112,7 @@ export class AcpProcess extends EventEmitter {
   hasActivePrompt(): boolean { return this.activePrompts > 0 }
   /** Live child pid, or null before start / after exit (stray reconciliation). */
   get pid(): number | null { return this.child?.pid ?? null }
-  /**
-   * A `session/prompt` is still in flight: the child is mid-turn, however quiet
-   * it has been. The idle sweep used to read that silence as "idle" and kill
-   * live 15-minute turns (`agy acp exited (code=1, signal=null)`), after which
-   * every retry replayed the dead recording (2026-11-23).
-   */
+  /** A `session/prompt` is still in flight — the child is mid-turn, however quiet (#182). */
   get isBusy(): boolean {
     for (const p of this.pending.values()) if (p.method === 'session/prompt') return true
     return false

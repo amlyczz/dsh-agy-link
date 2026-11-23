@@ -496,28 +496,20 @@ export class AcpSessionPool {
   private observeStrays(now: number): readonly number[] {
     if (this.strays === null) return []
     if (this.strayScanAt !== 0 && now - this.strayScanAt < STRAY_SCAN_OBSERVE_MS) return this.strayObserved
-    const poolIdle = this.procs.size === 0 && this.draining.size === 0
-    return this.sweepStrays(now, poolIdle).strays
+    return this.sweepStrays(now, this.procs.size === 0 && this.draining.size === 0).strays
   }
 
-  /** A live turn is never idle: re-stamp it; otherwise TTL + no retained session. */
+  // A live turn is never idle: re-stamp it; otherwise TTL + no retained session.
   private shouldEvict(p: AcpProcess, now: number): boolean {
-    if (p.isBusy) { p.lastUsedAt = now; return false }
-    // A foreground `session/prompt` can run longer than idleTtlMs while the
-    // server only pushes `session/update`: `lastUsedAt` (bumped on outbound
-    // writes) goes stale mid-turn, and the sweep used to close the process
-    // under the active turn (issue #182). Never treat an in-flight prompt as idle.
-    if (p.hasActivePrompt?.() === true) { p.lastUsedAt = now; return false }
-    return now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p)
+    if (p.isBusy || p.hasActivePrompt?.() === true) { p.lastUsedAt = now; return false }
+    return now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p)  // TTL, no retained session
   }
   evictIdle(now = Date.now()): number {
     let evicted = 0
     for (const [k, p] of [...this.procs.entries()]) {
       if (!p.isAlive() || this.shouldEvict(p, now)) {
-        const alive = p.isAlive()
-        const idleFor = now - p.lastUsedAt
+        if (p.isAlive()) this.opts.log?.(`[acp-pool] evicting idle pid=${p.pid} after ${Math.floor((now - p.lastUsedAt) / 1_000)}s`)
         this.procs.delete(k)
-        if (alive) this.opts.log?.(`[acp-pool] evicting idle process pid=${p.pid} after ${Math.floor(idleFor / 1_000)}s`)
         this.closeProc(p, false)
         evicted++
       }
