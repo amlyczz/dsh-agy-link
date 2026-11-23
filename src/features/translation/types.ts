@@ -152,6 +152,8 @@ export interface TranslationServiceDeps {
   poolQuotaHops?: () => number
   log?: (msg: string) => void
   now?: () => number
+  /** Run `fn` after `ms` (injected so tests drive the auto-translate back-off). */
+  schedule?: (fn: () => Promise<unknown>, ms: number) => void
 }
 
 export interface TranslateTurnOptions {

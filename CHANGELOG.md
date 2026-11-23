@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### English
+- **Fix(translate): a failed automatic translation is retried instead of dropped.** `autoTranslateTurn` made one attempt per finished turn. When Google answered `HTTP 503: No capacity available` (hours of it on 2026-11-23) or the run timed out, the reply simply stayed untranslated. Retryable failures (`TIMEOUT`, `ABORTED`, `AGY_ERROR`, `NO_ACCOUNT`) are now retried after 1, 2, 5 and 10 minutes. Each retry re-checks that auto-translate is still on for the session and is not forced, so a translation that already landed (for example from a click) is handed back instead of translating twice. Failures a retry cannot fix (no text, missing turn, aux disabled, ToS) are not retried. Pending retries live in memory; a host restart drops them.
+
+### 中文
+- **修复（翻译）：自动翻译失败后会重试，不再直接放弃。** 以前 `autoTranslateTurn` 对每个结束的回合只试一次。Google 返回 `HTTP 503: No capacity available`（2026-11-23 持续了好几个小时），或者运行超时，这条回复就一直没有译文。现在遇到可重试的失败（`TIMEOUT`、`ABORTED`、`AGY_ERROR`、`NO_ACCOUNT`），会在 1、2、5、10 分钟后各重试一次。每次重试前都会重新确认这个会话还开着自动翻译；重试不加 force，如果这期间已经有了译文（比如用户手动点了翻译），就直接用那份，不会重复翻译。重试也救不回来的失败（没有正文、回合不存在、辅助调用已关闭、违反服务条款）不重试。待重试的任务只存在内存里，宿主重启后就没了。
+
 ## 0.6.73 (2026-11-24)
 
 ### English

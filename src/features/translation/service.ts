@@ -118,6 +118,15 @@ interface InflightTranslation {
 
 const MAX_AUTO_SESSIONS = 500
 
+/**
+ * Back-off for a failed automatic translation, about 18 minutes in all: Google's
+ * "No capacity available" spells usually pass within minutes, and without a
+ * retry the reply simply stays untranslated.
+ */
+const AUTO_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000]
+/** Failures a later attempt can fix; no text, a vanished turn or aux-disabled never will. */
+const AUTO_RETRYABLE = new Set<string>(['TIMEOUT', 'ABORTED', 'AGY_ERROR', 'NO_ACCOUNT'])
+
 export class TranslationService {
   private readonly cache = new Map<string, TranslateResult>()
   private readonly inflight = new Map<string, InflightTranslation>()
@@ -128,6 +137,12 @@ export class TranslationService {
   private cacheHits = 0
 
   constructor(private readonly deps: TranslationServiceDeps) {}
+
+  private schedule(fn: () => Promise<unknown>, ms: number): void {
+    if (this.deps.schedule !== undefined) return this.deps.schedule(fn, ms)
+    const timer = setTimeout(() => void fn().catch(() => undefined), ms)
+    timer.unref?.()
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now()
@@ -529,7 +544,7 @@ export class TranslationService {
    * guards skip this turn) and never throws: a failed translation must not
    * disturb the agent loop that just finished.
    */
-  async autoTranslateTurn(sessionId: string, turn: number): Promise<TranslateResult | null> {
+  async autoTranslateTurn(sessionId: string, turn: number, attempt = 0): Promise<TranslateResult | null> {
     const cfg = this.deps.cfg()
     const enabled = this.deps.autoEnabled?.(sessionId) ?? cfg.autoTranslate
     if (!enabled) return null
@@ -538,19 +553,31 @@ export class TranslationService {
     if (answer === null) return null
     const target = this.target()
     if (cfg.translateSkipSameModel && answer.sourceModel !== undefined && sameModel(answer.sourceModel, target.model)) return null
-    const lastAt = this.lastAutoAt.get(sessionId)
     const now = this.now()
-    if (lastAt !== undefined && cfg.translateMinIntervalMs > 0 && now - lastAt < cfg.translateMinIntervalMs) return null
-    this.lastAutoAt.delete(sessionId)
-    this.lastAutoAt.set(sessionId, now)
-    while (this.lastAutoAt.size > MAX_AUTO_SESSIONS) {
-      const oldest = this.lastAutoAt.keys().next()
-      if (oldest.done) break
-      this.lastAutoAt.delete(oldest.value)
+    // A retry belongs to the turn that already passed the throttle.
+    if (attempt === 0) {
+      const lastAt = this.lastAutoAt.get(sessionId)
+      if (lastAt !== undefined && cfg.translateMinIntervalMs > 0 && now - lastAt < cfg.translateMinIntervalMs) return null
+      this.lastAutoAt.delete(sessionId)
+      this.lastAutoAt.set(sessionId, now)
+      while (this.lastAutoAt.size > MAX_AUTO_SESSIONS) {
+        const oldest = this.lastAutoAt.keys().next()
+        if (oldest.done) break
+        this.lastAutoAt.delete(oldest.value)
+      }
     }
     this.pending.set(sessionId, { turn, startedAt: now })
     try {
-      return await this.translateTurn(sessionId, turn, { persist: true })
+      // Not forced: a retry that finds a record (say the reader clicked translate
+      // meanwhile) hands that back instead of translating twice.
+      const res = await this.translateTurn(sessionId, turn, { persist: true })
+      const delayMs = AUTO_RETRY_DELAYS_MS[attempt]
+      if (!res.ok && delayMs !== undefined && AUTO_RETRYABLE.has(res.code ?? '') && !looksLikeTosViolation(res.error)) {
+        this.deps.log?.(`auto-translate of turn ${turn} failed (${res.code}); retry ${attempt + 1} in ${delayMs / 1000}s`)
+        // shortcut: pending retries live in memory, so a host restart drops them; persist them if restarts mid-outage matter.
+        this.schedule(() => this.autoTranslateTurn(sessionId, turn, attempt + 1), delayMs)
+      }
+      return res
     } catch (e) {
       this.deps.log?.('auto-translate failed: ' + (e instanceof Error ? e.message : String(e)))
       return null
