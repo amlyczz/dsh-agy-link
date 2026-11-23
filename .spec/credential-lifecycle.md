@@ -42,15 +42,26 @@
 
 ## 4. 结构化异常态：区分「需重登」「需网页验证」与「终态封禁」
 
+状态由 `accountAuthState(acc)`（`src/common/quota-bench.ts`）唯一推导，UI / `/agy pool` / 判定共用：
+
 | 状态原因 | 判定特征 | 自动恢复语义 | UI 呈现 |
 | --- | --- | --- | --- |
-| `TOS_VIOLATION`（终态封禁） | `TOS_VIOLATION` / `violation of Terms of Service`（含 `appeal_url`） | **粘性隔离（#114）**：`clearAuthRequired(id, false)` 与 `needsAuthReverify()` 均不清除；仅用户显式重新授权/导入（`force = true`）可解除 | 显示「服务受限 / 申诉」及可点击 `appeal_url` |
-| `VALIDATION_REQUIRED`（临时人机/手机验证） | `VALIDATION_REQUIRED` / `Verify your account`（含 `validation_url`） | 允许后台重验与验证完成后恢复 | 显示「需安全验证」及可点击 `validation_url`，不误导重走 OAuth |
-| 普通 `authRequired`（凭据过期/撤销） | 连续 2 次确认或权威 `invalid_grant` | 任意有效请求/配额成功即自动 `clearAuthRequired(id, false)`；满 `AUTH_REVERIFY_DELAY_MS`（10m）允许后台自愈重验 | 显示「需重新登录」 |
+| `tos`（终态封禁） | `TOS_VIOLATION` / `violation of Terms of Service`（含 `appeal_url`） | **粘性隔离（#114）**：`clearAuthRequired(id, false)`、`needsAuthReverify()` 与配额自愈均不清除；仅用户显式重新授权/导入（`force = true`）可解除 | 红标「已封禁 (ToS)」+ 可点击 `appeal_url` |
+| `validation`（临时人机/手机验证） | `VALIDATION_REQUIRED` / `Verify your account`（含 `validation_url`） | 允许后台重验与验证完成后恢复；配额成功**不**清标（token 仍有效，issue #114 同理） | 红标「需安全验证」+ 可点击 `validation_url`，不误导重走 OAuth |
+| `relogin`（凭据过期/撤销） | 权威 `invalid_grant` / `revoked` / `unauthorized_client`，或连续 2 次非权威确认后升级 | 任意有效请求/配额成功即自动 `clearAuthRequired(id, false)`；快速复核窗口 2m（见下） | 红标「需重新登录」 |
+| `review`（待复核，非权威标记） | `authRequired` 且 `authError` 不含权威 OAuth 码、不是 TOS/验证（典型：agy 裸 "not signed in" 横幅、身份无法证明） | 后台快速复核（2m→30m 退避）或任何更新的配额快照即可清除 | **黄标**「认证复核中」，tooltip 说明无需重新登录；账号仍暂时不参与轮换 |
+
+### 4.1 自愈节奏：从「最多 70 分钟」降到「一轮复核」
+
+- 旧行为：背景轮询默认 60 分钟一轮（`quotaPollIntervalMs`），而 `shouldPollAccount()` 对 `authRequired` 直接返回 false，只有 `needsAuthReverify()`（标记满 10 分钟）才让它在**下一次整点轮询**进管道 → 误报红标最长挂 ~70 分钟，期间卡片配额条还是新的，自相矛盾（2026-11-23 现场）。
+- 现行为：`QuotaService.reverifyFlaggedAccounts()` 由 2 分钟定时器驱动（`AUTH_FAST_REVERIFY_MS`，`src/index.ts`），只处理「已过自身退避窗口」的标记；`authReverifyAttempts` 每失败一次退避翻倍（2/4/8/16/30 分钟，`authReverifyDelayMs()`），所以真死号不会被每两分钟敲一次 Google。
+- **零网络自愈（活证据）**：`AccountPoolManager.healAuthFlagsFromQuota()` 在每次轮询收尾与每次快速复核前运行——只要任一配额族 `updatedAt` 晚于 `authMarkedAt`（无论写入者是本进程还是共用 `pool.json` 的另一个进程），就证明 token 可用，直接清标。TOS / `VALIDATION_REQUIRED` 例外：它们的配额端点照样能通。
+- 判定顺序：先把「网络阶段被写入的标记」用配额时间戳证伪，再决定是否发一次网络复核请求。
 
 ## 5. 测试锚点
 
 - `test/failure-classifier.test.ts` / `test/auth-jitter.test.ts`：`disabled` 日志不误判权威鉴权失败、同秒日志偏移读取、MCP 错误不误判、HTTP/2 `GOAWAY` 与代理 `502/504` 归类为 `NETWORK`。
+- `test/auth-flag-heal.test.ts`：更新的配额快照证伪标记（零网络）、旧快照不算证据、无 `authMarkedAt` 的历史标记可被证伪、TOS/验证不被配额自愈、2m→30m 退避与「只复核过期标记」。
 - `test/credential-slot.test.ts` / `test/issue101-slot-failover.test.ts`：主槽网络超时不连坐隔离辅账号、带 `expiry` 唯一写入。
 - `test/pool-auth.test.ts`：主账号 OAuth 登录与导入清除 `authRequired` 并触发选择器同步。
 
@@ -66,3 +77,21 @@
 
 - **`SSH_CONNECTION` 隔离（`agy >= 1.5`）**：`isolatedHomeEnv()` 为所有带独立 `dir` 的隔离池账号注入 `SSH_CONNECTION="127.0.0.1 0 127.0.0.1 0"`，`agy 1.5+` 将其识别为远程 SSH 会话并直接读写各自 `dir/.gemini/antigravity-cli/antigravity-oauth-token`，三端（含 Windows）绕开全局共享钥匙串/凭据管理器。Windows 下当 `supportsSshIsolation(agyVersion)` 成立时，隔离辅账号免除全局凭据槽排队与 ACP 切号驱逐，且 `QuotaService.readCliUsageFamilies` 可直接为隔离账号（含免费账号，issue #143）执行官方 `agy -p /usage`。
 - **外部独立登录保护（issue #145，`respectExternalSignIn`）**：`src/domain/credentials/external-guard.ts` 追踪插件上次写入 Windows 凭据槽的指纹（`.last-installed-slot.json`）；当配置 `respectExternalSignIn: true` 且检测到用户在独立 `agy` 终端中重新登录了未识别的外部账号时，租约获取前拒绝覆盖并在租约释放后保留外部登录。锚点：`test/slice3-ssh-tier-143-145-152.test.ts`。
+
+## 隔离账号不得回落到机器级 keyring（2026-11-23）
+
+- 事故：会话 `8bade603` 第 8 回合运行 15.6 分钟后，ACP 回合返回空结果；插件丢弃 ACP 进程（日志出现 `ForceStopCascadeTree` + `Got signal terminated`）并回退 CLI，CLI 六次重试全部 `agy exited with code 1` 且 stderr 为空，最终中断。
+- 根因：该回合的 ACP 进程属于隔离账号 `dao`，但 agy 日志显示
+  `ChainedAuth: authenticated via keyring (effective: keyring)` 且 `applyAuthResult: email=`（空）。
+  即：隔离 token 过期/不可用时 agy **回落到机器级 keyring**，实际以主账号身份运行；而身份校验 `readAuthEmailFromLog` 把「没有 email」当成「无法判断」而放行，于是错误账号被计费/限流，最终该账号 token 失效导致空回合与重试雪崩。
+- 契约：
+  1. **出站前刷新**：隔离账号（`account.dir && !systemHome`）在 ACP/CLI spawn 前必须调用 `ensureFreshToken`（宿主注入 `quota.getValidAccessToken`），把 token 带入 `CLI_TOKEN_SAFETY_MS` 窗口，避免 agy 启动时回落到 keyring。
+  2. **身份硬门**：`readAuthEvidenceFromLog()` 同时解析 `ChainedAuth: authenticated via keyring`、`applyAuthResult: email=` 与 `keyringAuth: failed to fetch user info: <原因>`。判据是「能否证明身份」且「失败能否归因于网络」，不是「认证方式」：
+     - keyring + 正确 email → 放行（macOS 上插件为该账号预置槽位，agy 仍标 keyring）；
+     - 日志点名**另一个** email → `classifyIdentity()` 返回 `mismatch` → `Err.AUTH`（换槽重试一次，仍失败则隔离，走 2 次确认）；
+     - keyring + 空 email，且 agy 自己的 userinfo 拉取是**传输失败**（EOF / timeout） → `unproven` → 按 `Err.NETWORK` 重试，**不记 strike、不写红标**（2026-11-23 15:59 现场：健康账号被同形日志误判，红标挂了近一小时）；
+     - keyring + 空 email 且没有任何传输证据 → `mismatch`（真·keyring 回落）。
+   - 判定函数与探针分离：`classifyIdentity(evidence, expected, expectedIsolated)` 返回 `ok | unknown | unproven | mismatch`，`unknown`（日志没点名）永远是「不可判定」，不得当成 mismatch。
+  3. **失败可诊断**：`classifyExitOrFallback()` 在 stderr/结果为空时用 `rawErrText` 兜底，`agy exited with code 1` 会附带 ACP 的真实原因（如 `ACP prompt returned an empty turn: ...`），不再丢失。
+  4. **AUTH 不回退 CLI**：`retryOnCli` 排除 `Err.AUTH`；身份不匹配直接 `settleEarlyFailure(..., Err.AUTH)`。CLI 回退只对「transport 本身死掉」有意义，对凭据/身份问题只会重复烧同一份坏凭据。
+- 锚点：`test/acp-identity.test.ts`（含 `unproven` 分支）、`test/auth-flag-heal.test.ts`（活证据自愈 + 退避节奏）、`test/auth-flag.test.ts`（`accountAuthState` 四态）、`test/failure-classifier.test.ts`（PROCESS_EXIT 保留 rawErrText）。

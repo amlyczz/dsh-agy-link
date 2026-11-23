@@ -98,12 +98,24 @@ function trailingSpanOf(messages: readonly Message[]): { lastAssistantIdx: numbe
 }
 
 /**
+ * agy does not treat process cwd as its Active Workspace — it requires
+ * --add-dir. Attach the resolved workspace root (issue #26), EXCEPT for
+ * pure-text aux calls: their neutral cwd is deliberately empty and re-adding it
+ * would reintroduce project context.
+ */
+function resolveAddDirs(workspaceRoot: string, stagedDirs: string[], neutralAuxWorkspace: boolean): string[] {
+  if (neutralAuxWorkspace) return [...stagedDirs]
+  if (workspaceRoot === '') return stagedDirs
+  return stagedDirs.includes(workspaceRoot) ? stagedDirs : [workspaceRoot, ...stagedDirs]
+}
+
+/**
  * Assemble everything needed to spawn one agy call for this hop. The adapter
  * calls this once; nothing here touches process state or account selection.
  */
 export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPlan> {
   const { options, cfg, ctx, policy, account, activeModel, deps } = input
-  const { isAux, isTranslateSession, translateSession, sessionKey, isImage, workspaceRoot } = ctx
+  const { isAux, isTranslateSession, translateSession, sessionKey, isImage, workspaceRoot, neutralAuxWorkspace } = ctx
   const messages = options.messages
 
   const { lastAssistantIdx, trailingUser } = trailingSpanOf(messages)
@@ -196,11 +208,7 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
     compactionNotice.afterTokens = Math.max(100, Math.round(prompt.length / 3.5))
   }
 
-  // agy does not treat process cwd as its Active Workspace — it requires
-  // --add-dir. Always attach the resolved workspace root (issue #26).
-  const addDirs = workspaceRoot !== ''
-    ? (stagedDirs.includes(workspaceRoot) ? stagedDirs : [workspaceRoot, ...stagedDirs])
-    : stagedDirs
+  const addDirs = resolveAddDirs(workspaceRoot, stagedDirs, neutralAuxWorkspace)
 
   return {
     prompt,

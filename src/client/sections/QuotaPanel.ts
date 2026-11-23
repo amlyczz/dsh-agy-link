@@ -398,7 +398,47 @@ export function renderFamilyQuotaBar(
 		// dedicated Argon weekly bucket) so the card reflects the real quota structure.
 		(has5h || (!hasWeekly && familyKey !== 'argon')) ? renderLine(t, t('quota.fiveHour'), pct5h, c5h, note5h, FIVE_H_MS, info?.remainingFraction, info?.resetTime, isRefreshing) : null,
 		renderLine(t, t('quota.weekly'), pctWeekly, cWeekly, noteWeekly, SEVEN_D_MS, info?.weeklyFraction, info?.weeklyResetTime, isRefreshing),
+		...renderModelQuotas(t, info, isRefreshing),
+		renderModelPauses(t, acc, now),
 	);
+}
+
+/**
+ * Per-model quota rows inside one family. Only the media buckets (image) are
+ * surfaced: Google meters `gemini-3.1-flash-image` separately, so a family bar
+ * at 76% can hide a drained image bucket. Text models stay collapsed — the
+ * family bar already aggregates them.
+ */
+function renderModelQuotas(
+	t: (key: AgyLocaleKey) => string,
+	info: ManagedAccount['quotas'][keyof ManagedAccount['quotas']] | undefined,
+	isRefreshing: boolean,
+): unknown[] {
+	const models = (info?.models ?? []).filter((m) => /image|imagen/i.test(m.modelId))
+	return models.map((m) => {
+		const pct = typeof m.remainingFraction === 'number' && Number.isFinite(m.remainingFraction)
+			? Math.max(0, Math.min(100, Math.round(m.remainingFraction * 100)))
+			: -1
+		const note = m.resetTime ? formatQuotaWindow(t, m.resetTime).resetText : ''
+		return renderLine(t, t('quota.imageModel'), pct, getQuotaColors(pct), note, FIVE_H_MS, m.remainingFraction, m.resetTime, isRefreshing)
+	})
+}
+
+/**
+ * Model buckets that are paused while the family stays healthy — the image
+ * model is the common case (`gemini-3.1-flash-image`). Shown under the family
+ * bars so "76% but the image model is out" is legible instead of invisible.
+ */
+function renderModelPauses(t: (key: AgyLocaleKey) => string, acc: ManagedAccount, now: number): unknown {
+	const paused = Object.entries(acc.modelCooldowns ?? {})
+		.filter(([, cd]) => cd.cooldownUntil > now)
+		.sort(([a], [b]) => a.localeCompare(b));
+	if (paused.length === 0) return null;
+	const label = paused
+		.map(([model, cd]) => `${model} → ${new Date(cd.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`)
+		.join(' · ');
+	return h('div', { style: { marginTop: '2px', fontSize: '10px', fontWeight: 600, color: '#f59e0b' } },
+		`${t('quota.modelPaused')}: ${label}`);
 }
 
 /**

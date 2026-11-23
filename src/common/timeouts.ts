@@ -18,6 +18,13 @@ export const WRITE_TIMEOUT_MS = 20_000
 /** Manual CLI warmup across one or more accounts (up to 45s per CLI probe). */
 export const WARMUP_WRITE_TIMEOUT_MS = 90_000
 
+/**
+ * Floor for `warmupIntervalHours` (hours). A full-pool warmup run now takes
+ * minutes by design (accounts are 30–120s apart), so a 1-hour interval would
+ * re-arm before the previous run finished. 0 still means "disabled".
+ */
+export const MIN_WARMUP_INTERVAL_HOURS = 3
+
 /** Host-side hard deadline for any plugin route; the last line of defence. */
 export const ROUTE_TIMEOUT_MS = 30_000
 
@@ -57,6 +64,15 @@ export const QUOTA_ENDPOINT_DOWN_MS = 10 * 60_000
  * so a restored licence is picked up the moment the user asks for it.
  */
 export const QUOTA_LICENSE_RETRY_MS = 6 * 3600_000
+
+/**
+ * How long a CLI `/usage` probe that didn't answer within its 20s budget is
+ * skipped for that account, in favour of the REST path. Measured 2026-11-23:
+ * `agy -p /usage` spent ~13s in `loadCodeAssist` and then hit the process
+ * shutdown timeout, so every manual "同步" burned ~19s before the REST fallback
+ * produced the numbers anyway. The negative cache makes the next sync ~1-2s.
+ */
+export const CLI_USAGE_TIMEOUT_RETRY_MS = 10 * 60_000
 
 /**
  * How long a free-tier account's refused summary call stays suppressed.

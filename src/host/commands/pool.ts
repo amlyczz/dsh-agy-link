@@ -3,8 +3,8 @@ import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { ModelFamily } from '../../common/pool-types.ts'
 import {
   QUOTA_FAMILIES,
+  accountAuthState,
   accountCoolingFamilies,
-  isAccountCriticalAuth,
   normalizeModelFamily,
 } from '../../common/quota-bench.ts'
 import { redactProxyUrl } from '../diagnostics.ts'
@@ -89,7 +89,10 @@ function renderPool(deps: CommandDeps): CommandResult {
     let statusText = '   - Status: 🟢 Ready'
     if (!a.enabled) {
       statusText = '   - Status: ⏸️ Disabled'
-    } else if (isAccountCriticalAuth(a)) {
+    } else if (accountAuthState(a) === 'review') {
+      // Not a sign-out: an unverified flag is re-checked in the background.
+      statusText = `   - Status: 🟡 Verifying sign-in (${a.authError || 'background re-check'})`
+    } else if (accountAuthState(a) !== 'healthy') {
       statusText = `   - Status: 🔴 Auth required (${a.authError || a.quotaUnavailable?.reason || 'sign in again'})`
     } else if (coolingFamilies.length > 0) {
       const details = coolingFamilies.map((fam) => {

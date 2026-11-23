@@ -132,7 +132,11 @@ function classifyPolicyOrQuota(c: FailureContext): AttemptFailure | null {
 
 function classifyExitOrFallback(c: FailureContext): AttemptFailure {
   if (c.outcome.code !== 0) {
-    const detail = detailText(c)
+    // `detailText` only looks at the parsed result / stderr. The ACP path's own
+    // exception (e.g. "ACP prompt returned an empty turn: ...") lives in
+    // rawErrText, and dropping it turned every such failure into the useless
+    // "agy exited with code 1". Fall back to it when nothing else is present.
+    const detail = detailText(c, brief(c.rawErrText))
     return c.transportFailure
       ? {
           kind: 'error',

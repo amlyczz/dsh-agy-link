@@ -8,15 +8,17 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import {
-  AUTH_CONFIRM_STRIKES,
   isTerminalAuthError,
   type AccountPlanTier,
   type AccountPoolData,
   type ManagedAccount,
   type ModelFamily,
 } from '../../common/pool-types.ts'
-import { parseResetDurationMs } from '../../common/types.ts'
+import { normalizeModelFamily } from '../../common/quota-bench.ts'
+import { applyModelFailure, clearModelCooldown, cooldownUntilFor, dropLegacyModelScopedFamilyCooldowns } from './model-cooldown.ts'
+import { isModelScopedQuotaFailure, parseResetDurationMs } from '../../common/types.ts'
 import { isAccountEligible, orderByExpiry, type DedicatedGroupSource } from './selection.ts'
+import { AccountAuthFlags } from './auth-state.ts'
 
 /** State and capabilities AccountPoolManager lends to PoolAdmin. */
 export interface PoolAdminDeps {
@@ -38,7 +40,12 @@ export interface PoolAdminDeps {
 }
 
 export class PoolAdmin {
-  constructor(private readonly deps: PoolAdminDeps) {}
+  /** 需重新登录 flag lifecycle (mark / confirm / clear / heal / back-off). */
+  private readonly authFlags: AccountAuthFlags
+
+  constructor(private readonly deps: PoolAdminDeps) {
+    this.authFlags = new AccountAuthFlags(this.deps)
+  }
 
   private account(id: string): ManagedAccount | undefined {
     return this.deps.getData().accounts.find((a) => a.id === id)
@@ -284,47 +291,12 @@ export class PoolAdmin {
   }
 
   markAuthRequired(id: string, reason?: string): void {
-    const data = this.deps.getData()
-    const acc = this.account(id)
-    if (!acc) return
-    acc.authRequired = true
-    acc.authMarkedAt = Date.now()
-    acc.authError = reason || 'Authentication expired or revoked (invalid_grant)'
-    if (data.lastActiveAccountId === id) {
-      data.lastActiveAccountId = undefined
-    }
-    if (data.activeAccountIds) {
-      for (const [fam, accId] of Object.entries(data.activeAccountIds)) {
-        if (accId === id) delete data.activeAccountIds[fam as ModelFamily]
-      }
-    }
-    this.deps.authStrikes.delete(id)
-    this.deps.persist()
+    this.authFlags.mark(id, reason)
   }
 
-  /**
-   * Confirmation-gated quarantine for auth-classified failures that carry NO
-   * authoritative evidence (no invalid_grant / revoked / unauthorized_client).
-   *
-   * agy prints the same "not signed in" banner whether the login is really
-   * dead or its keyring validation merely missed a 10s window on a flaky
-   * network, so one banner used to sticky-quarantine healthy accounts — the
-   * user then saw a red 需重新登录 and could not even 设为当前使用. A single
-   * strike now only rotates the account away for the current retry; the flag
-   * hardens into a real quarantine only when the failure repeats with no
-   * success in between. Authoritative OAuth paths keep calling
-   * markAuthRequired directly and quarantine on first sight.
-   *
-   * Returns true when the account is now hard-quarantined.
-   */
+  /** Confirmation-gated quarantine for a non-authoritative auth banner (2 strikes). */
   noteAuthFailure(id: string, reason?: string): boolean {
-    const strikes = (this.deps.authStrikes.get(id) ?? 0) + 1
-    if (strikes < AUTH_CONFIRM_STRIKES) {
-      this.deps.authStrikes.set(id, strikes)
-      return false
-    }
-    this.markAuthRequired(id, reason)
-    return true
+    return this.authFlags.noteFailure(id, reason)
   }
 
   /**
@@ -345,6 +317,7 @@ export class PoolAdmin {
     delete acc.authRequired
     delete acc.authError
     delete acc.authMarkedAt
+    delete acc.authReverifyAttempts
     if (resetAlias && acc.systemHome) {
       acc.alias = 'Primary account (system sign-in)'
       acc.defaultAlias = true
@@ -352,24 +325,19 @@ export class PoolAdmin {
     this.deps.persist()
   }
 
-  /**
-   * Drop the "needs re-login" flag.
-   *
-   * Automatic paths (a successful quota/token refresh, boot-time credential
-   * recovery) must NOT lift a TERMINAL TOS ban: those accounts still have a
-   * valid refresh token, so every refresh would succeed and clear the ban
-   * (issue #114). `force` is reserved for explicit user actions — a completed
-   * re-login or a fresh credential import.
-   */
+  /** Drop the flag (automatic paths never lift a terminal TOS ban; force = user action). */
   clearAuthRequired(id: string, force = false): void {
-    const acc = this.account(id)
-    if (!acc) return
-    if (!force && isTerminalAuthError(acc.authError)) return
-    delete acc.authRequired
-    delete acc.authError
-    delete acc.authMarkedAt
-    this.deps.authStrikes.delete(id)
-    this.deps.persist()
+    this.authFlags.clear(id, force)
+  }
+
+  /** Count one failed background re-verification (drives the 2m→30m back-off). */
+  noteAuthReverifyAttempt(id: string): void {
+    this.authFlags.noteReverifyAttempt(id)
+  }
+
+  /** Clear flags that a NEWER quota snapshot already disproved (zero network). */
+  healAuthFlagsFromQuota(): string[] {
+    return this.authFlags.healFromQuota()
   }
 
   /**
@@ -439,7 +407,63 @@ export class PoolAdmin {
     this.deps.persist()
   }
 
-    /**
+  /**
+   * Drop cooldowns that were recorded from a MODEL-scoped refusal
+   * (`... exhausted your capacity on this model ...`). Such a cooldown never
+   * should have removed the account from rotation for the whole family: the
+   * other models still have quota. Runs once at pool init so an account frozen
+   * by the old classifier rejoins rotation immediately.
+   */
+  dropModelScopedCooldowns(): number {
+    const dropped = dropLegacyModelScopedFamilyCooldowns(this.deps.getData().accounts)
+    if (dropped > 0) this.deps.persist()
+    return dropped
+  }
+
+  /** Clear cooldowns (family-level, and every model bucket of that account). */
+  clearCooldown(id?: string, family?: ModelFamily, includeQuotaBench = false): void {
+    const now = Date.now()
+    const targetFamily = family ? (normalizeModelFamily(family) ?? family) : undefined
+    const clearOne = (acc: ManagedAccount): void => {
+      acc.cooldowns ??= {}
+      if (targetFamily) delete acc.cooldowns[targetFamily]
+      else acc.cooldowns = {}
+      acc.modelCooldowns = {} // same user action: release paused model buckets too
+      if (!includeQuotaBench) return
+      const families = targetFamily ? [targetFamily] : (Object.keys(acc.quotas ?? {}) as ModelFamily[])
+      if (families.length === 0) return
+      acc.quotaGateClearedAt ??= {}
+      for (const fam of families) {
+        const updatedAt = acc.quotas?.[fam]?.updatedAt
+        acc.quotaGateClearedAt[fam] = Math.max(now, updatedAt ?? 0)
+      }
+    }
+    if (id) {
+      const acc = this.account(id)
+      if (!acc) return
+      clearOne(acc)
+    } else {
+      for (const acc of this.deps.getData().accounts) clearOne(acc)
+    }
+    this.deps.persist()
+  }
+
+  /** Record a 429 that belongs to ONE model's own bucket (never the family). */
+  recordModelFailure(id: string, model: string, reason: string, serverResetTime?: string): void {
+    const acc = this.account(id)
+    const data = this.deps.getData()
+    if (!acc) return
+    applyModelFailure(acc, model, reason, serverResetTime, data)
+    this.deps.persist()
+  }
+
+  /** Clear one model's cooldown after a successful call on it. */
+  recordModelSuccess(id: string, model: string): void {
+    const acc = this.account(id)
+    if (acc && clearModelCooldown(acc, model)) this.deps.persist()
+  }
+
+  /**
    * Records a rate-limit / 429 error and sets cooldown for the requested model family.
    */
   recordFailure(id: string, family: ModelFamily, reason: string, serverResetTime?: string): void {
@@ -450,23 +474,7 @@ export class PoolAdmin {
 
     const prev = acc.cooldowns[family]
     const failures = (prev?.consecutiveFailures ?? 0) + 1
-
-    let cooldownUntil: number
-    const parsedDuration = parseResetDurationMs(serverResetTime || reason)
-
-    if (serverResetTime && !parsedDuration) {
-      const parsed = Date.parse(serverResetTime)
-      if (!Number.isNaN(parsed) && parsed > Date.now()) {
-        cooldownUntil = parsed + 10_000 // 10s safety buffer
-      } else {
-        cooldownUntil = Date.now() + Math.min(data.defaultCooldownMs * failures, data.maxCooldownMs)
-      }
-    } else if (parsedDuration && parsedDuration > 0) {
-      // Add a 10s safety buffer to avoid hitting Google at the exact millisecond of reset
-      cooldownUntil = Date.now() + parsedDuration + 10_000
-    } else {
-      cooldownUntil = Date.now() + Math.min(data.defaultCooldownMs * failures, data.maxCooldownMs)
-    }
+    const cooldownUntil = cooldownUntilFor(data, failures, reason, serverResetTime)
 
     acc.cooldowns[family] = {
       cooldownUntil,
@@ -493,6 +501,7 @@ export class PoolAdmin {
       delete acc.authRequired
       delete acc.authError
       delete acc.authMarkedAt
+      delete acc.authReverifyAttempts
     }
     if (acc.cooldowns?.[family]) {
       delete acc.cooldowns[family]

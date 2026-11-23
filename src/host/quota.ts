@@ -14,9 +14,6 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
-  isTerminalAuthError,
-  needsAuthReverify,
-  shouldPollAccount,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
@@ -26,7 +23,7 @@ import { readPrimaryCredential, parseCredentialDoc, credentialFingerprint, write
 import { readAgyUsage, usageGroupsToFamilies, type AgyUsageGroup } from './agy-usage.ts'
 import { supportsSshIsolation } from '../runtime/agy/env.ts'
 import { buildAgyEnvWithProxy, pickProxy } from '../runtime/net/account-env.ts'
-import { QUOTA_FORCE_CONCURRENCY } from '../common/timeouts.ts'
+import { CLI_USAGE_TIMEOUT_RETRY_MS } from '../common/timeouts.ts'
 import { CLI_TOKEN_SAFETY_MS, prepareCliToken as prepareCliTokenImpl } from '../features/quota/cli-token.ts'
 
 import {
@@ -40,8 +37,12 @@ import {
   type UserQuotaResponse,
 } from '../domain/quota/parse.ts'
 import { refreshAccountQuotaPipeline, type QuotaRefreshDeps } from '../features/quota/refresh.ts'
+import {
+  reverifyFlaggedAccounts,
+  sweepPoolQuotas,
+  type PoolSweepDeps,
+} from '../features/quota/pool-sweep.ts'
 import { EndpointHealth } from '../features/quota/endpoint-health.ts'
-import { sweepAccountsByEgress } from '../features/quota/sweep.ts'
 import {
   fetchAvailableModels as fetchAvailableModelsImpl,
   fetchQuotaSummary as fetchQuotaSummaryImpl,
@@ -138,6 +139,8 @@ export class QuotaService {
   private readonly refreshingIds = new Set<string>()
   /** Last raw CLI `/usage` groups per accountId (used for planTier inference). */
   private readonly lastCliUsageGroups = new Map<string, readonly AgyUsageGroup[]>()
+  /** accountId -> don't spawn `agy /usage` again before this time (it timed out). */
+  private readonly cliUsageSkipUntil = new Map<string, number>()
 
   /**
    * @param globalProxy resolves the plugin-wide proxy URL; used when the
@@ -231,6 +234,10 @@ export class QuotaService {
   ): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
     const bin = this.cliDeps.bin?.()
     if (!bin) return null
+    // The CLI path is anti-ban-preferred, but a probe that keeps timing out
+    // must not make every "同步" click pay 19s before the REST fallback runs.
+    // Skip it for a while after a failure, per account.
+    if (Date.now() < (this.cliUsageSkipUntil.get(account.id) ?? 0)) return null
     const isIsolated = Boolean(account.dir && !account.systemHome)
     if (isIsolated) {
       // agy >= 1.5 with SSH_CONNECTION (injected by isolatedHomeEnv) bypasses
@@ -253,7 +260,11 @@ export class QuotaService {
         timeoutMs: 20_000,
         preemptAutoUpdate: this.cliDeps.preemptAutoUpdate?.(),
       })
-      if (groups === null) return null
+      if (groups === null) {
+        this.cliUsageSkipUntil.set(account.id, Date.now() + CLI_USAGE_TIMEOUT_RETRY_MS)
+        return null
+      }
+      this.cliUsageSkipUntil.delete(account.id)
       this.lastCliUsageGroups.set(account.id, groups)
       return usageGroupsToFamilies(groups)
     }
@@ -288,7 +299,11 @@ export class QuotaService {
         timeoutMs: 20_000,
         preemptAutoUpdate: this.cliDeps.preemptAutoUpdate?.(),
       })
-      if (groups === null) return null
+      if (groups === null) {
+        this.cliUsageSkipUntil.set(account.id, Date.now() + CLI_USAGE_TIMEOUT_RETRY_MS)
+        return null
+      }
+      this.cliUsageSkipUntil.delete(account.id)
       this.lastCliUsageGroups.set(account.id, groups)
       return usageGroupsToFamilies(groups)
     } finally {
@@ -500,87 +515,33 @@ export class QuotaService {
   }
 
   /**
-   * Refresh quota statistics for all accounts in the pool.
-   * Automatic polling (force=false) skips restricted accounts (disabled /
-   * auth-quarantined / in cooldown) so the poller never keeps knocking on
-   * Google endpoints for accounts already known to be limited. Manual force
-   * refresh from the UI refreshes everything.
-   *
-   * Before gating, a ZERO-NETWORK identity reconciliation runs for flagged
-   * slots: an external `agy logout` + re-login writes the new email into the
-   * newest CLI logs, and detecting that locally lets us reset the stale
-   * quarantine/cooldowns so the slot rejoins polling — no extra request to
-   * Google is made for this check (risk-control neutral).
+   * Refresh quota statistics for all accounts in the pool (hourly background
+   * poll, or a user-triggered sweep). Scheduling lives in features/quota/pool-sweep.ts;
+   * this method only supplies the I/O seams.
    */
   async refreshAllQuotas(force = false): Promise<void> {
-    let accounts = this.pool.getAccounts()
-    if (!force) {
-      const now = Date.now()
-      for (const acc of accounts) {
-        const flagged = acc.authRequired || Object.values(acc.cooldowns ?? {}).some((cd) => cd && cd.cooldownUntil > now)
-        if (!acc.systemHome || !flagged) continue
-        const home = acc.systemHome || !acc.dir ? homedir() : acc.dir
-        let detected: string | undefined
-        if (process.platform === 'win32') {
-          const stored = readPrimaryCredential(this.pool.dir)
-          if (stored?.email) detected = stored.email
-        }
-        if (!detected) {
-          const fromLogs = detectEmailFromAgyLogs(home)
-          const siblingEmails = new Set(
-            this.pool
-              .getAccounts()
-              .filter((a) => a.id !== acc.id && a.email)
-              .map((a) => a.email!),
-          )
-          if (fromLogs && !siblingEmails.has(fromLogs)) {
-            detected = fromLogs
-          }
-        }
-        if (detected && detected !== acc.email) {
-          this.pool.resetAccountIdentity(acc.id, detected)
-        }
-      }
-      // Auth-flagged accounts re-enter the poll once their flag is stale
-      // enough: one token-endpoint verification either clears the flag (the
-      // common transient false positive) or re-stamps it. This is what makes
-      // "needs re-login" self-heal without a manual quota refresh.
-      accounts = accounts.filter((acc) => shouldPollAccount(acc) || needsAuthReverify(acc))
-      // Background sweeps stay sequential with a 2-second gap. Only the
-      // credential-store owner can spawn a CLI now (see readCliUsageFamilies),
-      // so this is no longer about CLI contention — it keeps the unattended,
-      // hourly REST burst gentle instead. An hourly sweep has no latency budget
-      // worth trading that safety margin for; explicit user refreshes below run
-      // fully concurrently.
-      for (let i = 0; i < accounts.length; i++) {
-        const acc = accounts[i]!
-        await this.refreshAccountQuota(acc, false).catch(() => null)
-        if (i < accounts.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, staggerJitterMs()))
-        }
-      }
-      return
-    }
-    // Even on manual force refresh, never touch disabled or terminally TOS-banned
-    // accounts: knocking on a banned account from the same proxy egress risks
-    // correlating sibling accounts.
-    accounts = accounts.filter((acc) => acc.enabled && !isTerminalAuthError(acc.authError))
-    const nextForceGapMs = (): number =>
-      this.cliDeps.forceStaggerMs?.() ??
-      (process.env.NODE_TEST_CONTEXT !== undefined ? 0 : 400 + Math.floor(Math.random() * 450))
+    await sweepPoolQuotas(this.sweepDeps(), force)
+  }
 
-    // Isolated accounts run pure REST calls and never touch the Windows OS
-    // Credential Manager slot; only the single `systemHome` account uses
-    // `credentialSlotMutex` inside `readCliUsageFamilies`. Keep bounded
-    // per-egress concurrency across all platforms to avoid slow serial sweeps.
-    const concurrency = Math.max(1, Math.floor(this.cliDeps.forceConcurrency?.() ?? QUOTA_FORCE_CONCURRENCY))
-    await sweepAccountsByEgress(accounts, {
-      egressOf: (acc) => this.proxyFor(acc) || '__direct__',
-      run: async (acc) => {
-        await this.refreshAccountQuota(acc, force).catch(() => null)
-      },
-      staggerMs: nextForceGapMs,
-      concurrency,
-    })
+  /**
+   * Fast self-heal for 需重新登录 flags (2-minute timer, 2m → 30m back-off):
+   * a false positive clears in one request, a dead login backs off.
+   */
+  async reverifyFlaggedAccounts(): Promise<void> {
+    await reverifyFlaggedAccounts(this.sweepDeps())
+  }
+
+  /** I/O seams for the pool-wide passes. */
+  private sweepDeps(): PoolSweepDeps {
+    return {
+      pool: this.pool,
+      refreshAccountQuota: (account, force) => this.refreshAccountQuota(account, force),
+      proxyOf: (account) => this.proxyFor(account),
+      detectEmailFromLogs: (home) => detectEmailFromAgyLogs(home),
+      readStoredPrimaryEmail: () => readPrimaryCredential(this.pool.dir)?.email,
+      systemHome: () => homedir(),
+      ...(this.cliDeps.forceStaggerMs === undefined ? {} : { forceStaggerMs: this.cliDeps.forceStaggerMs }),
+      ...(this.cliDeps.forceConcurrency === undefined ? {} : { forceConcurrency: this.cliDeps.forceConcurrency }),
+    }
   }
 }

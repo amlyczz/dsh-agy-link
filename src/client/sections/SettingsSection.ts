@@ -27,6 +27,7 @@ import { ModelsPanel } from './ModelsPanel.ts';
 import { RuntimeControlsSection } from './RuntimeControlsRows.ts';
 import { IMAGE_CLI_SAMPLE, renderImageRow } from './ImageSettingsRows.ts';
 import { WarmupStatusBar } from './WarmupStatusBar.ts';
+import { warmupConfigRows } from './WarmupConfigRows.ts';
 import { renderVisibilityRows } from './VisibilityRows.ts';
 import { renderPoolWideCatalogRow } from './CatalogRows.ts';
 
@@ -452,6 +453,7 @@ function renderRuntimeConfig(
 					}, t('config.off')),
 				]),
 			}),
+			...warmupConfigRows({ t, status, loadingAction, setCfg }),
 			h(Row, {
 				style: { gap: '10px' },
 				left: h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },

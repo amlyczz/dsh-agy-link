@@ -33,6 +33,11 @@ export interface StatusPayload {
 		/** Processes still finishing background work for a switched-away account. */
 		drainingProcesses?: number
 		drainingKeys?: readonly string[]
+		/** `agy acp` children of this host the pool no longer tracks. */
+		strayProcesses?: number
+		strayPids?: readonly number[]
+		/** Total strays killed since the pool started. */
+		reapedStrays?: number
 		/** Times another agy rewrote the machine-wide credential slot under us. */
 		slotOverwriteDetectedCount?: number
 		lastSlotRecoveryAt?: number | null
@@ -83,6 +88,8 @@ export interface StatusPayload {
 	selectedModels?: readonly string[];
 	autoWarmup?: boolean;
 	warmupModels?: readonly string[];
+	warmupWindows?: 'weekly' | '5h' | 'both';
+	warmupMaxProbesPerRun?: number;
 	autoTranslate?: boolean;
 	translateModel?: string;
 	translateEffort?: string;

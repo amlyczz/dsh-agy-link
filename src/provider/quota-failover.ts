@@ -2,12 +2,16 @@
 // Keeps subagent/tool 429 handling pure and compact outside attempt.ts.
 import {
   extractQuotaErrorModel,
+  isImageModelId,
+  isModelScopedQuotaFailure,
+  isModelScopedQuotaTool,
   isTransientBurstRateLimit,
   looksLikeHardRateLimit,
   looksLikeTosViolation,
   parseResetDurationMs,
   type AgyEvent,
 } from '../common/types.ts'
+import { PREFERRED_IMAGE_QUOTA_MODEL } from '../common/model-lineup.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import { unwrapMcpTool } from '../host/mirror-tool.ts'
@@ -20,6 +24,8 @@ export interface LiveQuotaFailoverState {
   rawErrorText: string
   resetTime?: string
   cooledInLive: boolean
+  /** The refusal was scoped to one model, so no family cooldown may be written. */
+  modelScoped?: boolean
 }
 
 const DIRECT_QUOTA_TOOLS = new Set(['generate_image', 'invoke_subagent', 'swarm', 'run_workflow'])
@@ -28,7 +34,7 @@ const DIRECT_QUOTA_TOOLS = new Set(['generate_image', 'invoke_subagent', 'swarm'
  * Inspect one completed/failed tool step for an authoritative hard quota error
  * emitted directly by agy's image-generation or subagent delegation tool.
  */
-export function isDirectToolQuotaExhausted(ev: AgyEvent): { toolName: string; errorText: string } | null {
+export function isDirectToolQuotaExhausted(ev: AgyEvent): { toolName: string; errorText: string; modelScoped: boolean } | null {
   if (ev.kind !== 'step' || ev.stepKind !== 'tool' || !ev.tool) return null
   if (ev.state !== 'ERROR' && !ev.tool.error) return null
   const unwrapped = unwrapMcpTool(ev.tool.name, ev.tool.args)
@@ -44,7 +50,11 @@ export function isDirectToolQuotaExhausted(ev: AgyEvent): { toolName: string; er
   if (!looksLikeHardRateLimit(err) || isTransientBurstRateLimit(err) || looksLikeTosViolation(err)) {
     return null
   }
-  return { toolName: unwrapped.tool, errorText: err }
+  // A model-scoped refusal (image model, one model's own quota) still rotates
+  // to another account so the image can be produced, but the caller must NOT
+  // cool the whole text family for it.
+  const modelScoped = isModelScopedQuotaTool(unwrapped.tool) || isModelScopedQuotaFailure(err)
+  return { toolName: unwrapped.tool, errorText: err, modelScoped }
 }
 
 /**
@@ -96,6 +106,7 @@ export function createLiveQuotaController(ctx: LiveQuotaContext): LiveQuotaContr
     const raw = info.errorText.trim()
     if (raw === '' || isTransientBurstRateLimit(raw) || looksLikeTosViolation(raw)) return
     const detectedModel = info.model ?? extractQuotaErrorModel(raw)
+    const modelScoped = info.modelScoped === true || isModelScopedQuotaFailure(raw) || isImageModelId(detectedModel)
     const modelFam = detectedModel ? modelFamilyOf(detectedModel) : undefined
     const targetFamily: ModelFamily = modelFam && modelFam !== 'unknown' ? modelFam : ctx.inputFamily
     const resetMs = info.resetMs ?? parseResetDurationMs(raw)
@@ -104,10 +115,23 @@ export function createLiveQuotaController(ctx: LiveQuotaContext): LiveQuotaContr
     let cooledNow = false
     if (ctx.account && ctx.pool && !cooled.has(targetFamily)) {
       cooled.add(targetFamily)
+      if (modelScoped) {
+        // One model's own bucket ran out. Record it ONLY on that model and keep
+        // the turn on this account: switching the family pointer here is what
+        // made image quota exhaustion interrupt unrelated text work.
+        const bucket = detectedModel ?? info.model ?? ''
+        if (bucket !== '') ctx.pool.recordModelFailure(ctx.account.id, bucket, raw, resetTime)
+        ctx.emitNotice(
+          `live-quota-model-${ctx.account.id}-${bucket || 'model'}`,
+          `[agy] ${bucket || '当前模型'} 的额度已耗尽，仅该模型暂停，其他模型与账号不受影响。\n`,
+        )
+        return
+      }
       ctx.pool.recordFailure(ctx.account.id, targetFamily, raw, resetTime)
       cooledNow = true
     }
 
+    const cooledInLive = modelScoped ? false : (cooledNow || cooled.has(targetFamily))
     const alt = ctx.account && ctx.pool
       ? findAlternativeAccount(ctx.pool, ctx.account.id, ctx.inputFamily, ctx.activeModel, targetFamily)
       : undefined
@@ -122,7 +146,8 @@ export function createLiveQuotaController(ctx: LiveQuotaContext): LiveQuotaContr
         errorText: raw.slice(0, 300),
         rawErrorText: raw,
         ...(resetTime === undefined ? {} : { resetTime }),
-        cooledInLive: cooledNow || cooled.has(targetFamily),
+        cooledInLive,
+        ...(modelScoped ? { modelScoped: true } : {}),
       }
       ctx.emitNotice(
         `live-quota-switch-${ctx.account?.id ?? 'none'}-${targetFamily}`,
@@ -137,7 +162,8 @@ export function createLiveQuotaController(ctx: LiveQuotaContext): LiveQuotaContr
         errorText: raw.slice(0, 300),
         rawErrorText: raw,
         ...(resetTime === undefined ? {} : { resetTime }),
-        cooledInLive: cooledNow || cooled.has(targetFamily),
+        cooledInLive,
+        ...(modelScoped ? { modelScoped: true } : {}),
       }
       ctx.emitNotice(
         `live-quota-loop-${ctx.account?.id ?? 'none'}-${targetFamily}`,
@@ -163,11 +189,15 @@ export function reportDirectToolQuota(quotaCtrl: LiveQuotaController | null, ev:
   if (!quotaCtrl) return
   const direct = isDirectToolQuotaExhausted(ev)
   if (!direct) return
+  // A generate_image 429 always belongs to the image model's bucket even when
+  // the error text omits the model id: the tool name is the proof.
   const m = extractQuotaErrorModel(direct.errorText)
+    ?? (direct.toolName === 'generate_image' ? PREFERRED_IMAGE_QUOTA_MODEL : undefined)
   const r = parseResetDurationMs(direct.errorText)
   quotaCtrl.handleQuotaExhausted({
     source: 'tool-step',
     errorText: direct.errorText,
+    ...(direct.modelScoped ? { modelScoped: true } : {}),
     ...(m ? { model: m } : {}),
     ...(r !== undefined ? { resetMs: r } : {}),
   })
@@ -181,20 +211,38 @@ export function poolQuotaHopsFor(pool: AccountPoolManager | undefined): number {
 export function createPoolQuotaHooks(pool: AccountPoolManager) {
   return {
     poolQuotaHops: (): number => poolQuotaHopsFor(pool),
-    onQuotaExhausted: (accountId: string | undefined, model: string, errorText: string): boolean => {
+    onQuotaExhausted: (
+      accountId: string | undefined,
+      model: string,
+      errorText: string,
+      quotaModel?: string,
+    ): boolean => {
       const errModel = extractQuotaErrorModel(errorText) || model
       const errFam = modelFamilyOf(errModel)
       const mainFam = modelFamilyOf(model)
       const targetFam = errFam !== 'unknown' ? errFam : mainFam
       const resetMs = parseResetDurationMs(errorText)
       const resetTime = resetMs && resetMs > 0 ? new Date(Date.now() + resetMs).toISOString() : undefined
+      // The caller telling us which bucket ran out (image model) is authoritative:
+      // it means "do NOT cool the family, only that model".
+      const bucketModel = (quotaModel ?? '').trim() || errModel
+      const modelScoped =
+        (quotaModel !== undefined && quotaModel.trim() !== '') ||
+        isModelScopedQuotaFailure(errorText) ||
+        isImageModelId(errModel)
       if (accountId) {
-        pool.recordFailure(accountId, targetFam, errorText, resetTime)
+        if (modelScoped) pool.recordModelFailure(accountId, bucketModel, errorText, resetTime)
+        else pool.recordFailure(accountId, targetFam, errorText, resetTime)
         if (targetFam !== mainFam) {
           pool.advanceAccount(accountId, mainFam, model)
         }
       }
-      return pool.selectAccount(mainFam, model) !== null
+      // Non-mutating: availability for the NEXT attempt, without stealing the
+      // family's sticky account from a concurrent chat turn.
+      return pool.findAccount(mainFam, model, quotaModel) !== null
+    },
+    onModelSuccess: (accountId: string, quotaModel: string): void => {
+      pool.recordModelSuccess(accountId, quotaModel)
     },
   }
 }

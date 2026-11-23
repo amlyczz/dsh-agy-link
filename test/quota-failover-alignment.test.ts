@@ -309,7 +309,7 @@ describe('quota failover alignment across subagents, aux, and tools', () => {
     }
   })
 
-  test('5. Live subagent quota exhaustion kills stuck run with ERR_RATE_LIMIT when alternative exists, and keeps running when alone', async () => {
+  test('5. Live subagent MODEL-scoped quota keeps the run alive, pauses only that model, never moves the pointer', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agy-sub-live-'))
     const prevMode = process.env.FAKE_AGY_MODE
     const prevInv = process.env.FAKE_AGY_INVOCATION_FILE
@@ -320,7 +320,8 @@ describe('quota failover alignment across subagents, aux, and tools', () => {
       process.env.FAKE_AGY_INVOCATION_FILE = invFile
       process.env.FAKE_AGY_SUBAGENT_WAIT_MS = '2000'
 
-      // 2 isolated accounts -> cools first, rotates to second, interrupts stuck run with RATE_LIMIT
+      // 2 isolated accounts -> the image-model 429 must NOT abort the run nor
+      // move the family pointer: it only pauses that model on acc1.
       const pool2 = new AccountPoolManager(join(root, 'pool2'))
       pool2.setAccountEnabled('acc_primary', false)
       const acc1 = pool2.createAccountSlot('A1')
@@ -328,10 +329,10 @@ describe('quota failover alignment across subagents, aux, and tools', () => {
       const { adapter: a2 } = makeAdapter(join(root, 'a2'), {}, { pool: pool2 })
       const chunks2 = await collect(a2.stream(opts([msg('user', 'run subagent')], { sessionId: 'sess-sub2' as never })))
       const finish2 = chunks2[chunks2.length - 1] as { type: string; reason: { kind: string; failure?: { code: string } } }
-      assert.equal(finish2.reason.kind, 'error')
-      assert.equal(finish2.reason.failure?.code, Err.RATE_LIMIT)
-      assert.ok((acc1.cooldowns.google?.cooldownUntil ?? 0) > Date.now() + 4 * 3600_000)
-      assert.equal(pool2.getPoolData().lastActiveAccountId, acc2.id)
+      assert.equal(finish2.reason.kind, 'stop', 'a model-scoped 429 must not kill the turn')
+      assert.equal(pool2.getAccount(acc1.id)?.cooldowns?.google, undefined)
+      assert.equal(pool2.getPoolData().lastActiveAccountId, acc1.id, 'the sticky pointer must stay on acc1')
+      assert.ok(acc2.id, 'the spare account stays available for later turns')
 
       // 1 isolated account (no alternative) -> cools account but does NOT kill prematurely
       writeFileSync(invFile, '')
@@ -343,7 +344,7 @@ describe('quota failover alignment across subagents, aux, and tools', () => {
       const chunks1 = await collect(a1.stream(opts([msg('user', 'run subagent solo')], { sessionId: 'sess-sub1' as never })))
       const finish1 = chunks1[chunks1.length - 1] as { type: string; reason: { kind: string } }
       assert.equal(finish1.reason.kind, 'stop')
-      assert.ok((solo.cooldowns.google?.cooldownUntil ?? 0) > Date.now() + 4 * 3600_000)
+      assert.equal(pool1.getAccount(solo.id)?.cooldowns?.google, undefined)
     } finally {
       process.env.FAKE_AGY_MODE = prevMode
       if (prevInv === undefined) delete process.env.FAKE_AGY_INVOCATION_FILE

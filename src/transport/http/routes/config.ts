@@ -1,3 +1,4 @@
+import { MIN_WARMUP_INTERVAL_HOURS } from '../../../common/timeouts.ts'
 import type { HostServices } from '../../../host/services.ts'
 import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
 
@@ -49,9 +50,18 @@ function validateConfigValue(key: string, value: unknown): string | null {
     return typeof value === 'string' ? null : 'warmupTimezone must be an IANA timezone string'
   }
   if (key === 'warmupIntervalHours') {
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 168
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 168) {
+      return 'warmupIntervalHours must be a number between 0 and 168'
+    }
+    if (value > 0 && value < MIN_WARMUP_INTERVAL_HOURS) {
+      return `warmupIntervalHours must be 0 (off) or at least ${MIN_WARMUP_INTERVAL_HOURS}`
+    }
+    return null
+  }
+  if (key === 'warmupMaxProbesPerRun') {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 200
       ? null
-      : 'warmupIntervalHours must be a number between 0 and 168'
+      : 'warmupMaxProbesPerRun must be a number between 0 and 200 (0 = unlimited)'
   }
   if (key === 'agent') {
     return typeof value === 'string' ? null : 'agent must be a string'
@@ -92,7 +102,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup',
           'cloakSystemPrompt', 'respectExternalSignIn', 'auxNeutralWorkspace',
           'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels',
-          'autoWarmup', 'warmupModels', 'warmupWindows', 'warmupDailyTime', 'warmupTimezone', 'warmupIntervalHours',
+          'autoWarmup', 'warmupModels', 'warmupWindows', 'warmupDailyTime', 'warmupTimezone', 'warmupIntervalHours', 'warmupMaxProbesPerRun',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',

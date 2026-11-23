@@ -2,6 +2,7 @@
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { classifyToolError } from '../recording.ts'
 import { ok, type AcpStatusView, type CommandDeps } from './shared.ts'
+import { cacheMetrics, formatCacheBucket } from '../cache-metrics.ts'
 
 /** One-line ACP pool summary, including drains and credential-slot recoveries. */
 function describeAcp(s: AcpStatusView): string {
@@ -50,6 +51,7 @@ export async function renderStatus(deps: CommandDeps): Promise<string> {
     '- default effort: ' + (cfg.defaultEffort === '' ? '(model default)' : cfg.defaultEffort),
     '- catalog: ' + cat.models.length + ' models — ' + cat.source + (cat.lastError === undefined ? '' : ' — last error: ' + cat.lastError),
     '- conversation bindings: ' + bindings,
+    '- cache: ' + (cacheMetrics.snapshot().today.turns === 0 ? 'no ACP turns yet' : formatCacheBucket(cacheMetrics.snapshot().today)),
     '- last run process: ' + (last ? (last.processOk ? 'ok' : last.processCode) + ' — ' + last.model + ' in ' + Math.round(last.durationMs / 100) / 10 + 's' : 'none yet'),
     ...(last?.tokenSpeed !== undefined && (last.tokenSpeed.measuredSteps > 0 || last.tokenSpeed.outputTokens > 0)
       ? [

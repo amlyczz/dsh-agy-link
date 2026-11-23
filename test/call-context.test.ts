@@ -95,3 +95,28 @@ test('missing binary throws AGY_NOT_INSTALLED before any work', () => {
     warnOnce: () => {},
   }), /agy binary not found/)
 })
+
+test('pure-text aux calls run in a neutral, cacheable dir instead of the project workspace', () => {
+  for (const purpose of ['session-title', 'compaction', 'translation'] as const) {
+    const { context } = ctx({ purpose, ...(purpose === 'translation' ? { agyTranslateSession: { setup: 'p', text: 't' } } : {}) })
+    assert.equal(context.neutralAuxWorkspace, true, purpose + ' must use the neutral dir')
+    assert.ok(context.workspaceRoot.endsWith('/agy-link/aux-cwd'), purpose + ' cwd: ' + context.workspaceRoot)
+  }
+  const chat = ctx()
+  assert.equal(chat.context.neutralAuxWorkspace, false)
+  assert.equal(chat.context.workspaceRoot, '/proc-cwd')
+  const image = ctx({ purpose: 'image' })
+  assert.equal(image.context.neutralAuxWorkspace, false, 'image calls still see the workspace')
+})
+
+test('an explicit workspaceRoot wins over the neutral aux dir (operator intent)', () => {
+  const { context } = ctx({ purpose: 'session-title' }, { workspaceRoot: '/cfg' })
+  assert.equal(context.neutralAuxWorkspace, false)
+  assert.equal(context.workspaceRoot, '/cfg')
+})
+
+test('auxNeutralWorkspace:false restores the old behaviour', () => {
+  const { context } = ctx({ purpose: 'session-title' }, { auxNeutralWorkspace: false })
+  assert.equal(context.neutralAuxWorkspace, false)
+  assert.equal(context.workspaceRoot, '/proc-cwd')
+})

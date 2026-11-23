@@ -9,6 +9,7 @@
 // unchanged.
 import {
   accountHasArgon,
+  baseModelSlug,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
@@ -24,7 +25,7 @@ import { computeQuotaPacing, FIVE_HOUR_WINDOW_MS, WEEKLY_WINDOW_MS } from '../..
 export { isQuotaBenched, LOW_QUOTA_5H, LOW_QUOTA_WEEKLY }
 
 /** Why a pool account cannot serve a family right now (diagnostics only). */
-export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported' | 'model-unsupported'
+export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported' | 'model-unsupported' | 'model-cooldown'
 
 /**
  * The slice of the pool the Argon check needs: whether an account has itself
@@ -60,8 +61,62 @@ export function explainIneligibility(
   }
   const cd = acc.cooldowns?.[family]
   if (cd && cd.cooldownUntil > now) return 'cooldown'
+  // A model-scoped cooldown (e.g. the image model's own 429) removes the
+  // account only for THAT model — other models in the family stay usable.
+  if (model) {
+    const mcd = acc.modelCooldowns?.[baseModelSlug(model)]
+    if (mcd && mcd.cooldownUntil > now) return 'model-cooldown'
+  }
   if (isQuotaBenched(acc, family, now, model)) return 'quota'
   return null
+}
+
+/**
+ * Pick an eligible account WITHOUT mutating any active pointer.
+ *
+ * Used by cross-model requests (image generation): rotating a model-scoped
+ * bucket must never steal the family's sticky account from a chat turn.
+ */
+export function pickEligibleAccount(
+  accounts: readonly ManagedAccount[],
+  pool: DedicatedGroupSource | null | undefined,
+  input: {
+    family: ModelFamily
+    model?: string
+    quotaModel?: string
+    avoid?: readonly string[]
+    activeId?: string
+    now: number
+  },
+): ManagedAccount | null {
+  const skip = new Set(input.avoid ?? [])
+  const candidates = accounts.filter(
+    (acc) =>
+      !skip.has(acc.id) &&
+      explainIneligibility(acc, input.family, input.now, pool, input.model) === null &&
+      (input.quotaModel === undefined || input.quotaModel === '' ||
+        isModelQuotaClear(acc, input.family, input.quotaModel, input.now)),
+  )
+  if (candidates.length === 0) return null
+  return (
+    candidates.find((acc) => acc.id === input.activeId) ??
+    orderByExpiry(accounts, candidates, input.family, input.activeId, input.now)[0] ??
+    null
+  )
+}
+
+/**
+ * True when a specific MODEL's quota bucket still has room on this account.
+ *
+ * Used for cross-model eligibility: an image request must pick an account whose
+ * IMAGE bucket is healthy even though the driving chat model lives in the same
+ * `google` family. Family-level checks alone cannot see that.
+ */
+export function isModelQuotaClear(acc: ManagedAccount, family: ModelFamily, model: string, now: number): boolean {
+  if (model.trim() === '') return true
+  const mcd = acc.modelCooldowns?.[baseModelSlug(model)]
+  if (mcd && mcd.cooldownUntil > now) return false
+  return !isQuotaBenched(acc, family, now, model)
 }
 
 /**

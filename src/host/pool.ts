@@ -28,7 +28,9 @@ import {
   LOW_QUOTA_WEEKLY,
   explainIneligibility,
   isAccountEligible,
+  isModelQuotaClear,
   orderByExpiry,
+  pickEligibleAccount,
   resolveEligibleActiveAccountId,
   type AccountIneligibilityReason,
 } from '../domain/accounts/selection.ts'
@@ -98,6 +100,7 @@ export class AccountPoolManager {
       },
       selectAccount: (family, model) => this.selectAccount(family, model),
     })
+    this.admin.dropModelScopedCooldowns()
   }
 
   private catalogForAccount(accountId: string): { models?: readonly { id: string }[]; source?: string } | undefined {
@@ -280,6 +283,8 @@ export class AccountPoolManager {
   clearAuthRequired(id: string, force = false): void {
     this.admin.clearAuthRequired(id, force)
   }
+  noteAuthReverifyAttempt(id: string): void { this.admin.noteAuthReverifyAttempt(id) }
+  healAuthFlagsFromQuota(): string[] { return this.admin.healAuthFlagsFromQuota() }
 
   /** Drop an email label that is provably wrong (e.g. a foreign token overwrote it). */
   clearAccountEmail(id: string): void {
@@ -336,6 +341,16 @@ export class AccountPoolManager {
   /** Check whether an account is eligible to serve requests for the given family and model. */
   isAccountEligibleForModel(acc: ManagedAccount, family: ModelFamily, model?: string, now = Date.now()): boolean {
     return this.explainIneligibility(acc, family, now, model) === null
+  }
+
+  /** Record a 429 scoped to ONE model's quota bucket (e.g. the image model). */
+  recordModelFailure(id: string, model: string, reason: string, serverResetTime?: string): void {
+    this.admin.recordModelFailure(id, model, reason, serverResetTime)
+  }
+
+  /** Clear one model's cooldown after a successful call on it. */
+  recordModelSuccess(id: string, model: string): void {
+    this.admin.recordModelSuccess(id, model)
   }
 
   /** Returns the currently active and healthy account ID (see PoolAdmin). */
@@ -497,39 +512,17 @@ export class AccountPoolManager {
    * drop a 429 timer.
    */
   clearCooldown(id?: string, family?: ModelFamily, includeQuotaBench = false): void {
-    const now = Date.now()
-    const targetFamily = family ? (normalizeModelFamily(family) ?? family) : undefined
-    const clearOne = (acc: ManagedAccount): void => {
-      acc.cooldowns ??= {}
-      if (targetFamily) delete acc.cooldowns[targetFamily]
-      else acc.cooldowns = {}
-      if (!includeQuotaBench) return
-      const families = targetFamily ? [targetFamily] : (Object.keys(acc.quotas ?? {}) as ModelFamily[])
-      if (families.length === 0) return
-      acc.quotaGateClearedAt ??= {}
-      for (const fam of families) {
-        const updatedAt = acc.quotas?.[fam]?.updatedAt
-        acc.quotaGateClearedAt[fam] = Math.max(now, updatedAt ?? 0)
-      }
-    }
-    if (id) {
-      const acc = this.getAccount(id)
-      if (!acc) return
-      clearOne(acc)
-    } else {
-      for (const acc of this.data.accounts) clearOne(acc)
-    }
-    this.persist()
+    this.admin.clearCooldown(id, family, includeQuotaBench)
   }
 
-  /**
-   * Core scheduling algorithm: Sticky Sequential Drain.
-   * Sticks to the current active account until it runs out of quota/rate-limited,
-   * then smoothly advances to the next available account in cyclic order.
-   */
-  selectAccount(family: ModelFamily, model?: string): ManagedAccount | null {
+  /** Sticky Sequential Drain: keep the active account until it is unusable. */
+  selectAccount(family: ModelFamily, model?: string, quotaModel?: string): ManagedAccount | null {
     const now = Date.now()
-    const candidates = this.data.accounts.filter((acc) => this.isAccountEligibleForModel(acc, family, model, now))
+    const candidates = this.data.accounts.filter(
+      (acc) =>
+        this.isAccountEligibleForModel(acc, family, model, now) &&
+        (quotaModel === undefined || quotaModel === '' || isModelQuotaClear(acc, family, quotaModel, now)),
+    )
 
     if (candidates.length === 0) return null
 
@@ -583,15 +576,24 @@ export class AccountPoolManager {
     return nextAccount
   }
 
+  /** Pick an eligible account WITHOUT mutating the active pointer (image rotation). */
+  findAccount(family: ModelFamily, model?: string, quotaModel?: string, avoid?: readonly string[]): ManagedAccount | null {
+    return pickEligibleAccount(this.data.accounts, this, {
+      family,
+      ...(model === undefined ? {} : { model }),
+      ...(quotaModel === undefined ? {} : { quotaModel }),
+      ...(avoid === undefined ? {} : { avoid }),
+      ...(this.data.activeAccountIds?.[family] === undefined ? {} : { activeId: this.data.activeAccountIds[family] }),
+      now: Date.now(),
+    })
+  }
+
   /** Get countdown in milliseconds until the earliest account in cooldown resets. */
   getEarliestResetCountdown(family: ModelFamily): number | null {
     return earliestResetCountdown(this.data.accounts, family)
   }
 
-  /**
-   * Earliest moment ANY enabled account could serve `family` again: the sooner
-   * of a cooldown expiry and a quota-window reset.
-   */
+  /** Earliest moment ANY enabled account can serve `family` again. */
   getEarliestAvailableCountdown(family: ModelFamily): number | null {
     return earliestAvailableCountdown(this.data.accounts, family)
   }

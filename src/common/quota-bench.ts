@@ -1,7 +1,8 @@
 // Pure quota-bench, cooldown, and auth-quarantine predicates shared across
 // domain scheduling, host commands, and client UI so every surface derives
 // account availability from a single source of truth.
-import { modelMatches, type FamilyQuotaInfo, type ManagedAccount, type ModelFamily } from './pool-types.ts'
+import { isTerminalAuthError, modelMatches, type FamilyQuotaInfo, type ManagedAccount, type ModelFamily } from './pool-types.ts'
+import { isAuthoritativeAuthError, looksLikeValidationRequired } from './types.ts'
 
 /** Proactive rotation thresholds: bench accounts at or below these remaining fractions until reset. */
 export const LOW_QUOTA_5H = 0.10
@@ -136,11 +137,37 @@ export function isAccountFullyCooling(acc: ManagedAccount, now: number): boolean
 }
 
 /**
+ * Why an account is barred from running, in the terms the user needs to act on.
+ *
+ *   `relogin`     — authoritative OAuth state (invalid_grant / revoked…): only a
+ *                   real sign-in fixes it.
+ *   `validation`  — Google wants a human verification step; re-running OAuth is
+ *                   the wrong button.
+ *   `tos`         — terminal ToS suspension; only the appeal form helps.
+ *   `review`      — flagged by non-authoritative evidence (an agy "not signed
+ *                   in" banner, an unprovable identity). Nothing is known to be
+ *                   broken: the background re-verification decides. Painting it
+ *                   the same red as a dead login is what made the console cry
+ *                   wolf (reported 2026-11-23).
+ */
+export type AccountAuthState = 'healthy' | 'relogin' | 'review' | 'validation' | 'tos'
+
+export function accountAuthState(acc: ManagedAccount): AccountAuthState {
+  const reason = acc.quotaUnavailable?.reason
+  if (reason === 'tos_violation') return 'tos'
+  if (reason === 'validation_required') return 'validation'
+  if (acc.authRequired !== true) return 'healthy'
+  if (isTerminalAuthError(acc.authError)) return 'tos'
+  if (looksLikeValidationRequired(acc.authError)) return 'validation'
+  if (isAuthoritativeAuthError(acc.authError ?? '')) return 'relogin'
+  return 'review'
+}
+
+/**
  * True when the account cannot operate due to auth expiration, web verification
- * (`VALIDATION_REQUIRED`), or ToS suspension (`TOS_VIOLATION`).
+ * (`VALIDATION_REQUIRED`), an unverified flag, or ToS suspension
+ * (`TOS_VIOLATION`).
  */
 export function isAccountCriticalAuth(acc: ManagedAccount): boolean {
-  if (acc.authRequired === true) return true
-  const reason = acc.quotaUnavailable?.reason
-  return reason === 'validation_required' || reason === 'tos_violation'
+  return accountAuthState(acc) !== 'healthy'
 }

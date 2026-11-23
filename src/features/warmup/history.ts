@@ -51,6 +51,12 @@ export class WarmupHistoryStore {
     return now - last < cooldownMs
   }
 
+  /** Latest timestamp for `key`, re-read from disk (cross-host / post-restart). */
+  lastRecordedAt(key: string): number | undefined {
+    this.load()
+    return this.history.get(key)
+  }
+
   record(key: string, now = Date.now()): void {
     this.history.set(key, now)
     this.save()

@@ -10,6 +10,7 @@ import {
   WarmupHistoryStore,
   WarmupService,
   detectSlidingIdleReset,
+  dailyJitterMinutes,
   isDailyScheduleDue,
   isIntervalScheduleDue,
   planWarmupTargets,
@@ -175,22 +176,27 @@ describe('Slice 7: WarmupService 5h/daily/interval, sliding-idle detection & 50-
       assert.equal(r0.length, 0)
       assert.equal(probes, 0)
 
-      // Reading 2 at 08:00 Shanghai -> resetTime slid by +10m (idle!) AND daily schedule is due
+      // Reading 2 just after the daily anchor -> resetTime slides forward in
+      // lockstep with the observation gap (idle window!) AND the daily schedule
+      // is due. The anchor carries a deterministic per-day jitter (0–20 min), so
+      // the reading and the slide both move by exactly that amount.
+      const jitterMs = dailyJitterMinutes('2026-11-22') * 60_000
+      const slideMs = 10 * 60_000 + jitterMs
       acc.quotas = {
         google: {
           remainingFraction: 1.0,
-          resetTime: new Date(t0 + 2 * 3600_000 + 10 * 60_000).toISOString(),
+          resetTime: new Date(t0 + 2 * 3600_000 + slideMs).toISOString(),
           weeklyFraction: 0.5,
         },
       }
-      const r1 = await svc.runScheduledWarmup(t0)
+      const r1 = await svc.runScheduledWarmup(t0 + jitterMs)
       assert.equal(r1.length, 1)
       assert.equal(r1[0]?.success, true)
       assert.equal(probes, 1)
       assert.equal(svc.status().recentHistory?.[0]?.trigger, 'sliding-idle')
 
       // Running again same day does not re-fire daily schedule
-      const r2 = await svc.runScheduledWarmup(t0 + 60_000)
+      const r2 = await svc.runScheduledWarmup(t0 + jitterMs + 60_000)
       assert.equal(r2.length, 0)
       assert.equal(probes, 1)
 

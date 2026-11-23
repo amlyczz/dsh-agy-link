@@ -36,4 +36,8 @@ export type AgyGenerateOptions = Omit<GenerateOptions, 'purpose'> & {
   agyTransport?: AgyTransportMode
   agyOnEvent?: (ev: AgyEvent) => void
   agyOnAccount?: (info: AgyAccountInfo) => void
+  /** Extra model whose own quota bucket must be clear for this call (image generation). */
+  agyQuotaModel?: string
+  /** Accounts that must not serve this call (the caller is rotating a model-scoped bucket). */
+  agyAvoidAccountIds?: readonly string[]
 }

@@ -24,30 +24,37 @@ function num(v: unknown): number | undefined {
 }
 
 function extractUsageFromRecord(rec: Record<string, unknown>): RawUsage | null {
-  const raw =
-    (rec.usage && typeof rec.usage === 'object' ? (rec.usage as Record<string, unknown>) : null) ??
-    (rec.token_usage && typeof rec.token_usage === 'object' ? (rec.token_usage as Record<string, unknown>) : null) ??
-    (rec.metadata && typeof rec.metadata === 'object' && (rec.metadata as Record<string, unknown>).usage && typeof (rec.metadata as Record<string, unknown>).usage === 'object'
-      ? ((rec.metadata as Record<string, unknown>).usage as Record<string, unknown>)
-      : null)
-  if (!raw) return null
-  const input = num(raw.input_tokens) ?? num(raw.inputTokens) ?? num(raw.prompt_tokens)
-  const output = num(raw.output_tokens) ?? num(raw.outputTokens) ?? num(raw.completion_tokens)
-  const cacheRead = num(raw.cache_read_tokens) ?? num(raw.cachedReadTokens) ?? num(raw.cached_content_token_count)
-  const cacheWrite = num(raw.cache_write_tokens) ?? num(raw.cachedWriteTokens)
-  const thinking = num(raw.thinking_tokens) ?? num(raw.thoughtTokens) ?? num(raw.thoughts_token_count)
-  const total = num(raw.total_tokens) ?? num(raw.totalTokens)
-  if (input === undefined && output === undefined && cacheRead === undefined && thinking === undefined) {
-    return null
+  // agy 1.5.x writes the counters at the TOP LEVEL of a PLANNER_RESPONSE line
+  // (`{"type":"PLANNER_RESPONSE","input_tokens":N,"cache_read_tokens":N,...}`).
+  // Older/other shapes nest them under `usage`, `token_usage` or
+  // `metadata.usage`. Try every shape, top level last, and take the first that
+  // carries a real counter.
+  const candidates: Record<string, unknown>[] = []
+  if (rec.usage && typeof rec.usage === 'object') candidates.push(rec.usage as Record<string, unknown>)
+  if (rec.token_usage && typeof rec.token_usage === 'object') candidates.push(rec.token_usage as Record<string, unknown>)
+  const meta = rec.metadata
+  if (meta && typeof meta === 'object' && typeof (meta as Record<string, unknown>).usage === 'object') {
+    candidates.push((meta as Record<string, unknown>).usage as Record<string, unknown>)
   }
-  const out: RawUsage = {}
-  if (input !== undefined) out.input_tokens = input
-  if (output !== undefined) out.output_tokens = output
-  if (cacheRead !== undefined) out.cache_read_tokens = cacheRead
-  if (cacheWrite !== undefined) out.cache_write_tokens = cacheWrite
-  if (thinking !== undefined) out.thinking_tokens = thinking
-  if (total !== undefined) out.total_tokens = total
-  return out
+  candidates.push(rec)
+  for (const raw of candidates) {
+    const input = num(raw.input_tokens) ?? num(raw.inputTokens) ?? num(raw.prompt_tokens)
+    const output = num(raw.output_tokens) ?? num(raw.outputTokens) ?? num(raw.completion_tokens)
+    const cacheRead = num(raw.cache_read_tokens) ?? num(raw.cachedReadTokens) ?? num(raw.cached_content_token_count)
+    const cacheWrite = num(raw.cache_write_tokens) ?? num(raw.cachedWriteTokens)
+    const thinking = num(raw.thinking_tokens) ?? num(raw.thoughtTokens) ?? num(raw.thoughts_token_count)
+    const total = num(raw.total_tokens) ?? num(raw.totalTokens)
+    if (input === undefined && output === undefined && cacheRead === undefined && thinking === undefined) continue
+    const out: RawUsage = {}
+    if (input !== undefined) out.input_tokens = input
+    if (output !== undefined) out.output_tokens = output
+    if (cacheRead !== undefined) out.cache_read_tokens = cacheRead
+    if (cacheWrite !== undefined) out.cache_write_tokens = cacheWrite
+    if (thinking !== undefined) out.thinking_tokens = thinking
+    if (total !== undefined) out.total_tokens = total
+    return out
+  }
+  return null
 }
 
 export class AcpTranscriptUsageTailer {

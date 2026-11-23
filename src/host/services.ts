@@ -32,6 +32,7 @@ import { ImageService, runViaAdapter } from './image.ts'
 import { EcosystemService } from '../features/ecosystem/index.ts'
 import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { createPoolQuotaHooks } from '../provider/quota-failover.ts'
+import { PREFERRED_IMAGE_QUOTA_MODEL } from '../common/model-lineup.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, type McpBridge } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
@@ -128,16 +129,6 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     if (acc === undefined) return
     await quota.refreshAccountQuota(acc, false)
   })
-  const warmup = new WarmupService(
-    pool,
-    quota,
-    () => getConfig().proxyUrl || detectSystemProxy() || '',
-    version,
-    getConfig,
-    log,
-    undefined,
-    { bin: () => bin() },
-  )
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
 
   const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv => {
@@ -154,6 +145,25 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   }
 
   const effortStore = createEffortUnsupportedStore({ stateDir, notifyPicker, log })
+
+  // Constructed after `effortStore` so the probe can honour (and extend) the
+  // learned `--effort` refusal list: agy rejects the whole invocation when the
+  // flag is not valid for a model, and a warmup that never learns will fail for
+  // that family forever (observed on claude-sonnet-5-5, 2026-11-23).
+  const warmup = new WarmupService(
+    pool,
+    quota,
+    () => getConfig().proxyUrl || detectSystemProxy() || '',
+    version,
+    getConfig,
+    log,
+    undefined,
+    {
+      bin: () => bin(),
+      effortUnsupported: () => effortStore.read(),
+      onEffortUnsupported: (model) => effortStore.remember(model),
+    },
+  )
 
   const sessionWorkspace = (sessionId: string): string | undefined => {
     const sessions = ctx.get('sessions') as { get(id: unknown): { header?: { cwd?: string } } | undefined } | undefined
@@ -538,6 +548,9 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     run: (call) => runViaAdapter(adapter, call),
     catalog: () => catalog.get(),
     ...quotaHooks,
+    // Prefer the advertised image model, fall back to the one agy 1.5.x ships.
+    imageQuotaModel: () =>
+      catalog.get().models.find((m) => /image/i.test(m.id))?.id ?? PREFERRED_IMAGE_QUOTA_MODEL,
     log,
   })
 

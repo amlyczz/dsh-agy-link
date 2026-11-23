@@ -6,6 +6,7 @@ import { LlmError } from '@deepseek-ai/dsh-llm'
 import { Err, type PluginConfig } from '../common/types.ts'
 import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import { resolveModelSlug } from '../domain/models/parse.ts'
+import { isModelQuotaClear } from '../domain/accounts/selection.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import type { SessionStore } from '../host/sessions.ts'
 import {
@@ -39,6 +40,14 @@ export interface AccountSelectionInput {
   isAux: boolean
   sessionKey: string
   reasoningEffort?: string
+  /**
+   * A SECOND model whose own quota bucket must also be clear for this call
+   * (image generation: driver model + image model share the family pool but not
+   * the same bucket). Empty/undefined keeps the historical behaviour.
+   */
+  quotaModel?: string
+  /** Accounts that just failed THIS request's quota bucket; never pick them again. */
+  avoidAccountIds?: readonly string[]
   /** Allow switching to a widely-supported model when zero accounts can serve a scarce model (compaction / session-title). */
   allowAuxModelFallback?: boolean
 }
@@ -247,11 +256,25 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
   if (pool !== undefined && !isAux && sessionKey !== '' && process.platform === 'win32' && cfg.parallelSameAccount) {
     account = pool.selectAccount(family, activeModel) ?? undefined
   }
+  const avoid = new Set(input.avoidAccountIds ?? [])
+  const quotaModel = (input.quotaModel ?? '').trim()
+  const quotaClear = (acc: ManagedAccount | undefined): acc is ManagedAccount =>
+    acc !== undefined &&
+    !avoid.has(acc.id) &&
+    (quotaModel === '' || isModelQuotaClear(acc, family, quotaModel, Date.now()))
   if (account === undefined && pool !== undefined && !isAux && sessionKey !== '') {
-    account = stickyAccount(deps, family, sessionKey, activeModel)
+    const sticky = stickyAccount(deps, family, sessionKey, activeModel)
+    if (quotaClear(sticky)) account = sticky
   }
   if (account === undefined && pool !== undefined) {
-    account = pool.selectAccount(family, activeModel) ?? undefined
+    if (quotaModel !== '' && typeof pool.findAccount === 'function') {
+      // Image-style call: pick WITHOUT moving the family's sticky pointer.
+      const picked = pool.findAccount(family, activeModel, quotaModel, input.avoidAccountIds) ?? undefined
+      if (quotaClear(picked)) account = picked
+    } else {
+      const picked = pool.selectAccount(family, activeModel) ?? undefined
+      if (quotaClear(picked)) account = picked
+    }
   }
   if (account !== undefined && pool !== undefined) {
     // Record the account actually serving this family, without stamping

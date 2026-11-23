@@ -4,8 +4,11 @@
 // booleans, aux gate, permission mode, session/workspace fallback, tool mode.
 // Keeping it pure makes the matrix testable without spawning agy.
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AgyGenerateOptions, AgyTranslateSession } from '../common/protocol.ts'
 import { Err, type PermissionMode, type PluginConfig } from '../common/types.ts'
+import { stateDir } from '../common/config.ts'
 import { agyBinDiagnostics } from '../runtime/agy/bin.ts'
 
 export type CallPurpose = 'chat' | 'compaction' | 'session-title' | 'translation' | 'image'
@@ -25,6 +28,8 @@ export interface CallContext {
   permissionMode: PermissionMode
   sessionKey: string
   workspaceRoot: string
+  /** True when this is a pure-text aux call running in the neutral dir. */
+  neutralAuxWorkspace: boolean
   isCodeMode: boolean
   hasToolSupport: boolean
 }
@@ -37,6 +42,21 @@ export interface CallContextInput {
   warnOnce: (key: string, message: string) => void
   /** Process cwd override for tests; defaults to process.cwd(). */
   cwd?: string
+}
+
+/**
+ * Stable, empty working directory for pure-text auxiliary calls. Created once
+ * under the plugin state dir; never deleted so the path (and therefore agy's
+ * system-prompt prefix) stays identical across processes and calls.
+ */
+function auxWorkspaceDir(): string {
+  const dir = join(stateDir(), 'aux-cwd')
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {
+    return stateDir()
+  }
+  return dir
 }
 
 /**
@@ -144,6 +164,16 @@ export function resolveCallContext(input: CallContextInput): CallContext {
     }
   }
 
+  // Pure-text auxiliary work must not pay the project prefix. agy loads
+  // GEMINI.md / AGENTS.md / workspace context into every one-shot aux process
+  // (~15-20k uncached tokens at 0% cache). A stable empty directory keeps the
+  // prefix tiny and identical across calls, so Gemini's implicit cache can hit
+  // after the first one. Titles/compaction/translation never read files.
+  const neutralAuxWorkspace = cfg.auxNeutralWorkspace && cfg.workspaceRoot === '' && (isTitle || isCompaction || isTranslate)
+  if (neutralAuxWorkspace) {
+    workspaceRoot = auxWorkspaceDir()
+  }
+
   return {
     cfg,
     bin,
@@ -159,6 +189,7 @@ export function resolveCallContext(input: CallContextInput): CallContext {
     permissionMode,
     sessionKey,
     workspaceRoot,
+    neutralAuxWorkspace,
     isCodeMode,
     hasToolSupport,
   }

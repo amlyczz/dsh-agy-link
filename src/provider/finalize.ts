@@ -23,6 +23,7 @@ import {
   Err,
   isAuthoritativeAuthError,
   looksLikeHardRateLimit,
+  isModelScopedQuotaFailure,
   parseResetDurationMs,
   shouldMarkAuthRequired,
   type RawUsage,
@@ -166,12 +167,23 @@ function rotateOnFailure(input: FinalizeInput, failure: AttemptFailure): void {
   const targetFamily = qf?.family ?? family
   const resetMs = parseResetDurationMs(input.rawErrText) ?? parseResetDurationMs(failure.message)
   const serverResetTime = qf?.resetTime ?? (resetMs && resetMs > 0 ? new Date(Date.now() + resetMs).toISOString() : undefined)
+  const modelScoped =
+    qf?.modelScoped === true ||
+    isModelScopedQuotaFailure(input.rawErrText) ||
+    isModelScopedQuotaFailure(failure.message)
   if (account && !outcome.aborted && (looksLikeHardRateLimit(input.rawErrText) || Boolean(qf))) {
-    if (!qf?.cooledInLive) {
-      pool?.recordFailure(account.id, targetFamily, failure.message, serverResetTime)
-    }
-    if (qf?.crossFamily) {
-      pool?.advanceAccount(account.id, family, input.activeModel)
+    if (modelScoped) {
+      // One model's own quota ran out (e.g. an image model). Rotate this turn
+      // so the retry does not land on the same exhausted model, but never put
+      // the whole family into cooldown — other models still have quota.
+      pool?.advanceAccount(account.id, targetFamily, input.activeModel)
+    } else {
+      if (!qf?.cooledInLive) {
+        pool?.recordFailure(account.id, targetFamily, failure.message, serverResetTime)
+      }
+      if (qf?.crossFamily) {
+        pool?.advanceAccount(account.id, family, input.activeModel)
+      }
     }
   }
   // Silent timeout: rotate to the next account for the automatic retry

@@ -70,12 +70,15 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
   - **前置失败自动回退**：当 `runAcpAttempt()` 在流式启动前失败（未配置、进程拉起失败或 `openSession` 失败）时返回 `null` 并保留并发/凭据槽位，由 `runAgyAttempt()` 无缝回退至 CLI `-p` 路径；若进入 `runAcpAttempt()` 成功路径，须先调用 `recorder.stop()` 释放未使用的 CLI 录制器资源；当存在 `--json-schema`、`--settings` 或 `isAux` 辅助调用时自动走 CLI 通道。
   - **Windows 凭据槽安全**：在 Windows 下切号时，`AcpSessionPool.acquireProcess()` 会主动 `evictOtherAccounts()` 关闭旧账号常驻进程，避免并发凭据槽冲突。
   - **ACP 轮内超时对齐**：`AcpProcess.prompt()` 同样遵循 `timeoutMs` 空闲看门狗、工具进行中切换至 `longToolIdleMs`、`maxTurnMs` 硬上限以及 `AbortSignal` 触发 `session/cancel`。
+  - **关闭必须整组升级，单发 SIGTERM 不算终止**：`AcpProcess.close()` 复用 `killTree()`（POSIX：进程组 `SIGTERM` → 3s `SIGKILL`；Windows：`taskkill /T /F`），ACP 子进程在 POSIX 以 `detached` 启动以成为进程组组长。agy 会挂上优雅退出钩子并忽略 SIGTERM，旧实现「先 `procs.delete()` 再 `child.kill()`」会把它变成隐形孤儿——2026-11-23 实测 pid 75365 在池遗忘后存活 12+ 分钟，每 60s 刷 `You are not logged into Antigravity`，并带着 6 个 MCP 子进程。
+  - **残留对账（strays）**：`AcpSessionPool` 的 60s sweep 调用 `sweepStrays(now, true)`——只匹配 `parentPid === process.pid` 且命令形态为 `agy[.exe] acp …` 的**直系**子进程，排除 live/draining 跟踪集合，先杀后代再杀根（避免 MCP 子进程被 reparent 后长存）。`status()` 以 15s 节流刷新：池内还有 live/draining 进程时只观察不杀（读徽标不得有副作用）；池内为空时同一次扫描可直接回收——此刻不存在任何合法属主，而空闲孤儿会拿着已失效的凭据继续轮询 Google，并同时回报 `strayProcesses` / `strayPids` / `reapedStrays`。第二个 DSH 实例或终端里的 `agy` 因 parentPid 不符永不被误杀。
+  - **徽标必须描述机器，不是池内 map**：控制台「n 进程 · m 会话」的 n = `activeProcesses + drainingProcesses + strayProcesses`，draining/stray 非零时追加说明。只数池内 map 正是 2026-11-23「面板显示 1 进程、实际 2 个 agy acp」的根因。
 - **CLI 参数透传（`src/provider/attempt.ts`, `src/host/oneshot.ts`）**：
   - 支持结构化透传 `--agent`（`agent` / `agyAgent`）、`--settings`（`agySettings`）、`--json-schema`（`agyJsonSchema` / `schemaArgs()` 自动写临时 schema 并清理）与 `--sandbox`。
 - **跨回合后台唤醒（`src/features/background/watcher.ts`, `BackgroundWakeWatcher`）**：
   - **opt-in**：`backgroundWakeup` 默认 `false`；未显式开启（设置页「跨回合后台自动唤醒」/ `/agy config wakeup on` / `DSH_AGY_BACKGROUND_WAKEUP=1`）时下列保留与唤醒逻辑一律不启动。ACP 常驻进程的回合后保留（`retainSession` / `attachAcpWatch`）同样受这一个开关控制，`transport` 只决定走哪条通道，两者不互相隐式启用。
   - 当回合结束前触发过一次性 `schedule`（`DurationSeconds > 0` 且未在同回合内完成）、存在 `RUNNING` 后台工具/`SUBAGENT_STATE_ALIVE` 子代理或 ACP 后台会话时，宿主按 `backgroundWakeupTtlMinutes` / `backgroundWakeupMaxPerSession` 保留计时器与 `.system_generated/` + ACP 会话监听，并在不归档、无活跃 `liveRun`、`agent.status !== 'running'` 且无重复入队 notice 时通过 `sessionController.resolveAgent` + `agent.followup(createUserMessage({ source: { kind: 'plugin:agy-link', form: 'notice', summary } }))` 唤醒 DSH 会话；`AcpSessionPool.evictIdle()` 对受保留的后台 ACP 会话豁免空闲超时驱逐。唤醒通知的来源必须使用生产者自有 kind（`src/common/agy-link-source.ts` 的 `plugin:agy-link`）；会话格式 v4 会拒绝已退役的 `{ kind: 'plugin', plugin: 'agy-link' }` 包装并在落盘前丢弃整批消息。
-- **锚点**：`test/acp.test.ts`、`test/mcp-ready-disposal.test.ts`、`test/http-contract.test.ts`、`test/background-followup-wakeup.test.ts`。
+- **锚点**：`test/acp.test.ts`、`test/acp-kill-tree.test.ts`（忽略 SIGTERM 的子进程+孙进程必须真死）、`test/acp-strays.test.ts`（命令形态/直系筛选/杀序）、`test/acp-pool-strays.test.ts`（status 只观察、evictIdle 才杀、draining 不误杀）、`test/mcp-ready-disposal.test.ts`、`test/http-contract.test.ts`、`test/background-followup-wakeup.test.ts`。
 
 ## 6. `agy_tool` 镜像工具活性守卫与 `UNKNOWN_TOOL` 误报消除
 

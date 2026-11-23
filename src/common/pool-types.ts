@@ -92,8 +92,21 @@ export interface ManagedAccount {
   authError?: string
   /** When authRequired was last set (drives the background re-verification cadence). */
   authMarkedAt?: number
+  /**
+   * Consecutive background re-verifications that failed to disprove the flag.
+   * Drives an exponential back-off (2m → 4m → 8m → 16m → 30m) so a genuinely
+   * dead login is not re-probed every two minutes, while a transient false
+   * positive heals on the first attempt.
+   */
+  authReverifyAttempts?: number
   /** Cooldown state tracked per model family. */
   cooldowns: Partial<Record<ModelFamily, FamilyCooldownState>>
+  /**
+   * Cooldown state tracked per MODEL (base slug), for quota buckets that belong
+   * to a single model rather than the family — e.g. `gemini-3.1-flash-image`.
+   * A model-scoped 429 must never leave the family's OTHER models unavailable.
+   */
+  modelCooldowns?: Record<string, FamilyCooldownState>
   /** Cached real-time quota statistics per model family. */
   quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>
   /**
@@ -397,6 +410,22 @@ export const AUTH_CONFIRM_STRIKES = 2
 export const AUTH_REVERIFY_DELAY_MS = 10 * 60_000
 
 /**
+ * First re-verification delay for a fresh flag. The hourly pool poll used to be
+ * the ONLY re-check, so a transient mis-classification painted a red 需重新登录
+ * badge for up to ~70 minutes on a healthy account (reported 2026-11-23).
+ */
+export const AUTH_FAST_REVERIFY_MS = 2 * 60_000
+
+/** Upper bound of the re-verification back-off (a dead login is still retried). */
+export const AUTH_REVERIFY_MAX_MS = 30 * 60_000
+
+/** Exponential re-verification back-off: 2m, 4m, 8m, 16m, then 30m. */
+export function authReverifyDelayMs(attempts: number): number {
+  const n = Number.isFinite(attempts) ? Math.max(0, Math.floor(attempts)) : 0
+  return Math.min(AUTH_FAST_REVERIFY_MS * 2 ** Math.min(n, 4), AUTH_REVERIFY_MAX_MS)
+}
+
+/**
  * A flagged account whose flag is old enough (or whose flag predates the
  * authMarkedAt bookkeeping) may be re-verified in the background. If the
  * stored token still works the flag clears itself; if not, the flag is
@@ -407,7 +436,11 @@ export function isTerminalAuthError(message?: string): boolean {
   return typeof message === 'string' && /\bTOS_VIOLATION\b|violation of Terms of Service/i.test(message)
 }
 
-export function needsAuthReverify(account: ManagedAccount, now = Date.now()): boolean {
+export function needsAuthReverify(
+  account: ManagedAccount,
+  now = Date.now(),
+  delayMs = AUTH_REVERIFY_DELAY_MS,
+): boolean {
   if (!account.enabled) return false
   if (!account.authRequired) return false
   // A TOS-banned account still has a working refresh token, so the 10-minute
@@ -415,7 +448,7 @@ export function needsAuthReverify(account: ManagedAccount, now = Date.now()): bo
   // wait for an explicit re-login / appeal, not a background poll (issue #114).
   if (isTerminalAuthError(account.authError)) return false
   if (typeof account.authMarkedAt !== 'number') return true
-  return now - account.authMarkedAt > AUTH_REVERIFY_DELAY_MS
+  return now - account.authMarkedAt > delayMs
 }
 
 /** Compute real-time health indicator for an account. */

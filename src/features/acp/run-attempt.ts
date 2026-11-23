@@ -39,10 +39,13 @@ import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState }
 import { rebuildAcpSession } from './rebuild.ts'
 import {
   finishAcpAttempt,
+  identityFailureKind,
   settleEarlyAbort,
+  settleIdentityFailure,
   type AcpPromptOutcome,
 } from './settle.ts'
 import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
+import { reportAcpCacheTurn } from './cache-turn.ts'
 
 /**
  * How long we watch a fresh ACP turn for its first event before handing the
@@ -104,8 +107,9 @@ async function runAcpPrompt(opts: {
   sid: string
   prompt: string
   onFirstOutput?: () => void
+  sessionStatus: 'created' | 'resumed' | 'loaded' | 'cached' | 'rebuilt'
 }): Promise<AcpPromptOutcome> {
-  const { deps, input, recorder, proc, sid, prompt, onFirstOutput } = opts
+  const { deps, input, recorder, proc, sid, prompt, onFirstOutput, sessionStatus } = opts
   const { cfg, account } = input
   const startedAt = Date.now()
   const streamState = createAcpStreamState()
@@ -136,6 +140,7 @@ async function runAcpPrompt(opts: {
   const subTracker = !input.isAux && sid !== ''
     ? new SubagentTracker({
         conversationId: sid,
+        sessionKey: input.sessionKey,
         resumed: Boolean(input.binding?.conversationId),
         accountHome: recorder.rec.accountHome,
         log: deps.log,
@@ -216,14 +221,20 @@ async function runAcpPrompt(opts: {
       })
     let result = await runOnePrompt(prompt, true)
     subTracker?.flush()
-    if (usageTailer && flushTranscriptUsage() === 0 && recorder.rec.lastUsage !== null) {
-      await new Promise((r) => setTimeout(r, 60))
-      flushTranscriptUsage()
+    // agy flushes transcript.jsonl asynchronously: on a single-call turn the
+    // last PLANNER_RESPONSE line can land a few ms after the prompt resolves.
+    // Retry a bounded handful of times (only when nothing new arrived) so the
+    // per-call sample wins over the cumulative result envelope (context bug).
+    if (usageTailer) {
+      for (let attempt = 0; attempt < 4 && flushTranscriptUsage() === 0; attempt++) {
+        await new Promise((r) => setTimeout(r, 40))
+      }
     }
     let liveQf = quotaCtrl.failoverState()
     if (liveQf !== null) {
       throw new Error(liveQf.rawErrorText)
     }
+    let selfHealed = false
     let resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText, streamState.lastContextUsed)
     if (
       !input.isAux &&
@@ -231,6 +242,7 @@ async function runAcpPrompt(opts: {
       !quotaCancelled &&
       shouldSelfHealAcpResult(resEv, { sawText, sawThinking, sawTools })
     ) {
+      selfHealed = true
       deps.log?.(`acp self-heal: retrying empty/invalid model output on same session ${sid}`)
       streamState.accumulatedText = ''
       result = await runOnePrompt('Continue and provide your response.', false)
@@ -244,6 +256,16 @@ async function runAcpPrompt(opts: {
     }
     recorder.rec.append(resEv)
     input.agyOnEvent?.(resEv)
+    if (!input.isAux) {
+      reportAcpCacheTurn({
+        deps,
+        input,
+        sessionStatus,
+        lastUsage: recorder.rec.lastUsage,
+        envelopeUsage: resEv.kind === 'result' ? resEv.usage : undefined,
+        selfHealed,
+      })
+    }
     if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
       throw new Error(resEv.error ?? 'ACP prompt returned error without response')
     }
@@ -389,9 +411,18 @@ export async function runAcpAttempt(
     telemetryFlags: cfg.disableTelemetry,
   })
 
+  // Isolated accounts must authenticate from their OWN token file. If that
+  // token is stale agy may fall back to the machine-wide keyring and silently
+  // run as another account (observed 2026-11-23: "authenticated via keyring",
+  // empty email, then an empty turn). Refresh it first.
+  if (account && account.dir && !account.systemHome && deps.ensureFreshToken) {
+    const fresh = await deps.ensureFreshToken(account).catch(() => false)
+    if (!fresh) deps.log?.('acp: isolated token for ' + account.id + ' could not be refreshed — agy may fall back to the system keyring')
+  }
   let proc!: AcpProcess
   let sid = ''
   let prompt = input.prompt
+  let openedStatus: 'created' | 'resumed' | 'loaded' | 'cached' | 'rebuilt' = 'created'
   const usesSharedSlot =
     process.platform === 'win32'
     && !(account?.dir && !account.systemHome && supportsSshIsolation(deps.agyVersion?.() ?? null))
@@ -411,6 +442,7 @@ export async function runAcpAttempt(
         agent: (input.agent ?? cfg.agent).trim(),
         preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
         ...(account?.email ? { expectedEmail: account.email } : {}),
+        ...(account?.dir && !account.systemHome ? { expectedIsolated: true } : {}),
         usesSharedSlot,
       })
       const resumeId = input.persistBinding ? input.binding?.conversationId : undefined
@@ -426,6 +458,7 @@ export async function runAcpAttempt(
         mode: input.permissionMode,
       })
       sid = opened.sessionId
+      openedStatus = opened.resumeFailed ? 'rebuilt' : opened.status
       if (opened.resumeFailed) {
         const rebuilt = await rebuildAcpSession({ deps, input, proc, previousSid: sid, workspaceRoot })
         sid = rebuilt.sid
@@ -437,19 +470,19 @@ export async function runAcpAttempt(
       if (input.signal?.aborted) {
         return settleEarlyAbort(deps, input, slot, input.binding?.conversationId ?? null, msg)
       }
-      const mismatch = /^ACP identity mismatch/i.test(msg)
-      if (mismatch && !identityRetried && account && deps.reinstallCredentialSlot) {
+      const identityFailure = identityFailureKind(msg)
+      // mismatch = another account in the log (AUTH); unproven = userinfo died on the network (NETWORK).
+      if (identityFailure !== null && !identityRetried && account && deps.reinstallCredentialSlot) {
         identityRetried = true
         deps.log?.(`${msg} — reinstalling the credential slot and retrying the ACP process once`)
         pool.discardProcess(proc)
         if (deps.reinstallCredentialSlot(account)) continue
-        deps.log?.('credential slot could not be reinstalled — failing the turn instead of spending the wrong account')
-        return null
+        return await settleIdentityFailure(deps, input, slot, sid || null, msg, identityFailure)
       }
-      if (mismatch) {
-        deps.log?.(`${msg} — refusing to run on the wrong account`)
+      if (identityFailure !== null) {
+        deps.log?.(`${msg} — ${identityFailure === 'mismatch' ? 'refusing to run on the wrong account' : 'retrying without quarantining the account'}`)
         pool.discardProcess(proc)
-        return null
+        return await settleIdentityFailure(deps, input, slot, sid || null, msg, identityFailure)
       }
       deps.log?.(`acp pre-stream failure (${msg}) — falling back to CLI -p transport`)
       return null
@@ -462,6 +495,7 @@ export async function runAcpAttempt(
   }
 
   const recorder = createAttemptRecorder(deps, cfg, account, sid, !input.isAux)
+  recorder.setTrackerSession?.(input.sessionKey)
   recorder.streamCid = sid
   recorder.startTracker?.()
   recorder.rec.requestAbort = () => proc.cancelSession(sid)
@@ -502,6 +536,7 @@ export async function runAcpAttempt(
     proc,
     sid,
     prompt,
+    sessionStatus: openedStatus,
     onFirstOutput: () => settleGate('stream'),
   })
   promptPromise.then(
@@ -527,6 +562,9 @@ export async function runAcpAttempt(
       result.empty &&
       failure.kind !== 'aborted' &&
       failure.code !== Err.TIMEOUT &&
+      // AUTH failures are not transport-specific: the CLI fallback would use the
+      // same wrong/expired credential and burn another retry budget.
+      failure.code !== Err.AUTH &&
       // A keyring blip would simply repeat on the other transport, and the retry
       // would pay a second credential hand-off for nothing.
       result.keyringJitter !== true &&

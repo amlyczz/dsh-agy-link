@@ -3,11 +3,23 @@
 // hot changes and survives restarts; the env is read per call so a changed
 // process environment is honored without reload.
 import { defaultConfig, type AgyTransportMode, type PermissionMode, type PluginConfig, type WarmupWindowMode } from './types.ts'
+import { MIN_WARMUP_INTERVAL_HOURS } from './timeouts.ts'
 import { readFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 export interface OverridesFile { [key: string]: unknown }
+
+/**
+ * Clamp the scheduled-warmup interval. `0` disables it; anything else is at
+ * least MIN_WARMUP_INTERVAL_HOURS (a pool sweep now spans minutes, so a 1–2h
+ * interval would re-arm before the previous run drains).
+ */
+export function clampWarmupIntervalHours(hours: number): number {
+  const floored = Math.floor(hours)
+  if (!Number.isFinite(floored) || floored <= 0) return 0
+  return Math.min(168, Math.max(MIN_WARMUP_INTERVAL_HOURS, floored))
+}
 
 export function dshHome(): string {
   return process.env.DSH_HOME ?? join(homedir(), '.dsh')
@@ -140,6 +152,7 @@ export function resolveConfig(
     contextWindowDefault: asNum(get('contextWindowDefault')) ?? base.contextWindowDefault,
     maxTokensDefault: asNum(get('maxTokensDefault')) ?? base.maxTokensDefault,
     forwardSystemPrompt: asBool(get('forwardSystemPrompt')) ?? base.forwardSystemPrompt,
+    auxNeutralWorkspace: asBool(get('auxNeutralWorkspace')) ?? base.auxNeutralWorkspace,
     cloakSystemPrompt: asBool(get('cloakSystemPrompt')) ?? base.cloakSystemPrompt,
     digestMaxChars: asNum(get('digestMaxChars')) ?? base.digestMaxChars,
     contextTransferMaxChars: asNum(get('contextTransferMaxChars')) ?? base.contextTransferMaxChars,
@@ -178,6 +191,7 @@ export function resolveConfig(
     warmupDailyTime: asString(get('warmupDailyTime')) ?? base.warmupDailyTime,
     warmupTimezone: asString(get('warmupTimezone')) ?? base.warmupTimezone,
     warmupIntervalHours: asNum(get('warmupIntervalHours')) ?? base.warmupIntervalHours,
+    warmupMaxProbesPerRun: asNum(get('warmupMaxProbesPerRun')) ?? base.warmupMaxProbesPerRun,
     autoTranslate: asBool(get('autoTranslate')) ?? base.autoTranslate,
     translateModel: asString(get('translateModel')) ?? base.translateModel,
     translateEffort: asString(get('translateEffort')) ?? base.translateEffort,
@@ -341,7 +355,12 @@ export function resolveConfig(
     const ih = asNum(env.DSH_AGY_WARMUP_INTERVAL_HOURS)
     if (ih !== undefined && ih >= 0) cfg.warmupIntervalHours = Math.min(168, Math.floor(ih))
   }
-  cfg.warmupIntervalHours = Math.min(168, Math.max(0, Math.floor(cfg.warmupIntervalHours)))
+  if (env.DSH_AGY_WARMUP_MAX_PROBES) {
+    const mp = asNum(env.DSH_AGY_WARMUP_MAX_PROBES)
+    if (mp !== undefined && mp >= 0) cfg.warmupMaxProbesPerRun = Math.floor(mp)
+  }
+  cfg.warmupIntervalHours = clampWarmupIntervalHours(cfg.warmupIntervalHours)
+  cfg.warmupMaxProbesPerRun = Math.min(200, Math.max(0, Math.floor(cfg.warmupMaxProbesPerRun)))
   if (env.DSH_AGY_AUTO_TRANSLATE !== undefined) {
     const at = asBool(env.DSH_AGY_AUTO_TRANSLATE)
     if (at !== undefined) cfg.autoTranslate = at
@@ -379,6 +398,10 @@ export function resolveConfig(
   if (env.DSH_AGY_CLOAK_SYSTEM_PROMPT !== undefined) {
     const csp = asBool(env.DSH_AGY_CLOAK_SYSTEM_PROMPT)
     if (csp !== undefined) cfg.cloakSystemPrompt = csp
+  }
+  if (env.DSH_AGY_AUX_NEUTRAL_WORKSPACE !== undefined) {
+    const anw = asBool(env.DSH_AGY_AUX_NEUTRAL_WORKSPACE)
+    if (anw !== undefined) cfg.auxNeutralWorkspace = anw
   }
   if (env.DSH_AGY_BACKGROUND_WAKEUP !== undefined) {
     const bw = asBool(env.DSH_AGY_BACKGROUND_WAKEUP)

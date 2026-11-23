@@ -15,6 +15,7 @@ import {
   looksLikeAuthVerificationJitter,
   looksLikeEligibilityFailure,
   looksLikeHardRateLimit,
+  isModelScopedQuotaFailure,
   looksLikeNetworkError,
   looksLikeRateLimit,
   looksLikeTosViolation,
@@ -536,7 +537,8 @@ export class TranslationWorkerPool {
       if (account && pool) {
         const resetMs = parseResetDurationMs(errText)
         const resetIso = resetMs ? new Date(this.now() + resetMs).toISOString() : undefined
-        pool.recordFailure(account.id, family, errText, resetIso)
+        if (isModelScopedQuotaFailure(errText)) pool.advanceAccount(account.id, family, resolvedModel)
+        else pool.recordFailure(account.id, family, errText, resetIso)
         if (pool.getActiveAccountId(family) === account.id) {
           pool.advanceAccount(account.id, family, resolvedModel)
         }

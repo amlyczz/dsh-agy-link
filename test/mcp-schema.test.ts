@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 import {
   AGY_ALWAYS_LOAD_META,
   AGY_MCP_SAFE_TOKEN_BUDGET,
+  enforceArrayItems,
   estimateMcpToolsTokens,
   extractMcpContentBlocks,
+  findArraysMissingItems,
   prepareMcpTools,
   sanitizeMcpSchema,
   sanitizeRe2Pattern,
@@ -142,5 +144,56 @@ describe('Slice 4: Reverse MCP Bridge 4x hardening', () => {
       { type: 'text', text: 'Screenshot captured' },
       { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
     ])
+  })
+})
+
+describe('MCP bridge: no array may reach agy without `items`', () => {
+  // Google rejects the WHOLE GenerateContentRequest when a single declaration
+  // is malformed (`...properties[args].items: missing field`), so the bridge
+  // must guarantee the post-condition rather than hope sanitizeNode covered it.
+  const hostile: McpToolDef = {
+    name: 'game_procedural_mesh',
+    dshName: 'mcp__godot__game_procedural_mesh',
+    description: 'build a mesh from raw arrays',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        vertices: { type: 'array', items: { type: 'array', items: { type: 'number' } } },
+        // Plain array with no items at all.
+        args: { type: 'array' },
+        // Array hidden inside a union branch.
+        points: { anyOf: [{ type: 'array' }, { type: 'null' }] },
+        // Array hidden inside additionalProperties.
+        methods: { type: 'object', additionalProperties: { type: 'array' } },
+        // Array behind a $ref whose definition is incomplete.
+        normals: { $ref: '#/$defs/NumList' },
+      },
+      $defs: { NumList: { type: 'array' } },
+    },
+  }
+
+  it('finds the violation in a raw schema (proves the audit can see it)', () => {
+    const found = findArraysMissingItems(hostile.inputSchema)
+    assert.ok(found.length >= 3, `expected several violations, got ${JSON.stringify(found)}`)
+    assert.ok(found.some((p) => p.includes('args')))
+  })
+
+  it('prepareMcpTools output satisfies the post-condition for every tool', () => {
+    const prepared = prepareMcpTools([hostile])
+    assert.equal(prepared.length, 1)
+    assert.deepEqual(findArraysMissingItems(prepared[0]!.inputSchema), [])
+    // The nested shape survives: vertices stays array-of-array-of-number.
+    const props = (prepared[0]!.inputSchema.properties ?? {}) as Record<string, Record<string, unknown>>
+    assert.equal(props.vertices?.type, 'array')
+    assert.deepEqual(props.vertices?.items, { type: 'array', items: { type: 'number' } })
+  })
+
+  it('the guard is idempotent and depth-safe', () => {
+    let deep: Record<string, unknown> = { type: 'array' }
+    for (let i = 0; i < 30; i++) deep = { type: 'object', properties: { child: deep } }
+    const once = enforceArrayItems(deep)
+    assert.deepEqual(findArraysMissingItems(once), [])
+    const twice = enforceArrayItems(once)
+    assert.deepEqual(twice, once)
   })
 })

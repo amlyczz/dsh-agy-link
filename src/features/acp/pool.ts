@@ -2,6 +2,7 @@
 import type { PermissionMode, PluginConfig } from '../../common/types.ts'
 import { slotGuardStats } from '../../domain/credentials/guards.ts'
 import { AcpProcess, type AcpProcessOptions } from './client.ts'
+import { realStrayDeps, reapStrayAcpProcesses, type StrayDeps } from './strays.ts'
 
 /** Default grace window before a draining process is force-closed. */
 const DEFAULT_DRAIN_MS = 10 * 60_000
@@ -11,6 +12,8 @@ const DEFAULT_DRAIN_MS = 10 * 60_000
  * write in half.
  */
 const GRACEFUL_EXIT_MS = 400
+/** How often `status()` may re-read the process table for stray counting. */
+const STRAY_SCAN_OBSERVE_MS = 15_000
 
 /** One session still owed background work by a draining process. */
 export interface AcpDrainSession {
@@ -58,6 +61,11 @@ export interface AcpPoolOptions {
   onDrainClosed?: (info: AcpDrainClosedInfo) => void
   /** Called when the last live or draining process is gone. */
   onIdle?: () => void
+  /**
+   * Process-table hooks for the stray `agy acp` reaper. `null` disables the
+   * sweep (unit tests never signal a real pid); omitted means "real machine".
+   */
+  strays?: StrayDeps | null
 }
 
 interface DrainingEntry {
@@ -91,6 +99,10 @@ export class AcpSessionPool {
   private readonly maxProcesses: number
   private readonly idleTtlMs: number
   private sweepTimer: NodeJS.Timeout | null = null
+  private readonly strays: StrayDeps | null
+  private strayObserved: readonly number[] = []
+  private strayScanAt = 0
+  private reapedStrays = 0
   private drainSeq = 0
   private slotOverwriteDetectedCount = 0
   private lastSlotRecoveryAt: number | null = null
@@ -98,6 +110,9 @@ export class AcpSessionPool {
   constructor(private readonly opts: AcpPoolOptions) {
     this.maxProcesses = opts.maxProcesses ?? 4
     this.idleTtlMs = opts.idleTtlMs ?? 15 * 60_000
+    this.strays = opts.strays === undefined
+      ? (process.env.NODE_TEST_CONTEXT === undefined ? realStrayDeps() : null)
+      : opts.strays
   }
 
   private ensureSweepTimer(): void {
@@ -174,6 +189,8 @@ export class AcpSessionPool {
     preemptAutoUpdate?: boolean
     /** Account this process must authenticate as (gate 2 identity check). */
     expectedEmail?: string
+    /** Account has its own isolated HOME; keyring fallback means wrong account. */
+    expectedIsolated?: boolean
     /** True when this process depends on the shared Windows Credential Manager slot (legacy agy < 1.5). */
     usesSharedSlot?: boolean
   }): AcpProcess {
@@ -213,6 +230,7 @@ export class AcpSessionPool {
       ...(req.agent ? { agent: req.agent } : {}),
       ...(req.preemptAutoUpdate !== undefined ? { preemptAutoUpdate: req.preemptAutoUpdate } : {}),
       ...(req.expectedEmail ? { expectedEmail: req.expectedEmail } : {}),
+      ...(req.expectedIsolated === true ? { expectedIsolated: true } : {}),
       ...(this.opts.log ? { log: this.opts.log } : {}),
     }
     const proc = this.opts.createProcess ? this.opts.createProcess(procOpts) : new AcpProcess(procOpts)
@@ -429,6 +447,58 @@ export class AcpSessionPool {
     return closed
   }
 
+  /** Pids this pool still owns: live + draining. Never stray-killed. */
+  private trackedPids(): Set<number> {
+    const out = new Set<number>()
+    for (const proc of this.procs.values()) {
+      if (proc.pid !== null && proc.pid !== undefined) out.add(proc.pid)
+    }
+    for (const entry of this.draining.values()) {
+      if (entry.proc.pid !== null && entry.proc.pid !== undefined) out.add(entry.proc.pid)
+    }
+    return out
+  }
+
+  /**
+   * Reconcile the machine's process table with what this pool tracks.
+   *
+   * `kill: false` only observes; eviction always passes `kill: true`. A stray is
+   * a DIRECT child of this host, so a second DSH instance or a terminal `agy` is
+   * never a target.
+   */
+  private sweepStrays(now: number, kill: boolean): { strays: readonly number[]; reaped: number } {
+    if (this.strays === null) return { strays: [], reaped: 0 }
+    const input = { parentPid: process.pid, trackedPids: this.trackedPids() }
+    const result = reapStrayAcpProcesses(this.strays, input, { kill })
+    let observed: readonly number[] = result.strays
+    if (kill && result.strays.length > 0) {
+      // The badge must not keep showing the graveyard: recount what survived
+      // the kill instead of trusting the pre-kill table.
+      observed = reapStrayAcpProcesses(this.strays, input, { kill: false }).strays
+      this.reapedStrays += result.strays.length
+      this.opts.log?.(`[acp-pool] reaped ${result.strays.length} stray agy acp process(es): ${result.killed.join(',')}`)
+    }
+    this.strayObserved = observed
+    this.strayScanAt = now
+    return { strays: observed, reaped: kill ? result.strays.length : 0 }
+  }
+
+  /**
+   * Strays seen by the last sweep, refreshed at a badge-poll-friendly rate.
+   *
+   * Reads are side-effect free WHILE the pool owns a process. With an empty pool
+   * the scan is authoritative — no live or draining session can own an `agy acp`
+   * child of this host — so it may reap: an idle stray keeps polling Google with
+   * a credential it no longer has, which is exactly the shape risk control
+   * watches for, and the 60s sweep timer is stopped while the pool is empty.
+   */
+  private observeStrays(now: number): readonly number[] {
+    if (this.strays === null) return []
+    if (this.strayScanAt !== 0 && now - this.strayScanAt < STRAY_SCAN_OBSERVE_MS) return this.strayObserved
+    const poolIdle = this.procs.size === 0 && this.draining.size === 0
+    return this.sweepStrays(now, poolIdle).strays
+  }
+
   evictIdle(now = Date.now()): number {
     let evicted = 0
     for (const [k, p] of [...this.procs.entries()]) {
@@ -439,6 +509,7 @@ export class AcpSessionPool {
       }
     }
     evicted += this.closeFinishedDrains(now)
+    evicted += this.sweepStrays(now, true).reaped
     this.stopSweepTimerIfEmpty()
     return evicted
   }
@@ -475,6 +546,11 @@ export class AcpSessionPool {
     keys: readonly string[]
     drainingProcesses: number
     drainingKeys: readonly string[]
+    /** `agy acp` children this host spawned that the pool no longer owns. */
+    strayProcesses: number
+    strayPids: readonly number[]
+    /** Total strays killed since pool creation. */
+    reapedStrays: number
     slotOverwriteDetectedCount: number
     lastSlotRecoveryAt: number | null
   } {
@@ -486,6 +562,7 @@ export class AcpSessionPool {
       keys.push(k)
     }
     const drainingKeys = [...this.draining.values()].map((e) => e.key)
+    const strayPids = this.observeStrays(Date.now())
     // The credential-slot state machine observes overwrites/recoveries itself;
     // report the union so a host-level recovery is visible from this endpoint.
     const guards = slotGuardStats()
@@ -495,6 +572,9 @@ export class AcpSessionPool {
       keys,
       drainingProcesses: drainingKeys.length,
       drainingKeys,
+      strayProcesses: strayPids.length,
+      strayPids: [...strayPids],
+      reapedStrays: this.reapedStrays,
       slotOverwriteDetectedCount: Math.max(this.slotOverwriteDetectedCount, guards.overwriteDetected),
       lastSlotRecoveryAt: Math.max(this.lastSlotRecoveryAt ?? 0, guards.lastRecoveryAt ?? 0) || null,
     }

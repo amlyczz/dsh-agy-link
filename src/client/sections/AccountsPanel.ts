@@ -12,9 +12,10 @@ import { resolveFamilyActiveIds, resolveFamilyPinnedIds } from './active-account
 import { resolveAccountPlanTier } from '../../common/plan-tier.ts';
 import {
 	QUOTA_FAMILIES,
-	isAccountCriticalAuth,
+	accountAuthState,
 	isAccountFullyCooling,
 	isFamilyCooling,
+	type AccountAuthState,
 	type QuotaFamily,
 } from '../../common/quota-bench.ts';
 import { effortLabel } from '../../common/reasoning.ts';
@@ -84,7 +85,8 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 
 	return accounts.map((acc: ManagedAccount) => {
 		const isPrimary = acc.id === pool?.primaryAccountId;
-		const isAuthRequired = isAccountCriticalAuth(acc);
+		const authState = accountAuthState(acc);
+		const isAuthRequired = authState !== 'healthy';
 		const isFullyCooling = isAccountFullyCooling(acc, now);
 		const isSyncing = loadingAction === `refresh:${acc.id}` || loadingAction === 'refresh:all' || quotaRefreshing.includes(acc.id);
 		const isWarming = loadingAction === `warmup:${acc.id}` || (warmupState?.running === true && warmupState.activeAccountIds.includes(acc.id));
@@ -98,7 +100,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		);
 		const hasPinnedFamily = frameFamilies.some((fam) => pinnedIds[fam] === acc.id);
 		const hasPredictedFamily = !hasPinnedFamily && frameFamilies.length > 0;
-		const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : isFullyCooling ? '#f59e0b' : '#10b981';
+		const dotColor = !acc.enabled ? '#64748b' : authState === 'review' ? '#f59e0b' : isAuthRequired ? '#ef4444' : isFullyCooling ? '#f59e0b' : '#10b981';
 		const isEditingProxy = editingProxyId === acc.id;
 		const isEditingAlias = editingAliasId === acc.id;
 		const isExpanded = expandedModels[acc.id] ?? false;
@@ -118,10 +120,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			} : {}),
 			...(!acc.enabled ? { opacity: 0.72 } : {}),
 		};
-		const legacyDefault = acc.defaultAlias === undefined && acc.systemHome && acc.alias === '主账号 (系统登录)';
-		const displayAlias = acc.defaultAlias || legacyDefault
-			? acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accIndex + 1 })
-			: acc.alias;
+		const displayAlias = accountDisplayAlias(acc, accIndex, t);
 
 		const childModels = buildAccountModelRows(acc, accountModels?.[acc.id]);
 		const renderQuotaBar = (label: string, familyKey: QuotaFamily): unknown => {
@@ -152,7 +151,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			style: cardStyle,
 		},
 			renderCardHeader(t, acc, {
-				isPrimary, isAuthRequired, dotColor, isEditingProxy, isSyncing, isWarming, isEditingAlias,
+				isPrimary, isAuthRequired, authState, dotColor, isEditingProxy, isSyncing, isWarming, isEditingAlias,
 				displayAlias, accountModelIds: accountModels?.[acc.id]?.map((m) => m.id), accIndex, accounts, pool, loadingAction, accountActionBusy, handlers, setEditingProxyId, setEditingAliasId,
 			}),
 			h('div', { key: 'agy-body', style: S.quotaBox },
@@ -188,9 +187,18 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 	});
 }
 
+/** Card label: a generated default alias is re-rendered in the active locale. */
+function accountDisplayAlias(acc: ManagedAccount, accIndex: number, t: Translator): string {
+	// `defaultAlias === undefined` on legacy rows still carrying the old Chinese default.
+	const legacyDefault = acc.defaultAlias === undefined && acc.systemHome && acc.alias === '主账号 (系统登录)';
+	if (!acc.defaultAlias && !legacyDefault) return acc.alias;
+	return acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accIndex + 1 });
+}
+
 interface CardHeaderCtx {
 	isPrimary: boolean;
 	isAuthRequired: boolean;
+	authState: AccountAuthState;
 	dotColor: string;
 	isEditingProxy: boolean;
 	isEditingAlias: boolean;
@@ -242,12 +250,24 @@ function renderPlanTierBadge(t: Translator, tier: AccountPlanTier | undefined): 
 }
 
 function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderCtx): unknown[] {
-	const { isAuthRequired } = ctx;
+	const { isAuthRequired, authState } = ctx;
 	const planTier = resolveAccountPlanTier(acc, ctx.accountModelIds);
-	const unavailReason = acc.quotaUnavailable?.reason;
-	const isTos = isAuthRequired && (unavailReason === 'tos_violation' || /\bTOS_VIOLATION\b|violation of Terms of Service/i.test(acc.authError ?? ''));
-	const isValidation = isAuthRequired && !isTos && (unavailReason === 'validation_required' || /\bVALIDATION_REQUIRED\b/i.test(acc.authError ?? ''));
-	const authLabel = isTos ? t('status.tosBanned') : isValidation ? t('status.validationRequired') : t('status.authRequired');
+	// The badge must say which KIND of problem this is: only `relogin`/`tos` mean
+	// "your login is gone". `review` is a flag awaiting proof, so it is amber and
+	// tells the user the plugin is re-checking instead of begging for a re-login.
+	const authLabel = authState === 'tos'
+		? t('status.tosBanned')
+		: authState === 'validation'
+			? t('status.validationRequired')
+			: authState === 'review'
+				? t('status.authReview')
+				: t('status.authRequired');
+	const authColor = authState === 'review'
+		? { color: '#b45309', borderColor: '#fcd34d', bg: 'rgba(245, 158, 11, 0.14)' }
+		: { color: '#ef4444', borderColor: '#fca5a5', bg: 'var(--agy-badge-email-bg)' };
+	const authTitle = authState === 'review'
+		? `${acc.authError || authLabel} · ${t('status.authReviewHint')}`
+		: (acc.authError || authLabel);
 	const actionUrl = isAuthRequired
 		? (extractActionUrl(acc.authError) ?? (typeof acc.quotaUnavailable?.actionUrl === 'string' && acc.quotaUnavailable.actionUrl.startsWith('https://') ? acc.quotaUnavailable.actionUrl : undefined))
 		: undefined;
@@ -281,12 +301,12 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 		}, uiIcon('globe', 10, 'var(--agy-badge-proxy-text)'), t('status.proxy')) : null,
 		isAuthRequired ? h(actionUrl ? 'a' : 'span', {
 			...(actionUrl ? { href: actionUrl, target: '_blank', rel: 'noopener noreferrer' } : {}),
-			title: acc.authError || authLabel,
+			title: authTitle,
 			style: {
 				...S.badgeTag!,
-				background: 'var(--agy-badge-email-bg)',
-				color: '#ef4444',
-				borderColor: '#fca5a5',
+				background: authColor.bg,
+				color: authColor.color,
+				borderColor: authColor.borderColor,
 				gap: '3px',
 				fontSize: '10px',
 				padding: '1px 5px',
@@ -295,7 +315,7 @@ function renderStatusBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 				flexShrink: 0,
 				textDecoration: actionUrl ? 'underline' : 'none',
 			},
-		}, uiIcon('alert', 10, '#ef4444'), authLabel) : null,
+		}, uiIcon('alert', 10, authColor.color), authLabel) : null,
 		!acc.enabled ? h('span', {
 			style: {
 				...S.badgeTag!,

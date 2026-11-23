@@ -521,8 +521,12 @@ test('an empty ACP turn caused by auth failure is classified as AUTH', async () 
     } finally {
       pool.dispose()
     }
-    assert.equal(rec, null)
-    assert.ok(logs.some((m) => m.includes('acp turn produced no output (AUTH)')), logs.join(' | '))
+    // AUTH is not transport-specific: re-running on the CLI would use the same
+    // bad credential, so the turn settles with an actionable AUTH failure.
+    assert.ok(rec !== null, 'auth failure must settle instead of retrying over CLI')
+    await waitSettled(rec as RunRecording)
+    assert.equal((rec as RunRecording).failureInfo?.code, 'AUTH')
+    assert.equal(logs.some((m) => m.includes('retrying over CLI')), false, logs.join(' | '))
   } finally {
     await cleanupDir(dir)
   }
@@ -606,7 +610,9 @@ test('a second identity mismatch refuses the turn instead of billing the wrong a
     const pool = identityPool(dir, ['other@example.com'], created)
     try {
       const rec = await runWithMode(pool, deps, input, 'chat')
-      assert.equal(rec, null, 'never answer on the wrong account')
+      assert.ok(rec !== null, 'a refused turn still settles (with an error)')
+      await waitSettled(rec as RunRecording)
+      assert.equal((rec as RunRecording).failureInfo?.code, 'AUTH', 'never answer on the wrong account')
       assert.equal(reinstalls, 1, 'exactly one self-heal attempt')
       assert.ok(logs.some((m) => m.includes('refusing to run on the wrong account')), logs.join(' | '))
     } finally {

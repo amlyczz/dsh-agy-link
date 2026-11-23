@@ -29,6 +29,7 @@ Each invariant below is enforced in code AND covered by a regression test.
   - Tool definitions are budgeted under `AGY_MCP_SAFE_TOKEN_BUDGET` (18,000 tokens, safely below `agy`'s 20,000-token hard drop ceiling) by stripping metadata and progressively trimming verbose descriptions without dropping any tool.
   - Regex `pattern` constraints are converted from JS `\uXXXX` / surrogate pairs to Go RE2 `\x{...}`; RE2-incompatible lookarounds/backreferences are downgraded into `description` notes so `agy` never crashes in `"building toolbox"`.
   - `$ref` (with cycle guard), `allOf`, nullable `anyOf`/`oneOf`, `const`, empty `enum`, and item-less arrays are flattened; MCP tool results returning images are forwarded as native MCP `image` + `text` content blocks. (test: `test/mcp-schema.test.ts`)
+  - **`items` 后置不变式（`enforceArrayItems`）**：`prepareMcpTools()` 在清洗之后再走一遍全树，任何 `type: "array"` 缺 `items` 一律补 `{type:"string"}`。原因：Gemini 对 function declaration 的校验是**整轮**失败——`GenerateContentRequest.tools[0].function_declarations[N].parameters.properties[args].items: missing field` 一条就让整个请求 400，而清洗器会因为 `anyOf` 合并、depth 截断、`$ref` 解析失败等路径漏掉节点。`findArraysMissingItems()` 导出为可审计的检查器。
 
 ## One-shot `agy_ask` file inlining (`src/host/oneshot.ts`)
 

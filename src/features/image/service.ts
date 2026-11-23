@@ -222,6 +222,8 @@ export class ImageService {
     let effort = target.effort
     let effortFallbackUsed = false
     let quotaHopsUsed = 0
+    const quotaModel = (this.deps.imageQuotaModel?.() ?? '').trim()
+    const failedAccounts: string[] = []
     const maxQuotaHops = Math.min(Math.max(0, Math.round(this.deps.poolQuotaHops?.() ?? 0)), 16)
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = this.now()
@@ -233,6 +235,8 @@ export class ImageService {
         permissionMode: req.permissionMode ?? cfg.permissionMode,
         timeoutMs: req.timeoutMs ?? cfg.imageTimeoutMs,
         imagePaths: refs,
+        ...(quotaModel === '' ? {} : { quotaModel }),
+        ...(failedAccounts.length === 0 ? {} : { excludeAccountIds: [...failedAccounts] }),
         ...(signal === undefined ? {} : { signal }),
       })
       last.attempts = attempt + quotaHopsUsed
@@ -244,11 +248,21 @@ export class ImageService {
       }
 
       const reply = res.ok ? parseImageReply(res.text) : { error: undefined }
+      if (res.ok && quotaModel !== '' && res.accountId !== undefined && res.accountId !== '') {
+        this.deps.onModelSuccess?.(res.accountId, quotaModel)
+      }
       const quotaErr = detectHardQuotaError(res, reply.error)
       if (quotaErr !== null) {
         last = { ...last, ok: false, code: 'NO_ACCOUNT', error: quotaErr }
         const errModel = extractQuotaErrorModel(quotaErr) ?? target.model
-        const canSwitch = this.deps.onQuotaExhausted ? this.deps.onQuotaExhausted(res.accountId, errModel, quotaErr) : true
+        // Remember WHO failed so this request rotates locally; the global sticky
+        // pointer is never moved for a model-scoped bucket.
+        if (res.accountId !== undefined && res.accountId !== '' && !failedAccounts.includes(res.accountId)) {
+          failedAccounts.push(res.accountId)
+        }
+        const canSwitch = this.deps.onQuotaExhausted
+          ? this.deps.onQuotaExhausted(res.accountId, errModel, quotaErr, quotaModel === '' ? undefined : quotaModel)
+          : true
         if (canSwitch && quotaHopsUsed < maxQuotaHops) {
           quotaHopsUsed++
           attempt--

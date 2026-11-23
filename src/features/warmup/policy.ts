@@ -79,9 +79,34 @@ export const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000
  */
 export const FAILURE_BACKOFF_MS = 30 * 60 * 1000
 
+/**
+ * A model the CLI reports as retired / unknown / unavailable is not a transient
+ * failure: the family is parked for a day instead of being re-probed every
+ * 30 minutes (which is 48 probes/day on a model that cannot answer at all).
+ */
+export const MODEL_UNAVAILABLE_PARK_MS = 24 * 3600 * 1000
+
+export function isModelUnavailableError(text: string): boolean {
+  return /no longer available|is not available|is retired|unknown model|model not found|not recognized|unsupported model/i.test(text)
+}
+
 /** 1.5–3s randomized gap: a metronomic interval is itself a risk-control signal. */
 export function warmupDelayMs(): number {
   return 1500 + Math.floor(Math.random() * 1500)
+}
+
+/**
+ * Gap between two ACCOUNTS in one run.
+ *
+ * Probing account after account a couple of seconds apart is the single most
+ * farm-like shape a warmup can produce: N Google accounts touched from one
+ * egress IP inside a minute. Real usage never looks like that, so the gap is
+ * minutes, not seconds (30–120s, randomized).
+ */
+export function warmupAccountGapMs(random: () => number = Math.random): number {
+  const min = 30_000
+  const spread = 90_000
+  return min + Math.floor(random() * spread)
 }
 
 /** One family/model the service should probe this run. */
@@ -232,6 +257,8 @@ export function planWarmupTargets(params: {
     const q: FamilyQuotaInfo | undefined = quotas[fam]
     if (!q) continue
     if (!force && isFamilyCooling(account, fam, now)) continue
+    // Parked: the model itself is gone upstream (see MODEL_UNAVAILABLE_PARK_MS).
+    if (!force && isCoolingDown(`${identity}:${fam}:parked`, MODEL_UNAVAILABLE_PARK_MS)) continue
     const model = pickWarmupModelForFamily(fam, monitored, account)
 
     if (checkWeekly) {

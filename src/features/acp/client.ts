@@ -1,17 +1,19 @@
 // Persistent `agy acp` stdio JSON-RPC client process.
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { stateDir } from '../../common/config.ts'
 import type { PermissionMode } from '../../common/types.ts'
 import { preemptAgyAutoUpdate } from '../../host/auto-updater.ts'
+import { killTree } from '../../runtime/agy/process.ts'
 import { consoleOutputEncoding, makeLineDecoder } from '../../runtime/agy/console.ts'
-import { isCmdShim, windowsQuote } from '../../runtime/agy/bin.ts'
-import { nodeScriptEnv, withAgyQuietEnv } from '../../runtime/agy/env.ts'
-import { awaitAuthEmail, readAuthEmailFromLog } from './identity.ts'
+import { withAgyQuietEnv } from '../../runtime/agy/env.ts'
+import { awaitAuthEvidence, classifyIdentity, readAuthEmailFromLog, type AuthEvidence } from './identity.ts'
 import { pickPermissionOption, type JsonRpcResponse } from './protocol.ts'
 import { runAcpTurn, type AcpPromptOptions } from './turn.ts'
+import { collectAdvertisedModelIds } from './session-models.ts'
+import { spawnAcpChild } from './spawn.ts'
 
 export interface AcpProcessOptions {
   bin: string
@@ -34,6 +36,8 @@ export interface AcpProcessOptions {
    * process is silently spending someone else's quota.
    */
   expectedEmail?: string
+  /** Account has its own isolated HOME; a keyring fallback means the wrong account. */
+  expectedIsolated?: boolean
 }
 
 /** How a requested session id was resolved when the session was opened. */
@@ -59,21 +63,6 @@ interface PendingRpc {
   timer?: NodeJS.Timeout
 }
 
-function spawnAcpChild(opts: AcpProcessOptions, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
-  const isWin = process.platform === 'win32'
-  if (isWin && isCmdShim(opts.bin)) {
-    return spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', [opts.bin, ...args].map(windowsQuote).join(' ')], {
-      cwd: opts.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsVerbatimArguments: true, windowsHide: true,
-    })
-  }
-  if (/\.(?:m?js|cjs)$/i.test(opts.bin)) {
-    return spawn(process.execPath, [opts.bin, ...args], {
-      cwd: opts.cwd, env: nodeScriptEnv(env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-    })
-  }
-  return spawn(opts.bin, args, { cwd: opts.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
-}
-
 export class AcpProcess extends EventEmitter {
   private child: ChildProcess | null = null
   private nextId = 1
@@ -87,6 +76,8 @@ export class AcpProcess extends EventEmitter {
   // again on every turn, so an unchanged turn used to re-apply its settings
   // before each prompt (issue #167).
   private readonly sessionConfigs = new Map<string, { mode: string; model: string; effort: string }>()
+  /** Advertised model ids per session (atomic `${model}-${effort}` switch). */
+  private readonly sessionModels = new Map<string, Set<string>>()
   private buffer = ''
   /**
    * Rolling stderr window plus absolute character offsets, so a failure can be
@@ -102,7 +93,7 @@ export class AcpProcess extends EventEmitter {
   private authEmail: string | null = null
   /** The identity probe already ran for this process — never wait on it twice. */
   private identityProbeDone = false
-  private identityProbe: Promise<string | null> | null = null
+  private identityProbe: Promise<AuthEvidence> | null = null
   private alive = false
   private supportsInlineImages = false
   private readonly rebuiltSessions = new Set<string>()
@@ -114,6 +105,8 @@ export class AcpProcess extends EventEmitter {
   }
 
   isAlive(): boolean { return this.alive && this.child !== null }
+  /** Live child pid, or null before start / after exit (stray reconciliation). */
+  get pid(): number | null { return this.child?.pid ?? null }
   get sessionCount(): number { return this.openSessions.size }
   /** Tail of the process stderr (diagnostics / crash messages). */
   get stderr(): string { return this.stderrBuffer.slice(-4096) }
@@ -232,6 +225,7 @@ export class AcpProcess extends EventEmitter {
       this.pending.clear()
       this.openSessions.clear()
       this.sessionConfigs.clear()
+      this.sessionModels.clear()
       this.emit('exit', code, sig)
     })
     child.on('error', (err) => {
@@ -368,6 +362,7 @@ export class AcpProcess extends EventEmitter {
     try {
       const r = await this.request('session/resume', { sessionId, cwd, mcpServers: [] }, 30_000)
       const sid = typeof r.sessionId === 'string' && r.sessionId !== '' ? r.sessionId : sessionId
+      this.rememberModels(sid, r)
       return { sessionId: sid, status: 'resumed' }
     } catch {
       // -32603 cannot distinguish "wrong account" from "no such session";
@@ -392,6 +387,7 @@ export class AcpProcess extends EventEmitter {
     try {
       const r = await this.request('session/load', { sessionId, cwd, mcpServers: [] }, 30_000)
       const sid = typeof r.sessionId === 'string' && r.sessionId !== '' ? r.sessionId : sessionId
+      this.rememberModels(sid, r)
       // Give the replay a moment to arrive before judging it.
       if (replayed === 0) await new Promise((r2) => setTimeout(r2, 300))
       if (replayed === 0 && cachedReadTokens === 0) return null
@@ -437,6 +433,7 @@ export class AcpProcess extends EventEmitter {
       const r = await this.request('session/new', params, 30_000)
       sid = typeof r.sessionId === 'string' ? r.sessionId : ''
       if (sid === '') throw new Error('ACP session/new returned empty sessionId')
+      this.rememberModels(sid, r)
       if (opts.resumeId && sid !== opts.resumeId) {
         this.rebuiltSessions.add(sid)
       }
@@ -444,6 +441,12 @@ export class AcpProcess extends EventEmitter {
     this.openSessions.add(sid)
     await this.applySessionConfig(sid, opts)
     return { sessionId: sid, status, resumeFailed }
+  }
+
+  /** Record the model ids a session advertises for the atomic switch path. */
+  private rememberModels(sid: string, r: Record<string, unknown>): void {
+    const ids = collectAdvertisedModelIds(r)
+    if (ids.size > 0) this.sessionModels.set(sid, ids)
   }
 
   /**
@@ -465,12 +468,25 @@ export class AcpProcess extends EventEmitter {
       await this.request('session/set_mode', { sessionId: sid, modeId: mode }, 15_000).catch(() => undefined)
     }
     const modelChanged = model !== '' && prev?.model !== model
+    // Prefer ONE atomic switch when the server advertises an id that already
+    // carries the effort (`gemini-4-hydrogen-xhigh`). agy's model switch resets
+    // thought_level to the new model's default, so the two-step path needs a
+    // follow-up call; the atomic one does not (issue #167 suggestion).
+    let appliedAtomically = false
     if (modelChanged) {
-      await this.request('session/set_config_option', { sessionId: sid, configId: 'model', value: model }, 15_000)
-        .catch(() => undefined)
+      const atomicId = effort !== '' && !model.endsWith('-' + effort) ? `${model}-${effort}` : model
+      if (this.sessionModels.get(sid)?.has(atomicId)) {
+        appliedAtomically = await this.request('session/set_model', { sessionId: sid, modelId: atomicId }, 15_000)
+          .then(() => true)
+          .catch(() => false)
+      }
+      if (!appliedAtomically) {
+        await this.request('session/set_config_option', { sessionId: sid, configId: 'model', value: model }, 15_000)
+          .catch(() => undefined)
+      }
     }
     const effortToSend = effort !== '' ? effort : modelChanged ? '' : (prev?.effort ?? '')
-    if (effortToSend !== '' && (modelChanged || prev?.effort !== effortToSend)) {
+    if (!appliedAtomically && effortToSend !== '' && (modelChanged || prev?.effort !== effortToSend)) {
       await this.request('session/set_config_option', { sessionId: sid, configId: 'thought_level', value: effortToSend }, 15_000)
         .catch(() => undefined)
     }
@@ -500,13 +516,16 @@ export class AcpProcess extends EventEmitter {
     if (expected === '') return
     if (this.authEmail !== null) return this.checkIdentity(this.authEmail, expected)
     if (this.identityProbeDone) return
-    this.identityProbe ??= awaitAuthEmail(this.logFile, () => this.isAlive()).finally(() => {
+    this.identityProbe ??= awaitAuthEvidence(this.logFile, () => this.isAlive()).finally(() => {
       this.identityProbeDone = true
     })
-    const actual = await this.identityProbe
-    if (actual === null) return
-    this.authEmail = actual
-    this.checkIdentity(actual, expected)
+    const evidence = await this.identityProbe
+    // Only a DIFFERENT account in the log is actionable; an identity agy could not
+    // prove because its userinfo lookup died on the network is retried, not flagged.
+    const verdict = classifyIdentity(evidence, expected, this.opts.expectedIsolated === true)
+    if (verdict.kind === 'mismatch' || verdict.kind === 'unproven') throw new Error(verdict.message)
+    if (evidence.email === null) return
+    this.authEmail = evidence.email
   }
 
   private checkIdentity(actual: string, expected: string): void {
@@ -548,20 +567,13 @@ export class AcpProcess extends EventEmitter {
     const c = this.child
     this.child = null
     this.initPromise = null
-    if (c) {
-      try { c.stdin?.end() } catch { /* ignore */ }
-      // Windows: agy spawns helper processes (task shells, subagents). A bare
-      // kill() orphans them, and an orphan keeps writing to the shared
-      // credential slot and to its conversation DB. Kill the whole tree.
-      if (process.platform === 'win32' && c.pid !== undefined) {
-        try {
-          spawn('taskkill', ['/pid', String(c.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-          return
-        } catch {
-          // fall back below
-        }
-      }
-      try { c.kill() } catch { /* ignore */ }
-    }
+    if (!c) return
+    try { c.stdin?.end() } catch { /* ignore */ }
+    // agy spawns helpers (task shells, subagents, MCP servers): a bare kill()
+    // orphans them, and an orphan keeps writing to the shared credential slot
+    // and to its conversation DB. It also ignores SIGTERM while shutting down,
+    // so the pool must escalate — this used to leak a live `agy acp` server on
+    // every eviction (see src/features/acp/strays.ts).
+    killTree(c)
   }
 }

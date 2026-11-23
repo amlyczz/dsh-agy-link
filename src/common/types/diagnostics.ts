@@ -73,6 +73,46 @@ export function looksLikeAiCreditsLow(text?: string): boolean {
 }
 
 /**
+ * A quota refusal scoped to ONE model, not the whole account pool.
+ *
+ * Live signature (agy 1.5.15, image model):
+ *   `ResourceExhausted, HTTP 429: You have exhausted your capacity on this
+ *    model. Your quota will reset after 4h32m32s.`
+ *
+ * `looksLikeHardRateLimit` matches "exhausted your capacity", and the caller
+ * used to cool the whole `google` FAMILY for 4.5 hours even though the family
+ * aggregate still had ~20% and every text model was healthy. A model-scoped
+ * refusal must never remove an account from rotation for other models.
+ */
+export function looksLikeModelScopedCapacity(text?: string): boolean {
+  if (!text) return false
+  return /\b(?:on|for) this model\b|this model(?:'s)?\s+(?:quota|capacity|limit)|model[-\s]specific\s+(?:quota|capacity|limit)/i.test(
+    text,
+  )
+}
+
+/** Models whose quota is not the text family's pool (`generate_image` etc.). */
+export function isModelScopedQuotaTool(toolName: string): boolean {
+  return toolName === 'generate_image'
+}
+
+/** Image-generation model ids carry their own per-model quota. */
+export function isImageModelId(model?: string): boolean {
+  return Boolean(model && /image/i.test(model))
+}
+
+/**
+ * One predicate for "this refusal is about ONE model, not the account's family":
+ * either the prose says so, or the error names an image model. Families must
+ * never be cooled from this.
+ */
+export function isModelScopedQuotaFailure(text?: string): boolean {
+  if (!text) return false
+  if (looksLikeModelScopedCapacity(text)) return true
+  return isImageModelId(extractQuotaErrorModel(text))
+}
+
+/**
  * HARD, server-issued rate-limit signatures — the ONLY patterns allowed to
  * put an account into cooldown. Deliberately narrow: bare `429` or
  * `rate limit` matched incidental substrings in the wild (hash/UUID

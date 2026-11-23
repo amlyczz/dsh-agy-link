@@ -399,6 +399,10 @@ html.agy-modal-open body {
 	   it worse (big fixed layer + shadow re-composited per frame). A 640px panel
 	   needs neither hint; plain overflow: hidden already clips it. */
 }
+/* Settings row: the label column may shrink so long descriptions ellipsize
+   instead of pushing the control cluster off-panel (desktop and modal). */
+.agy-row > :first-child { min-width: 0; }
+
 .agy-submodel-row {
 	display: flex;
 	align-items: center;
@@ -453,35 +457,39 @@ body[data-ds-dark-theme] select.agy-select { color-scheme: dark; }
 		-webkit-overflow-scrolling: touch;
 	}
 
-	/* A flex row may wrap instead of pushing the panel sideways. */
-	.agy-console [style*="display: flex"] { flex-wrap: wrap !important; }
-	/* Label on its own line, the control underneath it. */
-	.agy-console [style*="justify-content: space-between"] {
+	/* Settings rows: label on its own line, controls underneath.
+	   The settings modal is PORTALED to <body>, outside .agy-console, so a
+	   console-scoped selector silently never applied there: the sheet went
+	   full-width while its rows kept the desktop two-column layout and
+	   overflowed. Target the shared row class instead. */
+	.agy-row {
+		flex-wrap: wrap !important;
 		flex-direction: column !important;
 		align-items: stretch !important;
 		gap: 8px !important;
 	}
+	.agy-row > * { min-width: 0 !important; }
 	/* Segmented controls fill the row; every segment shares the width. */
-	.agy-console [style*="agy-seg-group-border"] {
+	:is(.agy-console, .agy-modal-panel) [style*="agy-seg-group-border"] {
 		display: flex !important;
 		width: 100% !important;
 		box-sizing: border-box !important;
 	}
-	.agy-console [style*="agy-seg-group-border"] > button {
+	:is(.agy-console, .agy-modal-panel) [style*="agy-seg-group-border"] > button {
 		flex: 1 1 0 !important;
 		min-width: 0 !important;
 		padding-left: 6px !important;
 		padding-right: 6px !important;
 	}
 	/* Inputs shrink; buttons keep a comfortable tap area. */
-	.agy-console input { min-width: 0 !important; flex: 1 1 140px !important; }
+	:is(.agy-console, .agy-modal-panel) input { min-width: 0 !important; flex: 1 1 140px !important; }
 	/* Settings dropdowns share their row and stretch on a phone. */
-	.agy-console .agy-select { flex: 1 1 0 !important; min-width: 0 !important; max-width: none !important; height: 34px !important; }
-	.agy-console .agy-btn { min-height: 34px; }
+	:is(.agy-console, .agy-modal-panel) .agy-select { flex: 1 1 0 !important; min-width: 0 !important; max-width: none !important; height: 34px !important; }
+	:is(.agy-console, .agy-modal-panel) .agy-btn { min-height: 34px; }
 	/* The family label no longer reserves 140px of a 360px screen. */
-	.agy-console [style*="min-width: 140px"] { min-width: 0 !important; }
+	:is(.agy-console, .agy-modal-panel) [style*="min-width: 140px"] { min-width: 0 !important; }
 	/* Per-model rows may wrap their value under the name. */
-	.agy-console .agy-submodel-row { flex-wrap: wrap; gap: 4px 8px; }
+	:is(.agy-console, .agy-modal-panel) .agy-submodel-row { flex-wrap: wrap; gap: 4px 8px; }
 
 	/* Quota line: window name, percentage badge, and reset info share the first row,
 	   the bar takes the second one — on narrow screens this keeps all info legible

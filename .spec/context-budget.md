@@ -13,6 +13,8 @@
 
 两条 agy 硬约束决定了装配顺序：单条 user 消息按 **192,000 B 从尾部截断**，所以 live request 必须放**最前面**（`wrapLiveRequest`），摘要排在其后；摘要超过阈值就落成文件引用，避免占用这条通道。压缩提示词（`buildCompactionPrompt`）同样先把固定的 `<conversation_history>` 闭合标签与「严禁调用工具」尾注从 `AGY_PROMPT_SAFE_BYTES` 中扣出，再填充锚点与最新回合，确保闭合指令永不被 `buildSpawnArgs` 截尾丢弃。
 
+纯文本辅助调用（`session-title` / `compaction` / `translation`）默认在 `<state>/agy-link/aux-cwd` 这个稳定的空目录里运行（`auxNeutralWorkspace`，默认 true），且不追加 `--add-dir`：这些调用不读文件，却会因落在会话工作区而被迫加载 GEMINI.md/AGENTS.md（每次 1–2 万 token、0% 缓存）。显式配置 `workspaceRoot` 时仍以配置为准。
+
 ### 引用斜杠指令去活化（`defuseQuotedSlashCommands`）
 
 `agy` print 模式会扫描整条 user 消息并展开独立出现的系统斜杠指令（例如历史或技能目录文本里的 `/goal`、`/plan`）；且 `--mode plan` 依赖 `/plan` 展开，不能全局传 `--disable-slash-commands`。因此在构造 `<conversation_history>` 与 `[conversation so far]` 历史摘要时，必须通过 `defuseQuotedSlashCommands()` 把独立的 `agy` 系统斜杠指令（`/goal`、`/plan`、`/compact`、`/schedule`、`/browser`、`/grill-me`、`/teamwork`、`/learn`、`/boost`）改写为 `/ <name>`，同时完整保留文件路径（`/plan/doc.md`、`src/goal.ts`）、URL（`https://example.com/goal`）与带连字符标识符（`/goal-123`），且不触碰 `[CURRENT REQUEST]` 里的实时人类请求。

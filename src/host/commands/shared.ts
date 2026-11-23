@@ -116,6 +116,7 @@ export type CommandHandler = (deps: CommandDeps, ctx: CommandContext) => Promise
 export const HELP = [
   '**/agy** — Antigravity (agy CLI) bridge',
   '- `/agy status` — binary, version, auth, mode, catalog, bindings',
+  '- `/agy cache-stats` (`/agy cache`) — per-day cache hit rate and cold-start reasons',
   '- `/agy pool` / `/agy accounts` — account pool, live quota %, cooldowns',
   '- `/agy goal [status|set <obj>|edit <obj>|pause|resume|complete|clear]` — inspect or control the current DSH goal',
   '- `/agy session [info|clear]` — view or drop the current session agy binding',

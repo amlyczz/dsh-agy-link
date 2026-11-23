@@ -15,43 +15,33 @@ import type {
   WarmupLastRunSnapshot,
   WarmupStatusSnapshot,
 } from '../../common/warmup-types.ts'
-import { acquireCredentialSlot } from '../../host/credential-slot.ts'
-import { StreamJsonParser } from '../../host/parser.ts'
 import type { AccountPoolManager } from '../../host/pool.ts'
 import type { QuotaService } from '../../host/quota.ts'
-import { ensureIsolatedKeychain, probeProcess, resolveAgyBin } from '../../host/runner.ts'
-import { supportsSshIsolation } from '../../runtime/agy/env.ts'
-import { buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { WarmupHistoryStore } from './history.ts'
 import {
+  runWarmupProbe,
+  type WarmupCliDeps,
+  type WarmupProbeContext,
+  type WarmupProbeResult,
+} from './probe.ts'
+import {
   detectSlidingIdleReset,
+  localDayKey,
   isDailyScheduleDue,
   isIntervalScheduleDue,
   type ResetObservation,
 } from './schedule.ts'
 import {
   FAILURE_BACKOFF_MS,
+  isModelUnavailableError,
   FOUR_HOURS_MS,
-  describeWarmupError,
   planWarmupTargets,
   skippedWarmupResult,
-  toCliWarmupModel,
+  warmupAccountGapMs,
   warmupDelayMs,
   type WarmupResult,
   type WarmupTarget,
 } from './policy.ts'
-
-export interface CliProbeOutcome {
-  code: number | null
-  stdout: string
-  stderr: string
-  durationMs: number
-}
-
-export interface WarmupCliDeps {
-  bin?: () => string | null
-  runCliProbe?: (account: ManagedAccount, model: string) => Promise<CliProbeOutcome>
-}
 
 function summarizeWarmupRun(
   scope: 'all' | string,
@@ -114,8 +104,6 @@ export class WarmupService {
   private readonly recentHistory: WarmupAuditEntry[] = []
   private readonly resetObservations = new Map<string, ResetObservation>()
   private readonly slidingIdleKeys = new Set<string>()
-  private lastDailyFiredKey: string | null = null
-  private lastIntervalRunAt: number | null = null
 
   constructor(
     private readonly pool: AccountPoolManager,
@@ -132,130 +120,20 @@ export class WarmupService {
     this.history = historyStore ?? new WarmupHistoryStore()
   }
 
-  private resolveBin(): string | null {
-    const injected = this.cliDeps.bin?.()
-    if (injected) return injected
-    return resolveAgyBin(this.config())
-  }
-
-  private async defaultRunCliProbe(account: ManagedAccount, model: string): Promise<CliProbeOutcome> {
-    const bin = this.resolveBin()
-    if (!bin) {
-      return { code: 127, stdout: '', stderr: 'agy binary not found', durationMs: 0 }
-    }
-    const cfg = this.config()
-    if (account.dir && !account.systemHome) {
-      ensureIsolatedKeychain(account.dir)
-    }
-    const start = Date.now()
-    let slotLease: Awaited<ReturnType<typeof acquireCredentialSlot>>
-    const needsWinSlot =
-      process.platform === 'win32'
-      && process.env.NODE_TEST_CONTEXT === undefined
-      && !(account.dir && !account.systemHome && supportsSshIsolation(this._agyVersion()))
-    if (needsWinSlot) {
-      try {
-        slotLease = await acquireCredentialSlot(account, this.pool, {
-          baseDir: this.pool.dir,
-          proxyUrl: account.proxyUrl?.trim() || this.globalProxy() || undefined,
-          dispatchTimeoutMs: 10_000,
-          parallel: cfg.parallelSameAccount !== false,
-          log: this.log,
-        })
-      } catch (e) {
-        return {
-          code: 1,
-          stdout: '',
-          stderr: `credential slot busy or unavailable: ${String(e)}`,
-          durationMs: Date.now() - start,
-        }
-      }
-    }
-    try {
-      const cliModel = toCliWarmupModel(model)
-      const args = [
-        '--output-format', 'stream-json',
-        '--print-timeout', '1m',
-        '--mode', 'plan',
-        '--model', cliModel,
-      ]
-      if (cliModel.startsWith('gemini-') || cliModel.startsWith('claude-sonnet-5-5') || cliModel.startsWith('claude-opus-5-5')) {
-        args.push('--effort', 'low')
-      }
-      args.push('-p', 'hi')
-      const env = buildAgyEnv({
-        account,
-        cfg: {
-          ...cfg,
-          proxyUrl: cfg.proxyUrl || this.globalProxy() || '',
-        },
-        telemetryFlags: Boolean(cfg.disableTelemetry),
-      })
-      const out = await probeProcess(bin, args, 45_000, undefined, env, cfg.suppressAgyAutoUpdate)
-      return {
-        code: out.code,
-        stdout: out.stdout,
-        stderr: out.stderrTail,
-        durationMs: Date.now() - start,
-      }
-    } finally {
-      try {
-        slotLease?.release()
-      } catch {
-        // best-effort
-      }
-    }
-  }
-
-  /**
-   * Probe one model via the official `agy` CLI and classify terminal ToS /
-   * validation responses safely without false `authRequired` flags.
-   */
-  async probeModel(
-    account: ManagedAccount,
-    modelName: string,
-  ): Promise<{ ok: boolean; status?: number; error?: string; durationMs: number; terminal?: boolean }> {
-    const cliModel = toCliWarmupModel(modelName)
-    const runner = this.cliDeps.runCliProbe ?? ((acc, m) => this.defaultRunCliProbe(acc, m))
-    let raw: CliProbeOutcome
-    try {
-      raw = await runner(account, cliModel)
-    } catch (err) {
-      return { ok: false, error: String(err), durationMs: 0 }
-    }
-
-    const parser = new StreamJsonParser()
-    let responseText = ''
-    for (const ev of [...parser.feed(raw.stdout + '\n'), ...parser.flush()]) {
-      if (ev.kind === 'step' && ev.stepKind === 'text' && ev.text) responseText += ev.text + '\n'
-      if (ev.kind === 'result' && ev.response) responseText += ev.response
-    }
-
-    const combinedText = [parser.stats.lastResultError ?? '', raw.stderr, responseText, raw.stdout].filter(Boolean).join('\n')
-    const described = describeWarmupError(raw.code ?? 0, combinedText)
-    if (described.terminal) {
-      this.pool.markAuthRequired(account.id, described.error)
-      this.log(`[agy-link] warmup: ${account.alias || account.id} hit terminal ToS restriction: ${described.error}`)
-      return { ok: false, status: 403, error: described.error, durationMs: raw.durationMs, terminal: true }
-    }
-
-    if (/VALIDATION_REQUIRED|verify your account/i.test(combinedText)) {
-      return { ok: false, status: 403, error: described.error, durationMs: raw.durationMs }
-    }
-
-    if (/no longer available|is not available|is retired/i.test(combinedText)) {
-      return { ok: false, error: `Model is retired upstream: ${cliModel}`, durationMs: raw.durationMs }
-    }
-
-    if (raw.code === 0 && !parser.stats.lastResultError) {
-      return { ok: true, status: 200, durationMs: raw.durationMs }
-    }
-
+  private probeContext(): WarmupProbeContext {
     return {
-      ok: false,
-      error: (parser.stats.lastResultError || raw.stderr || 'agy warmup probe failed').trim().slice(0, 1000),
-      durationMs: raw.durationMs,
+      pool: this.pool,
+      cfg: this.config,
+      proxy: this.globalProxy,
+      agyVersion: this._agyVersion,
+      log: this.log,
+      ...(this.cliDeps.bin !== undefined ? { bin: this.cliDeps.bin } : {}),
     }
+  }
+
+  /** Probe one model through the official CLI (see ./probe.ts for the policy). */
+  async probeModel(account: ManagedAccount, modelName: string): Promise<WarmupProbeResult> {
+    return runWarmupProbe(this.probeContext(), this.cliDeps, account, modelName)
   }
 
   /** Explicit single-model request (manual trigger). Never marks authRequired on non-terminal errors. */
@@ -360,6 +238,12 @@ export class WarmupService {
         this.history.record(`${identity}:${target.model}:100`, now)
       } else {
         this.history.record(target.failureKey, now)
+        if (isModelUnavailableError(res.error ?? '')) {
+          // Retrying a retired model every 30 minutes is pure footprint: park the
+          // family for a day and let the model catalog catch up.
+          this.history.record(`${identity}:${target.family}:parked`, now)
+          this.log(`[Warmup] ${target.model} is unavailable upstream — parking ${target.family} for 24h`)
+        }
       }
       this.pushAudit({
         timestamp: Date.now(),
@@ -385,11 +269,17 @@ export class WarmupService {
       })
       if (res.terminal) break
       if (i < targets.length - 1) {
-        await new Promise((r) => setTimeout(r, warmupDelayMs()))
+        await this.pause(warmupDelayMs())
       }
     }
 
     return results
+  }
+
+  /** Sleep hook: production timer, no-op in tests (a 7-account run would take minutes). */
+  private pause(ms: number): Promise<void> {
+    if (this.cliDeps.sleep !== undefined) return this.cliDeps.sleep(ms)
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
   isRunning(): boolean {
@@ -516,19 +406,36 @@ export class WarmupService {
     this.activeTotal = accounts.length
 
     try {
+      // Hard ceiling on probes per run. `0` disables the cap. Without it a
+      // 7-account pool × 4 families = 28 probes, all from one egress IP.
+      const budget = Math.max(0, this.config().warmupMaxProbesPerRun ?? 0)
+      let probesRan = 0
       for (let i = 0; i < accounts.length; i++) {
         const acc = accounts[i]!
+        if (budget > 0 && probesRan >= budget) {
+          for (const rest of accounts.slice(i)) {
+            allResults.push(skippedWarmupResult(rest, 'default', 'Run probe budget exhausted'))
+          }
+          this.activeCompleted = accounts.length
+          this.log(`[Warmup] probe budget ${budget} reached — ${accounts.length - i} account(s) deferred to the next run`)
+          break
+        }
         this.currentAccountId = acc.id
         const res = await this.warmupAccount(acc, options)
         allResults.push(...res)
+        probesRan += res.filter((r) => !r.skipped).length
         this.activeCompleted = i + 1
         if (res.some((r) => r.terminal === true)) {
           this.log('[agy-link] warmup: terminal TOS_VIOLATION detected — halting remaining pool warmup as sweep protection')
           break
         }
-        // Only pace between accounts when at least one CLI probe actually ran.
-        if (i < accounts.length - 1 && res.some((r) => !r.skipped)) {
-          await new Promise((r) => setTimeout(r, warmupDelayMs()))
+        // Only pace between accounts when at least one CLI probe actually ran,
+        // and never when the budget is spent (the next tick would skip): a
+        // pointless 2-minute wait is its own kind of damage.
+        // Accounts are minutes apart, not seconds: see warmupAccountGapMs().
+        const moreToProbe = i < accounts.length - 1 && (budget === 0 || probesRan < budget)
+        if (moreToProbe && res.some((r) => !r.skipped)) {
+          await this.pause(warmupAccountGapMs())
         }
       }
       return allResults
@@ -546,21 +453,33 @@ export class WarmupService {
   async runScheduledWarmup(now = Date.now()): Promise<WarmupResult[]> {
     const cfg = this.config()
     if (!cfg.autoWarmup) return []
+    // A manual run (one-click / single account) can last minutes since accounts
+    // are paced apart; a tick that stacked a second sweep on it would double the
+    // probes and fight over `lastRun`. The HTTP route already refuses this, the
+    // scheduler must too.
+    if (this.isRunning()) return []
     const dailyTime = (cfg.warmupDailyTime ?? '').trim()
     const intervalHours = cfg.warmupIntervalHours ?? 0
     if (dailyTime !== '' || intervalHours > 0) {
+      // Schedule anchors live in the durable history file, not in memory: a
+      // plugin reload (or a second host sharing the state dir) used to re-fire
+      // the day's warmup or treat an interval as never-run. The per-family
+      // cooldowns only masked it, so every restart still cost a full scan.
+      const dailyFiredKey = (dayKey: string): string => `schedule:daily:${dayKey}`
+      const todayKey = localDayKey(now, cfg.warmupTimezone ?? '')
+      const alreadyFiredToday = this.history.lastRecordedAt(dailyFiredKey(todayKey)) !== undefined
       const daily = dailyTime !== ''
         ? isDailyScheduleDue({
             dailyTime,
             timezone: cfg.warmupTimezone ?? '',
             now,
-            lastFiredDayKey: this.lastDailyFiredKey,
+            lastFiredDayKey: alreadyFiredToday ? todayKey : null,
           })
         : { due: false, dayKey: '' }
       const intervalDue = isIntervalScheduleDue({
         intervalHours,
         now,
-        lastRunAt: this.lastIntervalRunAt,
+        lastRunAt: this.history.lastRecordedAt('schedule:interval') ?? null,
       })
       if (!daily.due && !intervalDue) {
         // Still observe quotas on scheduled ticks so sliding-idle detection stays current.
@@ -568,8 +487,8 @@ export class WarmupService {
         return []
       }
       const trigger: WarmupAuditEntry['trigger'] = daily.due ? 'daily' : 'interval'
-      if (daily.due && daily.dayKey !== '') this.lastDailyFiredKey = daily.dayKey
-      if (intervalDue) this.lastIntervalRunAt = now
+      if (daily.due && daily.dayKey !== '') this.history.record(dailyFiredKey(daily.dayKey), now)
+      if (intervalDue) this.history.record('schedule:interval', now)
       return this.warmupAllAccounts({ force: false, trigger, now })
     }
     return this.warmupAllAccounts({ force: false, trigger: 'auto', now })

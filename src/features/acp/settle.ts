@@ -148,6 +148,65 @@ export async function finishAcpAttempt(opts: {
   }
 }
 
+/**
+ * Settle a turn that must NOT be retried on the CLI transport (an identity /
+ * credential failure). Re-running it over CLI would pick the same wrong
+ * account and burn more quota; surface an actionable AUTH error instead.
+ */
+export async function settleEarlyFailure(
+  deps: AttemptDeps,
+  input: AttemptInput,
+  slot: AttemptSlot,
+  sid: string | null,
+  failure: AttemptFailure,
+): Promise<RunRecording> {
+  const recorder = createAttemptRecorder(deps, input.cfg, input.account, sid ?? input.binding?.conversationId, false)
+  try {
+    await settleAcpOutcome({
+      deps, input, rec: recorder.rec, account: input.account, sid,
+      failure, durationMs: 0, stderr: '', rawErrText: failure.message, runLogText: '', silentTimeout: false,
+    })
+  } finally {
+    recorder.stop()
+    slot.releaseOnce()
+    deps.clearInFlightPrompt(input.sessionKey, input.prompt)
+    recorder.rec.settle(failure)
+  }
+  return recorder.rec
+}
+
+/** Which identity gate fired, from its message prefix. */
+export function identityFailureKind(message: string): 'mismatch' | 'unproven' | null {
+  if (/^ACP identity unproven/i.test(message)) return 'unproven'
+  if (/^ACP identity mismatch/i.test(message)) return 'mismatch'
+  return null
+}
+
+/**
+ * Settle an identity-gate failure.
+ *
+ * `mismatch` — the log names ANOTHER account (or proves a keyring fallback with
+ * no transport excuse): that login is unusable, so it is AUTH and the account is
+ * flagged. `unproven` — agy fell back to the keyring and its own userinfo lookup
+ * died on the network: nothing is known about the login, so it is a retryable
+ * NETWORK failure that rotates the turn and never writes a 需重新登录 flag (a
+ * false positive there used to cost ~70 minutes of red badge).
+ */
+export async function settleIdentityFailure(
+  deps: AttemptDeps,
+  input: AttemptInput,
+  slot: AttemptSlot,
+  sid: string | null,
+  message: string,
+  kind: 'mismatch' | 'unproven',
+): Promise<RunRecording> {
+  return settleEarlyFailure(deps, input, slot, sid, {
+    kind: 'error',
+    code: kind === 'unproven' ? Err.NETWORK : Err.AUTH,
+    message,
+  })
+}
+
 export async function settleEarlyAbort(
   deps: AttemptDeps,
   input: AttemptInput,
@@ -156,6 +215,7 @@ export async function settleEarlyAbort(
   message: string,
 ): Promise<RunRecording> {
   const recorder = createAttemptRecorder(deps, input.cfg, input.account, sid ?? input.binding?.conversationId, false)
+  recorder.setTrackerSession?.(input.sessionKey)
   const failure: AttemptFailure = { kind: 'aborted', code: Err.AGY_ERROR, message }
   try {
     await settleAcpOutcome({

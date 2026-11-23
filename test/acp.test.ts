@@ -63,7 +63,21 @@ rl.on('line', (line) => {
     return;
   }
   if (msg.method === 'session/new') {
-    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'acp-sess-1' } });
+    const models = process.env.MOCK_ACP_ADVERTISE_MODELS
+      ? { models: { availableModels: [
+          { modelId: 'gemini-4-hydrogen-high' },
+          { modelId: 'gemini-4-hydrogen-xhigh' },
+          { modelId: 'gemini-4-neon-high' },
+        ] } }
+      : {};
+    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'acp-sess-1', ...models } });
+    return;
+  }
+  if (msg.method === 'session/set_model') {
+    if (process.env.MOCK_ACP_RECORD_DIR) {
+      try { appendFileSync(process.env.MOCK_ACP_RECORD_DIR + '/calls.log', msg.method + ' ' + JSON.stringify(msg.params) + '\\n'); } catch {}
+    }
+    send({ jsonrpc: '2.0', id: msg.id, result: {} });
     return;
   }
   if (msg.method === 'session/set_mode' || msg.method === 'session/set_config_option') {
@@ -564,6 +578,52 @@ test('runAcpAttempt streams happy path, falls back cleanly on pre-stream failure
     pool.dispose()
     badPool.dispose()
     crashPool.dispose()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+  }
+})
+
+test('issue #167: an advertised effort-suffixed model id is switched atomically in one call', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-atomic-'))
+  const bin = createMockAcpBin(dir, 'normal')
+  const proc = new AcpProcess({
+    bin,
+    cwd: dir,
+    permissionMode: 'skip',
+    preemptAutoUpdate: false,
+    env: { ...process.env, MOCK_ACP_RECORD_DIR: dir, MOCK_ACP_ADVERTISE_MODELS: '1' },
+  })
+  try {
+    const opened = await proc.openSession({ cwd: dir, model: 'gemini-4-hydrogen', effort: 'xhigh', mode: 'skip' })
+    assert.equal(opened.sessionId, 'acp-sess-1')
+    const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n')
+    const setModel = calls.filter((l) => l.startsWith('session/set_model'))
+    const configCalls = calls.filter((l) => l.startsWith('session/set_config_option'))
+    assert.equal(setModel.length, 1, 'one atomic switch')
+    assert.match(setModel[0] ?? '', /gemini-4-hydrogen-xhigh/)
+    assert.equal(configCalls.length, 0, 'no model→thought_level double switch')
+  } finally {
+    await closeProc(proc)
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+  }
+})
+
+test('issue #167: without an advertised id the two-step config switch still works', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-atomic-fallback-'))
+  const bin = createMockAcpBin(dir, 'normal')
+  const proc = new AcpProcess({
+    bin,
+    cwd: dir,
+    permissionMode: 'skip',
+    preemptAutoUpdate: false,
+    env: { ...process.env, MOCK_ACP_RECORD_DIR: dir },
+  })
+  try {
+    await proc.openSession({ cwd: dir, model: 'gemini-4-hydrogen', effort: 'xhigh', mode: 'skip' })
+    const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n')
+    assert.equal(calls.filter((l) => l.startsWith('session/set_model')).length, 0)
+    assert.equal(calls.filter((l) => l.startsWith('session/set_config_option')).length, 2)
+  } finally {
+    await closeProc(proc)
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
   }
 })

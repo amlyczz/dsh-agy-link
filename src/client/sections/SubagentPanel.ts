@@ -102,27 +102,25 @@ function row(t: (key: string) => string, it: SubagentItem, now: number): unknown
 	)
 }
 
-/** The dropdown body. Pure (takes `now`), so it is unit-testable as markup. */
+/**
+ * The dropdown body. Pure (takes `now`), so it is unit-testable as markup.
+ *
+ * Mirrors DSH's own background-task list: ONLY live work is shown. agy keeps
+ * finished subagent descriptors around (and never flips them off ALIVE), so a
+ * history section here produced a permanent "已结束 45" panel on idle sessions.
+ */
 export function renderSubagentList(
 	t: (key: string) => string,
 	items: readonly SubagentItem[],
 	now: number,
-	expandedFinished: boolean,
 ): unknown {
-	const { running, finished } = groupSubagents(items)
-	const section = (title: string, list: readonly SubagentItem[]): unknown =>
-		h('div', { style: { display: 'flex', flexDirection: 'column', gap: '3px' } },
-			h('div', { style: { fontSize: '10px', fontWeight: 700, color: 'var(--agy-text-secondary)', margin: '2px 2px 0' } }, `${title} ${list.length}`),
-			...list.map((it) => row(t, it, now)),
-		)
-	return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '8px', minWidth: '260px', maxWidth: '340px' } },
-		running.length > 0 ? section(t('subagent.running'), running) : null,
-		finished.length > 0
-			? (expandedFinished
-				? section(t('subagent.finished'), finished)
-				: h('div', { style: { fontSize: '10px', fontWeight: 600, color: 'var(--agy-text-secondary)', margin: '2px' } }, `${t('subagent.finished')} ${finished.length}`))
+	const running = items.filter((it) => it.running)
+	return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '3px', padding: '8px', minWidth: '260px', maxWidth: '340px' } },
+		running.length > 0
+			? h('div', { style: { fontSize: '10px', fontWeight: 700, color: 'var(--agy-text-secondary)', margin: '0 2px 2px' } }, `${t('subagent.running')} ${running.length}`)
 			: null,
-		items.length === 0 ? h('div', { style: { fontSize: '11px', color: 'var(--agy-text-secondary)' } }, t('subagent.empty')) : null,
+		...running.map((it) => row(t, it, now)),
+		running.length === 0 ? h('div', { style: { fontSize: '11px', color: 'var(--agy-text-secondary)' } }, t('subagent.empty')) : null,
 	)
 }
 
@@ -136,7 +134,6 @@ export function SubagentControl(props: {
 }): unknown {
 	const { t, items } = props
 	const [open, setOpen] = useState(false)
-	const [expandedFinished, setExpandedFinished] = useState(false)
 	const [, setTick] = useState(0)
 	const triggerRef = useRef<HTMLElement | null>(null)
 	const panelRef = useRef<HTMLElement | null>(null)
@@ -166,9 +163,12 @@ export function SubagentControl(props: {
 		}
 	}, [open])
 
-	if (items.length === 0) return null
-	const running = items.filter((i) => i.running).length
-	const tint = running > 0 ? '#8b5cf6' : 'var(--agy-text-secondary)'
+	// Idle sessions must not show a count pill at all: agy's descriptor files
+	// outlive the run, so "finished" history is not a reason to occupy the header.
+	const runningItems = items.filter((i) => i.running)
+	if (runningItems.length === 0) return null
+	const runningCount = runningItems.length
+	const tint = '#8b5cf6'
 
 	const trigger = h(Button, {
 		variant: 'pill',
@@ -178,8 +178,8 @@ export function SubagentControl(props: {
 		...(open ? {} : {}),
 		onClick: () => setOpen((v) => !v),
 	},
-		h('span', { style: { color: tint, fontSize: '11px' } }, running > 0 ? '●' : '○'),
-		h('span', { style: { color: tint, fontWeight: 700, fontSize: '10.5px' } }, `${running}/${items.length}`),
+		h('span', { style: { color: tint, fontSize: '11px' } }, '●'),
+		h('span', { style: { color: tint, fontWeight: 700, fontSize: '10.5px' } }, String(runningCount)),
 	)
 
 	let panel: unknown = null
@@ -200,21 +200,14 @@ export function SubagentControl(props: {
 			h('div', {
 				style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '7px 8px 0' },
 			},
-				h('strong', { style: { fontSize: '11.5px', color: 'var(--agy-text-primary)' } }, t('subagent.title')),
+				h('strong', { style: { fontSize: '11.5px', color: 'var(--agy-text-primary)' } }, `${t('subagent.title')} · ${runningCount}`),
 				h('button', {
 					type: 'button',
 					style: { background: 'transparent', border: 'none', color: 'var(--agy-text-secondary)', cursor: 'pointer', fontSize: '11px' },
 					onClick: () => setOpen(false),
 				}, t('console.close')),
 			),
-			renderSubagentList(t, items, Date.now(), expandedFinished),
-			items.some((i) => !i.running)
-				? h('button', {
-					type: 'button',
-					style: { margin: '0 8px 8px', background: 'transparent', border: 'none', color: 'var(--agy-text-secondary)', cursor: 'pointer', fontSize: '10.5px' },
-					onClick: () => setExpandedFinished((v) => !v),
-				}, expandedFinished ? t('subagent.hideFinished') : t('subagent.showFinished'))
-				: null,
+			renderSubagentList(t, runningItems, Date.now()),
 		))
 	}
 

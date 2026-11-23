@@ -21,6 +21,13 @@ createAttemptRecorder(deps, cfg, account, initialConversationId)   src/provider/
 - `EventMapper` 把 `stepKind:'subagent'` 收敛成一条 `[agy subagent]` 横幅 + 逐行进度，避免每个子代理各起一个 reasoning 块；来自 `TaskActivityTracker` 的 `[后台任务 · <taskId>]` / `[后台通知 · <sender>]` 事件走同一通道并喂活看门狗。
 - `SubagentTracker` 现在同时委托 `TaskActivityTracker`（`src/features/subagent/task-activity.ts`）增量 tail 主会话 `.system_generated/tasks/*.log` 与 `.system_generated/messages/{,undelivered/}*.json`，并在 `runAcpAttempt` 与 `runAgyAttempt` 两条传输路径统一启用；`RUNNING` 工具卡片在 `presentMirrorResult` 与 `EventMapper` 保留可结束切卡语义的同时补充后台任务日志/定时器提示。
 
+## 表头可见性（2026-11-23）
+
+- 表头只展示**正在运行**的子代理：`SubagentControl` 在 `running.length === 0` 时返回 `null`，会话空闲时表头不出现计数胶囊。
+- 面板只列运行中的行；**不再有「已结束 N / 展开已结束」**。agy 的子代理描述符会长期保留且状态永远是 `SUBAGENT_STATE_ALIVE`，按描述符做历史列表会让空闲会话永久挂着一个「已结束 45」的面板。
+- 计数格式与 DSH 自带后台任务对齐：`● N`（仅运行数，不含历史总数）；面板标题 `子代理 · N`。
+- 为什么不直接注册成 DSH job：job registry 的 `running + stopping` 上限与 bash 后台任务共享（默认 10），每次结算还会通知 owner（这里是 agy），会注入 agy 从未发起的「后台任务完成」。agy 一轮可起 10+ 子代理，注册会撞 `JOB_LIMIT_REACHED` 并污染模型上下文；因此只复用观感，不共用账本。
+
 ## 2. 不变式
 
 - **增量 tail、UTF-8 跨块安全与续接历史隔离**：每个子代理（以及父对话自身日志 `pollParentTranscript()`）记录 `offset` / `rest` 与 `StringDecoder('utf8')`，按实际 `bytesRead` 切片解码，防止多字节中文在 500ms 轮询边界被截断成乱码或混入未初始化内存。当续接已有会话（无论 `initialConversationId` 在 `start()` 时已就绪还是通过 `setConversationId()` 滞后到达）时，`baselineExisting()` 将父对话日志、既有子代理描述符与 `transcript.jsonl` 基线定在当前状态与末尾字节（EOF），**绝不把历史 `SUBAGENT_STATE_ALIVE` 或历史 `SYSTEM_MESSAGE` 报错残留误报为本轮事件或重复触发切号**；本轮新产生的文件或追加的新行正常从新增处发出。

@@ -102,6 +102,10 @@ export interface ImageAgentCall {
   timeoutMs: number
   /** Reference images (the adapter stages/grant access to their directories). */
   imagePaths: readonly string[]
+  /** Second quota dimension: the image model's own bucket. */
+  quotaModel?: string
+  /** Accounts that already failed this request's quota bucket. */
+  excludeAccountIds?: readonly string[]
   signal?: AbortSignal
 }
 
@@ -135,8 +139,16 @@ export interface ImageServiceDeps {
   catalog?: () => ImageCatalogLike
   /** Extra quota-failover hops available across the enabled account pool (independent of imageRetries). */
   poolQuotaHops?: () => number
-  /** Cool down / rotate after hard quota exhaustion; returns true if another eligible account can be tried. */
-  onQuotaExhausted?: (accountId: string | undefined, model: string, errorText: string) => boolean
+  /**
+   * Record/rotate after hard quota exhaustion. `quotaModel` names the bucket
+   * that actually ran out (the image model); returns true when another eligible
+   * account can be tried.
+   */
+  onQuotaExhausted?: (accountId: string | undefined, model: string, errorText: string, quotaModel?: string) => boolean
+  /** Resolve the image model id whose quota governs this request (e.g. gemini-3.1-flash-image). */
+  imageQuotaModel?: () => string
+  /** A successful run clears a stale model-scoped cooldown for that bucket. */
+  onModelSuccess?: (accountId: string, quotaModel: string) => void
   log?: (msg: string) => void
   now?: () => number
 }

@@ -12,8 +12,13 @@
 // once, and reports a single summary line.
 import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import type { ManagedAccount } from '../common/pool-types.ts'
+import { parseCimDate, pidAlive, readProcessTable, type ProcessRow } from '../runtime/agy/process-table.ts'
+
+// Re-exported so existing diagnostics/scripts keep one import site for the
+// machine process table.
+export { parseCimDate, pidAlive, readProcessTable, type ProcessRow }
 
 /** Presence locks older than this are certainly from finished conversations. */
 export const PRESENCE_LOCK_MAX_AGE_MS = 24 * 60 * 60 * 1000
@@ -49,14 +54,6 @@ export function sweepStalePresenceLocks(accountDir: string, now = Date.now(), ma
     }
   }
   return removed
-}
-
-export interface ProcessRow {
-  pid: number
-  parentPid: number
-  /** Creation time in epoch ms, when the platform reports one. */
-  startedAtMs: number
-  commandLine: string
 }
 
 /** Markers of MCP servers we consider safe to reap once orphaned. */
@@ -96,83 +93,6 @@ export function pickOrphanMcpProcesses(
     out.push(row.pid)
   }
   return out
-}
-
-/** Parse the shapes `ConvertTo-Json` emits for a CIM DateTime. */
-export function parseCimDate(value: unknown): number {
-  if (typeof value !== 'string' || value === '') return 0
-  const ms = /^\/Date\((-?\d+)\)\/$/.exec(value)
-  if (ms) {
-    const n = Number(ms[1])
-    return Number.isFinite(n) && n > 0 ? n : 0
-  }
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-}
-
-/** Read this machine's process table (Windows via CIM, POSIX via ps). Never throws. */
-export function readProcessTable(): ProcessRow[] {
-  try {
-    if (process.platform === 'win32') {
-      const out = execFileSync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          "Get-CimInstance Win32_Process -Filter \"Name='node.exe' OR Name='cmd.exe' OR Name='npx.exe'\" | " +
-            'Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress',
-        ],
-        { encoding: 'utf8', timeout: 8_000, windowsHide: true },
-      ).trim()
-      if (out === '') return []
-      const parsed = JSON.parse(out) as unknown
-      const list = Array.isArray(parsed) ? parsed : [parsed]
-      const rows: ProcessRow[] = []
-      for (const item of list) {
-        const rec = item as Record<string, unknown>
-        const pid = Number(rec.ProcessId)
-        const parentPid = Number(rec.ParentProcessId)
-        if (!Number.isInteger(pid) || !Number.isInteger(parentPid)) continue
-        rows.push({
-          pid,
-          parentPid,
-          startedAtMs: parseCimDate(rec.CreationDate),
-          commandLine: typeof rec.CommandLine === 'string' ? rec.CommandLine : '',
-        })
-      }
-      return rows
-    }
-    const out = execFileSync('ps', ['-eo', 'pid=,ppid=,lstart=,command='], {
-      encoding: 'utf8',
-      timeout: 8_000,
-    })
-    const rows: ProcessRow[] = []
-    for (const line of out.split('\n')) {
-      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.{24})\s(.*)$/)
-      if (!m) continue
-      const started = Date.parse(m[3]!.trim())
-      rows.push({
-        pid: Number(m[1]),
-        parentPid: Number(m[2]),
-        startedAtMs: Number.isFinite(started) ? started : 0,
-        commandLine: m[4] ?? '',
-      })
-    }
-    return rows
-  } catch {
-    return []
-  }
-}
-
-function pidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return (err as NodeJS.ErrnoException)?.code === 'EPERM'
-  }
 }
 
 /** Kill one orphan MCP process. Windows needs `/T /F`; POSIX escalates. */

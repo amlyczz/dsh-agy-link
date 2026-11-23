@@ -18,6 +18,8 @@ export interface SubagentQuotaExhaustedInfo {
   errorText: string
   model?: string
   resetMs?: number
+  /** The refusal is scoped to one model (image model / "on this model"). */
+  modelScoped?: boolean
   role?: string
   conversationId?: string
 }

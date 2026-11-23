@@ -78,12 +78,28 @@ function renderTransportRow(props: RuntimeControlsProps): unknown {
 	const { t, status, loadingAction, setCfg } = props;
 	const transport = status.transport === 'acp' ? 'acp' : 'cli';
 	const acpInfo = status.acpStatus;
+	// The badge must describe the REAL machine, not just the pool's own map:
+	// `activeProcesses` excludes draining children and any stray `agy acp` the
+	// pool lost track of, which is how "1 进程" was shown while two servers ran.
+	const procTotal = acpInfo
+		? (acpInfo.activeProcesses ?? 0) + (acpInfo.drainingProcesses ?? 0) + (acpInfo.strayProcesses ?? 0)
+		: 0;
+	const notes: string[] = [];
+	if (acpInfo && (acpInfo.drainingProcesses ?? 0) > 0) {
+		notes.push(t('config.acpStatsDraining', { draining: acpInfo.drainingProcesses }));
+	}
+	if (acpInfo && (acpInfo.strayProcesses ?? 0) > 0) {
+		notes.push(t('config.acpStatsStray', { stray: acpInfo.strayProcesses }));
+	}
+	const statsLabel = acpInfo === undefined || acpInfo === null
+		? ''
+		: t('config.acpStats', { procs: procTotal, sessions: acpInfo.sessions }) + (notes.length > 0 ? ' ' + notes.join(' ') : '');
 	return h(Row, {
 		style: { gap: '10px', flexWrap: 'wrap' },
 		left: rowCaption(t('config.transport'), t('config.transportDesc')),
 		right: h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
 			transport === 'acp' && acpInfo
-				? h('span', { style: S.badgeTag }, t('config.acpStats', { procs: acpInfo.activeProcesses, sessions: acpInfo.sessions }))
+				? h('span', { style: S.badgeTag, title: t('config.acpStatsHint') }, statsLabel)
 				: null,
 			segGroup([
 				h(Button, {

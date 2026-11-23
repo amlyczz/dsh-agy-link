@@ -68,6 +68,10 @@ export async function runViaAdapter(adapter: AdapterLike, call: ImageAgentCall):
     signal,
     agyImagePrompt: call.prompt,
     agyPermissionMode: call.permissionMode,
+    ...(call.quotaModel === undefined ? {} : { agyQuotaModel: call.quotaModel }),
+    ...(call.excludeAccountIds === undefined || call.excludeAccountIds.length === 0
+      ? {}
+      : { agyAvoidAccountIds: call.excludeAccountIds }),
     agyOnAccount: (info: { id?: string; home?: string }) => {
       if (accountId !== undefined && typeof info.id === 'string' && info.id !== accountId) {
         toolCalls.length = 0

@@ -74,9 +74,33 @@ function localPartsInTimezone(now: number, timezone: string): { dayKey: string; 
   }
 }
 
+/** The local calendar day key at `now` (used by the durable schedule anchors). */
+export function localDayKey(now: number, timezone: string): string {
+  return localPartsInTimezone(now, timezone).dayKey
+}
+
+/**
+ * Extra delay applied to a daily anchor, 0–20 minutes, derived from the day key.
+ *
+ * A warmup that starts at 08:00:00 every single day is a signature: nothing a
+ * human does is that regular. The delay is deterministic per day (two ticks on
+ * the same day must agree, or the run would fire twice), but unpredictable
+ * across days.
+ */
+export const DAILY_JITTER_MAX_MINUTES = 20
+
+export function dailyJitterMinutes(dayKey: string): number {
+  let hash = 0
+  for (let i = 0; i < dayKey.length; i++) {
+    hash = (hash * 31 + dayKey.charCodeAt(i)) % 1_000_003
+  }
+  return hash % (DAILY_JITTER_MAX_MINUTES + 1)
+}
+
 /**
  * Check whether a daily scheduled warmup (`HH:MM` in an optional IANA timezone)
- * is due now and has not yet fired for today's date key.
+ * is due now and has not yet fired for today's date key. The anchor is shifted
+ * by `dailyJitterMinutes(dayKey)` and clamped to the end of the day.
  */
 export function isDailyScheduleDue(opts: {
   dailyTime: string
@@ -89,7 +113,8 @@ export function isDailyScheduleDue(opts: {
   const cur = localPartsInTimezone(opts.now, opts.timezone)
   if (opts.lastFiredDayKey === cur.dayKey) return { due: false, dayKey: cur.dayKey }
   const curMinutes = cur.hour * 60 + cur.minute
-  const targetMinutes = parsed.hour * 60 + parsed.minute
+  // Clamp to 23:59: a 23:55 anchor plus jitter must still fire today.
+  const targetMinutes = Math.min(24 * 60 - 1, parsed.hour * 60 + parsed.minute + dailyJitterMinutes(cur.dayKey))
   return { due: curMinutes >= targetMinutes, dayKey: cur.dayKey }
 }
 

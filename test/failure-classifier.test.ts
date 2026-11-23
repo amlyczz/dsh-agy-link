@@ -52,6 +52,11 @@ test('context window, eligibility, exit code, network, envelope and invalid outp
   assert.equal(classifyFailure(c({ consumable: false, rawErrText: 'context window exceeded' }))?.code, Err.CONTEXT_WINDOW_EXCEEDED)
   assert.equal(classifyFailure(c({ consumable: false, rawErrText: 'User location is not supported' }))?.code, Err.ELIGIBILITY)
   assert.equal(classifyFailure(c({ consumable: false }, { code: 1, stderrTail: 'boom' }))?.code, Err.PROCESS_EXIT)
+  // The ACP path's own exception must survive into the message; the old code
+  // dropped it and showed only "agy exited with code 1".
+  const acpEmpty = classifyFailure(c({ consumable: false, rawErrText: 'ACP prompt returned an empty turn: agy produced no output' }, { code: 1 }))!
+  assert.equal(acpEmpty.code, Err.PROCESS_EXIT)
+  assert.match(acpEmpty.message, /empty turn/)
   assert.equal(classifyFailure(c({ consumable: false, transportFailure: true, rawErrText: 'EOF' }))?.code, Err.NETWORK)
   assert.equal(classifyFailure(c({ consumable: false }, { code: 0 }, { lastResultError: 'model said no' }))?.code, Err.AGY_ERROR)
   assert.equal(classifyFailure(c({ consumable: false }, { code: 0 }))?.code, Err.INVALID_OUTPUT)

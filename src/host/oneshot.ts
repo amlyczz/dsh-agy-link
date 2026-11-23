@@ -9,6 +9,7 @@ import {
   looksLikeAuthFailure,
   looksLikeEligibilityFailure,
   looksLikeHardRateLimit,
+  isModelScopedQuotaFailure,
   looksLikeTosViolation,
   parseResetDurationMs,
   shouldMarkAuthRequired,
@@ -314,6 +315,7 @@ async function runSingleOneShotAttempt(opts: {
     const hardQuota =
       isHardQuotaResultError(resultOk !== false, resultError, resultText)
       || (looksLikeHardRateLimit(rawErr) && !isTransientBurstRateLimit(rawErr))
+    const modelScopedQuota = isModelScopedQuotaFailure(rawErr)
     if (hardQuota) {
       const errModel = extractQuotaErrorModel(rawErr)
       const modelFam = errModel ? modelFamilyOf(errModel) : undefined
@@ -321,7 +323,8 @@ async function runSingleOneShotAttempt(opts: {
       const resetMs = parseResetDurationMs(rawErr)
       const resetIso = resetMs && resetMs > 0 ? new Date(Date.now() + resetMs).toISOString() : undefined
       if (pool && account) {
-        pool.recordFailure(account.id, targetFam, rawErr || 'quota exhausted', resetIso)
+        if (modelScopedQuota) pool.advanceAccount(account.id, targetFam, model)
+        else pool.recordFailure(account.id, targetFam, rawErr || 'quota exhausted', resetIso)
         if (targetFam !== family) pool.advanceAccount(account.id, family, model)
       }
       const errMsg = rawErr || 'Antigravity quota / rate limit reached'

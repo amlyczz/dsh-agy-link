@@ -48,6 +48,17 @@ export const PREFERRED_GEMINI_HYDROGEN = 'gemini-4-hydrogen'
 /** Gemini Pro tier / Argon (Pro & Ultra plans only). */
 export const PREFERRED_GEMINI_ARGON = 'gemini-4-argon'
 
+/**
+ * The image model whose OWN quota bucket `generate_image` consumes.
+ *
+ * It is NOT the model that drives the image turn (`imageModel` config = a chat
+ * model). Google meters image generation against a separate per-model bucket
+ * inside the same `google` family — the quota snapshot exposes it as
+ * `quotas.google.models[].modelId = gemini-3.1-flash-image`. Scheduling must
+ * therefore check that bucket explicitly, and must never cool the family for it.
+ */
+export const PREFERRED_IMAGE_QUOTA_MODEL = 'gemini-3.1-flash-image'
+
 /** Anthropic tier (Sonnet — the default Anthropic pick). */
 export const PREFERRED_CLAUDE = 'claude-sonnet-5-5'
 

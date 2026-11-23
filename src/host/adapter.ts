@@ -1,10 +1,6 @@
-// AgyAdapter — the LlmAdapter implementation at the heart of the plugin
-// (spec section 3). Translates one DSH model call into a short-lived
-// `agy -p --output-format stream-json` child process, maps the NDJSON event
-// stream onto StreamChunks, and binds DSH sessions to agy conversations for
-// multi-turn continuity (ADR-4). Only the trailing user messages become the
-// prompt; earlier context rides agy-native history plus a digest prefix on
-// first bind (ADR-7).
+// AgyAdapter — turns one DSH model call into an agy process/ACP session,
+// maps its event stream onto StreamChunks, and binds DSH sessions to agy
+// conversations for multi-turn continuity (spec §3, ADR-4/ADR-7).
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
@@ -368,6 +364,8 @@ export class AgyAdapter extends LlmAdapter {
       allowAuxModelFallback: isCompaction || isTitle,
       sessionKey,
       ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: String(options.reasoningEffort) }),
+      ...(options.agyQuotaModel === undefined ? {} : { quotaModel: options.agyQuotaModel }),
+      ...(options.agyAvoidAccountIds === undefined ? {} : { avoidAccountIds: options.agyAvoidAccountIds }),
     })
     const account = selection.account
     let family = selection.family
@@ -586,6 +584,8 @@ export class AgyAdapter extends LlmAdapter {
       family,
       signal: options.signal,
       agyOnEvent: options.agyOnEvent,
+      ...(options.agyQuotaModel === undefined ? {} : { quotaModel: options.agyQuotaModel }),
+      ...(options.agyAvoidAccountIds === undefined ? {} : { avoidAccountIds: options.agyAvoidAccountIds }),
       ...resolveAttemptOverrides(options, cfg),
     }
     const rec = yield* runAgyAttempt(attemptDeps, attemptInput)

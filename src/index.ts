@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PROVIDER_ID } from './common/types.ts'
+import { AUTH_FAST_REVERIFY_MS } from './common/pool-types.ts'
 import { defineAgyAskTool } from './host/ask-tool.ts'
 import { defineAgyImageTool } from './host/image-tool.ts'
 import { agyCommandDefinition } from './host/commands.ts'
@@ -473,6 +474,18 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       clearTimeout(boot)
       clearInterval(timer)
     }
+  })
+
+  // Fast self-heal for 需重新登录 flags; only flags past their own back-off run.
+  ctx.effect(() => {
+    if (!getConfig().enabled) return () => undefined
+    let running = false
+    const timer = setInterval(() => {
+      if (running || !getConfig().enabled) return
+      running = true
+      void quota.reverifyFlaggedAccounts().catch(() => undefined).finally(() => { running = false })
+    }, AUTH_FAST_REVERIFY_MS)
+    timer.unref?.(); return () => clearInterval(timer)
   })
 
   // Scheduled weekly quota auto-warmup (opt-in): monitors 7-day quota windows

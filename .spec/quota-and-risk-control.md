@@ -44,6 +44,17 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
    - 先请求 `retrieveUserQuotaSummary` 与 `fetchAvailableModels`；仅当 `fetchAvailableModels` 未携带模型级 `quotaInfo` 时才回退请求 `retrieveUserQuota`（保留 issue #48 修正过期 5h 占位符能力的同时，消除稳态下每次轮询多余的第 3 个内部端点请求）。
    - 后台自动轮询通过 `shouldPollAccount` 跳过已禁用、终态封禁以及**全族冷却（`isAccountFullyCooling`）**的账号；单模型族冷却（例如仅 Gemini 处于 429/本地冷却而 Argon/Claude/GPT 仍健康）绝不阻断其余模型族的轮询与调度；账号间保持 `2000~3500ms` 随机抖动间隔（`staggerJitterMs`）。
    - 预热规划（`planWarmupTargets` / `WarmupService`）按**模型族粒度**判定冷却与激活资格（`isFamilyCooling`）：点击一键预热默认使用 `force: false, ignoreFailureBackoff: true`，只激活已过期且健康的配额窗口，不强探周期中（mid-cycle）窗口、不触碰冷却中的模型族，且整号跳过时不插入账号间休眠延迟。
+   - 预热按**模型族**逐个探测（`account.quotas` 里出现的每个族各一条模型）；`warmupModels` 只决定族内选哪条模型（空数组=全禁），不是白名单。因此「配了 2 条模型」仍可能探 4 个族（google/anthropic/openai/argon）。
+   - **`--effort` 由模型决定，不能按族硬塞**：只有 `gemini-*` 探针接受 `--effort`（Claude/GPT 的档位在模型 slug 里）。探针先查 `effort-unsupported` 学习列表跳过，若仍被 CLI 拒绝（`--effort is not supported for model …`）则**去掉 `--effort` 重试一次并回写学习列表**。教训：2026-11-23 实测 claude-sonnet-5-5 每次都因该参数被本地拒绝，anthropic 族周窗口从未被激活，lastRun 恒为 3 失败。
+   - **账号之间 30–120s 随机间隔**（`warmupAccountGapMs()`），不是 1.5–3s：同出口多号在一分钟内连续点亮是最像号池 farm 的形态。族内探针之间仍是 1.5–3s（单号小爆发，贴近正常使用）。
+   - **单轮探针硬上限** `warmupMaxProbesPerRun`（默认 12，`0` = 不限，env `DSH_AGY_WARMUP_MAX_PROBES`）：超限账号本轮以 `Run probe budget exhausted` 记为 skipped 并留到下次；预算用尽后不再插入无意义的账号间等待。
+   - 设置页暴露 `warmupWindows` / `warmupModels` / `warmupMaxProbesPerRun`（此前窗口模式只能改配置文件），实际值与上限都从 `/status` 读回，避免面板和调度器各说一套。
+   - **自动预热（`autoWarmup`，默认关闭）只在配额窗口「可激活」时触发**：调度器每 5 分钟 tick 一次，是否真探由按族判定决定（周窗口 6 天冷却 / 5h 窗口 4 小时冷却 / 失败 30 分钟退避 / 冷却中的族跳过），所以开启后每周每族最多 1 次，5h 模式约每 4 小时 1 次。
+   - **调度与手动互斥**：`runScheduledWarmup()` 在 `isRunning()` 为真时直接返回（账号间隔 30–120s 意味着一次全池 run 会持续数分钟），否则一次手动预热会被下一个 tick 叠上第二轮全池扫描。
+   - **日锚点带确定性抖动**：`warmupDailyTime` 采用分钟级锚点 + `dailyJitterMinutes(dayKey)`（0–20 分钟，同日稳定、跨日不可预测），避免每天同一分钟准点开跑；锚点钳到 23:59，深夜锚点不会跨日丢失。
+   - **上游下架立即停车**：CLI 报 `retired / no longer available / unknown model` 时写入 `${identity}:${family}:parked`，该族停车 24 小时再试，而不是按 30 分钟退避无限重试（否则一天 48 次无效探针）；手动 force 仍可越过停车。
+   - **调度锚点必须持久化**：日锚点与间隔锚点写入 `warmup-history.json`（`schedule:daily:<dayKey>` / `schedule:interval`），不再只存在内存里。否则插件重载会让间隔模式立刻"到期"、日锚点当天再判一次——按族冷却只是把探针挡住，白跑一轮全池扫描。多宿主共享 state 目录时也靠它去重。
+   - **间隔下限 3 小时**（`MIN_WARMUP_INTERVAL_HOURS`，`0` = 关闭）：一次全池 run 按 30–120s 账号间隔要跑几分钟，1–2 小时的间隔会在上一轮没跑完时重新武装。`common/config.ts` 的 `clampWarmupIntervalHours()` 与配置路由校验共用同一常量。
 
 ## 3. Proto3 零值省略与耗尽态解析
 
@@ -68,6 +79,8 @@ Google Cloud Code PA 使用 Proto3 JSON 序列化：当配额耗尽（`remaining
 
 - `test/quota.test.ts` / `test/domain-quota.test.ts`：CLI `/usage` 主账号放行、REST 按需降级、Proto3 零值省略解析为 `0%`、消费级单一端点。
 - `test/warmup.test.ts`：CLI 探针执行（零 `undici` 推理请求、零 `anthropic-beta` 伪造头）、`TOS_VIOLATION` 终态隔离与 `appeal_url` 保留、非终态错误不误标 `authRequired`。
+- `test/warmup-effort-throttle.test.ts`：claude/gpt 探针不带 `--effort`、学习列表前置生效、被拒后去 effort 重试一次并回写、账号间隔 30–120s、单轮探针上限与 `0` 关闭语义。
+- `test/warmup-auto-schedule.test.ts`：调度 tick 不与运行中的预热叠加、日锚点抖动 0–20 分钟且同日稳定、上游下架模型停车 24 小时（force 可越权）、锚点跨重载持久化、间隔下限 3h。
 - `test/failure-classifier.test.ts` / `test/rate-limit-classify.test.ts`：CLI 文本 `TOS_VIOLATION` 识别与停止跨号连坐重试。
 - `test/quota-availability.test.ts`：端点健康 TTL 与置后不丢弃、403 license 分类为 `no_license`、`quotaUnavailable` 写入/清除、`no_license` 后台摘要短路与手动强制探测、同出口有界并发 + 起点抖动、`refreshingAccounts()` 进度暴露。
 - `test/http-contract.test.ts`：`/pool/refresh-quota` 的 `alreadyRunning` 重复点击回报、`/status` 的 `quotaRefreshing` 透出。
@@ -206,3 +219,26 @@ agy 1.5.x 的 `session/update`（`usage_update`）**只带 `{ used, size }`**—
 - `used` 仅作诊断记录（`lastContextUsed`）。只有当更新真的携带 `cachedReadTokens` / `outputTokens` 时才可作为用量样本。
 - 通用原则：**「上下文占用」与「计费用量」是两个量，永不互相替代。**
 - 锚点：`test/usage-acp.test.ts`（178 行）。
+
+## 模型级 429 不得冷却整个模型族（2026-11-23）
+
+- 实测：账号 `ele`（Pro，Google 族还剩 20%，Argon 80%）被一次**图片模型** 429 打进 4h32m 的 `google` 冷宫：
+  `ResourceExhausted, HTTP 429: You have exhausted your capacity on this model. Your quota will reset after 4h32m32s.`
+  该消息被 `looksLikeHardRateLimit`（`exhausted your capacity`）命中，随后 `generate_image` 又被当作族级配额，`recordFailure(family=google, reset=+4h32m)` → 整个文本族被冷却，而所有文本模型其实还有额度。
+- 建模：Google 的配额维度本来就是 **per-model**，`google` 族只是我们的聚合。图片模型（`gemini-3.1-flash-image`）是族里的一个**独立桶**，因此可用性必须分两层：族级 `cooldowns[family]` + 模型级 `modelCooldowns[baseSlug]`（持久化在 `pool.json`）。**不要**为图片新建 family/账号池：没有独立的图片配额组，也没有另一批图片账号，缺行还会被误判成“永远可用”。
+- 契约：
+  - **判定**：`explainIneligibility(acc, family, now, pool, model)` 对 `modelCooldowns[model]` 未过期返回 `model-cooldown`；`isModelQuotaClear(acc, family, model, now)` 单独回答“这个模型的桶还有额度吗”。
+  - **选择**：`selectAccount(family, model?, quotaModel?)` 支持第二个配额维度；图片路径用 **`findAccount(...)`（不移动 active 指针）**，再叠加 `avoidAccountIds` 做本请求内的局部轮换。
+  - **记录**：模型级 429 只写 `recordModelFailure(account, model)`，**不写族冷却、不 `advanceAccount`**；成功调用 `recordModelSuccess` 清掉该模型冷却。`generate_image` 的工具级 429 由工具名直接绑定图片模型 id。
+  - **不再中断**：子代理/工具层面的模型级 429 只暂停该模型并提示，**不 kill 当前 run、不切账号**（此前会中断整轮，正是双会话同时中断的放大器）。
+  - **UI**：族条保持健康（76% 仍是 76%），卡片下补一行 `单模型暂停: gemini-3.1-flash-image → 20:46`。
+  - **迁移**：`PoolAdmin.dropModelScopedCooldowns()` 在池初始化时清掉历史遗留的模型级族冷却（reasons 命中模型级签名者）；用户的「清除冷却」同时清空该账号全部模型桶。
+- 只有 `Individual quota reached` / 纯 `RESOURCE_EXHAUSTED` 这类**账号级**拒绝才允许族级冷却。
+- 锚点：`test/model-cooldown.test.ts`（族不被冷却、跨重启持久化、按 image 桶预筛、ImageService 局部轮换且指针不动）、`test/model-scoped-quota.test.ts`、`test/quota-failover-alignment.test.ts` 第 5/8 题。
+
+## CLI `/usage` 超时后的负缓存（同步慢的根因）
+
+- 实测 2026-11-23：单个账号点「同步」耗时 **19.1s**。日志显示 `agy -p /usage --output-format stream-json` 在 `loadCodeAssist` 上花了 ~13s，随后 `Language server shutdown timed out`，撞满 20s 预算后 REST 兜底只用 ~1s。
+- 契约：每个账号维护 `cliUsageSkipUntil`；`readAgyUsage` 返回 `null`（超时/失败）后，**10 分钟内**跳过 CLI 直接走 REST（`CLI_USAGE_TIMEOUT_RETRY_MS`）。一次超时之后，后续同步 ~1-2s。
+- 不要把超时预算调大来「修」慢：探针没有返回，加大预算只会让每次点击更慢；CLI 是防封首选，但连续超时的探针必须暂时让位给 REST。
+- 锚点：`test/model-scoped-quota.test.ts` 的「CLI usage negative cache」用例。

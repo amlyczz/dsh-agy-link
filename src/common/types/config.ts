@@ -93,6 +93,14 @@ export interface PluginConfig {
    * reviewer answer in prose instead of the required JSON object.
    */
   forwardSystemPrompt: boolean
+  /**
+   * Run pure-text auxiliary calls (session-title / compaction / translation)
+   * in a stable empty directory instead of the session workspace. agy loads
+   * the project's GEMINI.md/AGENTS.md and workspace context into every
+   * one-shot aux process (~15-20k uncached tokens each, 0% cache); a neutral
+   * cwd keeps that prefix small and cacheable across calls. Default: true.
+   */
+  auxNeutralWorkspace: boolean
   /** Apply semantic-preserving rewrites to forwarded harness system prompts to avoid upstream prompt-fingerprint false 429 / shallow degradation (default: true). */
   cloakSystemPrompt: boolean
   digestMaxChars: number
@@ -208,6 +216,14 @@ export interface PluginConfig {
   warmupTimezone: string
   /** Optional fixed warmup interval in hours (0 = disabled, 1..168). */
   warmupIntervalHours: number
+  /**
+   * Hard cap on CLI probes per warmup run (`0` = unlimited).
+   *
+   * A pool of N accounts × up to 4 model families can queue dozens of probes
+   * from one egress IP. Manual/scheduled runs stop here and report the rest as
+   * skipped instead of bursting through every account.
+   */
+  warmupMaxProbesPerRun: number
   /**
    * Auto "plain language" translation after every completed agent turn
    * (default OFF). The finished turn's final answer is sent to the translate
@@ -355,6 +371,7 @@ export function defaultConfig(): PluginConfig {
     contextWindowDefault: 1_048_576,
     maxTokensDefault: 65_536,
     forwardSystemPrompt: false,
+    auxNeutralWorkspace: true,
     cloakSystemPrompt: true,
     digestMaxChars: 8_000,
     contextTransferMaxChars: 660_000,
@@ -397,6 +414,8 @@ export function defaultConfig(): PluginConfig {
     warmupDailyTime: '',
     warmupTimezone: '',
     warmupIntervalHours: 0,
+    // Bounded by default so one click cannot probe an entire large pool.
+    warmupMaxProbesPerRun: 12,
     // Translation is strictly opt-in: it spends quota on every completed
     // turn, so the default must never silently start billing a user.
     autoTranslate: false,

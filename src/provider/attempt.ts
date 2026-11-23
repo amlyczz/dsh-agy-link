@@ -138,6 +138,10 @@ export interface AttemptInput {
   messages: readonly Message[]
   newlySentImageIds: readonly string[]
   stagedImages?: readonly { path: string; mediaType: string }[]
+  /** Second model whose quota bucket must be clear (image: the image model). */
+  quotaModel?: string
+  /** Accounts this request must avoid (model-scoped rotation). */
+  avoidAccountIds?: readonly string[]
   sessionAccountKey: string
   family: ModelFamily
   signal: AbortSignal | undefined

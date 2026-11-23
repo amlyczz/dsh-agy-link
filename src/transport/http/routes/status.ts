@@ -3,6 +3,7 @@ import { runRoute, sendJsonWithEtag, type RawRes, type RouteRegistrar } from '..
 import { sanitizeCatalogEntries } from '../../../host/models.ts'
 import { mergeCatalogWithQuotaModels, quotaCatalogForAccount } from '../../../domain/models/quota-catalog.ts'
 import type { ManagedAccount } from '../../../common/pool-types.ts'
+import { cacheMetrics } from '../../../host/cache-metrics.ts'
 import { snapshotSubagents } from '../../../features/subagent/live.ts'
 
 /**
@@ -106,6 +107,8 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           selectedModels: cfg.selectedModels,
           autoWarmup: cfg.autoWarmup,
           warmupModels: cfg.warmupModels,
+          warmupWindows: cfg.warmupWindows,
+          warmupMaxProbesPerRun: cfg.warmupMaxProbesPerRun,
           autoTranslate: cfg.autoTranslate,
           translateModel: cfg.translateModel,
           translateEffort: cfg.translateEffort,
@@ -119,6 +122,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },
           bindings: Object.keys(store.all()).length,
           effortUnsupported: adapter.effortUnsupportedModels(),
+          cacheStats: cacheMetrics.snapshot(),
               lastRun,
         })
       })

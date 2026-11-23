@@ -202,6 +202,52 @@ function sanitizeNode(
   return current
 }
 
+/**
+ * Every path in `node` where a node claims `type: "array"` but carries no
+ * `items`. Empty means the schema is safe to hand to Google's validator.
+ *
+ * Exported for the bridge self-check and for tests: Gemini rejects the WHOLE
+ * request (`GenerateContentRequest.tools[0].function_declarations[N].parameters
+ * .properties[args].items: missing field`) when a single declaration is
+ * malformed, so "one bad tool kills the turn" is the failure mode to prevent.
+ */
+export function findArraysMissingItems(node: unknown, path = ''): string[] {
+  const out: string[] = []
+  const walk = (value: unknown, at: string, depth: number): void => {
+    if (depth > 40 || value === null || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => walk(item, `${at}[${i}]`, depth + 1))
+      return
+    }
+    const rec = value as Record<string, unknown>
+    if (rec.type === 'array' && rec.items === undefined) out.push(at === '' ? '(root)' : at)
+    for (const [k, v] of Object.entries(rec)) walk(v, at === '' ? k : `${at}.${k}`, depth + 1)
+  }
+  walk(node, path, 0)
+  return out
+}
+
+/**
+ * Last-line normalization: fill `items` for every array node, wherever it hides
+ * (inside `anyOf` branches, `$ref` targets, `additionalProperties`…). Applied
+ * AFTER `sanitizeMcpSchema` so no future sanitizer change can let a malformed
+ * array escape the bridge.
+ */
+export function enforceArrayItems<T>(node: T): T {
+  const walk = (value: unknown, depth: number): void => {
+    if (depth > 40 || value === null || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, depth + 1)
+      return
+    }
+    const rec = value as Record<string, unknown>
+    if (rec.type === 'array' && rec.items === undefined) rec.items = { type: 'string' }
+    for (const v of Object.values(rec)) walk(v, depth + 1)
+  }
+  walk(node, 0)
+  return node
+}
+
 /** Sanitize a single tool's JSON Schema for agy Go/RE2 compatibility. */
 export function sanitizeMcpSchema(raw: Record<string, unknown>): Record<string, unknown> {
   const defs: Record<string, unknown> = {
@@ -269,7 +315,10 @@ export function prepareMcpTools(
 ): McpToolDef[] {
   let tools: McpToolDef[] = rawTools.map((t) => ({
     ...t,
-    inputSchema: sanitizeMcpSchema(t.inputSchema),
+    // `enforceArrayItems` is a post-condition, not a nicety: agy forwards these
+    // schemas to Google verbatim, and one array without `items` fails the whole
+    // turn with INVALID_ARGUMENT (see findArraysMissingItems).
+    inputSchema: enforceArrayItems(sanitizeMcpSchema(t.inputSchema)),
     _meta: { ...AGY_ALWAYS_LOAD_META, ...(t._meta ?? {}) },
   }))
 

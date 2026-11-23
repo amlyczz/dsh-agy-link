@@ -12,6 +12,10 @@ export interface RowProps {
 
 export function Row({ left, right, style }: RowProps): unknown {
 	return h('div', {
+		// The class is load-bearing: the phone rules in global-css target
+		// `.agy-row`, NOT `.agy-console …`. The settings modal is portaled to
+		// <body>, so console-scoped selectors never reached it.
+		className: 'agy-row',
 		style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', ...(style ?? {}) },
 	}, left, right);
 }

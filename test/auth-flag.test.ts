@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { shouldMarkAuthRequired, looksLikeNetworkError, looksLikeAuthVerificationJitter, isTransportFailure, isAuthoritativeAuthError } from '../src/common/types.ts'
 import { AUTH_REVERIFY_DELAY_MS, needsAuthReverify, isTerminalAuthError, type ManagedAccount } from '../src/common/pool-types.ts'
+import { accountAuthState, isAccountCriticalAuth } from '../src/common/quota-bench.ts'
 
 const NETWORK_BLIP = 'Post "https://oauth2.googleapis.com/token": dial tcp 172.217.113.4:443: i/o timeout'
 
@@ -95,4 +96,18 @@ test('isTransportFailure: a proxy blip logged in the agy run log is NETWORK, not
     isTransportFailure({ rawErrText: banner, runLogText: 'keyringAuth: timed out after 30s' }),
     true,
   )
+})
+
+test('accountAuthState: the badge must name the KIND of problem, not just "auth"', () => {
+  const base = { id: 'a', alias: 'a', dir: '', enabled: true, cooldowns: {}, quotas: {} } as ManagedAccount
+  assert.equal(accountAuthState(base), 'healthy')
+  assert.equal(accountAuthState({ ...base, authRequired: true, authError: 'token endpoint 400: invalid_grant' }), 'relogin')
+  assert.equal(accountAuthState({ ...base, authRequired: true, authError: 'agy is not signed in' }), 'review')
+  assert.equal(accountAuthState({ ...base, authRequired: true, authError: 'TOS_VIOLATION (https://forms.gle/x)' }), 'tos')
+  assert.equal(accountAuthState({ ...base, authRequired: true, authError: 'VALIDATION_REQUIRED' }), 'validation')
+  assert.equal(accountAuthState({ ...base, quotaUnavailable: { reason: 'validation_required', since: 1, retryAfter: 2 } }), 'validation')
+  assert.equal(accountAuthState({ ...base, quotaUnavailable: { reason: 'tos_violation', since: 1, retryAfter: 2 } }), 'tos')
+  // An unverified flag still blocks rotation — only the badge softens.
+  assert.equal(isAccountCriticalAuth({ ...base, authRequired: true, authError: 'agy is not signed in' }), true)
+  assert.equal(isAccountCriticalAuth(base), false)
 })
