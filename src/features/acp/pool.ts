@@ -503,13 +503,21 @@ export class AcpSessionPool {
   /** A live turn is never idle: re-stamp it; otherwise TTL + no retained session. */
   private shouldEvict(p: AcpProcess, now: number): boolean {
     if (p.isBusy) { p.lastUsedAt = now; return false }
+    // A foreground `session/prompt` can run longer than idleTtlMs while the
+    // server only pushes `session/update`: `lastUsedAt` (bumped on outbound
+    // writes) goes stale mid-turn, and the sweep used to close the process
+    // under the active turn (issue #182). Never treat an in-flight prompt as idle.
+    if (p.hasActivePrompt?.() === true) { p.lastUsedAt = now; return false }
     return now - p.lastUsedAt > this.idleTtlMs && !this.hasRetainedSession(p)
   }
   evictIdle(now = Date.now()): number {
     let evicted = 0
     for (const [k, p] of [...this.procs.entries()]) {
       if (!p.isAlive() || this.shouldEvict(p, now)) {
+        const alive = p.isAlive()
+        const idleFor = now - p.lastUsedAt
         this.procs.delete(k)
+        if (alive) this.opts.log?.(`[acp-pool] evicting idle process pid=${p.pid} after ${Math.floor(idleFor / 1_000)}s`)
         this.closeProc(p, false)
         evicted++
       }

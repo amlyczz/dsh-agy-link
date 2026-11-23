@@ -98,6 +98,7 @@ export class AcpProcess extends EventEmitter {
   private identityProbe: Promise<AuthEvidence> | null = null
   private alive = false
   private supportsInlineImages = false
+  private activePrompts = 0
   private readonly rebuiltSessions = new Set<string>()
   private initPromise: Promise<Record<string, unknown>> | null = null
   lastUsedAt = Date.now()
@@ -107,6 +108,8 @@ export class AcpProcess extends EventEmitter {
   }
 
   isAlive(): boolean { return this.alive && this.child !== null }
+  /** Foreground prompts own the process until completion, timeout or cancellation. */
+  hasActivePrompt(): boolean { return this.activePrompts > 0 }
   /** Live child pid, or null before start / after exit (stray reconciliation). */
   get pid(): number | null { return this.child?.pid ?? null }
   /**
@@ -551,7 +554,13 @@ export class AcpProcess extends EventEmitter {
 
   async prompt(opts: AcpPromptOptions): Promise<Record<string, unknown>> {
     const effectiveOpts = this.supportsInlineImages ? opts : { ...opts, images: undefined }
-    return runAcpTurn(this, effectiveOpts)
+    this.activePrompts++
+    try {
+      return await runAcpTurn(this, effectiveOpts)
+    } finally {
+      this.activePrompts--
+      if (!this.hasActivePrompt()) this.lastUsedAt = Date.now()
+    }
   }
 
   /**
