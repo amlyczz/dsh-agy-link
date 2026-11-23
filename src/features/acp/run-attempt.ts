@@ -356,6 +356,9 @@ async function runAcpPrompt(opts: {
       keyringJitter: looksLikeAuthVerificationJitter(`${errText} ${logText}`),
     }
   } finally {
+    // Subagents belong to this round: stopping detaches the tracker from the
+    // live registry so the header stops reporting them the moment the turn ends.
+    subTracker?.stop()
     // The streak is counted where the failure is classified (above), so this
     // only has to clear it on a turn that actually produced model output.
     if (sawRealOutput) deps.clearNetworkStreak(input.sessionKey)

@@ -15,7 +15,7 @@ import {
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
 import { TaskActivityTracker } from './task-activity.ts'
 import { ParentQuotaMonitor, type SubagentQuotaExhaustedInfo } from './parent-quota.ts'
-import { attachSubagentTracker, detachSubagentTracker, type SubagentSnapshot, type SubagentSnapshotItem } from './live.ts'
+import { attachSubagentTracker, detachSubagentTracker, SUBAGENT_LIVE_WINDOW_MS, type SubagentSnapshot, type SubagentSnapshotItem } from './live.ts'
 
 export type { SubagentQuotaExhaustedInfo }
 
@@ -254,7 +254,6 @@ export class SubagentTracker {
   private readonly pollIntervalMs: number
   private parentCursor: TranscriptCursor = createTranscriptCursor()
   private sessionKey: string
-  /** Late-bind the DSH session id: the recorder is built before an attempt knows it. */
   setSessionKey(key: string): void { this.sessionKey = key }
   private parentLines = 0
 
@@ -326,6 +325,8 @@ export class SubagentTracker {
       }
     } finally {
       this.active = false
+      // agy keeps a finished descriptor at ALIVE, so only the round ending proves it stopped.
+      for (const s of this.trackedSubagents.values()) if (!s.terminal) { s.terminal = true; s.lastAt = Date.now(); s.lastAction = '已结束（回合结束）' }
       detachSubagentTracker(this.sessionKey, this)
       if (this.timer) {
         clearInterval(this.timer)
@@ -480,6 +481,8 @@ export class SubagentTracker {
         const active = isActiveSubagentState(rawState)
         const logPath = join(subBrainDir, '.system_generated', 'logs', 'transcript.jsonl')
         const initialOffset = baselineOnly ? fileSizeOrZero(logPath) : 0
+        // Baseline rows are history: freshness comes from the descriptor mtime.
+        const descMtime = baselineOnly ? statSync(fullPath).mtimeMs : Date.now()
         const tracked: TrackedSubagent = {
           conversationId: subId,
           role,
@@ -489,8 +492,7 @@ export class SubagentTracker {
           terminal: !active,
           cursor: createTranscriptCursor(initialOffset),
           lines: 0,
-          startedAt: Date.now(),
-          lastAt: Date.now(),
+          startedAt: descMtime, lastAt: descMtime,
           lastAction: active ? `已启动协同专员 (${typeName})` : `未保持运行 (${rawState ?? 'unknown'})`,
         }
         this.trackedSubagents.set(subId, tracked)
@@ -586,12 +588,11 @@ export class SubagentTracker {
     }
   }
 
-  /** Current subagent state for the header badge / status route. */
   snapshot(): SubagentSnapshot {
     const items: SubagentSnapshotItem[] = [...this.trackedSubagents.values()].map((s) => ({
       conversationId: s.conversationId, role: s.role, typeName: s.typeName,
       ...(s.state === undefined ? {} : { state: s.state }),
-      running: !s.terminal, lastAction: s.lastAction, startedAt: s.startedAt, lastAt: s.lastAt,
+      running: !s.terminal && Date.now() - s.lastAt <= SUBAGENT_LIVE_WINDOW_MS, lastAction: s.lastAction, startedAt: s.startedAt, lastAt: s.lastAt,
     }))
     return { total: items.length, running: items.filter((i) => i.running).length, items }
   }

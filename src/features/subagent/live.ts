@@ -8,6 +8,14 @@
 // run and the status route reads a snapshot.
 //
 // Keyed by DSH session id so a session's header only reports its OWN subagents.
+/**
+ * How long a tracked subagent may go without observed activity before the panel
+ * stops calling it "running". agy never flips a finished descriptor off
+ * SUBAGENT_STATE_ALIVE, so descriptor state cannot prove life; recent transcript
+ * activity can, and the round ending (tracker.stop) settles the rest.
+ */
+export const SUBAGENT_LIVE_WINDOW_MS = 10 * 60_000
+
 export interface SubagentSnapshotItem {
   conversationId: string
   role: string
