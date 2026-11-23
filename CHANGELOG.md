@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.74 (2026-11-24)
+
+### English
+
+- **Feat(credentials): external credential leases with bearer auth (merges PR #181, supersedes #173).** A process that launches the official `agy` itself — e.g. a long-running runner whose jobs must survive a DSH restart — can now borrow a pool account through the plugin's own selection, credential-slot and failure-settlement code, instead of fighting it for the machine-wide slot.
+  - **Four routes** (`POST /lease/acquire|renew|release`, `GET /lease`) plus a discovery file `<pool dir>/.link-endpoint.json`.
+  - **An isolated account on agy ≥ 1.5 is leased without the slot**: the lease prepares that account's token file and returns the exact `env` the caller sets on `agy`. The primary account (and isolated accounts on older agy) holds the slot for the lease's lifetime, like any in-plugin run.
+  - **Auth (the point that blocked #173):** a 256-bit token is generated per plugin start and published **only** in the discovery file, which is written atomically with mode `0600`; on POSIX the owner and mode are verified after the write and the file is deleted if either is wrong. Every `/lease*` request must send `Authorization: Bearer <token>`, checked with `timingSafeEqual` **before** the cross-origin and method gates. No discovery file, no token, no lease.
+  - **Bounded leases:** TTL defaults to 2 minutes (min 15s, max 10min) and a sweeper reclaims expired leases every 5 seconds, so a crashed external process cannot pin an account for ever.
+
+### 中文
+
+- **特性(凭证)：带 bearer 鉴权的外部凭证租约（合并 PR #181，取代 #173）。** 自己启动官方 `agy` 的进程——例如长任务必须跨 DSH 重启存活的 runner——现在可以通过插件自己的选号、凭证槽与失败结算逻辑**借用**池账号，而不是去抢那个机器级槽位。
+  - **四条路由**（`POST /lease/acquire|renew|release`、`GET /lease`）加一个发现文件 `<pool dir>/.link-endpoint.json`。
+  - **agy ≥ 1.5 上的隔离账号租约不占槽位**：租约只准备该账号的 token 文件，并返回调用方设置到 `agy` 上的确切 `env`。主账号（以及旧版 agy 的隔离账号）则在租约期间持有槽位，与在插件内运行完全一致。
+  - **鉴权（正是当初拦下 #173 的那一条）**：每次插件启动生成 256-bit 随机 token，**只**公布在发现文件里；该文件原子写入且权限 `0600`，POSIX 下还会在写入后校验 owner 与 mode，任一不符即删除文件。所有 `/lease*` 请求必须携带 `Authorization: Bearer <token>`，用 `timingSafeEqual` 校验，且**先于**跨源与方法门禁。没有发现文件就没有 token，也就没有租约。
+  - **租约有界**：TTL 默认 2 分钟（最小 15 秒、最大 10 分钟），并有每 5 秒运行的清扫器回收过期租约——外部进程崩溃也不会永久占住账号。
+
 ## 0.6.73 (2026-11-24)
 
 ### English
