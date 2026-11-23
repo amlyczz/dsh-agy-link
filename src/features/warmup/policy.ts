@@ -86,6 +86,14 @@ export const FAILURE_BACKOFF_MS = 30 * 60 * 1000
  */
 export const MODEL_UNAVAILABLE_PARK_MS = 24 * 3600 * 1000
 
+/**
+ * A "successful" probe does not prove the window started: a probe that never
+ * reached the model (e.g. agy stalled on dead MCP servers) leaves the window
+ * idle. When the quota keeps sliding after a recorded warmup, the long success
+ * cooldown must not hide it for days; retry, but at most this often.
+ */
+export const SLIDING_IDLE_RETRY_MS = 2 * 3600 * 1000
+
 export function isModelUnavailableError(text: string): boolean {
   return /no longer available|is not available|is retired|unknown model|model not found|not recognized|unsupported model/i.test(text)
 }
@@ -158,6 +166,8 @@ function warmupDue(params: {
 
   if (force) {
     shouldWarm = true
+  } else if (hasRecentWarmup && slidingIdle) {
+    shouldWarm = !isCoolingDown(historyKey, SLIDING_IDLE_RETRY_MS)
   } else if (!hasRecentWarmup) {
     if (slidingIdle) {
       shouldWarm = true
@@ -198,6 +208,8 @@ function warmup5hDue(params: {
 
   if (force) {
     shouldWarm = true
+  } else if (hasRecentWarmup && slidingIdle) {
+    shouldWarm = !isCoolingDown(historyKey, SLIDING_IDLE_RETRY_MS)
   } else if (!hasRecentWarmup) {
     if (slidingIdle) {
       shouldWarm = true
