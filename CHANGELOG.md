@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.76 (2026-11-24)
+
+### English
+
+- **Fix(mcp): drop empty-string enum members — this was failing EVERY turn since 0.6.73 (merges PR #189).** A tool schema declaring `enum: ["read", "write", "admin", ""]` made Gemini answer `400 INVALID_ARGUMENT … enum[3]: cannot be empty`, and one such tool fails the whole `GenerateContentRequest` even if it is never called. `sanitizeMcpSchema` only removed a completely empty `enum`, not empty members; it now filters `''` and `null` (including values merged from `anyOf`/`oneOf` `const` branches) and then applies the existing empty-enum cleanup. Rolling back to 0.6.61 was the only workaround.
+- **Fix(translate): a re-translation replaces the reply's card instead of stacking (merges PR #186).** Every `plugin:agy-link/translation` record became its own chat node, so translating the same reply again with `force` left the old translation in place too. In `card` mode that is two stacked cards; in `replace` mode (#178) every stacked card is shown in place of the reply — one reported reply ended up showing six translations in a row. Records are now identified by the reply they belong to, so a re-translation replaces the previous one.
+- **Fix(translate): retry a failed automatic translation (merges PR #187).** `autoTranslateTurn` made exactly one attempt per finished turn; a transient failure left the reply untranslated for ever. When Google answered `503 No capacity available` for hours, replies stayed in the original language until someone retried by hand. A failed automatic attempt is now retried within a bounded budget.
+
+### 中文
+
+- **修复(mcp)：去掉空字符串 enum 成员——自 0.6.73 起这会让**每个回合**都失败（合并 PR #189）。** 某工具 schema 声明 `enum: ["read", "write", "admin", ""]`，Gemini 便返回 `400 INVALID_ARGUMENT … enum[3]: cannot be empty`，而**只要有一个这样的工具，整个 `GenerateContentRequest` 就失败**（即使从不调用它）。`sanitizeMcpSchema` 此前只清理完全空的 `enum`，不清理空成员；现在会过滤 `''` 与 `null`（含从 `anyOf`/`oneOf` 的 `const` 分支合并来的值），再套用原有的空 enum 清理。此前只能回退到 0.6.61 规避。
+- **修复(翻译)：重复翻译替换原卡片而不是堆叠（合并 PR #186）。** 每条 `plugin:agy-link/translation` 记录都会成为独立聊天节点，于是用 `force` 重新翻译同一回复时，旧译文仍留在原处。`card` 模式下是两个卡片叠着；`replace` 模式（#178）下更糟——每个堆叠的卡片都会顶替原回复，有用户的一条回复最终连续显示了六份译文。现在记录以"它翻译的那条回复"为标识，重复翻译会替换前一份。
+- **修复(翻译)：自动翻译失败后重试（合并 PR #187）。** `autoTranslateTurn` 每个回合只尝试一次，瞬时失败后该回复就永久不翻译了。当 Google 连续数小时返回 `503 No capacity available` 时，回复会一直停留在原文，直到有人手动重试。现在失败的自动尝试会在有界预算内重试。
+
 ## 0.6.75 (2026-11-24)
 
 ### English
