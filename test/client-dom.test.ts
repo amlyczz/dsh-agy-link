@@ -783,6 +783,32 @@ test('translate card: copy, collapse and show-original handlers', async () => {
 	await act(() => { root.unmount(); });
 });
 
+test('translate card: replace mode reads as the reply and flips back to the original', async () => {
+	setGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ translateDisplay: 'replace' }) }));
+	publishStatusSnapshot({ translateDisplay: 'replace' });
+	const { container, root } = await mount(createElement(TranslationCard, {
+		node: { data: { text: '译文正文', original: 'source text' } },
+		t: (key: string) => ({ 'tsl.copy': '复制', 'tsl.showOriginal': '查看原文', 'tsl.showTranslation': '显示译文', 'tsl.badge': 'Gemini 译文' } as Record<string, string>)[key] ?? key,
+	}));
+	const card = () => container.querySelector('.agy-tsl-card') as HTMLElement;
+	const buttons = () => Array.from(container.querySelectorAll('.agy-tsl-btn')) as HTMLButtonElement[];
+	assert.equal(card().getAttribute('data-display'), 'replace');
+	assert.equal(card().getAttribute('data-show-original'), 'false', 'the stylesheet hides the reply seat only in this state');
+	assert.equal(container.querySelector('.agy-tsl-head'), null, 'no card banner in replace mode');
+	assert.equal(container.querySelector('.agy-tsl-body')?.textContent, '译文正文');
+	assert.equal(container.querySelector('.agy-tsl-original'), null, 'the original comes back from DSH, not the capped copy');
+
+	await act(() => { buttons().find((b) => b.textContent === '查看原文')!.click(); });
+	assert.equal(card().getAttribute('data-show-original'), 'true');
+	assert.equal(container.querySelector('.agy-tsl-body'), null, 'translation steps aside while the original shows');
+	assert.ok(buttons().some((b) => b.textContent === '显示译文'));
+
+	await act(() => { buttons().find((b) => b.textContent === '显示译文')!.click(); });
+	assert.equal(card().getAttribute('data-show-original'), 'false');
+	await act(() => { root.unmount(); });
+	publishStatusSnapshot({});
+});
+
 // ---------------------------------------------------------------------------
 // 6. toolview question-card + run_code view branches
 // ---------------------------------------------------------------------------

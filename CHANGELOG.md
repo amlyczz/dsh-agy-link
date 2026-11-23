@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### English
+
+- **Feat(translate): show the translation in the reply's place (`translateDisplay: replace`).** A new setting, "Translation display" (Settings, next to the translate-button switch; also `translateDisplay` in config or `DSH_AGY_TRANSLATE_DISPLAY`), chooses between the existing card under the reply (`card`, the default) and `replace`, where the translated reply shows the translation as if it were the reply, with a small footer to flip back to the original and to copy. It is display only: the session, and so the model's own context, keeps the original text. The reply is hidden by a stylesheet `:has()` rule keyed on the translation node DSH seats right after it (`anchorSeq + 0.1`), so nothing in the DOM or the session is rewritten; if DSH ever seats another node in between, both texts simply show. "Show original" brings back DSH's own full reply rather than the record's 8000-character copy.
+
+### 中文
+
+- **新增(翻译)：在回复原位显示译文（`translateDisplay: replace`）。** 新设置「译文显示方式」（设置面板，单条翻译按钮开关旁；也可在配置里写 `translateDisplay`，或用 `DSH_AGY_TRANSLATE_DISPLAY`）可在现有的「回复下方卡片」（`card`，缺省）和「替换原文」（`replace`）之间切换。替换模式下，已翻译的回复直接显示译文，脚注可切回原文、复制译文。只改显示：会话里、也就是模型自己的上下文里，原文不变。隐藏原文靠样式表 `:has()` 规则：DSH 把译文节点紧排在被翻译回复之后（`anchorSeq + 0.1`），规则据此隐藏那条回复，不改 DOM、不改会话；若两者之间被插入别的节点，规则不再匹配，原文和译文都会显示。「查看原文」切回的是 DSH 自己渲染的完整回复，不是记录里截断到 8000 字的副本。
+
 ## 0.6.70 (2026-11-23)
 
 ### English

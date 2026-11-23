@@ -6,6 +6,7 @@
 // translate-state.ts.
 
 import { BRAND_PATHS } from './brand-icons.ts'
+import { useAgyStatus } from './status.ts'
 import { h, useState, win, STYLE_ID } from './translate-context.ts'
 
 const CSS = `
@@ -105,6 +106,24 @@ body.dark .agy-tsl-card,
   color: var(--dsw-alias-label-secondary, #4a4c55);
   white-space: pre-wrap; max-height: 260px; overflow: auto;
 }
+/* Replace mode (translateDisplay = replace): the translation takes the reply's
+   place. DSH seats the card right after the reply it translates (anchorSeq +
+   0.1), so the reply seat is the card seat's previous sibling and :has() hides
+   it declaratively — nothing in the DOM or the session is rewritten, and the
+   rule survives every re-render. If DSH ever seats something in between, the
+   rule simply stops matching and both texts show. */
+[data-chat-flow-kind="assistant-step"]:has(+ [data-chat-flow-kind="agy-translation"] .agy-tsl-card[data-display="replace"][data-show-original="false"]) {
+  display: none !important;
+}
+.agy-tsl-card[data-display="replace"] {
+  margin: 0; border: 0; border-radius: 0; background: transparent; overflow: visible;
+}
+.agy-tsl-card[data-display="replace"] .agy-tsl-body { padding: 0; }
+.agy-tsl-replace-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px;
+  font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-tertiary, #8a8f98);
+}
+.agy-tsl-replace-bar .agy-tsl-actions { margin-left: 0; }
 /* Icon-only action that sits in the same strip as copy / thumbs / link, with
    the same neutral tint so it reads as part of that group. */
 .agy-tsl-icon {
@@ -302,6 +321,7 @@ export const TranslationCard = (props?: Record<string, unknown>): unknown => {
 	const [open, setOpen] = useState(true)
 	const [showOriginal, setShowOriginal] = useState(false)
 	const [copied, setCopied] = useState(false)
+	const replace = useAgyStatus().status?.translateDisplay === 'replace'
 	const text = typeof data.text === 'string' ? data.text : ''
 	const original = typeof data.original === 'string' ? data.original : ''
 	if (text.trim() === '') return null
@@ -328,6 +348,38 @@ export const TranslationCard = (props?: Record<string, unknown>): unknown => {
 			label,
 		)
 	const badge = t('tsl.badge', 'Gemini translation')
+	if (replace) {
+		// The translation reads as the reply itself; "show original" flips the
+		// stylesheet rule above so DSH's own reply (the full text, not the capped
+		// copy in the record) comes back in place of this body.
+		return h(
+			'div',
+			{
+				className: 'agy-tsl-card',
+				'data-agy-translation': 'gemini',
+				'data-display': 'replace',
+				'data-show-original': showOriginal ? 'true' : 'false',
+				'aria-label': badge,
+			},
+			showOriginal ? null : h('div', { className: 'agy-tsl-body' }, renderMarkdown(text) as never),
+			h(
+				'div',
+				{ className: 'agy-tsl-replace-bar' },
+				h('span', { className: 'agy-tsl-badge' }, geminiMark(), h('span', { className: 'agy-tsl-label' }, badge)),
+				h(
+					'span',
+					{ className: 'agy-tsl-actions' },
+					action(
+						'original',
+						showOriginal ? t('tsl.showTranslation', 'Show translation') : t('tsl.showOriginal', 'Show original'),
+						() => setShowOriginal(!showOriginal),
+						showOriginal,
+					),
+					showOriginal ? null : action('copy', copied ? t('tsl.copied', 'Copied') : t('tsl.copy', 'Copy'), copy),
+				),
+			),
+		)
+	}
 	return h(
 		'div',
 		{ className: 'agy-tsl-card', 'data-agy-translation': 'gemini', 'aria-label': badge },
