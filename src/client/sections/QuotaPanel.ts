@@ -495,7 +495,14 @@ export function renderQuotaUnavailableNote(
 	// 5-hour window at all. A paid account that already reported one is being
 	// refused transiently; calling it "free-tier" contradicted its own Pro badge
 	// and 5h bar in the SAME card (reported 2026-11-23).
-	const has5hEvidence = Object.values(acc.quotas).some((q) => typeof q?.remainingFraction === 'number');
+	//
+	// The 5h reading only counts as evidence while it is NEWER than the refusal:
+	// a 5h bar frozen from before the account was refused says nothing about the
+	// plan it has NOW (a lapsed Pro account keeps its old 100% row and would
+	// otherwise be described as a refused paid account — reported 2026-11-23).
+	const has5hEvidence = Object.values(acc.quotas).some(
+		(q) => typeof q?.remainingFraction === 'number' && (q?.updatedAt ?? 0) > state.since,
+	);
 	const reasonKey = state.reason === 'no_summary_access' && has5hEvidence
 		? 'quota.unavailable.no_summary_access_paid'
 		: `quota.unavailable.${state.reason}`;

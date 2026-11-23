@@ -759,3 +759,30 @@ test('quota-unavailable note says WHY a frozen row is frozen', () => {
 		'a healthy account renders no note',
 	);
 });
+
+test('a refused account is only called "paid" when its 5h row is newer than the refusal', () => {
+	// Reported 2026-11-23: a lapsed Pro account kept a frozen 100% 5h bar from
+	// before the refusal, so the note claimed "a paid account was refused" about
+	// an account that no longer had a 5-hour window at all (the CLI said
+	// weekly-only). Stale 5h data must not be read as proof of a paid plan.
+	const t = (key: string): string => key;
+	const frozen = {
+		id: 'primary',
+		alias: 'primary',
+		dir: '',
+		enabled: false,
+		createdAt: 0,
+		cooldowns: {},
+		quotas: { google: { remainingFraction: 1, weeklyFraction: 1, updatedAt: 1_000 } },
+		quotaUnavailable: { reason: 'no_summary_access', since: 2_000, retryAfter: 3_000, detail: 'PERMISSION_DENIED' },
+	};
+	const staleHtml = renderToStaticMarkup(renderQuotaUnavailableNote(t as never, frozen as never) as never);
+	assert.match(staleHtml, /quota\.unavailable\.no_summary_access\b/,
+		"a 5h reading older than the refusal describes the OLD plan, not this one");
+	assert.equal(staleHtml.includes("no_summary_access_paid"), false);
+
+	// A fresh 5h reading (written after the refusal started) proves the plan.
+	const fresh = { ...frozen, quotas: { google: { remainingFraction: 0.4, updatedAt: 9_000 } } };
+	const freshHtml = renderToStaticMarkup(renderQuotaUnavailableNote(t as never, fresh as never) as never);
+	assert.match(freshHtml, /quota\.unavailable\.no_summary_access_paid/);
+});
