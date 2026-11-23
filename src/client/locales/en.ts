@@ -81,7 +81,7 @@ export const en: AgyDictionary = {
   'account.collapsedCoolingHint': ' ({families} cooling down)', 'account.poolHeading': 'Account Pool ({count})',
   'account.removed': 'Account removed: {alias}',
   'plan.ultra': 'Ultra', 'plan.pro': 'Pro', 'plan.free': 'Free', 'plan.enterprise': 'Enterprise',
-  'quota.imageModel': 'Image quota', 'quota.modelPaused': 'Model paused', 'quota.fiveHour': '5-hour quota', 'quota.weekly': 'Weekly quota', 'quota.refreshed': 'Quota refreshed', 'quota.refreshStarted': 'Syncing quota — figures update shortly', 'quota.windowReset': 'Reset · available', 'quota.windowResetStale': 'window already reset · data from {time}',
+  'quota.modelPaused': 'Model paused', 'quota.fiveHour': '5-hour quota', 'quota.weekly': 'Weekly quota', 'quota.refreshed': 'Quota refreshed', 'quota.refreshStarted': 'Syncing quota — figures update shortly', 'quota.windowReset': 'Reset · available', 'quota.windowResetStale': 'window already reset · data from {time}',
   'quota.unactivated': 'Unactivated · warmup to start',
   'quota.refreshInProgress': 'A refresh is already running for this account',
   'quota.unavailableTitle': 'Quota refresh failed',

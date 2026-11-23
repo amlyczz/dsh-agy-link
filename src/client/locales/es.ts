@@ -81,7 +81,7 @@ export const es: AgyDictionary = {
   'account.collapsedCoolingHint': ' ({families} en espera)', 'account.poolHeading': 'Pool de cuentas ({count})',
   'account.removed': 'Cuenta eliminada: {alias}',
   'plan.ultra': 'Ultra', 'plan.pro': 'Pro', 'plan.free': 'Gratis', 'plan.enterprise': 'Enterprise',
-  'quota.imageModel': 'Cuota de imagen', 'quota.modelPaused': 'Modelo en pausa', 'quota.fiveHour': 'Cuota de 5 horas', 'quota.weekly': 'Cuota semanal', 'quota.refreshed': 'Cuota actualizada', 'quota.refreshStarted': 'Sincronizando la cuota — las cifras se actualizarán en breve', 'quota.windowReset': 'Reiniciada · disponible', 'quota.windowResetStale': 'ventana ya reiniciada · datos del {time}',
+  'quota.modelPaused': 'Modelo en pausa', 'quota.fiveHour': 'Cuota de 5 horas', 'quota.weekly': 'Cuota semanal', 'quota.refreshed': 'Cuota actualizada', 'quota.refreshStarted': 'Sincronizando la cuota — las cifras se actualizarán en breve', 'quota.windowReset': 'Reiniciada · disponible', 'quota.windowResetStale': 'ventana ya reiniciada · datos del {time}',
   'quota.unactivated': 'Sin activar · calentar para iniciar',
   'quota.refreshInProgress': 'Ya hay una actualización en curso para esta cuenta',
   'quota.unavailableTitle': 'No se pudo actualizar la cuota',

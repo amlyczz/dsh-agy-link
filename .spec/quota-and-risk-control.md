@@ -31,6 +31,13 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
    - `src/features/quota/endpoint-health.ts` 记录 **`操作|端点`** 维度的失败（TTL `QUOTA_ENDPOINT_DOWN_MS`=10 分钟，实例级、非模块全局），`orderEndpointsByHealth()` 把刚失败的端点排到最后；**全部端点都在冷却时按原顺序照常探测**，避免一次抖动把池子锁死。401/403 视为「端点活着、账号被拒」，不置为失败。
    - 摘要调用额外回报失败原因（`onSummaryFailure`）：`no_license`（403 且响应体提到 license）/ `auth`（401）/ `network` / `http`，只保留 API 枚举（如 `PERMISSION_DENIED`），不带响应正文。
 
+### 2.1 不展示逐模型（图片）配额行 —— 2026-11-23 决定
+
+- **`agy` CLI 不给逐模型配额。** 实测 `agy -p /usage`（文本）与 `agy -p /usage --output-format json`（`command.data.groups[]`）在 Pro 账号（3 组：Gemini / Claude&GPT / Gemini 4 Argon）与免费账号（2 组）上都**只有分组级桶**（weekly + 5h），整份输出中 `image`/`imagen` **零命中**；`agy models` 连 `gemini-3.1-flash-image` 这个模型 id 都不列。
+- 逐模型的图片桶只存在于 Google 内部 REST（`fetchAvailableModels` 的 `quotaInfo` / `retrieveUserQuota`），也就是**降级路径**。
+- 结论：**控制台不再渲染「图片额度」行**（原先 `renderModelQuotas` 筛选 `models[].modelId` 含 image/imagen）。若一次 REST 降级恰好带来该数据，也不再展示，避免把「降级残留」呈现成稳定指标，也避免为了它常态打 REST 增加指纹暴露。
+- 「单模型暂停」（`renderModelPauses`）保留：它反映的是本地调度冷却（哪个模型被我们暂停），与配额采集来源无关。
+
 3. **权威快照缺失必须显式化（禁止静默保留旧值当新值）**：
    - `buildFamilyQuotas` 在摘要失败时**故意保留上一份完整数据**（部分回退数据不得覆盖好数据）。这条规则本身正确，但旧实现让「摘要拿不到」完全无声：账号卡片会永远显示前一天的百分比，用户只能看到「一直卡在那」。
    - 现在摘要非权威时写入账号级 `quotaUnavailable = { reason, since, retryAfter, detail? }`，控制台据此渲染「配额刷新失败 · 原因 · 数据停留在 <时间>」；拿到权威摘要后立即清除（`clearQuotaUnavailable`）。

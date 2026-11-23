@@ -81,7 +81,7 @@ export const zh = {
   'account.collapsedCoolingHint': '（{families} 冷却中）', 'account.poolHeading': '账号池 ({count})',
   'account.removed': '已移除账号：{alias}',
   'plan.ultra': 'Ultra', 'plan.pro': 'Pro', 'plan.free': 'Free', 'plan.enterprise': 'Enterprise',
-  'quota.imageModel': '图片额度', 'quota.modelPaused': '单模型暂停', 'quota.fiveHour': '5 小时额度', 'quota.weekly': '周额度', 'quota.refreshed': '额度已刷新', 'quota.refreshStarted': '正在同步额度，稍后自动更新', 'quota.windowReset': '已重置 · 可用', 'quota.windowResetStale': '窗口已重置 · 数据停留在 {time}',
+  'quota.modelPaused': '单模型暂停', 'quota.fiveHour': '5 小时额度', 'quota.weekly': '周额度', 'quota.refreshed': '额度已刷新', 'quota.refreshStarted': '正在同步额度，稍后自动更新', 'quota.windowReset': '已重置 · 可用', 'quota.windowResetStale': '窗口已重置 · 数据停留在 {time}',
   'quota.unactivated': '未激活 · 预热启动计时',
   'quota.refreshInProgress': '该账号正在刷新中，请稍候',
   'quota.unavailableTitle': '配额刷新失败',

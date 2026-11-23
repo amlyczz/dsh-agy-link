@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.71 (2026-11-23)
+
+### English
+
+- **The "Image quota" row is gone.** `agy -p /usage` (both the plain text and the `--output-format json` `command.data.groups[]`) only reports GROUP-level buckets — verified on a Pro account (Gemini / Claude&GPT / Gemini 4 Argon) and on a free one: neither output mentions `image`/`imagen` anywhere, and `agy models` does not even list `gemini-3.1-flash-image`. Per-model image buckets only exist in Google's internal REST fallback, so the panel no longer renders them: a value that can only appear when the CLI already failed is not a stable metric, and re-fetching it on every refresh would add Node TLS traffic to an internal endpoint for zero scheduling value. Single-model pause rows (local cooldowns) are kept.
+- **A frozen 5-hour row no longer proves a paid plan.** The "quota refresh failed" note used to describe any account with a stale `remainingFraction` as a refused PAID account; a lapsed Pro account kept its frozen 100% bar and got that wording while its own CLI reported weekly-only. The paid wording now requires the 5-hour reading to be NEWER than the refusal stamp.
+
+### 中文
+
+- **去掉「图片额度」行。** 实测 `agy -p /usage`（文本与 `--output-format json` 的 `command.data.groups[]`）在 Pro 账号（Gemini / Claude&GPT / Gemini 4 Argon 三组）与免费账号上都只有**分组级桶**，整份输出 `image`/`imagen` 零命中；`agy models` 连 `gemini-3.1-flash-image` 都不列。逐模型图片桶只存在于 Google 内部 REST 的降级路径，因此控制台不再渲染：一个「只有 CLI 失败时才可能出现」的数值不是稳定指标，而为了它每轮去打内部端点只会凭空增加 Node TLS 指纹暴露、对调度毫无价值。「单模型暂停」行（本地冷却）保留。
+- **冻结的 5 小时行不再当作付费证据。** 原来只要有 `remainingFraction` 就把账号描述成「付费账号被汇总接口拒绝」；订阅失效的账号会留着冻结的 100% 5h 行，于是文案与实际（CLI 只报周额度）自相矛盾。现在要求 5 小时读数**比拒绝时间更新**才使用付费措辞。
+
 ## 0.6.70 (2026-11-23)
 
 ### English
