@@ -616,3 +616,151 @@ test('a second identity mismatch refuses the turn instead of billing the wrong a
     await cleanupDir(dir)
   }
 })
+// ---- warm process reuse / crash recovery (reviewer's third request) --------
+
+/** All assistant text a recording streamed, in order. */
+function textOf(rec: { length: number; eventAt(i: number): unknown }): string {
+  let out = ''
+  for (let i = 0; i < rec.length; i++) {
+    const ev = rec.eventAt(i) as { kind?: string; stepKind?: string; text?: string } | undefined
+    if (ev?.kind === 'step' && ev.stepKind === 'text' && typeof ev.text === 'string') out += ev.text
+  }
+  return out
+}
+
+test('a second turn on the same session reuses the warm process and restores nothing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-two-turns-'))
+  const created: AcpProcess[] = []
+  const notices: Array<{ kind: string }> = []
+  const logs: string[] = []
+  const store = new SessionStore(join(dir, 'sessions.json'))
+  try {
+    const deps = attemptDeps({
+      store,
+      log: (m: string) => logs.push(m),
+      appendAcpNotice: (_k, notice) => notices.push(notice),
+    })
+    const pool = new AcpSessionPool({
+      bin: () => FIXTURE,
+      cfg: () => attemptInput(dir).cfg,
+      createProcess: (opts) => {
+        const proc = new AcpProcess(opts)
+        created.push(proc)
+        return proc
+      },
+    })
+    try {
+      const first = await runWithMode(pool, deps, attemptInput(dir), 'chat')
+      assert.ok(first !== null)
+      await waitSettled(first)
+      assert.equal(textOf(first), 'ok')
+      const binding = store.get('sess-hard')
+      assert.equal(binding?.conversationId, 'sess-new', 'the first turn must persist its session id')
+
+      // Second turn: same session, same account. The process is warm and the
+      // session id is already open on it, so NOTHING may be restored — a
+      // session/load here would replay the whole conversation into the new turn.
+      const second = await runWithMode(pool, deps, attemptInput(dir, { binding: binding as never }), 'chat')
+      assert.ok(second !== null, 'the second turn must run')
+      await waitSettled(second)
+      assert.equal(textOf(second), 'ok', 'only this turn own answer may appear')
+      assert.equal(created.length, 1, 'the warm process is reused, not respawned')
+      assert.equal(notices.length, 0, 'a cached session must not be reported as lost: ' + JSON.stringify(notices))
+      assert.ok(!logs.some((m) => m.includes('could not be restored')), logs.join(' | '))
+      assert.equal(store.get('sess-hard')?.conversationId, 'sess-new', 'the binding still points at the live session')
+    } finally {
+      pool.dispose()
+    }
+  } finally {
+    await cleanupDir(dir)
+  }
+})
+
+test('a killed ACP process is recovered on the next turn by rebuilding with history', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-killed-'))
+  const created: AcpProcess[] = []
+  const notices: Array<{ kind: string }> = []
+  const logs: string[] = []
+  const store = new SessionStore(join(dir, 'sessions.json'))
+  try {
+    const deps = attemptDeps({
+      store,
+      log: (m: string) => logs.push(m),
+      appendAcpNotice: (_k, notice) => notices.push(notice),
+    })
+    const pool = new AcpSessionPool({
+      bin: () => FIXTURE,
+      cfg: () => attemptInput(dir).cfg,
+      createProcess: (opts) => {
+        const proc = new AcpProcess(opts)
+        created.push(proc)
+        return proc
+      },
+    })
+    try {
+      const first = await runWithMode(pool, deps, attemptInput(dir), 'chat')
+      assert.ok(first !== null)
+      await waitSettled(first)
+      const binding = store.get('sess-hard')
+      assert.equal(binding?.conversationId, 'sess-new')
+
+      // Kill the child the way a crash would: the pool keeps no live process,
+      // and agy no longer knows the session it was told about.
+      const victim = created[0]!
+      victim.close()
+      const deadline = Date.now() + 5_000
+      while (victim.isAlive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+      assert.equal(victim.isAlive(), false, 'the killed process must be gone')
+
+      const second = await runWithMode(pool, deps, attemptInput(dir, { binding: binding as never }), 'chat')
+      assert.ok(second !== null, 'the next turn must still run after the crash')
+      await waitSettled(second)
+      assert.equal(textOf(second), 'ok')
+      assert.equal(created.length, 2, 'a dead process is replaced, not reused')
+      assert.equal(notices.length, 1, 'the user must be told the session was rebuilt')
+      assert.equal(notices[0]!.kind, 'acp-reset')
+      assert.ok(logs.some((m) => m.includes('could not be restored')), logs.join(' | '))
+    } finally {
+      pool.dispose()
+    }
+  } finally {
+    await cleanupDir(dir)
+  }
+})
+
+test('the wakeup switch alone decides retention: transport=acp with wakeup off keeps nothing', () => {
+  const cfg = { ...defaultConfig(), transport: 'acp' as const, backgroundWakeup: false }
+  let subscribed = 0
+  let retained = 0
+  const proc = {
+    isAlive: () => true,
+    lastUsedAt: 0,
+    hasOpenSession: () => true,
+    subscribeSession: () => { subscribed++; return () => {} },
+  }
+  const watcher = new BackgroundWakeWatcher({
+    getConfig: () => cfg,
+    resolveAgent: async () => ({ status: 'idle', inbox: { nextTurn: [] }, followup: () => {} }),
+    retainAcpSession: () => { retained++; return () => {} },
+  })
+  try {
+    const rec = new RunRecording()
+    rec.append({ kind: 'step', stepKey: 'tc-live', stepKind: 'tool', state: 'ACTIVE', rawStatus: 'in_progress', text: '', tool: { name: 'run_command', args: { CommandLine: 'npm run dev' } } })
+    rec.settle(null)
+    watcher.onAttemptSettled({
+      sessionKey: 'sess-two-switches',
+      conversationId: 'acp-two',
+      transport: 'acp',
+      recording: rec,
+      failure: null,
+      superseded: false,
+      acpProcess: proc as never,
+      acpSessionId: 'acp-two',
+    })
+    assert.equal(subscribed, 0, 'wakeup off must not subscribe to post-turn updates')
+    assert.equal(retained, 0, 'wakeup off must not retain the ACP session')
+    assert.equal(watcher.status().activeWatches, 0)
+  } finally {
+    watcher.dispose()
+  }
+})

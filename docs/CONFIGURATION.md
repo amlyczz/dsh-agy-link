@@ -93,7 +93,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `proxyUrl` | `DSH_AGY_PROXY_URL` | `''` | Global proxy for agy processes; per-account proxies take precedence |
 | `quotaPollIntervalMs` | `DSH_AGY_QUOTA_POLL_INTERVAL_MS` | `3600000` | Background quota poll interval (minimum 60 s) |
-| `quotaViaCli` | `DSH_AGY_QUOTA_VIA_CLI` | `true` | Prefer the agy CLI path for quota queries |
+| `quotaViaCli` | `DSH_AGY_QUOTA_VIA_CLI` | `true` | Prefer the agy CLI path for quota queries. The CLI is only spawned once the account's access token has at least two minutes of life left (refreshed up front when it does not); otherwise that round falls back to the REST quota endpoint |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in weekly-quota warmup |
 | `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | Models used for warmup probes |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refresh agy's update-check timestamp before every spawn to stop the `--bg-updater` console flash chain |
