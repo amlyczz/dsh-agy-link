@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.71 (2026-11-23)
+
+### English
+
+- **Feat(translate): a `replace` display mode, so the translation can stand in for the reply instead of repeating it (merges PR #178).** New setting `translateDisplay` (Settings → 「译文显示方式」, next to the translate-button switch):
+  - `card` (**default**) — unchanged: the Gemini card sits under the reply.
+  - `replace` — the translated text takes the reply's place, with a small footer (`✦ Gemini translation · Show original · Copy`) to flip back.
+  - It is **display only**: the session, and therefore the model's own context, keeps the original text. The hiding is one declarative `:has()` stylesheet rule keyed on the card's own `data-display`/`data-show-original`; nothing in the DOM or the session is rewritten. If DSH ever seats an intermediate node the rule simply stops matching and both texts show — the failure direction is "shows too much", never "hides the reply for good".
+  - Four locales carry the copy; config validation, `/status`, HTTP contract and DOM tests updated.
+
+### 中文
+
+- **特性(翻译)：新增 `replace` 显示模式，让译文直接替代原回复而不是重复一遍（合并 PR #178）。** 新设置 `translateDisplay`（设置 → 「译文显示方式」，紧邻翻译按钮开关）：
+  - `card`（**默认**）—— 行为不变：Gemini 卡片显示在回复下方。
+  - `replace` —— 译文占据回复的位置，底部保留一条小栏（`✦ Gemini 翻译 · 显示原文 · 复制`）可翻回原文。
+  - **仅影响显示**：会话与模型上下文仍保留原文。隐藏逻辑是一条声明式 `:has()` 样式规则，依据卡片自身的 `data-display` / `data-show-original`；DOM 与会话都不被改写。若 DSH 将来在中间插入节点，规则会**自然失效并同时显示两份**——失败方向是"多显示"，绝不是"回复被永久隐藏"。
+  - 四语言文案齐全；配置校验、`/status`、HTTP 契约与 DOM 测试均已更新。
+
 ## Unreleased
 
 ### English
