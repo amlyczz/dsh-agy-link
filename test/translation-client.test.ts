@@ -155,7 +155,7 @@ interface Definition {
   kind: string
   match: (event: unknown) => unknown
   start: (context: unknown, match: unknown) => Record<string, unknown>
-  update: (context: { state?: unknown }) => unknown
+  update: (context: { state?: unknown }, match: unknown) => unknown
   buildViewNode: (context: {
     key: string
     id: string
@@ -209,6 +209,21 @@ test('client registers the translation conversation definition', () => {
   assert.equal(matched?.id, '7')
   assert.equal(matched?.role, 'start')
   assert.equal(definition.match({ type: 'assistant/message', seq: 7 }), null)
+})
+
+test('a re-translation of the same reply replaces its card instead of stacking a second one', () => {
+  const { definitions } = mount()
+  const definition = definitions.find((d) => d.kind === 'agy-translation')!
+  const rec = (seq: number, text: string) => ({ type: 'plugin:agy-link/translation', seq, data: { messageId: 'm1', anchorSeq: 42, text } })
+  const first = definition.match(rec(60, '口语版')) as { id: string }
+  const again = definition.match(rec(70, '结构版')) as { id: string }
+  assert.equal(first.id, again.id, 'both records of one reply map to one node')
+  assert.notEqual((definition.match({ ...rec(80, 'x'), data: { messageId: 'm2', text: 'x' } }) as { id: string }).id, first.id)
+  const state = definition.start({}, { event: rec(60, '口语版') })
+  const updated = definition.update({ state }, { event: rec(70, '结构版') }) as Record<string, unknown>
+  assert.equal(updated.text, '结构版')
+  assert.equal(updated.anchorSeq, 42)
+  assert.equal(definition.update({ state: updated }, { event: rec(90, '  ') }), updated, 'an empty record keeps the last good text')
 })
 
 test('definitions register once uiConversation is provided after the client applied', () => {

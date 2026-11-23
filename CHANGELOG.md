@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### English
+- **Fix(translate): re-translating a reply replaces its card instead of stacking another.** Every `plugin:agy-link/translation` record became its own chat node, so a forced re-translation (`/tsl --force`, `POST /translate` with `force`) left the old and new translations stacked under the reply. In replace mode all of them showed in place of the original. The conversation Definition now identifies a record by the `messageId` it translates: later records for the same reply update that node, so the newest translation is the one shown. An empty record never blanks a good one. Legacy records without `messageId` keep one node per record.
+
+### 中文
+- **修复（翻译）：重新翻译同一条回复会替换它的译文卡片，不再叠加一张新卡片。** 以前每条 `plugin:agy-link/translation` 记录都单独生成一个聊天节点。强制重译（`/tsl --force`，或带 `force` 调 `POST /translate`）之后，新旧译文会一起叠在回复下面；在替换原文模式下，这几份译文会同时显示在原文的位置上。现在会话定义按记录所翻译回复的 `messageId` 识别节点，同一条回复后来的记录会更新这个节点，所以显示的是最新译文。空记录不会覆盖已有的好译文。旧版没有 `messageId` 的记录仍然一条记录一个节点。
+
 ## 0.6.73 (2026-11-24)
 
 ### English
