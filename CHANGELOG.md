@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.72 (2026-11-23)
+
+### English
+
+- **Fix(client): a translate button that mounted while a translation was already in flight no longer spins forever (merges PR #180, fixes #179).** `TranslateAction` asked `GET /translate/state` exactly once on mount. A `busy` answer raised the spinner, and nothing asked again — only this page's own `POST /translate` settled `working`, and an auto-translation running in the session has none. The spinner then outlived the card until the panel remounted (switching conversations was the usual workaround).
+  - The mount effect is now a small probe loop: `busy` keeps the spinner and re-asks in 3 s, `ready` settles to ✓, and an `idle` that follows a `busy` releases the spinner this probe raised (the run failed or was cancelled). An `idle` on the first probe still changes nothing, as before — so a reply that was never translating does not flash.
+
+### 中文
+
+- **修复(客户端)：若翻译按钮在「已有翻译正在进行」时挂载，不再永久转圈（合并 PR #180，修复 #179）。** `TranslateAction` 挂载时只查一次 `GET /translate/state`。返回 `busy` 会升起 spinner，但之后没有任何人再问——只有本页自己发起的 `POST /translate` 才会把状态落定，而会话里正在跑的自动翻译没有这一环。于是 spinner 一直活到面板重新挂载（用户通常靠切换会话再切回来绕过）。
+  - 现在挂载 effect 变成一个小探测循环：`busy` 保持 spinner 并每 3 秒重问一次；`ready` 落定为 ✓；若 `busy` 之后变成 `idle`（该轮失败或被取消），则释放本次探测升起的 spinner。首次探测就是 `idle` 时行为不变——从没翻译过的回复不会闪一下。
+
 ## 0.6.71 (2026-11-23)
 
 ### English
