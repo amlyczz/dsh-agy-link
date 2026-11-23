@@ -156,6 +156,13 @@ function sanitizeNode(
     delete current.const
   }
 
+  // Gemini rejects empty-string (and null) enum members with
+  // `400 INVALID_ARGUMENT ... enum[N]: cannot be empty`, failing the whole
+  // GenerateContentRequest even when the tool is never called. Drop them.
+  if (Array.isArray(current.enum)) {
+    current.enum = current.enum.filter((v) => v !== '' && v !== null)
+  }
+
   // Drop empty `enum: []`
   if (Array.isArray(current.enum) && current.enum.length === 0) {
     delete current.enum
