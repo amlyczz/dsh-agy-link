@@ -32,7 +32,7 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'transport must be cli or acp'
   }
-  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn') {
+  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'auxNeutralWorkspace') {
     return typeof value === 'boolean' ? null : `${key} must be a boolean`
   }
   if (key === 'warmupWindows') {
@@ -55,6 +55,11 @@ function validateConfigValue(key: string, value: unknown): string | null {
   }
   if (key === 'agent') {
     return typeof value === 'string' ? null : 'agent must be a string'
+  }
+  if (key === 'quotaPollIntervalMs') {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 60_000
+      ? null
+      : 'quotaPollIntervalMs must be a number of milliseconds >= 60000'
   }
   if (key === 'agySettings') {
     if (typeof value !== 'string') return 'agySettings must be a string'
@@ -85,12 +90,13 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
           'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup',
-          'cloakSystemPrompt', 'respectExternalSignIn',
+          'cloakSystemPrompt', 'respectExternalSignIn', 'auxNeutralWorkspace',
           'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels',
           'autoWarmup', 'warmupModels', 'warmupWindows', 'warmupDailyTime', 'warmupTimezone', 'warmupIntervalHours',
           'autoTranslate', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',
+          'quotaPollIntervalMs',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })

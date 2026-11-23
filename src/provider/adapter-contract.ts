@@ -9,6 +9,7 @@ import type { PluginConfig } from '../common/types.ts'
 import type { ModelCatalog } from '../host/models.ts'
 import type { SessionStore } from '../host/sessions.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
+import type { ModelFamily } from '../common/pool-types.ts'
 import type { RunRecording, RunRegistry } from '../host/recording.ts'
 import type { StreamJsonParser } from '../host/parser.ts'
 import type { ImageRefLike } from '../host/media.ts'
@@ -29,6 +30,15 @@ export interface AgyAdapterDeps {
    * missing from its per-model snapshot (issue #125).
    */
   refreshQuota?: () => Promise<void>
+  /** Refresh ONLY one account's quota (throttled by the host). */
+  onAccountUsed?: (accountId: string, family: ModelFamily) => void
+  /**
+   * Bring an isolated account's own OAuth token into agy's safety window before
+   * spawning (host-injected; it needs the credential store). Without this a
+   * stale token makes agy fall back to the machine-wide keyring and silently
+   * run as another account.
+   */
+  ensureFreshToken?: (account: ManagedAccount) => Promise<boolean>
   /** Recordings shared with the agy_tool mirror (native tool-card mirroring). */
   runs: RunRegistry
   /**

@@ -19,6 +19,7 @@ import { resolveAgyBin, probeProcess, isolatedHomeEnv } from './runner.ts'
 import { supportsSshIsolation } from '../runtime/agy/env.ts'
 import { SessionStore } from './sessions.ts'
 import { AccountPoolManager } from './pool.ts'
+import { AccountQuotaRefresher } from '../features/quota/freshness.ts'
 import { PoolAuthFlow } from './pool-auth.ts'
 import { QuotaService } from './quota.ts'
 import { createEffortUnsupportedStore } from './effort-unsupported-store.ts'
@@ -118,6 +119,15 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       log,
     }),
   )
+  // Keep the account actually in use fresh. `recordSuccess`/a switch fires
+  // `onAccountUsed`; we refresh just that account (throttled) instead of waiting
+  // for the next full sweep, so the panel reflects real consumption within
+  // minutes. Fire-and-forget: a quota probe must never delay or fail a turn.
+  const quotaRefresher = new AccountQuotaRefresher(async (accountId) => {
+    const acc = pool.getAccount(accountId)
+    if (acc === undefined) return
+    await quota.refreshAccountQuota(acc, false)
+  })
   const warmup = new WarmupService(
     pool,
     quota,
@@ -413,6 +423,8 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     getMediaBaseUrl: () => (webServerPort.current ? `http://127.0.0.1:${webServerPort.current}/plugins/agy-link/media` : null),
     // Non-forced: honours per-account cooldowns so a heal cannot stampede the
     // pool. Catalog re-discovery repairs `agy models` in the same pass.
+    onAccountUsed: (accountId) => { quotaRefresher.trigger(accountId) },
+    ensureFreshToken: (acc) => quota.getValidAccessToken(acc).then((t) => t !== null).catch(() => false),
     refreshQuota: async () => {
       await quota.refreshAllQuotas(false).catch(() => undefined)
       await catalog.forceRefreshAndNotify().catch(() => undefined)

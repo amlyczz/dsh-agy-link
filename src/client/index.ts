@@ -116,6 +116,10 @@ export function apply(ctx: ClientContext): void {
 				order: 10,
 				label: () => locale.bind(NS)('section.label'),
 				locale: NS,
+				// The header component needs the session id to scope subagents.
+				// `inject` is supported by the slot runtime but missing from this
+				// bundle's TS surface, so spread it past the excess-property check.
+				...({ inject: (sessionId: string) => ({ sessionId }) } as Record<string, unknown>),
 			},
 			AgySessionStatus,
 		);

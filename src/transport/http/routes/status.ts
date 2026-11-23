@@ -3,6 +3,7 @@ import { runRoute, sendJsonWithEtag, type RawRes, type RouteRegistrar } from '..
 import { sanitizeCatalogEntries } from '../../../host/models.ts'
 import { mergeCatalogWithQuotaModels, quotaCatalogForAccount } from '../../../domain/models/quota-catalog.ts'
 import type { ManagedAccount } from '../../../common/pool-types.ts'
+import { snapshotSubagents } from '../../../features/subagent/live.ts'
 
 /**
  * The selectable universe the Settings ticks describe.
@@ -95,6 +96,8 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           // ~55s serial cascade showed no progress at all.
           quotaRefreshing: typeof quota?.refreshingAccounts === 'function' ? quota.refreshingAccounts() : [],
           warmupState: typeof warmup?.status === 'function' ? warmup.status() : null,
+          // Live agy-internal subagents per session (header badge). Empty when idle.
+          subagents: snapshotSubagents(),
           catalog: { source: activeCat.source, count: catalogCount, lastError: activeCat.lastError ?? cat.lastError ?? null },
           // Dynamically reflects models supported by the currently active account (e.g. hides Argon when active lacks Argon)
           catalogModels: sanitizedCatalogModels,

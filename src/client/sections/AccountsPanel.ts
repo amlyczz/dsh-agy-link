@@ -8,6 +8,7 @@
 import { buildAccountModelRows, type AccountModelDisplayItem } from '../../common/account-models.ts';
 import type { AccountPlanTier, AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
 import { renderDuplicateBadge } from './duplicate-badge.ts';
+import { resolveFamilyActiveIds, resolveFamilyPinnedIds } from './active-account-ids.ts';
 import { resolveAccountPlanTier } from '../../common/plan-tier.ts';
 import {
 	QUOTA_FAMILIES,
@@ -66,24 +67,6 @@ export interface AccountsPanelProps {
 	handlers: AccountsPanelHandlers;
 }
 
-function resolveFamilyActiveIds(
-	pool: AccountPoolData | undefined,
-	optimisticActiveByFamily: Partial<Record<QuotaFamily, string>> | undefined,
-	optimisticActiveId: string | null | undefined,
-): Partial<Record<QuotaFamily, string>> {
-	const out: Partial<Record<QuotaFamily, string>> = {};
-	for (const fam of QUOTA_FAMILIES) {
-		out[fam] =
-			optimisticActiveByFamily?.[fam] ??
-			(fam === 'google' ? optimisticActiveId ?? undefined : undefined) ??
-			pool?.resolvedActiveAccountIds?.[fam] ??
-			(fam === 'google'
-				? (pool?.activeAccountId ?? pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId)
-				: pool?.activeAccountIds?.[fam]);
-	}
-	return out;
-}
-
 export function AccountsPanel(props: AccountsPanelProps): unknown {
 	const {
 		t, pool, accounts, accountModels, loadingAction, quotaRefreshing = [], warmupState,
@@ -96,6 +79,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		loadingAction === `${action}:${acc.id}`;
 
 	const activeIds = resolveFamilyActiveIds(pool, optimisticActiveByFamily, optimisticActiveId);
+	const pinnedIds = resolveFamilyPinnedIds(pool, optimisticActiveByFamily, optimisticActiveId);
 	const now = Date.now();
 
 	return accounts.map((acc: ManagedAccount) => {
@@ -139,9 +123,11 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		const renderQuotaBar = (label: string, familyKey: QuotaFamily): unknown => {
 			const cooling = isFamilyCooling(acc, familyKey, now);
 			const isFamActive = Boolean(acc.enabled && !isAuthRequired && !cooling && activeIds[familyKey] === acc.id);
+			const isFamPredicted = Boolean(isFamActive && pinnedIds[familyKey] !== acc.id);
 			const canSetFamActive = Boolean(acc.enabled && !isAuthRequired && !cooling && activeIds[familyKey] !== acc.id);
 			return renderFamilyQuotaBar(t, label, familyKey, acc, isSyncing, {
 				isActive: isFamActive,
+				predicted: isFamPredicted,
 				canSetActive: canSetFamActive,
 				settingActive: loadingAction === `active:${acc.id}:${familyKey}`,
 				clearingCooldown: loadingAction === `clearCooldown:${acc.id}:${familyKey}`,

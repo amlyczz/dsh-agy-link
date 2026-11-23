@@ -203,8 +203,9 @@ test('modal host manager reactively promotes secondary header on unmount and sup
   const rendered = sessionStatusComponent()
   assert.ok(rendered)
   assert.equal(rendered.type, 'div')
-  // Second child (the portal) is null because isModalOpen is false
-  assert.equal(rendered.children[1], null)
+  // The LAST child is the modal portal, and it is null because isModalOpen is
+  // false. (A subagent control now sits between the badge and the portal.)
+  assert.equal(rendered.children[rendered.children.length - 1], null)
 })
 
 test('REGRESSION: session status badge claims primary host on mount to eliminate first-open flicker', () => {

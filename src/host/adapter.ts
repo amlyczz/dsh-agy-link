@@ -374,9 +374,7 @@ export class AgyAdapter extends LlmAdapter {
     let activeModel = selection.activeModel
     // The account is final here: record it as *the* in-use account for Google
     // (or bootstrap when none is set) without hijacking it on Argon/Claude/GPT turns.
-    if (account && !isAux && (family === 'google' || !this.deps.pool?.getPoolData().lastActiveAccountId)) {
-      this.deps.pool?.markAccountActive(account.id)
-    }
+    if (account && !isAux) this.deps.pool?.markAccountActive(account.id, family)
     // Image callers need the account's HOME to find agy's artifact directory
     // (`<home>/.gemini/antigravity-cli/brain/<conversation>/`). The hook is
     // advisory: a throwing listener must never break a run.
@@ -541,6 +539,8 @@ export class AgyAdapter extends LlmAdapter {
       log: this.deps.log,
       onParser: this.deps.onParser,
       onRun: this.deps.onRun,
+      ...(this.deps.onAccountUsed === undefined ? {} : { onAccountUsed: this.deps.onAccountUsed }),
+      ...(this.deps.ensureFreshToken === undefined ? {} : { ensureFreshToken: this.deps.ensureFreshToken }),
       clearInFlightPrompt: (key: string, p: string) => this.clearInFlightPrompt(key, p),
       registerActiveRun: (key: string, r: RunRecording) => this.activeRuns.set(key, r),
       unregisterActiveRun: (key: string, r: RunRecording) => {

@@ -237,8 +237,8 @@ export class AccountPoolManager {
    * Record the account a run actually spawned with. The console derives its
    * single "in use" badge from this; exactly one account runs agy at a time.
    */
-  markAccountActive(id: string): void {
-    this.admin.markAccountActive(id)
+  markAccountActive(id: string, family: ModelFamily = 'google'): void {
+    this.admin.markAccountActive(id, family)
   }
 
   /**

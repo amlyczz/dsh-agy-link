@@ -239,10 +239,26 @@ export class PoolAdmin {
    * Record the account a run actually spawned with. The console derives its
    * single "in use" badge from this; exactly one account runs agy at a time.
    */
-  markAccountActive(id: string): void {
+  /**
+   * Record the account a run ACTUALLY used, scoped to its model family.
+   *
+   * Family-scoped on purpose: the console's per-family "当前使用" badge must
+   * describe reality, and an Argon turn on account X must not rewrite the
+   * Gemini pointer (or the global `lastActiveAccountId`). Before this, an
+   * unpinned family showed a *predicted* account as "in use" while the live
+   * session ran somewhere else (reported 2026-11-23: Argon row claimed the
+   * primary while the header showed the account really serving the turn).
+   * Deliberately does NOT stamp `manualPinAtByFamily` — runtime use is not a
+   * user pin, so an explicit pin still wins the tie-break in stickyAccount().
+   */
+  markAccountActive(id: string, family: ModelFamily = 'google'): void {
     const data = this.deps.getData()
-    if (data.lastActiveAccountId === id) return
-    data.lastActiveAccountId = id
+    if (!data.activeAccountIds) data.activeAccountIds = {}
+    const familySame = data.activeAccountIds[family] === id
+    const lastSame = family !== 'google' || data.lastActiveAccountId === id
+    if (familySame && lastSame) return
+    data.activeAccountIds[family] = id
+    if (family === 'google' || !data.lastActiveAccountId) data.lastActiveAccountId = id
     this.deps.persist()
   }
 
@@ -423,7 +439,7 @@ export class PoolAdmin {
     this.deps.persist()
   }
 
-  /**
+    /**
    * Records a rate-limit / 429 error and sets cooldown for the requested model family.
    */
   recordFailure(id: string, family: ModelFamily, reason: string, serverResetTime?: string): void {

@@ -122,6 +122,22 @@ export function handleConfig(deps: CommandDeps, ctx: CommandContext): CommandRes
     return ok('Default effort set to **' + (normalized === 'default' ? 'model default' : normalized) + '**.')
   }
 
+  if (sub === 'quota-poll' || sub === 'quota-interval') {
+    const curMin = Math.round(deps.cfg().quotaPollIntervalMs / 60_000)
+    if (arg === '') {
+      return ok(
+        `后台配额全量扫描间隔：**${curMin} 分钟**（用法：/agy config quota-poll <分钟>）\n` +
+          '注意：正在使用的账号在一轮结束后会**单独立即刷新**（节流 5 分钟），所以这个间隔只决定"全量扫描"的频率，不等于你看到的数据新鲜度上限。',
+      )
+    }
+    const minutes = Number(arg)
+    if (!Number.isFinite(minutes) || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      return err('usage: /agy config quota-poll <1-1440>')
+    }
+    deps.setOverride('quotaPollIntervalMs', minutes * 60_000)
+    return ok(`后台配额全量扫描间隔设为 **${minutes} 分钟** — 下一个定时周期生效。`)
+  }
+
   if (sub === 'dispatch' || sub === 'dispatch-retries') {
     const cfg = deps.cfg()
     const mutex = credentialSlotMutex

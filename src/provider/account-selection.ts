@@ -253,16 +253,12 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
   if (account === undefined && pool !== undefined) {
     account = pool.selectAccount(family, activeModel) ?? undefined
   }
-  if (
-    account !== undefined
-    && pool !== undefined
-    && (family === 'google' || !pool.getPoolData().lastActiveAccountId)
-    && pool.getPoolData().lastActiveAccountId !== account.id
-  ) {
-    // Record in-use account without stamping manualPinAt or overwriting global
-    // family pins from an older session's sticky affinity.
+  if (account !== undefined && pool !== undefined) {
+    // Record the account actually serving this family, without stamping
+    // manualPinAt. Family-scoped: an Argon pick must not rewrite the Gemini
+    // pointer, but it MUST make the Argon row truthful.
     if (typeof pool.markAccountActive === 'function') {
-      pool.markAccountActive(account.id)
+      pool.markAccountActive(account.id, family)
     } else {
       pool.setActiveAccount(account.id, family)
     }

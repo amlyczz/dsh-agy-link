@@ -15,6 +15,8 @@ import { Spinner } from '../ui/Spinner.ts';
 
 export interface FamilyBarActions {
 	isActive?: boolean;
+	/** `isActive` came from the eligibility PREDICTION, not from a real use/pin. */
+	predicted?: boolean;
 	canSetActive?: boolean;
 	settingActive?: boolean;
 	clearingCooldown?: boolean;
@@ -272,14 +274,18 @@ function renderFamilyHeaderActions(
 		);
 	}
 	if (familyActions?.isActive) {
+		// A family with no real pin resolves to "who WOULD be picked". Calling that
+		// "当前使用" is what made the panel contradict the running session; the
+		// predicted case says so explicitly.
+		const label = familyActions.predicted ? t('account.predictedInUse') : t('status.inUse');
 		return h('span', {
 			key: 'fam-active',
-			title: t('status.inUse'),
+			title: label,
 			style: {
 				...S.badgeTag!,
-				background: 'rgba(16, 185, 129, 0.12)',
-				color: '#10b981',
-				borderColor: 'rgba(16, 185, 129, 0.45)',
+				background: familyActions.predicted ? 'rgba(148, 163, 184, 0.14)' : 'rgba(16, 185, 129, 0.12)',
+				color: familyActions.predicted ? 'var(--agy-text-secondary)' : '#10b981',
+				borderColor: familyActions.predicted ? 'var(--agy-border-box)' : 'rgba(16, 185, 129, 0.45)',
 				gap: '3px',
 				fontSize: '10px',
 				padding: '1px 5px',
@@ -287,7 +293,7 @@ function renderFamilyHeaderActions(
 				whiteSpace: 'nowrap',
 				flexShrink: 0,
 			},
-		}, uiIcon('zap', 10, '#10b981'), t('status.inUse'));
+		}, uiIcon('zap', 10, familyActions.predicted ? 'var(--agy-text-secondary)' : '#10b981'), label);
 	}
 	if (familyActions?.canSetActive && familyActions.onSetActive) {
 		return h(Button, {

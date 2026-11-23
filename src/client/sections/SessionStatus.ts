@@ -11,13 +11,14 @@ import { agyIcon } from '../icons.ts';
 import { h, useEffect, useRef, useState } from '../react.ts';
 import { isUiVisible, useAgyStatus } from '../status.ts';
 import { Button } from '../ui/Button.ts';
+import { SubagentControl } from './SubagentPanel.ts';
 import { agyModalStore, modalHostManager, Modal, portalToBody } from '../ui/Modal.ts';
 import { useAgyTranslation, type LocaleLike } from '../hooks/useTranslation.ts';
 
 export type SettingsSectionComponent = (props?: { isModal?: boolean; onClose?: () => void }) => unknown;
 
 export function createSessionStatus(locale: LocaleLike, SettingsSection: SettingsSectionComponent): () => unknown {
-	return function AgySessionStatus(): unknown {
+	return function AgySessionStatus(props?: { sessionId?: string }): unknown {
 		const hostIdRef = useRef<string | null>(null);
 		if (hostIdRef.current === null) {
 			hostIdRef.current = 'host_' + Math.random().toString(36).slice(2);
@@ -53,6 +54,11 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 		}, []);
 
 		const pool = status?.pool;
+		// Live agy-internal subagents for THIS session (injected by the header slot).
+		const sessionId = props?.sessionId ?? '';
+		const subSessions = (status as unknown as { subagents?: Array<{ session: string; total: number; running: number; items: Array<{ role: string; lastAction: string; running: boolean }> }> })?.subagents ?? [];
+		const mySubs = sessionId !== '' ? subSessions.find((s) => s.session === sessionId) : undefined;
+		const subItems = mySubs?.items ?? [];
 		const accounts = pool?.accounts ?? [];
 		const rawActiveId = pool?.resolvedActiveAccountIds?.google ?? pool?.activeAccountId ?? pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
 		// Display EXACTLY the server-scheduled account — same semantics as the
@@ -108,8 +114,9 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 		if (!isUiVisible(status, 'showHeaderBadge')) {
 			return modalPortal;
 		}
-		return h('div', { style: { display: 'inline-block' } },
+		return h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
 			badge,
+			h(SubagentControl, { t, items: subItems }),
 			modalPortal,
 		);
 	};

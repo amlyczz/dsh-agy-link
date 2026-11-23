@@ -445,7 +445,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
 
   // Background quota refresh: reads local token files only (no agy spawns,
   // no Keychain prompts), then one HTTPS call per account per poll interval
-  // (default 15 min, configurable; clamped to at least 60s). Restricted
+  // (default 60 min via quotaPollIntervalMs, configurable at runtime through
+  // the settings route / `/agy config quota-poll`, clamped to at least 60s).
+  // The account currently in use is additionally refreshed as soon as it
+  // settles a run (see quota/freshness.ts), so the panel is not stuck on the
+  // hourly snapshot. Restricted
   // accounts (cooldown / auth-quarantined) are skipped by refreshAllQuotas.
   // Background quota refresh: 5s boot pass awaits `versionProbePromise` if in
   // flight so User-Agent carries the detected agy version from the first poll.

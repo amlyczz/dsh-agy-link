@@ -74,3 +74,15 @@
 - **不要翻译用于「识别」的文本**：例如 mermaid 里 `代码块` 是 DSH 的占位 banner 文案，用来判断 banner 是否携带真实语言标签；翻译它等于破坏检测逻辑。
 - **不要用 `document.documentElement.lang` 代替 locale 绑定**：那是 DSH 页面语言，与插件 locale 可能不一致。
 - 锚点：`test/issue153-decision-locale.test.ts`、`test/issue153-client-locale.test.ts`（源码无中文字面量 + 四语言键齐全 + 兜底语义）、`test/client-dom.test.ts`（插入 payload 已本地化）。
+
+## 子代理可见性：顶栏下拉，复用 job 面板的「外观」而非 job 账本（2026-11-23）
+
+agy 的协同专员（`Builder N`、`Concept Artist` 等）此前只能作为滚动中的思考行出现。现在在会话顶栏提供一个紧凑计数控件，展开即见「运行中 / 已结束」分区：角色 · 类型、当前动作、走动耗时。
+
+- **数据源**：`SubagentTracker.snapshot()`（读 agy 会话目录 `.system_generated/subagents/*.json`）→ `features/subagent/live.ts` 按 DSH session 注册 → `/status.subagents` → 顶栏按注入的 `sessionId` 只显示本会话。
+- **为什么不注册成 DSH job**（虽然 `dsh-client-ui-jobs` 本来就是这么显示子代理的）：
+  1. `dsh-jobs-local` 的 `maxConcurrentJobsPerOwner` 默认 **10**，且 **bash 后台任务与它共用**该额度；agy 一次可并发 10 个子代理（2026-11-23 实测），注册必然 `JOB_LIMIT_REACHED`。
+  2. 每个 owned job 结算会向「该会话的 agent」发 `background job <id> (<kind>: <label>) finished …` —— 这里 agent 就是 agy，会给它注入一条它没发起过的通知，并按 `user/message` 记进会话。
+  3. 换成 unowned 虽无通知，但所有会话共享可见、任何会话可停止，反而更糟。
+- **结论**：复用 DSH 的**视觉与交互**（计数控件 + 分区 + 耗时），不复用 job 注册通道 → 零通知、零聊天气泡、无 10 个上限、按会话精确。
+- 锚点：`test/subagent-panel.test.ts`（分组、耗时格式、分区/折叠/空态渲染）、`test/subagent-live.test.ts`（按会话注册与聚合）。

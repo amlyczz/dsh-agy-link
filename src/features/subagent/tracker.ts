@@ -15,11 +15,14 @@ import {
 import { findBrainDir } from '../../runtime/agy/db/paths.ts'
 import { TaskActivityTracker } from './task-activity.ts'
 import { ParentQuotaMonitor, type SubagentQuotaExhaustedInfo } from './parent-quota.ts'
+import { attachSubagentTracker, detachSubagentTracker, type SubagentSnapshot, type SubagentSnapshotItem } from './live.ts'
 
 export type { SubagentQuotaExhaustedInfo }
 
 export interface SubagentTrackerOptions {
   conversationId?: string
+  /** DSH session id, so the header badge can scope this tracker's subagents. */
+  sessionKey?: string
   accountHome?: string
   /**
    * True when attaching to a resumed multi-turn conversation: pre-existing
@@ -133,6 +136,7 @@ interface TrackedSubagent {
   cursor: TranscriptCursor
   /** Lines consumed so far — the fallback step index when a row carries none. */
   lines: number
+  startedAt: number; lastAt: number; lastAction: string
 }
 
 function isActiveSubagentState(state: string | undefined): boolean {
@@ -249,11 +253,15 @@ export class SubagentTracker {
   private polling = false
   private readonly pollIntervalMs: number
   private parentCursor: TranscriptCursor = createTranscriptCursor()
+  private sessionKey: string
+  /** Late-bind the DSH session id: the recorder is built before an attempt knows it. */
+  setSessionKey(key: string): void { this.sessionKey = key }
   private parentLines = 0
 
   constructor(private readonly opts: SubagentTrackerOptions) {
     this.conversationId = opts.conversationId ?? ''
     this.accountHome = opts.accountHome
+    this.sessionKey = opts.sessionKey ?? ''
     this.pollIntervalMs = opts.pollIntervalMs ?? 500
     this.taskActivity = new TaskActivityTracker(opts.log)
   }
@@ -282,6 +290,7 @@ export class SubagentTracker {
   start(): void {
     if (this.active) return
     this.active = true
+    attachSubagentTracker(this.sessionKey, this)
     if (this.opts.resumed === true && !this.baselined && this.conversationId !== '') {
       this.baselined = true
       this.baselineExisting()
@@ -317,6 +326,7 @@ export class SubagentTracker {
       }
     } finally {
       this.active = false
+      detachSubagentTracker(this.sessionKey, this)
       if (this.timer) {
         clearInterval(this.timer)
         this.timer = null
@@ -450,6 +460,8 @@ export class SubagentTracker {
             this.pollSubagentTranscript(existing)
             existing.state = rawState
             existing.terminal = true
+            existing.lastAt = Date.now()
+            existing.lastAction = `已停止 (${rawState})`
             const stateKey = `subagent-state-${subId}-${rawState}`
             if (baselineOnly) {
               this.seenStepKeys.add(stateKey)
@@ -477,6 +489,9 @@ export class SubagentTracker {
           terminal: !active,
           cursor: createTranscriptCursor(initialOffset),
           lines: 0,
+          startedAt: Date.now(),
+          lastAt: Date.now(),
+          lastAction: active ? `已启动协同专员 (${typeName})` : `未保持运行 (${rawState ?? 'unknown'})`,
         }
         this.trackedSubagents.set(subId, tracked)
 
@@ -529,6 +544,8 @@ export class SubagentTracker {
               const toolName = typeof tc?.name === 'string' ? tc.name : ''
               if (toolName === '') continue
               const msg = formatSubagentAction(sub.role, toolName, tc.args)
+              sub.lastAction = msg
+              sub.lastAt = Date.now()
               this.emitSubagentEvent(`${baseKey}-tc-${tcIdx}`, `${msg}\n`, o)
             }
           } else if (o.type === 'PLANNER_RESPONSE' && typeof o.content === 'string' && o.content.trim() !== '') {
@@ -567,5 +584,15 @@ export class SubagentTracker {
         // skip malformed line
       }
     }
+  }
+
+  /** Current subagent state for the header badge / status route. */
+  snapshot(): SubagentSnapshot {
+    const items: SubagentSnapshotItem[] = [...this.trackedSubagents.values()].map((s) => ({
+      conversationId: s.conversationId, role: s.role, typeName: s.typeName,
+      ...(s.state === undefined ? {} : { state: s.state }),
+      running: !s.terminal, lastAction: s.lastAction, startedAt: s.startedAt, lastAt: s.lastAt,
+    }))
+    return { total: items.length, running: items.filter((i) => i.running).length, items }
   }
 }

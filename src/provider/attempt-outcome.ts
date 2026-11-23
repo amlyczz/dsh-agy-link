@@ -460,6 +460,9 @@ export async function handleAttemptOutcome(
       sharesSingleEgress: () => deps.sharesSingleEgress(),
       ...(deps.onRun === undefined ? {} : { onRun: deps.onRun }),
     })
+    // The run settled on `input.account`: refresh just that account so the panel
+    // stops showing the pre-turn snapshot (throttled host-side).
+    if (input.account !== undefined) deps.onAccountUsed?.(input.account.id, input.family)
   } finally {
     rec.settle(failure)
     if (!input.isAux && sessionKey !== '') {
@@ -485,6 +488,11 @@ export async function* runAgyAttempt(
   deps: AttemptDeps,
   input: AttemptInput,
 ): AsyncGenerator<StreamChunk, RunRecording, void> {
+  // Same pre-flight for the CLI path: a stale isolated token makes agy load the
+  // machine-wide keyring (wrong account) instead of this account's own token.
+  if (input.account && input.account.dir && !input.account.systemHome && deps.ensureFreshToken) {
+    await deps.ensureFreshToken(input.account).catch(() => false)
+  }
   const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId, true, {
     family: input.family,
     activeModel: input.activeModel,
@@ -496,6 +504,7 @@ export async function* runAgyAttempt(
   // Dispatch sees the NUL-sanitized prompt: its failure path clears the
   // in-flight marker with the same string the former inline block used.
   const slot = yield* dispatchCredentialSlot(deps, { ...input, prompt: spawn.prompt })
+  recorder.setTrackerSession?.(input.sessionKey)
   if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && !input.agySettings && !input.isAux) {
     const acpRec = await deps.runAcp(deps, { ...input, prompt: spawn.prompt }, slot).catch(() => null)
     if (acpRec !== null) {

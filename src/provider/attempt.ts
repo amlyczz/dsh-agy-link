@@ -61,6 +61,10 @@ export interface AttemptDeps {
   /** Called with each run's parser so the host can keep the last stdout ring. */
   onParser?: (parser: StreamJsonParser) => void
   onRun?: (info: RunTelemetry) => void
+  /** Fired after an attempt settles so the host can refresh THAT account's quota. */
+  onAccountUsed?: (accountId: string, family: ModelFamily) => void
+  /** Refresh an isolated account's token before an ACP spawn (see adapter deps). */
+  ensureFreshToken?: (account: ManagedAccount) => Promise<boolean>
   /** Adapter-private state, injected as callbacks. */
   clearInFlightPrompt: (sessionKey: string, prompt: string) => void
   registerActiveRun: (sessionKey: string, rec: RunRecording) => void
@@ -270,6 +274,8 @@ export interface AttemptRecorder {
   maxTurnMs?: number | undefined
   attachProcess: (proc: RunningProcess) => void
   startTracker?: () => void
+  /** Tell the subagent tracker which DSH session it belongs to (header badge scope). */
+  setTrackerSession?: (sessionKey: string) => void
   feedLine: (line: string, onEvent: ((ev: AgyEvent) => void) | undefined, onFirstEvent: (() => void) | undefined) => void
   drain: (onEvent: ((ev: AgyEvent) => void) | undefined) => void
   flushTracker: () => void
@@ -340,6 +346,7 @@ export function createAttemptRecorder(
     startTracker: () => {
       tracker?.start()
     },
+    setTrackerSession: (sessionKey) => { tracker?.setSessionKey(sessionKey) },
     feedLine: (line, onEvent, onFirstEvent) => {
       watchdog.markEvent()
       // First output = agy resolved its credential; give the machine-wide slot

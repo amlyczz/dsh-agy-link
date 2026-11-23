@@ -131,6 +131,19 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
   - 判定依据必须与 `resolveAccountPlanTier` 一致（`!ev.has5h`），不得另起一套。
 - 锚点：`test/issue137-free-tier-summary.test.ts`（分类、两类压制边界、轮询不变式、周期常量）。
 
+## 额度新鲜度：用完即刷 + 可调全量扫描（2026-11-23）
+
+全量扫描（`refreshAllQuotas`）默认 **60 分钟**一次（`quotaPollIntervalMs`，运行时可用 `/agy config quota-poll <分钟>` 或设置路由 `quotaPollIntervalMs` 调整，下限 60s）。60 分钟意味着"正在烧额度的那个号"最多显示一小时前的数字——这是用户报告"更新不及时"的根因。
+
+修正：**把刷新花在正在使用的账号上**，而不是提高全池扫描频率（后者是封号风险的主因）。
+
+1. **用完即刷**：`AccountPoolManager.recordSuccess()` 与"因失败切到新号"分支触发 `onAccountUsed(accountId, family)`；host 侧 `AccountQuotaRefresher` 只刷新该账号。
+2. **节流 5 分钟**（`QUOTA_ACCOUNT_REFRESH_MIN_GAP_MS`）：路由钩子每回合都会触发，不节流会打爆配额端点；5 分钟同时约束 Google API 与 `agy -p /usage` 进程 spawn（凭据槽持有者走 CLI）。
+3. **绝不阻塞回合**：`trigger()` 是 fire-and-forget，刷新抛错被吞掉——额度是咨询性数据，不能因此让一回合成功/失败。
+4. **边界**：这是最终一致性，不是实时。面板仍逐族显示 `updatedAt`，过期窗口按上一节标注"数据停留在 X"。
+5. **未采纳**：阻塞式"切号前预检"（在 `selectSessionAccount` 里 await 刷新）—— 会与即将 spawn 的 agy 抢凭据槽并引入秒级延迟；改用"切号即刷新新号"（上面的失败切换分支）。
+6. 锚点：`test/quota-freshness.test.ts`（节流、吞错、stale 判定、recordSuccess 触发）。
+
 ## 卡片一致性：同一张卡不得自相矛盾（2026-11-23）
 
 账号卡片同时展示「套餐徽章 + 各模型族配额条 + 失败提示 + 时间戳」，四者来自不同字段，必须彼此自洽。
@@ -142,6 +155,10 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
    - 锚点：`test/quota-panel-consistency.test.ts`。
 3. **按族合并写入意味着单卡多时间戳是合法的**：`updateAccountQuotas()` 逐族合并，某族刷新失败不会清掉其它族。`mergeFallbackFamilyQuota` 在摘要非权威时**保留上一份完整值及其 `updatedAt`**，因此「argon 刚刷新、google 停在两天前」是预期状态——正因为它是预期状态，UI 才必须逐族标出新鲜度，而不能让整卡看起来同一时刻。
 4. **不要用「按最新时间戳渲染」抹平差异**：把整卡的 `updatedAt` 取最大值会让旧族伪装成新数据，属于伪造新鲜度。
+5. **「当前使用」必须是事实，不能是预测**（2026-11-23 实测：Orchestrator/Argon 会话实跑 `ele`，面板 Argon 行却标主账号为「当前使用」）：
+   - `markAccountActive(id, family)` **按族**记录真实使用的账号：写 `activeAccountIds[family]`，只有 `google` 才动全局 `lastActiveAccountId`，且**不**写 `manualPinAtByFamily`（运行使用不是用户手动钉选）。
+   - 无真实钉选的族由 `resolveEligibleActiveAccountId` 回退算出的是**预测**，UI 必须标「预计使用」（`account.predictedInUse`，弱化配色），不得标「当前使用」。
+   - 锚点：`test/active-account-scope.test.ts`。
 
 ## 刷新成功后必须清除 unavailable 标记（issue #151）
 
