@@ -27,7 +27,7 @@ GET  /plugins/agy-link/translate/turn?session=<id>&turn=<n>      # 该回合是�
 GET  /plugins/agy-link/translate/state?session=<id>&message=<id>  # 该条回复的状态（供按钮）
 ```
 
-`/translate/state` 回答 `{state: 'ready'|'busy'|'idle'}`：`ready` = 该 `messageId`（或回退到它所属 turn）已有持久记录，`busy` = 本会话有翻译在跑。回复按钮每次挂载都问它一次，因此**译文完成后切窗口/切会话/整页刷新都仍显示 ✓**。
+`/translate/state` 回答 `{state: 'ready'|'busy'|'idle'}`：`ready` = 该 `messageId`（或回退到它所属 turn）已有持久记录，`busy` = 本会话有翻译在跑。回复按钮每次挂载都问它一次，因此**译文完成后切窗口/切会话/整页刷新都仍显示 ✓**。挂载时回答 `busy`（例如自动翻译正在跑，不是本页发起的请求）时，按钮每 3 秒再问一次，直到 `ready`（✓）或 `idle`（回到可点）；否则没有任何本页请求会结束这个旋转圈，它会一直转到下次重新挂载。
 
 状态码：`200` 成功；`400` 参数或空回合；`409` 当前回合仍在跑；`405` 方法；`502` 无可用账号等模型侧失败。
 

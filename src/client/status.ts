@@ -91,6 +91,7 @@ export interface StatusPayload {
 	warmupWindows?: 'weekly' | '5h' | 'both';
 	warmupMaxProbesPerRun?: number;
 	autoTranslate?: boolean;
+	translateDisplay?: 'card' | 'replace';
 	translateModel?: string;
 	translateEffort?: string;
 	showHeaderBadge?: boolean;

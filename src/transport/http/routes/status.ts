@@ -110,6 +110,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           warmupWindows: cfg.warmupWindows,
           warmupMaxProbesPerRun: cfg.warmupMaxProbesPerRun,
           autoTranslate: cfg.autoTranslate,
+          translateDisplay: cfg.translateDisplay,
           translateModel: cfg.translateModel,
           translateEffort: cfg.translateEffort,
           translateTargetLanguage: cfg.translateTargetLanguage,

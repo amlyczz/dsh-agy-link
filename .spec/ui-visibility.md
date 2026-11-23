@@ -10,6 +10,11 @@
 | --- | --- | --- | --- |
 | `showHeaderBadge` | `true` | `conversation.session.header.actions` 里的 AGY 状态徽标 | 徽标不渲染；控制台弹窗 portal 仍保留 |
 | `showTranslateAction` | `true` | `conversation.chat.assistant-actions` 里的单条「译成人话」按钮 | 按钮不渲染；已生成的译文卡片不受影响 |
+| `translateDisplay` | `card` | 已生成译文的呈现方式 | `replace`：界面上用译文代替被翻译的回复，脚注「查看原文 / 显示译文」可切回 |
+
+`translateDisplay = replace` 只改显示：会话里的原文不动（模型上下文仍是原话）。DSH 把译文节点排在被翻译回复之后（`anchorSeq + 0.1`），
+样式表用 `[data-chat-flow-kind="assistant-step"]:has(+ [data-chat-flow-kind="agy-translation"] .agy-tsl-card[data-display="replace"][data-show-original="false"])`
+隐藏这条回复，不改 DOM；若两者之间被插入别的节点，规则不再匹配，原文与译文同时显示（降级而非丢内容）。「查看原文」切回 DSH 自己渲染的完整回复，而不是记录里截断到 8000 字的副本。
 
 - **opt-out 语义**：只有显式 `false` 才隐藏。状态未到达、旧宿主不含该字段、
   `undefined`/`null` 都保持可见 —— 避免网络抖动时 UI 闪退。规则集中在

@@ -21,6 +21,9 @@
 ## 0.6.72 (2026-11-23)
 
 ### English
+
+- **Fix(client): a translate button that mounted while a translation was already in flight no longer spins forever (merges PR #180, fixes #179).** `TranslateAction` asked `GET /translate/state` exactly once on mount. A `busy` answer raised the spinner, and nothing asked again — only this page's own `POST /translate` settled `working`, and an auto-translation running in the session has none. The spinner then outlived the card until the panel remounted (switching conversations was the usual workaround).
+  - The mount effect is now a small probe loop: `busy` keeps the spinner and re-asks in 3 s, `ready` settles to ✓, and an `idle` that follows a `busy` releases the spinner this probe raised (the run failed or was cancelled). An `idle` on the first probe still changes nothing, as before — so a reply that was never translating does not flash.
 - **Fix(ui): the conversation header badge reports THIS session's model family, not the Gemini pointer.** Account selection is per family: an `Gemini 4 Argon` turn runs on the Argon-eligible account even when the `google` pointer names another one, and Argon bills its own weekly book. The badge resolved `pool.resolvedActiveAccountIds.google` unconditionally, so an Argon session announced a different account *and* that account's Gemini 5-hour percentage — contradicting the model in the composer and the console's Argon row ("菜单里显示的 Argon 不是这个账号"). A new `GET /plugins/agy-link/session-view?session=<id>` resolves the model actually selected for the conversation (`model/selection` event → `defaultModel` → last run), maps it to its family, then picks the account in the scheduler's own order — the session's sticky binding, the per-family pin, the side-effect-free eligibility prediction — and reads the percentage from THAT family's quota book. Measured on the reporting machine: the session showed `AGY · dao 98%` (dao's Gemini 5h) while it was draining account **ele**'s Argon pool (100% → 34% during the session); the badge now reads `AGY · ele` with ele's Argon weekly.
 - **Fix(ui): the badge claims nothing before it knows the family.** A conversation whose view has not answered yet shows the account count only — no alias, no percentage — instead of borrowing another family's pointer. The session-less preview (settings, older hosts) keeps the historical google readout, so nothing else regressed. `sessionStickyAccount` is now exported from account selection so the readout reuses the exact predicate the scheduler uses instead of a second copy.
 - **Fix(ui): a quota window whose reset boundary already passed is marked stale** (muted percentage + "window reset · data is old") rather than printed as a live number, and Argon never borrows a 5-hour slot it does not have.
@@ -30,6 +33,9 @@
 - **Tests:** `test/session-view.test.ts` (9 — family resolution, sticky vs pin, prediction vs "in use", stale window, empty selection, unsupported family), `test/session-badge.test.ts` (4 — view wins, unanswered session claims nothing, legacy preview, rendered badge), `test/account-alias.test.ts` (4 — one alias rule), and `/session-view` added to the frozen HTTP surface with a behavior test (session model outranks `defaultModel`). Two Windows-only failures (`adapter.test.ts` sticky-account, `call-context.test.ts` aux cwd) reproduce at the previous commit and are unrelated.
 
 ### 中文
+
+- **修复(客户端)：若翻译按钮在「已有翻译正在进行」时挂载，不再永久转圈（合并 PR #180，修复 #179）。** `TranslateAction` 挂载时只查一次 `GET /translate/state`。返回 `busy` 会升起 spinner，但之后没有任何人再问——只有本页自己发起的 `POST /translate` 才会把状态落定，而会话里正在跑的自动翻译没有这一环。于是 spinner 一直活到面板重新挂载（用户通常靠切换会话再切回来绕过）。
+  - 现在挂载 effect 变成一个小探测循环：`busy` 保持 spinner 并每 3 秒重问一次；`ready` 落定为 ✓；若 `busy` 之后变成 `idle`（该轮失败或被取消），则释放本次探测升起的 spinner。首次探测就是 `idle` 时行为不变——从没翻译过的回复不会闪一下。
 - **修复(界面)：会话头徽标改为报告「本会话模型所属家族」的账号，而不是 Gemini 指针。** 选号是按模型族独立进行的：`Gemini 4 Argon` 的回合会落在有 Argon 权限的账号上，即使 `google` 指针指着另一个账号，而且 Argon 消耗它自己的周额度。徽标此前无条件读 `pool.resolvedActiveAccountIds.google`，于是 Argon 会话既报了错误的账号、又报了那个账号的 Gemini 5 小时百分比，与输入框里的模型和控台的 Argon 行同时矛盾（即「菜单里显示的 Argon 不是这个账号」）。新增 `GET /plugins/agy-link/session-view?session=<id>`：先解析该会话真实选中的模型（`model/selection` 事件 → `defaultModel` → 上次运行），映射到家族，再按调度器同一顺序取号（会话粘性绑定 → 该家族显式 pin → 无副作用的资格预测），百分比取自**该家族自己的配额账**。在现场机器上实测：会话显示的是 `AGY · dao 98%`（dao 的 Gemini 5h），而它实际一直在消耗 **ele** 的 Argon 池（会话期间 100% → 34%）；现在徽标显示 `AGY · ele` 并附 ele 的 Argon 周额度。
 - **修复(界面)：在弄清家族之前，徽标什么都不声明。** 会话视图尚未返回时只显示账号数量，不借别的家族的指针来充数。没有会话上下文的预览（设置面板、旧宿主）仍走原来的 google 读数，其余行为不变。`stickyAccount` 已从选号模块导出为 `sessionStickyAccount` 供只读视图复用，避免再出现第二份「谁在用」的判定。
 - **修复(界面)：重置边界已过的窗口标记为陈旧**（百分比转灰 +「窗口已重置 · 数据偏旧」），不再当作实时数字展示；Argon 也绝不会去借它并不存在的 5 小时窗口。
@@ -44,11 +50,21 @@
 
 - **The "Image quota" row is gone.** `agy -p /usage` (both the plain text and the `--output-format json` `command.data.groups[]`) only reports GROUP-level buckets — verified on a Pro account (Gemini / Claude&GPT / Gemini 4 Argon) and on a free one: neither output mentions `image`/`imagen` anywhere, and `agy models` does not even list `gemini-3.1-flash-image`. Per-model image buckets only exist in Google's internal REST fallback, so the panel no longer renders them: a value that can only appear when the CLI already failed is not a stable metric, and re-fetching it on every refresh would add Node TLS traffic to an internal endpoint for zero scheduling value. Single-model pause rows (local cooldowns) are kept.
 - **A frozen 5-hour row no longer proves a paid plan.** The "quota refresh failed" note used to describe any account with a stale `remainingFraction` as a refused PAID account; a lapsed Pro account kept its frozen 100% bar and got that wording while its own CLI reported weekly-only. The paid wording now requires the 5-hour reading to be NEWER than the refusal stamp.
+- **Feat(translate): a `replace` display mode, so the translation can stand in for the reply instead of repeating it (merges PR #178).** New setting `translateDisplay` (Settings → 「译文显示方式」, next to the translate-button switch):
+  - `card` (**default**) — unchanged: the Gemini card sits under the reply.
+  - `replace` — the translated text takes the reply's place, with a small footer (`✦ Gemini translation · Show original · Copy`) to flip back.
+  - It is **display only**: the session, and therefore the model's own context, keeps the original text. The hiding is one declarative `:has()` stylesheet rule keyed on the card's own `data-display`/`data-show-original`; nothing in the DOM or the session is rewritten. If DSH ever seats an intermediate node the rule simply stops matching and both texts show — the failure direction is "shows too much", never "hides the reply for good".
+  - Four locales carry the copy; config validation, `/status`, HTTP contract and DOM tests updated.
 
 ### 中文
 
 - **去掉「图片额度」行。** 实测 `agy -p /usage`（文本与 `--output-format json` 的 `command.data.groups[]`）在 Pro 账号（Gemini / Claude&GPT / Gemini 4 Argon 三组）与免费账号上都只有**分组级桶**，整份输出 `image`/`imagen` 零命中；`agy models` 连 `gemini-3.1-flash-image` 都不列。逐模型图片桶只存在于 Google 内部 REST 的降级路径，因此控制台不再渲染：一个「只有 CLI 失败时才可能出现」的数值不是稳定指标，而为了它每轮去打内部端点只会凭空增加 Node TLS 指纹暴露、对调度毫无价值。「单模型暂停」行（本地冷却）保留。
 - **冻结的 5 小时行不再当作付费证据。** 原来只要有 `remainingFraction` 就把账号描述成「付费账号被汇总接口拒绝」；订阅失效的账号会留着冻结的 100% 5h 行，于是文案与实际（CLI 只报周额度）自相矛盾。现在要求 5 小时读数**比拒绝时间更新**才使用付费措辞。
+- **特性(翻译)：新增 `replace` 显示模式，让译文直接替代原回复而不是重复一遍（合并 PR #178）。** 新设置 `translateDisplay`（设置 → 「译文显示方式」，紧邻翻译按钮开关）：
+  - `card`（**默认**）—— 行为不变：Gemini 卡片显示在回复下方。
+  - `replace` —— 译文占据回复的位置，底部保留一条小栏（`✦ Gemini 翻译 · 显示原文 · 复制`）可翻回原文。
+  - **仅影响显示**：会话与模型上下文仍保留原文。隐藏逻辑是一条声明式 `:has()` 样式规则，依据卡片自身的 `data-display` / `data-show-original`；DOM 与会话都不被改写。若 DSH 将来在中间插入节点，规则会**自然失效并同时显示两份**——失败方向是"多显示"，绝不是"回复被永久隐藏"。
+  - 四语言文案齐全；配置校验、`/status`、HTTP 契约与 DOM 测试均已更新。
 
 ## 0.6.70 (2026-11-23)
 

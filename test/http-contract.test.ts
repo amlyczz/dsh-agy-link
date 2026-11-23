@@ -665,6 +665,10 @@ test('/config is POST-only and validates keys before writing', async () => {
   assert.equal(missingKey.status(), 400)
   assert.deepEqual(missingKey.json(), { error: 'key not settable' })
 
+  const badDisplay = await invoke(route, fakeReq('POST', '/', { key: 'translateDisplay', value: 'inline' }))
+  assert.equal(badDisplay.status(), 400)
+  assert.deepEqual(badDisplay.json(), { error: 'translateDisplay must be card or replace' })
+
   const badArray = await invoke(route, fakeReq('POST', '/', { key: 'hiddenModels', value: 'nope' }))
   assert.equal(badArray.status(), 400)
   assert.deepEqual(badArray.json(), { error: 'hiddenModels must be an array of model ids' })
@@ -698,7 +702,7 @@ test('/config is POST-only and validates keys before writing', async () => {
 
   // issue #105: both visibility switches are settable through the same guarded
   // endpoint; neither is a picker event.
-  for (const [key, value] of [['showHeaderBadge', false], ['showTranslateAction', false]] as const) {
+  for (const [key, value] of [['showHeaderBadge', false], ['showTranslateAction', false], ['translateDisplay', 'replace']] as const) {
     const res = await invoke(route, fakeReq('POST', '/', { key, value }))
     assert.equal(res.status(), 200, key + ' must be an allowed config key')
     assert.deepEqual(res.json(), { ok: true, key, value })

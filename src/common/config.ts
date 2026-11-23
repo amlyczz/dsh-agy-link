@@ -2,7 +2,7 @@
 // entry config > defaults (spec ADR-13). The overrides file backs /agy
 // hot changes and survives restarts; the env is read per call so a changed
 // process environment is honored without reload.
-import { defaultConfig, type AgyTransportMode, type PermissionMode, type PluginConfig, type WarmupWindowMode } from './types.ts'
+import { defaultConfig, type AgyTransportMode, type PermissionMode, type PluginConfig, type TranslateDisplayMode, type WarmupWindowMode } from './types.ts'
 import { MIN_WARMUP_INTERVAL_HOURS } from './timeouts.ts'
 import { readFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -103,6 +103,12 @@ function asTransport(v: unknown): AgyTransportMode | undefined {
   return s === 'cli' || s === 'acp' ? s : undefined
 }
 
+function asTranslateDisplay(v: unknown): TranslateDisplayMode | undefined {
+  if (typeof v !== 'string') return undefined
+  const s = v.trim().toLowerCase()
+  return s === 'card' || s === 'replace' ? s : undefined
+}
+
 function asWarmupWindows(v: unknown): WarmupWindowMode | undefined {
   if (typeof v !== 'string') return undefined
   const s = v.trim().toLowerCase()
@@ -193,6 +199,7 @@ export function resolveConfig(
     warmupIntervalHours: asNum(get('warmupIntervalHours')) ?? base.warmupIntervalHours,
     warmupMaxProbesPerRun: asNum(get('warmupMaxProbesPerRun')) ?? base.warmupMaxProbesPerRun,
     autoTranslate: asBool(get('autoTranslate')) ?? base.autoTranslate,
+    translateDisplay: asTranslateDisplay(get('translateDisplay')) ?? base.translateDisplay,
     translateModel: asString(get('translateModel')) ?? base.translateModel,
     translateEffort: asString(get('translateEffort')) ?? base.translateEffort,
     translateTargetLanguage: asString(get('translateTargetLanguage')) ?? base.translateTargetLanguage,
@@ -368,6 +375,8 @@ export function resolveConfig(
   if (env.DSH_AGY_TRANSLATE_MODEL) cfg.translateModel = env.DSH_AGY_TRANSLATE_MODEL
   if (env.DSH_AGY_TRANSLATE_EFFORT) cfg.translateEffort = env.DSH_AGY_TRANSLATE_EFFORT
   if (env.DSH_AGY_TRANSLATE_LANG) cfg.translateTargetLanguage = env.DSH_AGY_TRANSLATE_LANG
+  const td = asTranslateDisplay(env.DSH_AGY_TRANSLATE_DISPLAY)
+  if (td !== undefined) cfg.translateDisplay = td
   if (env.DSH_AGY_SHOW_HEADER_BADGE !== undefined) {
     const shb = asBool(env.DSH_AGY_SHOW_HEADER_BADGE)
     if (shb !== undefined) cfg.showHeaderBadge = shb

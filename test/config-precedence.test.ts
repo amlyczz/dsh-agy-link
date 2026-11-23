@@ -100,6 +100,14 @@ test('showHeaderBadge and showTranslateAction default to true, accept overrides 
   assert.equal(overrideWins.showHeaderBadge, true)
 })
 
+test('translateDisplay defaults to card; every layer can choose replace; junk keeps the default', () => {
+  assert.equal(defaultConfig().translateDisplay, 'card')
+  assert.equal(resolveConfig({ translateDisplay: 'replace' }, {}, {}).translateDisplay, 'replace')
+  assert.equal(resolveConfig({}, {}, { translateDisplay: 'replace' }).translateDisplay, 'replace')
+  assert.equal(resolveConfig({ translateDisplay: 'replace' }, { DSH_AGY_TRANSLATE_DISPLAY: 'card' }, {}).translateDisplay, 'card', 'env wins last')
+  assert.equal(resolveConfig({ translateDisplay: 'inline' }, { DSH_AGY_TRANSLATE_DISPLAY: 'nope' }, {}).translateDisplay, 'card')
+})
+
 test('issue #107: poolWideCatalog is opt-in and every layer can enable it', () => {
   assert.equal(defaultConfig().poolWideCatalog, false, 'strict single-account isolation stays the default')
   assert.equal(resolveConfig({ poolWideCatalog: true }, {}, {}).poolWideCatalog, true)

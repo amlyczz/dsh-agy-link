@@ -745,6 +745,53 @@ test('translate action: click posts, transitions to done, and early-returns whil
 	setActionState(ACTION_KEY, 'idle');
 });
 
+test('translate action: a reply busy on mount (auto-translate) keeps probing and settles, no stuck spinner', async () => {
+	const replies = ['busy', 'busy', 'ready'];
+	let stateCalls = 0;
+	setGlobal('fetch', async (url: unknown) => {
+		if (String(url).includes('/translate/state')) {
+			const state = replies[Math.min(stateCalls, replies.length - 1)];
+			stateCalls++;
+			return { ok: true, status: 200, json: async () => ({ state }) };
+		}
+		return { ok: true, status: 200, json: async () => ({ showTranslateAction: true }) };
+	});
+	// Capture only the busy re-probe (3 s); everything else keeps real timers.
+	const realSetTimeout = globalThis.setTimeout;
+	const pending: Array<() => void> = [];
+	setGlobal('setTimeout', (fn: () => void, ms?: number, ...rest: unknown[]) => {
+		if (ms === 3_000) { pending.push(fn); return 0; }
+		return realSetTimeout(fn, ms, ...rest);
+	});
+	const fire = async (): Promise<void> => {
+		await act(async () => { pending.splice(0).forEach((fn) => fn()); await wait(5); });
+	};
+	setActionState(ACTION_KEY, 'idle');
+	const { container, root } = await mount(createElement(TranslateAction, { messageId: 'msg-dom', sessionId: 'sess-dom' }));
+	await act(async () => { await wait(5); });
+	const btn = () => container.querySelector('.agy-tsl-icon') as HTMLButtonElement;
+	assert.equal(btn().getAttribute('data-state'), 'working', 'host busy on mount shows the spinner');
+	assert.equal(pending.length, 1, 'a re-probe is scheduled while busy');
+	await fire();
+	assert.equal(btn().getAttribute('data-state'), 'working');
+	await fire();
+	assert.equal(btn().getAttribute('data-state'), 'done', 'the spinner settles once the record lands');
+	assert.equal(stateCalls, 3);
+	assert.equal(pending.length, 0, 'probing stops once settled');
+	await act(() => { root.unmount(); });
+
+	// The host finishing without a record (failed) releases the spinner.
+	replies.splice(0, replies.length, 'busy', 'idle');
+	stateCalls = 0;
+	setActionState(ACTION_KEY, 'idle');
+	const second = await mount(createElement(TranslateAction, { messageId: 'msg-dom', sessionId: 'sess-dom' }));
+	await act(async () => { await wait(5); });
+	await fire();
+	assert.equal((second.container.querySelector('.agy-tsl-icon') as HTMLButtonElement).getAttribute('data-state'), 'idle');
+	await act(() => { second.root.unmount(); });
+	setActionState(ACTION_KEY, 'idle');
+});
+
 test('translate action: hidden by showTranslateAction=false and restored live (issue #105)', async () => {
 	let visible = false;
 	setGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ showTranslateAction: visible }) }));
@@ -781,6 +828,32 @@ test('translate card: copy, collapse and show-original handlers', async () => {
 	assert.equal(container.querySelector('.agy-tsl-body'), null, 'body collapsed');
 	await act(async () => { await wait(10); }); // wait for react render
 	await act(() => { root.unmount(); });
+});
+
+test('translate card: replace mode reads as the reply and flips back to the original', async () => {
+	setGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ translateDisplay: 'replace' }) }));
+	publishStatusSnapshot({ translateDisplay: 'replace' });
+	const { container, root } = await mount(createElement(TranslationCard, {
+		node: { data: { text: '译文正文', original: 'source text' } },
+		t: (key: string) => ({ 'tsl.copy': '复制', 'tsl.showOriginal': '查看原文', 'tsl.showTranslation': '显示译文', 'tsl.badge': 'Gemini 译文' } as Record<string, string>)[key] ?? key,
+	}));
+	const card = () => container.querySelector('.agy-tsl-card') as HTMLElement;
+	const buttons = () => Array.from(container.querySelectorAll('.agy-tsl-btn')) as HTMLButtonElement[];
+	assert.equal(card().getAttribute('data-display'), 'replace');
+	assert.equal(card().getAttribute('data-show-original'), 'false', 'the stylesheet hides the reply seat only in this state');
+	assert.equal(container.querySelector('.agy-tsl-head'), null, 'no card banner in replace mode');
+	assert.equal(container.querySelector('.agy-tsl-body')?.textContent, '译文正文');
+	assert.equal(container.querySelector('.agy-tsl-original'), null, 'the original comes back from DSH, not the capped copy');
+
+	await act(() => { buttons().find((b) => b.textContent === '查看原文')!.click(); });
+	assert.equal(card().getAttribute('data-show-original'), 'true');
+	assert.equal(container.querySelector('.agy-tsl-body'), null, 'translation steps aside while the original shows');
+	assert.ok(buttons().some((b) => b.textContent === '显示译文'));
+
+	await act(() => { buttons().find((b) => b.textContent === '显示译文')!.click(); });
+	assert.equal(card().getAttribute('data-show-original'), 'false');
+	await act(() => { root.unmount(); });
+	publishStatusSnapshot({});
 });
 
 // ---------------------------------------------------------------------------

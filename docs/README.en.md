@@ -100,6 +100,7 @@ Add more accounts from the **AGY (n)** badge in the header (browser login or tok
 ```
 
 - A native DSH card is rendered under the translated reply and survives reloads without entering model-visible history.
+- **Replace mode**: set Settings → “Translation display” to *Replace* (`translateDisplay: replace`) and the translation is shown in the reply's place, with a footer switch back to the original. Display only — the session and the model's context keep the original text.
 - Each DSH session gets its own translation conversation (`<sessionKey>#tsl`); the persona is sent once.
 - The per-reply “translate” button translates the **message you clicked**, not the turn's last answer.
 - Default effort is **`low`** (measured on real agy: `low` ≈ 12s, `medium` ≈ 33s, `high` ≈ 45s for a 964-char reply; configurable in Settings next to the auto-translate toggle).

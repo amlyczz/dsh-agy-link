@@ -106,7 +106,7 @@ test('killTree escalates a SIGTERM-ignoring process group to SIGKILL', async () 
     assert.equal(await exited, true, 'the direct child must die')
     assert.equal(await waitForDeath(grandPid), true, 'the group kill must reach the grandchild')
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
   }
 })
 
@@ -136,6 +136,6 @@ test('AcpProcess.close() terminates the server and its children even when SIGTER
     assert.equal(await waitForDeath(pid!), true, 'the acp server must not survive close()')
     assert.equal(await waitForDeath(grandPid), true, 'its MCP-style children must go too')
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
   }
 })

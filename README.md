@@ -152,6 +152,7 @@ dsh plugin --profile web add dsh-agy-link
 ```
 
 - **DSH 原生翻译卡片**：持久化存储于 `plugin:agy-link/translation` 会话记录中，渲染在被翻译回复正下方，刷新或切会话不丢失，且不进入模型可见历史。
+- **替换原文显示**：设置面板「译文显示方式」选「替换原文」（`translateDisplay: replace`）后，界面上直接用译文代替被翻译的回复，脚注可随时切回原文；只改显示，会话与模型上下文里的原文不变。
 - **回复快捷按钮**：每条助理回复下方提供「译成人话」按钮，支持按需点译历史任意一条消息。
 - **1:1 会话绑定 (`translateBindConversation`)**：每个 DSH 会话绑定一条独立翻译会话（`<sessionKey>#tsl`），仅首轮发送译员提示，后续增量传入原文；共享主号池与故障转移。
 - **严格 opt-in**：自动翻译默认关闭（`autoTranslate: false`），可在设置面板或通过 `/tsl auto on` 开启，同行右侧两个下拉框可直接修改翻译模型与思考强度。

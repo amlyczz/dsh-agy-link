@@ -65,6 +65,8 @@ test('console dictionary keys exist in every shipped language', () => {
     'config.imageCopyFailed',
     'config.showHeaderBadge', 'config.showHeaderBadgeDesc',
     'config.showTranslateAction', 'config.showTranslateActionDesc',
+    'config.translateDisplay', 'config.translateDisplayDesc', 'config.translateDisplayCard', 'config.translateDisplayReplace',
+    'tsl.showTranslation',
     'config.poolWideCatalog', 'config.poolWideCatalogDesc',
   ];
   for (const [lang, dict] of Object.entries(languages)) {
