@@ -99,3 +99,32 @@ test('an empty catalog renders the empty-state hint instead of chips', () => {
 	assert.match(labelOf(html), /"selected":0,"total":0/)
 	assert.equal(html.includes('models.deniedHint'), false)
 })
+
+test('clicking a chip denied by a legacy hiddenModels entry un-denies and ticks it', async () => {
+	// Seen live: Claude Opus 5.5 selected AND hidden (+ effort variants) by an older build.
+	const hiddenWrites: Array<ReadonlyArray<string>> = []
+	const selectedWrites: Array<ReadonlyArray<string>> = []
+	const hidden = ['claude-opus-5-5', 'claude-opus-5-5-high', 'gemini-3.5-flash']
+	const el = ModelsPanel({
+		t: ((key: string) => key) as never,
+		catalogModels: MODELS,
+		hiddenModelSet: new Set(hidden),
+		selectedModelSet: new Set(['gemini-4-neon']),
+		loadingAction: null,
+		setSelectedModels: async (ids) => { selectedWrites.push(ids) },
+		setHiddenModels: async (ids) => { hiddenWrites.push(ids) },
+	}) as { props: { children: Array<{ props: { children?: Chip[] } }> } }
+	const chips = el.props.children[1]!.props.children as Chip[]
+	chips[2]!.props.onClick()
+	await new Promise((r) => setImmediate(r))
+	assert.deepEqual(hiddenWrites, [['gemini-3.5-flash']], 'the model and its effort variants leave the deny-list; others stay')
+	assert.deepEqual(selectedWrites, [['gemini-4-neon', 'claude-opus-5-5']], 'and it is ticked in a restrictive allow-list')
+})
+
+test('planChipClick leaves the allow-list alone when the denied model is already ticked', async () => {
+	const { planChipClick } = await import('../src/client/sections/ModelsPanel.ts')
+	assert.deepEqual(
+		planChipClick({ id: 'claude-opus-5-5', catalogIds: MODELS.map((m) => m.id), hidden: ['claude-opus-5-5'], selected: ['claude-opus-5-5'] }),
+		{ hidden: [] },
+	)
+})

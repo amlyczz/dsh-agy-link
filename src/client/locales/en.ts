@@ -126,7 +126,7 @@ export const en: AgyDictionary = {
   'effort.label': 'Thinking effort:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high', 'effort.xhigh': 'extra', 'effort.max': 'max',
   'pool.label': 'Account-pool scheduling:', 'pool.sequential': 'Use sequentially', 'pool.roundRobin': 'Round-robin',
   'models.label': 'Model visibility ({selected} of {total} selected):', 'models.empty': 'No models in the catalog yet — send a message or click "Refresh quota", then come back to manage them',
-  'models.deniedHint': 'This model is blocked by the hiddenModels deny-list; ticking it will not add it to the picker.',
+  'models.deniedHint': 'This model is on the hiddenModels deny-list (set by an older version). Click to remove it from the list and show it in the picker.',
   'models.hint': 'Click to tick the models to show; ticking none shows them all. Ongoing sessions are unaffected.',
   'header.refreshQuota': 'Refresh quota', 'header.refreshing': 'Refreshing...',
   'console.close': 'Close (Esc)', 'header.badgeTitle': 'Antigravity: {count} accounts ready · click to open the console', 'header.badgeLoading': 'Antigravity · click to open the console', 'header.subagents': '{running}/{total} subagents',
