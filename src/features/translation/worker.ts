@@ -362,7 +362,7 @@ export class TranslationWorkerPool {
         // best-effort isolated keychain check
       }
     }
-    const env = withAgyQuietEnv(buildAgyEnv({ account, cfg, telemetryFlags: false }))
+    const env = withAgyQuietEnv(buildAgyEnv({ account, cfg, telemetryFlags: cfg.disableTelemetry }))
     if (cfg.suppressAgyAutoUpdate !== false) preemptAgyAutoUpdate(env, this.now())
     const args = [
       '-p',
