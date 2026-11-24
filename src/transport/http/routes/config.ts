@@ -40,7 +40,7 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'translateDisplay must be card or replace'
   }
-  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'mcpBridge' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'auxNeutralWorkspace') {
+  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'mcpBridge' || key === 'btwEnabled' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'auxNeutralWorkspace') {
     return typeof value === 'boolean' ? null : `${key} must be a boolean`
   }
   if (key === 'warmupWindows') {
@@ -114,7 +114,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
-          'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup', 'mcpBridge',
+          'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup', 'mcpBridge', 'btwEnabled',
           'cloakSystemPrompt', 'respectExternalSignIn', 'auxNeutralWorkspace',
           'defaultModel', 'defaultEffort',
           'orchestratorPlannerModel', 'orchestratorPlannerEffort', 'orchestratorExecutorModel', 'orchestratorExecutorEffort',

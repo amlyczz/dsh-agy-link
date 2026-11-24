@@ -319,6 +319,8 @@ export const en: AgyDictionary = {
   'section.ecosystem': 'Ecosystem & Sync',
   'config.btw': 'Side-question model',
   'config.btwDesc': 'Antigravity model and reasoning effort used for /atw read-only side questions',
+  'config.btwEnabled': 'Enable /agy-btw side questions',
+  'config.btwEnabledDesc': 'On by default. Turn off if you already use a dedicated side-question (/btw) plugin and do not want a second entry. Takes effect on restart.',
   'config.btwModel': '/atw model',
   'config.btwModelDesc': 'Model for /atw; auto falls back through defaultModel -> Gemini 4 Hydrogen -> Gemini Flash',
   'config.btwEffort': '/atw effort',

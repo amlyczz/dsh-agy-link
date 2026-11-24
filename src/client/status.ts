@@ -105,6 +105,7 @@ export interface StatusPayload {
 	imageModel?: string;
 	imageEffort?: string;
 	imageOutputDir?: string;
+	btwEnabled?: boolean;
 	btwModel?: string;
 	btwEffort?: string;
 	bindings?: number;

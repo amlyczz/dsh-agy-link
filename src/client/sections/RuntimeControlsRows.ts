@@ -221,6 +221,17 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		// Issue #201: a user with a dedicated /btw plugin may not want this one
+		// registered. Off needs a restart (commands are registered at startup).
+		boolRow({
+			t,
+			title: t('config.btwEnabled'),
+			desc: t('config.btwEnabledDesc'),
+			cfgKey: 'btwEnabled',
+			value: status.btwEnabled !== false,
+			loadingAction,
+			setCfg,
+		}),
 		renderAgentRow({ ...props, draft: agentDraft, setDraft: setAgentDraft }),
 	);
 }

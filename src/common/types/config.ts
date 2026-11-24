@@ -307,6 +307,8 @@ export interface PluginConfig {
   imageRetries: number
   // ---- `/btw` side questions ----
   /** Model used for `/btw` side questions (`''` = auto: `defaultModel` → Gemini 4 Hydrogen → Gemini Flash). */
+  /** Register the `/agy-btw` side-question command at all (default true). Off needs a restart. */
+  btwEnabled: boolean
   btwModel: string
   /** Reasoning effort for `/btw` side questions (default `'medium'` for balanced quality and speed). */
   btwEffort: string
@@ -467,6 +469,7 @@ export function defaultConfig(): PluginConfig {
     imageMaxBytes: 20 * 1024 * 1024,
     imageOutputDir: '',
     imageRetries: 1,
+    btwEnabled: true,
     btwModel: '',
     btwEffort: 'medium',
     backgroundWakeup: false,

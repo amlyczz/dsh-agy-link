@@ -150,6 +150,7 @@ const BASE_CONFIG: Record<string, unknown> = {
   agySettings: '',
   transport: 'cli',
   mcpBridge: false,
+  btwEnabled: true,
   imageTool: true,
   syncAccountCustomizations: true,
   workspaceRoot: '/tmp/agy-contract',
@@ -2042,4 +2043,18 @@ test('issue #196: mcpBridge is settable through the config route (boolean only) 
   const status = await s.call('/plugins/agy-link/status', fakeReq('GET', '/plugins/agy-link/status'))
   assert.equal(status.status(), 200)
   assert.ok('mcpBridge' in (status.json() as Record<string, unknown>), 'status must expose mcpBridge so the panel can render its switch')
+})
+
+test('issue #201: btwEnabled is settable (boolean) and reported by status', async () => {
+  const writes: Array<[string, unknown]> = []
+  const s = setup({ setOverride: (k: string, v: unknown) => { writes.push([k, v]) } })
+  const route = s.route('/plugins/agy-link/config')
+  const ok = await invoke(route, fakeReq('POST', '/', { key: 'btwEnabled', value: false }))
+  assert.equal(ok.status(), 200)
+  assert.deepEqual(writes, [['btwEnabled', false]])
+  const bad = await invoke(route, fakeReq('POST', '/', { key: 'btwEnabled', value: 'no' }))
+  assert.equal(bad.status(), 400)
+  assert.deepEqual(bad.json(), { error: 'btwEnabled must be a boolean' })
+  const status = await s.call('/plugins/agy-link/status', fakeReq('GET', '/plugins/agy-link/status'))
+  assert.ok('btwEnabled' in (status.json() as Record<string, unknown>), 'status must expose btwEnabled')
 })

@@ -125,6 +125,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           imageModel: cfg.imageModel,
           imageEffort: cfg.imageEffort,
           imageOutputDir: cfg.imageOutputDir,
+          btwEnabled: cfg.btwEnabled,
           btwModel: cfg.btwModel,
           btwEffort: cfg.btwEffort,
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },

@@ -319,6 +319,8 @@ export const ptBR: AgyDictionary = {
   'section.ecosystem': 'Ecossistema e sincronização',
   'config.btw': 'Modelo de pergunta lateral',
   'config.btwDesc': 'Modelo Antigravity e esforço usados em perguntas somente leitura /atw',
+  'config.btwEnabled': 'Ativar perguntas laterais /agy-btw',
+  'config.btwEnabledDesc': 'Ativado por padrão. Desative se já usa um plugin dedicado de perguntas laterais (/btw). Vale após reiniciar.',
   'config.btwModel': 'Modelo /atw',
   'config.btwModelDesc': 'Modelo para /atw; automático segue defaultModel -> Gemini 4 Hydrogen -> Gemini Flash',
   'config.btwEffort': 'Esforço /atw',

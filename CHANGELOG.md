@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.86 (2026-11-25)
+
+### English
+
+- **Feat(btw): the `/agy-btw` command can now be turned off (fixes #201).** v0.6.80 already renamed the command off the bare `/btw` (which had collided with `@michengai/dsh-btw`). This adds the second half of that request: a `btwEnabled` switch (default **on**) in **Settings → Runtime controls**, with `/status` reporting it and the config route accepting it as a boolean. When off, the command is not registered at all, so a user who prefers a dedicated side-question plugin has no second entry. Read at registration time, so the change takes effect on the next start.
+- **Note for the report:** the stronger suggestion — "make `btw` a standalone thing with any backend model, not limited to agy" — is a product direction, not a bug. This plugin's `/agy-btw` exists because it reuses the agy account/model plumbing; a backend-agnostic side-question tool is a different product. The opt-out means the two can coexist without competing.
+
+### 中文
+
+- **特性(btw)：`/agy-btw` 命令现在可以关闭（修复 #201）。** v0.6.80 已把命令从裸名 `/btw` 改走（原先与 `@michengai/dsh-btw` 撞名）。这次补上该诉求的第二半：**设置 → 运行时控制** 里的 `btwEnabled` 开关（默认**开启**），`/status` 会返回它，配置路由按布尔接受它。关闭时命令**完全不注册**，偏好专用旁问插件的用户不会多出一个入口。开关在注册时读取，下次启动生效。
+- **关于报告里更强的建议**（"把 btw 做成独立工具、后端模型不限 agy"）：那是产品方向而非缺陷。本插件的 `/agy-btw` 之所以存在，是因为它复用 agy 的账号/模型链路；一个"后端无关"的旁问工具是另一个产品。提供关闭开关后，两者可以共存而不互相竞争。
+
 ## 0.6.85 (2026-11-25)
 
 ### English

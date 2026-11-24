@@ -317,6 +317,8 @@ export const zh = {
   'section.ecosystem': '定制生态与多账号同步',
   'config.btw': '旁路提问模型',
   'config.btwDesc': '执行 /atw 只读旁路提问时使用的 Antigravity 模型与思考档位',
+  'config.btwEnabled': '启用 /agy-btw 旁路问答',
+  'config.btwEnabledDesc': '默认开启。如果你已使用专门的旁问（/btw）插件、不想再多一个入口，可以关闭。重启后生效。',
   'config.btwModel': '/atw 模型',
   'config.btwModelDesc': '选择 /atw 使用的模型；默认自动按默认模型 → Gemini 4 Hydrogen → Gemini Flash 回退',
   'config.btwEffort': '/atw 思考档',

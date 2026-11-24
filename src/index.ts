@@ -209,12 +209,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     ctx.commands.register(def)
   }
 
-  ctx.commands.register(
-    btwCommandDefinition({
-      btw: () => btw,
-      isWebActive: () => webServerPort.current !== undefined,
-    }),
-  )
+  // Opt-out (issue #201): a user who already runs a dedicated /btw plugin can
+  // turn this one off so the two never compete for a command name. Read at
+  // registration time, so the switch takes effect on the next start.
+  if (getConfig().btwEnabled !== false) {
+    ctx.commands.register(
+      btwCommandDefinition({
+        btw: () => btw,
+        isWebActive: () => webServerPort.current !== undefined,
+      }),
+    )
+  }
 
   // ---- /tsl command (Gemini plain-language translation) ----
   ctx.commands.register(
