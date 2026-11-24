@@ -1,6 +1,7 @@
-// Fullscreen image & media lightbox (modern glassmorphism, video player, zoom, pan, copy path, reveal in finder).
+// Fullscreen image & media lightbox (modern glassmorphism, video player, zoom, pan, copy image, copy path, reveal in finder).
 import { injectStyles } from './styles.ts';
 import { isVideoFile, openInSystem } from './media.ts';
+import { copyImageToClipboard } from './clipboard.ts';
 import { translateOr } from '../i18n-bridge.ts';
 
 let lightboxOverlay: HTMLElement | null = null;
@@ -36,10 +37,13 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
   onZoomIn: () => void;
   onZoomOut: () => void;
   onReset: () => void;
+  onCopyImage: () => Promise<boolean>;
   onClose: () => void;
-}): HTMLElement {
+}): { actions: HTMLElement; flashCopyImageCopied: () => void } {
   const actions = document.createElement('div');
   actions.className = 'agy-lightbox-actions';
+
+  let flashCopyImageCopied = (): void => {};
 
   if (!isVideo) {
     const btnZoomIn = document.createElement('button');
@@ -60,9 +64,30 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
     btnReset.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg></span><span class="agy-btn-text">1:1</span>';
     btnReset.onclick = (e) => { e.stopPropagation(); callbacks.onReset(); };
 
+    const copyImgMarkup = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></span><span class="agy-btn-text">' + translateOr('lightbox.copyImageChip', 'Copy image') + '</span>';
+    const btnCopyImage = document.createElement('button');
+    btnCopyImage.className = 'agy-lightbox-btn';
+    btnCopyImage.dataset.agyAction = 'copy-image';
+    btnCopyImage.title = translateOr('lightbox.copyImage', 'Copy image to clipboard (Ctrl/Cmd+C)');
+    btnCopyImage.innerHTML = copyImgMarkup;
+    let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+    flashCopyImageCopied = () => {
+      if (copyResetTimer) clearTimeout(copyResetTimer);
+      btnCopyImage.innerHTML = '<span class="agy-btn-text">' + translateOr('lightbox.copiedChip', '✓ Copied') + '</span>';
+      copyResetTimer = setTimeout(() => {
+        btnCopyImage.innerHTML = copyImgMarkup;
+        copyResetTimer = null;
+      }, 1500);
+    };
+    btnCopyImage.onclick = (e) => {
+      e.stopPropagation();
+      void callbacks.onCopyImage();
+    };
+
     actions.appendChild(btnZoomIn);
     actions.appendChild(btnZoomOut);
     actions.appendChild(btnReset);
+    actions.appendChild(btnCopyImage);
   }
 
   if (rawPath) {
@@ -120,7 +145,7 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
   btnClose.onclick = (e) => { e.stopPropagation(); callbacks.onClose(); };
   actions.appendChild(btnClose);
 
-  return actions;
+  return { actions, flashCopyImageCopied };
 }
 
 function buildErrorCard(rawPath: string | undefined, src: string): HTMLElement {
@@ -222,6 +247,7 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
   const closeLightbox = () => {
     cleanupListeners();
     if (activeLightboxCleanup === cleanupListeners) activeLightboxCleanup = null;
+    if (lightboxOverlay === overlay) currentLightboxImg = null;
     overlay.classList.remove('open');
     setTimeout(() => {
       overlay.remove();
@@ -229,7 +255,22 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
     }, 200);
   };
 
-  const actions = createActionButtons(rawPath, isVideo, {
+  let flashCopied = (): void => {};
+  const handleCopyImage = async (): Promise<boolean> => {
+    if (isVideo) return false;
+    const res = await copyImageToClipboard(src, currentLightboxImg);
+    if (res.ok) {
+      showToast(translateOr('lightbox.imageCopied', 'Image copied to the clipboard'));
+      flashCopied();
+      return true;
+    }
+    showToast(translateOr('lightbox.copyImageFailed', 'Could not copy image: {error}', {
+      error: res.error || translateOr('lightbox.unknownError', 'unknown error'),
+    }));
+    return false;
+  };
+
+  const { actions, flashCopyImageCopied } = createActionButtons(rawPath, isVideo, {
     onZoomIn: () => {
       lightboxScale = Math.min(lightboxScale * 1.3, 5.0);
       updateTransform();
@@ -244,8 +285,10 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
       lightboxTranslateY = 0;
       updateTransform();
     },
+    onCopyImage: handleCopyImage,
     onClose: closeLightbox,
   });
+  flashCopied = flashCopyImageCopied;
 
   header.appendChild(actions);
   overlay.appendChild(header);
@@ -306,7 +349,9 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
 
   const hints = document.createElement('div');
   hints.className = 'agy-lightbox-hints';
-  hints.textContent = isVideo ? translateOr('lightbox.hintClose', 'ESC to exit · click the backdrop to close') : translateOr('lightbox.hintZoom', 'ESC to exit · scroll to zoom · drag to pan');
+  hints.textContent = isVideo
+    ? translateOr('lightbox.hintClose', 'ESC to exit · click the backdrop to close')
+    : translateOr('lightbox.hintZoom', 'ESC to exit · scroll to zoom · drag to pan · Ctrl/Cmd+C to copy');
   overlay.appendChild(hints);
   overlay.appendChild(body);
 
@@ -319,6 +364,14 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       closeLightbox();
+      return;
+    }
+    if (!isVideo && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
+      const selected = typeof window !== 'undefined' ? window.getSelection?.()?.toString() : '';
+      if (!selected) {
+        e.preventDefault();
+        void handleCopyImage();
+      }
     }
   };
   window.addEventListener('keydown', onKeyDown);
