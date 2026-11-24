@@ -2,7 +2,7 @@
 //
 // Extracted from AccountPoolManager so one cohesive module owns the rule and the
 // pool keeps a thin delegate (budget: pool.ts sits on the 600-line ceiling).
-import { accountSupportsModel, baseModelSlug, type ManagedAccount } from '../common/pool-types.ts'
+import { accountSupportsModel, baseModelSlug, modelFamilyOf, modelMatches, type ManagedAccount } from '../common/pool-types.ts'
 
 /**
  * The minimal catalog shape this rule needs. Deliberately structural rather
@@ -15,8 +15,8 @@ export interface CatalogView {
 }
 
 export interface ModelSupportContext {
-  /** Per-account ids learned to reject this model (agy said "not recognized"). */
-  unsupportedModels: ReadonlyMap<string, ReadonlySet<string>>
+  /** Per account: the model slugs agy said "not recognized" for, and when that was learned. */
+  unsupportedModels: ReadonlyMap<string, ReadonlyMap<string, number>>
   /** The account-scoped catalog, when discovery ran for that account. */
   catalogFor: (accountId: string) => CatalogView | undefined
   /** The active pool, forwarded to `accountHasArgon`'s dedicated-group probe. */
@@ -26,7 +26,12 @@ export interface ModelSupportContext {
 /**
  * Whether `acc` can serve `model`.
  *
- * A learned refusal is final for that account. Otherwise the per-model quota
+ * A learned refusal is final while the account's own quota snapshot does not
+ * list the model. When it does, agy's "not recognized" may just mean it could
+ * not load its model list (a TLS timeout once shut a model out of the whole
+ * pool until the host restarted), so the refusal ends with a quota refresh
+ * after it, or after LISTED_REFUSAL_RETRY_MS (the poll runs hourly and goes
+ * through the same network). Otherwise the per-model quota
  * snapshot and the discovered catalog decide. Deliberately ACCOUNT-scoped: this
  * is what `selectAccount` routes on, so a sibling account must never make an
  * account look capable of a model its own evidence denies (that would route an
@@ -34,6 +39,15 @@ export interface ModelSupportContext {
  * handled by the self-heal refresh in account-selection instead (issue #125).
  */
 export function accountCanServeModel(acc: ManagedAccount, model: string, ctx: ModelSupportContext): boolean {
-  if (ctx.unsupportedModels.get(acc.id)?.has(baseModelSlug(model))) return false
+  const learnedAt = ctx.unsupportedModels.get(acc.id)?.get(baseModelSlug(model))
+  if (learnedAt !== undefined && !refusalHealed(acc, model, learnedAt)) return false
   return accountSupportsModel(acc, model, ctx.pool as never, ctx.catalogFor(acc.id))
+}
+
+export const LISTED_REFUSAL_RETRY_MS = 2 * 60_000
+
+function refusalHealed(acc: ManagedAccount, model: string, learnedAt: number): boolean {
+  const quota = acc.quotas?.[modelFamilyOf(model)]
+  if (!(quota?.models ?? []).some((m) => modelMatches(model, m.modelId))) return false
+  return (quota?.updatedAt ?? 0) > learnedAt || Date.now() - learnedAt >= LISTED_REFUSAL_RETRY_MS
 }
