@@ -86,6 +86,14 @@ export const FAILURE_BACKOFF_MS = 30 * 60 * 1000
  */
 export const MODEL_UNAVAILABLE_PARK_MS = 24 * 3600 * 1000
 
+/**
+ * A "successful" probe does not prove the window started: a probe that never
+ * reached the model (e.g. agy stalled on dead MCP servers) leaves the window
+ * idle. When the quota keeps sliding after a recorded warmup, the long success
+ * cooldown must not hide it for days; retry, but at most this often.
+ */
+export const SLIDING_IDLE_RETRY_MS = 2 * 3600 * 1000
+
 export function isModelUnavailableError(text: string): boolean {
   return /no longer available|is not available|is retired|unknown model|model not found|not recognized|unsupported model/i.test(text)
 }
@@ -154,10 +162,16 @@ function warmupDue(params: {
 }): { shouldWarm: boolean; failureKey: string } {
   const { quota, force, ignoreFailureBackoff, now, historyKey, slidingIdle, isCoolingDown } = params
   let shouldWarm = false
-  const hasRecentWarmup = isCoolingDown(historyKey, SIX_DAYS_MS)
+  // `ignoreFailureBackoff` is only sent by the manual warmup button. A user who
+  // clicks "warm up" on a window that is still idle (100%) must get a probe:
+  // the success cooldown only records that a probe ran, not that the window
+  // started, so it must not swallow the click. Active windows never reach here.
+  const hasRecentWarmup = !ignoreFailureBackoff && isCoolingDown(historyKey, SIX_DAYS_MS)
 
   if (force) {
     shouldWarm = true
+  } else if (hasRecentWarmup && slidingIdle) {
+    shouldWarm = !isCoolingDown(historyKey, SLIDING_IDLE_RETRY_MS)
   } else if (!hasRecentWarmup) {
     if (slidingIdle) {
       shouldWarm = true
@@ -194,10 +208,13 @@ function warmup5hDue(params: {
 }): { shouldWarm: boolean; failureKey: string } {
   const { quota, force, ignoreFailureBackoff, now, historyKey, slidingIdle, isCoolingDown } = params
   let shouldWarm = false
-  const hasRecentWarmup = isCoolingDown(historyKey, FOUR_HOURS_MS)
+  // Manual click: see warmupDue.
+  const hasRecentWarmup = !ignoreFailureBackoff && isCoolingDown(historyKey, FOUR_HOURS_MS)
 
   if (force) {
     shouldWarm = true
+  } else if (hasRecentWarmup && slidingIdle) {
+    shouldWarm = !isCoolingDown(historyKey, SLIDING_IDLE_RETRY_MS)
   } else if (!hasRecentWarmup) {
     if (slidingIdle) {
       shouldWarm = true
