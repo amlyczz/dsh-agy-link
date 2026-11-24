@@ -86,6 +86,9 @@ export const FAILURE_BACKOFF_MS = 30 * 60 * 1000
  */
 export const MODEL_UNAVAILABLE_PARK_MS = 24 * 3600 * 1000
 
+/** Retry a sliding-idle window that did not activate despite an earlier probe. */
+export const SLIDING_IDLE_RETRY_MS = 2 * 3600 * 1000
+
 export function isModelUnavailableError(text: string): boolean {
   return /no longer available|is not available|is retired|unknown model|model not found|not recognized|unsupported model/i.test(text)
 }
@@ -154,10 +157,12 @@ function warmupDue(params: {
 }): { shouldWarm: boolean; failureKey: string } {
   const { quota, force, ignoreFailureBackoff, now, historyKey, slidingIdle, isCoolingDown } = params
   let shouldWarm = false
-  const hasRecentWarmup = isCoolingDown(historyKey, SIX_DAYS_MS)
+  const hasRecentWarmup = !ignoreFailureBackoff && isCoolingDown(historyKey, SIX_DAYS_MS)
 
   if (force) {
     shouldWarm = true
+  } else if (hasRecentWarmup && slidingIdle) {
+    shouldWarm = !isCoolingDown(historyKey, SLIDING_IDLE_RETRY_MS)
   } else if (!hasRecentWarmup) {
     if (slidingIdle) {
       shouldWarm = true
@@ -194,10 +199,12 @@ function warmup5hDue(params: {
 }): { shouldWarm: boolean; failureKey: string } {
   const { quota, force, ignoreFailureBackoff, now, historyKey, slidingIdle, isCoolingDown } = params
   let shouldWarm = false
-  const hasRecentWarmup = isCoolingDown(historyKey, FOUR_HOURS_MS)
+  const hasRecentWarmup = !ignoreFailureBackoff && isCoolingDown(historyKey, FOUR_HOURS_MS)
 
   if (force) {
     shouldWarm = true
+  } else if (hasRecentWarmup && slidingIdle) {
+    shouldWarm = !isCoolingDown(historyKey, SLIDING_IDLE_RETRY_MS)
   } else if (!hasRecentWarmup) {
     if (slidingIdle) {
       shouldWarm = true

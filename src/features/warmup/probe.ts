@@ -77,9 +77,11 @@ function resolveBin(ctx: WarmupProbeContext): string | null {
 function classifyProbe(account: ManagedAccount, ctx: WarmupProbeContext, cliModel: string, raw: CliProbeOutcome): WarmupProbeResult {
   const parser = new StreamJsonParser()
   let responseText = ''
+  let resultTotalTokens: number | undefined
   for (const ev of [...parser.feed(raw.stdout + '\n'), ...parser.flush()]) {
     if (ev.kind === 'step' && ev.stepKind === 'text' && ev.text) responseText += ev.text + '\n'
     if (ev.kind === 'result' && ev.response) responseText += ev.response
+    if (ev.kind === 'result' && typeof ev.usage?.total_tokens === 'number') resultTotalTokens = ev.usage.total_tokens
   }
 
   const combinedText = [parser.stats.lastResultError ?? '', raw.stderr, responseText, raw.stdout].filter(Boolean).join('\n')
@@ -99,6 +101,9 @@ function classifyProbe(account: ManagedAccount, ctx: WarmupProbeContext, cliMode
   }
 
   if (raw.code === 0 && !parser.stats.lastResultError) {
+    if (resultTotalTokens === 0) {
+      return { ok: false, error: 'Warmup probe reached no model (0 tokens used); quota window not activated', durationMs: raw.durationMs }
+    }
     return { ok: true, status: 200, durationMs: raw.durationMs }
   }
 
