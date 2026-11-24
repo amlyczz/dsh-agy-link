@@ -1,6 +1,7 @@
 import type { ManagedAccount } from '../common/pool-types.ts'
+import { sameCredentialGrant } from '../domain/credentials/docs.ts'
+import { installSlotTracked, isExternalSlotSignIn } from '../domain/credentials/external-guard.ts'
 import { defaultSlotIo, readPrimaryCredential } from './credential-slot.ts'
-import { installSlotOrThrow } from '../domain/credentials/lease.ts'
 
 // The CLI quota read has to leave the credential in the safety window before it
 // spawns agy (see src/features/quota/cli-token.ts). On Windows agy authenticates
@@ -21,6 +22,7 @@ export function buildCliQuotaDeps(opts: {
   viaCli: () => boolean
   preemptAutoUpdate: () => boolean
   poolDir: () => string
+  respectExternalSignIn?: () => boolean
   log: (msg: string) => void
 }): CliQuotaDeps {
   const base = {
@@ -35,10 +37,18 @@ export function buildCliQuotaDeps(opts: {
   return {
     ...base,
     syncSlot: () => {
-      const raw = readPrimaryCredential(opts.poolDir())?.raw
+      const poolDir = opts.poolDir()
+      const raw = readPrimaryCredential(poolDir)?.raw
       if (raw === undefined || raw === '') return false
+      const io = defaultSlotIo()
+      const live = io.readSlot()
+      if (sameCredentialGrant(live, raw)) return true
+      if (opts.respectExternalSignIn?.() === true && isExternalSlotSignIn(live, raw, poolDir)) {
+        opts.log('[agy-link] quota token sync skipped: preserving external standalone AGY sign-in in Windows slot')
+        return false
+      }
       try {
-        installSlotOrThrow(defaultSlotIo(), raw, opts.log, 'quota token refresh')
+        installSlotTracked(io, raw, poolDir, opts.log, 'quota token refresh')
         return true
       } catch {
         return false

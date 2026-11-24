@@ -17,6 +17,7 @@
 // counter is module state here so every caller shares one instance.
 
 import { parseCredentialDoc, sameCredentialGrant, type PrimaryCredential } from './docs.ts'
+import { installSlotTracked, isExternalSlotSignIn } from './external-guard.ts'
 import { installSlotOrThrow } from './lease.ts'
 import type { CredentialPlatform } from './platform.ts'
 import { resolvePrimaryCredentialAt, type AccountPoolLike } from './resolve.ts'
@@ -161,8 +162,12 @@ export async function recoverPrimarySlotAt(
     return { restored: false, reason: 'unverifiable' }
   }
   if (sameCredentialGrant(io.readSlot(), primary.raw)) return { restored: false, reason: 'already-primary' }
+  if (input.respectExternalSignIn && isExternalSlotSignIn(io.readSlot(), primary.raw, input.baseDir)) {
+    input.log('[agy-link] primary slot recovery skipped: preserving external standalone AGY sign-in in Windows slot')
+    return { restored: false, reason: 'already-primary' }
+  }
   try {
-    installSlotOrThrow(io, primary.raw, input.log, 'primary')
+    installSlotTracked(io, primary.raw, input.baseDir, input.log, 'primary')
   } catch {
     return { restored: false, reason: 'failed' }
   }

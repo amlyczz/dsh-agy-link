@@ -242,6 +242,7 @@ export async function recoverPrimaryCredential(
     log: options.log ?? noop,
     ...(options.proxyUrl === undefined ? {} : { proxyUrl: options.proxyUrl }),
     ...(options.force === undefined ? {} : { force: options.force }),
+    ...(options.respectExternalSignIn === undefined ? {} : { respectExternalSignIn: options.respectExternalSignIn }),
   })
 }
 

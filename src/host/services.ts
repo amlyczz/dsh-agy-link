@@ -130,6 +130,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       viaCli: () => getConfig().quotaViaCli,
       preemptAutoUpdate: () => getConfig().suppressAgyAutoUpdate,
       poolDir: () => pool.dir,
+      respectExternalSignIn: () => getConfig().respectExternalSignIn,
       log,
     }),
   )
@@ -339,6 +340,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       const res = await recoverPrimaryCredential(pool, {
         baseDir: pool.dir,
         log,
+        respectExternalSignIn: getConfig().respectExternalSignIn,
         ...(getConfig().proxyUrl?.trim() ? { proxyUrl: getConfig().proxyUrl.trim() } : {}),
       })
       if (res.reason === 'restored') {

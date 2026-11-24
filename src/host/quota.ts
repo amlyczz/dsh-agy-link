@@ -249,7 +249,7 @@ export class QuotaService {
         supportsSshIsolation(this.agyVersion()) ||
         (process.platform !== 'win32' && account.quotaUnavailable?.reason === 'no_summary_access')
       if (!canIsolateCli) return null
-      if (!(await this.prepareCliToken(account))) return null
+      if (!(await this.prepareCliToken(account, false))) return null
       const env = buildAgyEnvWithProxy({
         account,
         proxy: pickProxy(account.proxyUrl, this.globalProxy()),
