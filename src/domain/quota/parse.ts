@@ -7,7 +7,7 @@ import {
   type ModelFamily,
   type ModelQuotaInfo,
 } from '../../common/pool-types.ts'
-import { isStale5hBucket, pickFamilyQuota, sameQuotaWindow } from './buckets.ts'
+import { isStale5hBucket, looksLikeWeeklyWindow, pickFamilyQuota, sameQuotaWindow, undoWeeklyInFiveHourSlot } from './buckets.ts'
 
 export interface DiscoveredModelEntry {
   quotaInfo?: {
@@ -211,6 +211,62 @@ function ingestSummaryGroups(
  * model-derived row when the summary had none). Mutates `familyQuotas` and
  * `stale5hFamilies`; returns the per-family model lists.
  */
+/**
+ * The row to use when this poll's summary carried NO group for `fam`.
+ *
+ * Three shapes, decided by the only evidence a label-less reading offers — its
+ * reset instant:
+ *
+ *   • `argon` without a dedicated group: WEEKLY-ONLY by construction (a Pro →
+ *     Ultra fold still reports argon models, but the pool is the shared Gemini
+ *     one and the reading carries the weekly window). Filing it as the 5-hour
+ *     fraction would bench a healthy account on the 10% 5h floor.
+ *   • any family whose reading resets more than 6 hours out: the WEEKLY window.
+ *     Filing it as the 5-hour fraction painted "5h 100% · weekly (empty) · reset
+ *     6 days out" plus a Pro badge on a FREE account (2026-11-23/24) — four
+ *     numbers describing buckets that account never had. The 5-hour slot stays
+ *     unknown unless a real (sub-6h) reading is already stored.
+ *   • anything else: the conservative "lowest binding constraint" merge, which
+ *     never overwrites a previously complete row with partial fallback data.
+ */
+function fallbackFamilyRow(params: {
+  fam: ModelFamily
+  prevFamily: FamilyQuotaInfo | undefined
+  remaining: number
+  resetTime: string | undefined
+  now: number
+  summaryAuthoritative: boolean
+}): FamilyQuotaInfo {
+  const { fam, prevFamily, remaining, resetTime, now, summaryAuthoritative } = params
+  if (fam === 'argon') {
+    return {
+      ...(prevFamily ?? {}),
+      remainingFraction: undefined,
+      resetTime: undefined,
+      weeklyFraction: remaining,
+      weeklyResetTime: resetTime,
+      updatedAt: now,
+    }
+  }
+  if (looksLikeWeeklyWindow(resetTime, now)) {
+    // A weekly reading never claims the 5-hour slot. A real 5h reading the
+    // account already stored is NOT erased: it stays until its own boundary,
+    // which the panel marks as expired instead of presenting it as live.
+    const keptWeekly = typeof prevFamily?.weeklyFraction === 'number' && prevFamily.weeklyFraction <= remaining
+    return {
+      ...(prevFamily ?? {}),
+      weeklyFraction: keptWeekly ? prevFamily?.weeklyFraction : remaining,
+      weeklyResetTime: keptWeekly ? prevFamily?.weeklyResetTime ?? resetTime : resetTime,
+      updatedAt: now,
+    }
+  }
+  return pickFamilyQuota(
+    prevFamily,
+    { remainingFraction: remaining, resetTime, updatedAt: now },
+    summaryAuthoritative,
+  )
+}
+
 function ingestModelCatalog(params: {
   modelsCatalog: Record<string, DiscoveredModelEntry>
   prevQuotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>
@@ -246,30 +302,13 @@ function ingestModelCatalog(params: {
     })
 
     const isStale = stale5hFamilies.has(fam)
+    // A persisted row that carries the WEEKLY number in the 5-hour slot is the
+    // free-tier mis-filing `undoWeeklyInFiveHourSlot` repairs; every branch
+    // below must start from the corrected row or the error is frozen forever.
+    const prevFamily = undoWeeklyInFiveHourSlot(prevQuotas[fam], now)
     // Fallback for family fraction if summary was unavailable.
     if (!familyQuotas[fam]) {
-      if (fam === 'argon') {
-        // Argon is WEEKLY-ONLY whenever the backend does not publish a
-        // dedicated Argon group (a Pro -> Ultra plan folds it into the
-        // shared Gemini bucket). The per-model quotaInfo then carries the
-        // WEEKLY window, so it must never be filed under the 5-hour row:
-        // the 10% 5h floor would otherwise bench an account whose weekly
-        // quota is still above the 5% weekly floor.
-        familyQuotas.argon = {
-          ...(prevQuotas.argon ?? {}),
-          remainingFraction: undefined,
-          resetTime: undefined,
-          weeklyFraction: remaining,
-          weeklyResetTime: resetTime,
-          updatedAt: now,
-        }
-      } else {
-        familyQuotas[fam] = pickFamilyQuota(
-          prevQuotas[fam],
-          { remainingFraction: remaining, resetTime, updatedAt: now },
-          summaryAuthoritative,
-        )
-      }
+      familyQuotas[fam] = fallbackFamilyRow({ fam, prevFamily, remaining, resetTime, now, summaryAuthoritative })
     } else {
       // Window-aware merge. `quotaInfo` carries no window label, so the
       // reset instant decides where the number belongs:
@@ -284,8 +323,14 @@ function ingestModelCatalog(params: {
       // explicitly; when `resetTime` is absent the model-level reading is
       // the WEEKLY window and must not tighten the 5-hour row.
       const weeklyOnlyArgon = fam === 'argon' && familyQuota.resetTime === undefined
+      // Same rule for EVERY family, decided by the reset distance instead of by
+      // the family name: a reading that resets more than 6 hours out cannot be
+      // the rolling 5-hour bucket, so it belongs to the weekly row even when the
+      // summary never named that window (free tier).
+      const weeklyOnlyRow = familyQuota.resetTime === undefined && looksLikeWeeklyWindow(resetTime, now)
       const modelIsWeekly =
         weeklyOnlyArgon ||
+        weeklyOnlyRow ||
         (sameQuotaWindow(resetTime, familyQuota.weeklyResetTime) &&
           !sameQuotaWindow(resetTime, familyQuota.resetTime))
       if (modelIsWeekly) {

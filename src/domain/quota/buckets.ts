@@ -107,6 +107,57 @@ export function pickFamilyQuota(
 export const QUOTA_WINDOW_MATCH_TOLERANCE_MS = 5 * 60_000
 
 /**
+ * A reset this far in the future cannot still belong to the rolling 5-hour
+ * window: a live 5h bucket always resets within 5 hours of now (the backend may
+ * add a little clock skew, never a day). Anything farther out is the WEEKLY
+ * window, which is the only window a free-tier account has.
+ */
+export const WEEKLY_WINDOW_MIN_RESET_MS = 6 * 3600_000
+
+/** True when `resetTime` can only be a weekly (7-day) quota boundary. */
+export function looksLikeWeeklyWindow(resetTime?: string, now = Date.now()): boolean {
+  if (typeof resetTime !== 'string' || resetTime.trim() === '') return false
+  const at = Date.parse(resetTime)
+  if (!Number.isFinite(at)) return false
+  return at - now > WEEKLY_WINDOW_MIN_RESET_MS
+}
+
+/**
+ * Move a weekly reading out of the 5-hour slot.
+ *
+ * `fetchAvailableModels` reports per-model `quotaInfo` with NO window label, so
+ * the writer has to decide which row a reading belongs to. When the summary
+ * endpoint is refused (free tier) there is nothing to match it against, and the
+ * old fallback filed the WEEKLY number under the 5-hour row. On screen that is
+ * "5 小时额度 100% · 周额度 (empty) · reset 6 days out" pinned to a Pro badge —
+ * numbers that describe no bucket at all (live 2026-11-23/24 on the primary
+ * account of `session-e778203d`).
+ *
+ * Migration for already-persisted rows: a 5h row whose reset is weekly-shaped,
+ * and which either has no weekly row or has a weekly row describing the SAME
+ * window, is that mis-filing. Move the number to the weekly slot; a genuine 5h
+ * row always resets inside 5 hours and is left untouched.
+ */
+export function undoWeeklyInFiveHourSlot(
+  row: FamilyQuotaInfo | undefined,
+  now = Date.now(),
+): FamilyQuotaInfo | undefined {
+  if (row === undefined) return undefined
+  if (typeof row.remainingFraction !== 'number') return row
+  if (!looksLikeWeeklyWindow(row.resetTime, now)) return row
+  const duplicateWindow = typeof row.weeklyFraction !== 'number'
+    || sameQuotaWindow(row.resetTime, row.weeklyResetTime)
+  if (!duplicateWindow) return row
+  return {
+    ...row,
+    remainingFraction: undefined,
+    resetTime: undefined,
+    weeklyFraction: row.weeklyFraction ?? row.remainingFraction,
+    weeklyResetTime: row.weeklyFraction === undefined ? row.resetTime : row.weeklyResetTime,
+  }
+}
+
+/**
  * Detects whether a 5-hour quota bucket from retrieveUserQuotaSummary is an
  * unmetered placeholder (remainingFraction = 1.0 and resetTime = now + ~5h).
  * In unmetered environments (e.g. Cloud Code PA prod for free tier), the window

@@ -63,6 +63,17 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
    - **调度锚点必须持久化**：日锚点与间隔锚点写入 `warmup-history.json`（`schedule:daily:<dayKey>` / `schedule:interval`），不再只存在内存里。否则插件重载会让间隔模式立刻"到期"、日锚点当天再判一次——按族冷却只是把探针挡住，白跑一轮全池扫描。多宿主共享 state 目录时也靠它去重。
    - **间隔下限 3 小时**（`MIN_WARMUP_INTERVAL_HOURS`，`0` = 关闭）：一次全池 run 按 30–120s 账号间隔要跑几分钟，1–2 小时的间隔会在上一轮没跑完时重新武装。`common/config.ts` 的 `clampWarmupIntervalHours()` 与配置路由校验共用同一常量。
 
+## 逐模型读数落哪个窗口：只看 reset 距离，不看族名（2026-11-24）
+
+`fetchAvailableModels` 的 `quotaInfo` **不带窗口标签**：同一个字段，有的账号给 5 小时桶，有的给周桶。判别依据只能是 reset 时刻。
+
+- **物理判据**：真实的 5 小时桶**永远在 5 小时内**重置（后端时钟抖动不会让它变成一天以后）。因此 `resetTime - now > 6h` → 这只可能是**周窗口**。常量 `WEEKLY_WINDOW_MIN_RESET_MS`（`src/domain/quota/buckets.ts`）。
+- **摘要被拒时没有可匹配的桶**：免费账号的 `retrieveUserQuotaSummary` 恒 403 PERMISSION_DENIED，`familyQuotas` 为空，于是旧 fallback 把**周读数写进了 5 小时行** —— 屏幕上就是「5 小时额度 100% · 周额度（空白）· 重置 11/30 22:46」外加一个 Pro 徽章，四者描述的都是账号根本没有的桶（实测 2026-11-23/24，主账号）。
+- **规则**：`ingestModelCatalog` 在「该族没有摘要行」时，若读数按上述判据是周窗口，就只写 `weeklyFraction`/`weeklyResetTime`，5 小时槽位保持「未知」；有真 5 小时读数（<6h）才写 5 小时行。摘要权威时行为不变（按 `sameQuotaWindow` 匹配）。
+- **已落盘的错行必须能自愈**：`undoWeeklyInFiveHourSlot()` 把「5 小时行里装着周窗口、且周行缺失或与该窗口同一时刻」的行搬回周行。否则 `mergeFallbackFamilyQuota` 会用它当「last-known-good」把错误和旧时间戳一起永久冻住（面板上的「数据停留在 …」正是这么来的）。
+- **套餐徽章必须与卡片一致**：`isStalePlanTier('pro', ev, quotaUnavailable)` —— 账号处于 `no_summary_access` 且**没有任何 5h 证据**时，持久化的 `pro` 与证据矛盾，按 Free 呈现。有 5h 读数的付费账号不受瞬时拒绝影响（`has5h` 仍成立）。
+- 锚点：`test/quota-weekly-window-filing.test.ts`。
+
 ## 3. Proto3 零值省略与耗尽态解析
 
 Google Cloud Code PA 使用 Proto3 JSON 序列化：当配额耗尽（`remainingFraction === 0`）时，服务端可能**省略 `remainingFraction` 字段**，仅返回未来的 `resetTime`（或 `remainingAmount: 0`）。

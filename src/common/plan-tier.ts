@@ -169,9 +169,20 @@ export function inferAccountPlanTier(input: {
  * Pro / Enterprise are never auto-downgraded here: a weaker probe must not erase
  * a tier that a richer probe (CLI `/usage` groups) legitimately detected.
  */
-export function isStalePlanTier(tier: AccountPlanTier, ev: PlanTierEvidence): boolean {
+export function isStalePlanTier(
+  tier: AccountPlanTier,
+  ev: PlanTierEvidence,
+  quotaUnavailable?: QuotaUnavailableState,
+): boolean {
   if (tier === 'free') return ev.has5h
   if (tier === 'ultra') return !ev.argonShared && !ev.argonDedicated
+  // A refused summary on an account with NO 5-hour window is the free-tier
+  // shape, so a persisted "pro" contradicts the evidence in front of us. Without
+  // this the badge stayed Pro while the same card carried an empty 5h bar,
+  // which is the "every number on this card is wrong" report of 2026-11-24.
+  // A paid account keeps its 5h reading through `undoWeeklyInFiveHourSlot`, so
+  // it still proves `has5h` and is never downgraded by a transient refusal.
+  if (tier === 'pro') return quotaUnavailable?.reason === 'no_summary_access' && !ev.has5h
   return false
 }
 
@@ -194,6 +205,6 @@ export function resolveAccountPlanTier(
   if (persisted === undefined) return inferred
   // A stored tier that its own defining marker contradicts is stale (e.g. a
   // "free" badge on an account that clearly has a 5-hour paid window).
-  if (isStalePlanTier(persisted, evidence)) return inferred ?? persisted
+  if (isStalePlanTier(persisted, evidence, acc.quotaUnavailable)) return inferred ?? persisted
   return persisted
 }
