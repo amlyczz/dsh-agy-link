@@ -222,9 +222,9 @@ export class AccountPoolManager {
     return this.admin.setAccountAlias(id, alias)
   }
 
-  setAccountPlanTier(id: string, tier: AccountPlanTier | undefined): boolean {
-    return this.admin.setAccountPlanTier(id, tier)
-  }
+  setAccountPlanTier(id: string, tier: AccountPlanTier | undefined): boolean { return this.admin.setAccountPlanTier(id, tier) }
+
+  setPlanTierOverride(id: string, tier: AccountPlanTier | undefined): boolean { return this.admin.setPlanTierOverride(id, tier) }
 
   setAccountEnabled(id: string, enabled: boolean): boolean {
     const wasActive = this.data.activeAccountIds?.google === id || this.data.lastActiveAccountId === id

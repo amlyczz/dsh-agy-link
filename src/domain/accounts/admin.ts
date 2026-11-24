@@ -223,6 +223,25 @@ export class PoolAdmin {
     return true
   }
 
+  /**
+   * Pin (or clear) the subscription tier the user states for this account.
+   *
+   * The inference can only prove `free` / `pro` / `enterprise`; Ultra has no
+   * provable signal in the quota data, so this override is the single honest
+   * path to show it — and it must not be clobbered by the hourly refresh, hence
+   * a field of its own instead of `planTier`.
+   */
+  setPlanTierOverride(id: string, tier: AccountPlanTier | undefined): boolean {
+    const acc = this.account(id)
+    if (!acc) return false
+    const next = tier === 'unknown' ? undefined : tier
+    if (acc.planTierOverride === next) return true
+    if (next === undefined) delete acc.planTierOverride
+    else acc.planTierOverride = next
+    this.deps.persist()
+    return true
+  }
+
   setAccountEnabled(id: string, enabled: boolean): boolean {
     const data = this.deps.getData()
     const acc = this.account(id)

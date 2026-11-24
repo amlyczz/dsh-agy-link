@@ -1,6 +1,6 @@
 // /agy pool (accounts), account add/enable/disable/remove and quota/cooldown ops.
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
-import type { ModelFamily } from '../../common/pool-types.ts'
+import type { AccountPlanTier, ModelFamily } from '../../common/pool-types.ts'
 import {
   QUOTA_FAMILIES,
   accountAuthState,
@@ -232,6 +232,33 @@ export async function handlePool(deps: CommandDeps, ctx: CommandContext): Promis
       }
     }
     return success ? ok(`Removed account ${resolved.id}`) : err(`Account ${resolved.id} not found`)
+  }
+
+  if (sub === 'plan') {
+    const pool = deps.pool?.()
+    if (!pool) return err('Account pool not available')
+    const tail = parts.slice(1)
+    if (tail.length < 2) return err('usage: /agy plan <id|alias> <pro|ultra|free|enterprise|auto>')
+    const selector = tail.slice(0, -1).join(' ').trim()
+    const token = (tail.at(-1) ?? '').toLowerCase()
+    const resolved = resolveAccountId(pool, selector)
+    if ('error' in resolved) return err(resolved.error)
+    if (token === 'auto' || token === 'reset') {
+      pool.setPlanTierOverride(resolved.id, undefined)
+      return ok(`Plan badge for **${resolved.id}** follows the inferred tier again (pin cleared).`)
+    }
+    const tiers: readonly AccountPlanTier[] = ['pro', 'ultra', 'free', 'enterprise']
+    const tier = tiers.find((t) => t === token)
+    if (tier === undefined) {
+      return err(`Unknown plan "${token}". Expected: pro, ultra, free, enterprise, auto.`)
+    }
+    if (!pool.setPlanTierOverride(resolved.id, tier)) return err(`Account ${selector} not found`)
+    deps.notifyPicker?.()
+    return ok([
+      `Plan badge for **${resolved.id}** pinned to **${tier}**.`,
+      `- Quota data cannot prove Pro vs Ultra any more, so the badge uses this pin until you clear it.`,
+      `- Clear it with \`/agy plan ${selector} auto\`.`,
+    ].join('\n'))
   }
 
   return err(`Unknown pool command \`${sub}\`.`)

@@ -127,6 +127,7 @@ export const HELP = [
   '- `/agy refresh-quota` — query Google backend for fresh quota %',
   '- `/agy clear-cooldown [id|alias] [family]` — reset cooldown timers (and any active low-quota bench)',
   '- `/agy remove-account <id|alias>` — delete an account slot',
+  '- `/agy plan <id|alias> <pro|ultra|free|enterprise|auto>` — pin the plan badge (quota data cannot tell Pro from Ultra)',
   '- `/agy auth [id|alias|email]` — login to the primary or reauthenticate an existing account',
   '- `/agy auth-status` — check the current or most recent login result',
   '- `/agy auth-code <code>` — finish login by pasting the code (fallback)',
