@@ -80,6 +80,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           transport: cfg.transport,
           acpStatus: typeof acpPool?.status === 'function' ? acpPool.status() : null,
           backgroundWakeup: cfg.backgroundWakeup,
+          mcpBridge: cfg.mcpBridge,
           backgroundWakeupTtlMinutes: cfg.backgroundWakeupTtlMinutes,
           backgroundWakeupMaxPerSession: cfg.backgroundWakeupMaxPerSession,
           backgroundWakeState: typeof backgroundWakeup?.status === 'function' ? backgroundWakeup.status() : null,

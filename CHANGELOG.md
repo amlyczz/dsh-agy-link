@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.81 (2026-11-24)
+
+### English
+
+- **Fix(settings): the reverse MCP bridge is now reachable — it had no UI, no settable HTTP key, and a hand-edited overrides file that never applied (fixes #196).** `mcpBridge` (experimental, default off) lets agy call this plugin's DSH tools (`read` / `write` / `edit` / `skill` / … ) instead of only its own. In practice nobody could turn it on:
+  - the settings panel had no switch for it (`mcpBridge` did not appear in the client bundle at all),
+  - `POST /plugins/agy-link/config { key: "mcpBridge" }` answered `400 key not settable` because the key was missing from the route allow-list,
+  - editing `runtime-overrides.json` by hand did not take effect.
+  It is now a normal boolean setting: a switch in **Settings → Runtime controls**, an allowed (boolean-validated) config route key, and `mcpBridge` reported by `/status` so the panel can render its state. Still off by default and still marked experimental.
+
+### 中文
+
+- **修复(设置)：反向 MCP 桥现在有入口了——此前没有 UI、HTTP 键不可设、手改 overrides 也不生效（修复 #196）。** `mcpBridge`（实验性，默认关闭）让 agy 能调用本插件的 DSH 工具（`read` / `write` / `edit` / `skill` 等），而不只是它自己的原生工具。但实际没人能打开它：
+  - 设置面板没有对应开关（`mcpBridge` 在客户端产物里根本不出现）；
+  - `POST /plugins/agy-link/config { key: "mcpBridge" }` 返回 `400 key not settable`，因为该键不在路由白名单里；
+  - 手改 `runtime-overrides.json` 不会生效。
+  现在它是正常的布尔设置：**设置 → 运行时控制** 里的开关、配置路由允许（并按布尔校验）的键、以及 `/status` 会返回 `mcpBridge` 供面板渲染状态。仍然默认关闭，仍然标注实验性。
+
 ## 0.6.80 (2026-11-24)
 
 ### English

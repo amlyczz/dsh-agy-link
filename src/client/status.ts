@@ -43,6 +43,7 @@ export interface StatusPayload {
 		lastSlotRecoveryAt?: number | null
 	} | null;
 	backgroundWakeup?: boolean;
+	mcpBridge?: boolean;
 	imageTool?: boolean;
 	syncAccountCustomizations?: boolean;
 	workspaceRoot?: string;

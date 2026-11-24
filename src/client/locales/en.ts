@@ -242,6 +242,8 @@ export const en: AgyDictionary = {
   'config.syncCustomizationsDesc': 'Automatically mirror primary Plugins, MCP servers, Skills, Rules, and Agents into isolated pool accounts',
   'config.backgroundWakeup': 'Cross-turn background wakeup',
   'config.backgroundWakeupDesc': 'Off by default. When on, idle DSH sessions wake up on their own when an agy timer fires or a background task / ACP session finishes',
+  'config.mcpBridge': 'Reverse MCP bridge (experimental)',
+  'config.mcpBridgeDesc': 'Off by default. Lets agy call this plugin’s DSH tools (read/write/edit/skill/…) instead of only its own. Experimental; takes effect on the next session.',
   'config.agent': 'Default custom agent (--agent)',
   'config.agentDesc': 'Select a Markdown custom agent name; leave blank for the default agy agent',
   'config.agentPlaceholder': 'Custom agent name (blank = default)',

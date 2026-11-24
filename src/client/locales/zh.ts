@@ -242,6 +242,8 @@ export const zh = {
   'config.syncCustomizationsDesc': '自动将主账号的 Plugins、MCP、Skills、Rules 与 Agents 镜像同步到隔离账号池',
   'config.backgroundWakeup': '跨回合后台自动唤醒',
   'config.backgroundWakeupDesc': '默认关闭。开启后，当定时任务到期、后台命令/子代理完成或 ACP 常驻推送更新时自动唤醒空闲的 DSH 会话',
+  'config.mcpBridge': '反向 MCP 桥（实验性）',
+  'config.mcpBridgeDesc': '默认关闭。开启后 agy 可以调用本插件的 DSH 工具（read/write/edit/skill 等），而不只是它自己的原生工具。实验性功能，下个会话生效。',
   'config.agent': '默认自定义 Agent (--agent)',
   'config.agentDesc': '指定 Markdown 自定义 Agent 名称，留空使用 agy 默认行为',
   'config.agentPlaceholder': '输入 agent 名称（留空默认）',

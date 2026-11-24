@@ -149,6 +149,7 @@ const BASE_CONFIG: Record<string, unknown> = {
   agent: '',
   agySettings: '',
   transport: 'cli',
+  mcpBridge: false,
   imageTool: true,
   syncAccountCustomizations: true,
   workspaceRoot: '/tmp/agy-contract',
@@ -2022,4 +2023,23 @@ test('/config validates auto mode, sandbox, transport, agent, agySettings, image
     ['imageTool', false],
     ['syncAccountCustomizations', false],
   ])
+})
+
+test('issue #196: mcpBridge is settable through the config route (boolean only) and reported by status', async () => {
+  const writes: Array<[string, unknown]> = []
+  const s = setup({ setOverride: (k: string, v: unknown) => { writes.push([k, v]) } })
+  const route = s.route('/plugins/agy-link/config')
+
+  // It used to answer 400 "key not settable", which is why the switch was unreachable.
+  const ok = await invoke(route, fakeReq('POST', '/', { key: 'mcpBridge', value: true }))
+  assert.equal(ok.status(), 200)
+  assert.deepEqual(writes, [['mcpBridge', true]])
+
+  const bad = await invoke(route, fakeReq('POST', '/', { key: 'mcpBridge', value: 'yes' }))
+  assert.equal(bad.status(), 400)
+  assert.deepEqual(bad.json(), { error: 'mcpBridge must be a boolean' })
+
+  const status = await s.call('/plugins/agy-link/status', fakeReq('GET', '/plugins/agy-link/status'))
+  assert.equal(status.status(), 200)
+  assert.ok('mcpBridge' in (status.json() as Record<string, unknown>), 'status must expose mcpBridge so the panel can render its switch')
 })

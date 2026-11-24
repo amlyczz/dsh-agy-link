@@ -209,6 +209,18 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		// Reverse MCP bridge: experimental and off by default, but it MUST be
+		// reachable from the panel — it used to have no UI, no settable HTTP key,
+		// and a hand-edited runtime-overrides.json that never took effect (#196).
+		boolRow({
+			t,
+			title: t('config.mcpBridge'),
+			desc: t('config.mcpBridgeDesc'),
+			cfgKey: 'mcpBridge',
+			value: status.mcpBridge === true,
+			loadingAction,
+			setCfg,
+		}),
 		renderAgentRow({ ...props, draft: agentDraft, setDraft: setAgentDraft }),
 	);
 }

@@ -242,6 +242,8 @@ export const es: AgyDictionary = {
   'config.syncCustomizationsDesc': 'Refleja automáticamente Plugins, MCP, Skills, Rules y Agents en cuentas aisladas del pool',
   'config.backgroundWakeup': 'Despertar automático en segundo plano',
   'config.backgroundWakeupDesc': 'Desactivado por defecto. Si se activa, las sesiones inactivas de DSH se reactivan solas cuando vence un temporizador o termina una tarea/ACP',
+  'config.mcpBridge': 'Puente MCP inverso (experimental)',
+  'config.mcpBridgeDesc': 'Desactivado por defecto. Permite que agy use las herramientas DSH de este plugin (read/write/edit/skill/…) en lugar de solo las suyas. Experimental; se aplica en la próxima sesión.',
   'config.agent': 'Agente personalizado (--agent)',
   'config.agentDesc': 'Nombre del agente Markdown personalizado; déjalo vacío para el agente predeterminado',
   'config.agentPlaceholder': 'Nombre del agente (vacío = predeterminado)',
