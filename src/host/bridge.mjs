@@ -12,6 +12,7 @@ import { createInterface } from 'node:readline'
 const URL_BASE = process.env.DSH_MCP_URL || ''
 const TOKEN = process.env.DSH_MCP_TOKEN || ''
 const SESSION = process.env.DSH_MCP_SESSION || ''
+const PROC_ID = process.env.DSH_MCP_PROC || ''
 const PROTOCOL = '2024-11-05'
 
 function post(path, body) {
@@ -32,6 +33,7 @@ function post(path, body) {
         'Content-Length': Buffer.byteLength(data),
         Authorization: 'Bearer ' + TOKEN,
         ...(SESSION === '' ? {} : { 'X-DSH-Session': SESSION }),
+        ...(PROC_ID === '' ? {} : { 'X-DSH-Proc': PROC_ID }),
       },
       timeout: 600000,
     });
@@ -54,8 +56,8 @@ function post(path, body) {
 
 let toolCache = null;
 
-async function listTools() {
-  if (toolCache) return toolCache;
+async function listTools(refresh = false) {
+  if (toolCache && !refresh) return toolCache;
   const res = await post('/tools', {})
   if (res.status !== 200) throw new Error('bridge /tools failed: ' + JSON.stringify(res.body))
   toolCache = (res.body.tools || []).map((t) => ({
@@ -79,15 +81,19 @@ async function handle(id, method, params) {
   }
   if (method.startsWith('notifications/')) return;
   if (method === 'tools/list') {
-    const tools = await listTools()
+    const tools = await listTools(true)
     send({ jsonrpc: '2.0', id, result: { tools: tools.map(({ _dshName, ...t }) => t) } })
     return;
   }
   if (method === 'tools/call') {
     const name = params && params.name
     const args = (params && params.arguments) || {}
-    const tools = await listTools()
-    const hit = tools.find((t) => t.name === name)
+    let tools = await listTools(false)
+    let hit = tools.find((t) => t.name === name)
+    if (!hit) {
+      tools = await listTools(true)
+      hit = tools.find((t) => t.name === name)
+    }
     if (!hit) {
       send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool: ' + name } })
       return;

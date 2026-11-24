@@ -484,15 +484,7 @@ export class AcpSessionPool {
     return { strays: observed, reaped: kill ? result.strays.length : 0 }
   }
 
-  /**
-   * Strays seen by the last sweep, refreshed at a badge-poll-friendly rate.
-   *
-   * Reads are side-effect free WHILE the pool owns a process. With an empty pool
-   * the scan is authoritative — no live or draining session can own an `agy acp`
-   * child of this host — so it may reap: an idle stray keeps polling Google with
-   * a credential it no longer has, which is exactly the shape risk control
-   * watches for, and the 60s sweep timer is stopped while the pool is empty.
-   */
+  /** Strays seen by the last sweep; read-only while pool owns processes. */
   private observeStrays(now: number): readonly number[] {
     if (this.strays === null) return []
     if (this.strayScanAt !== 0 && now - this.strayScanAt < STRAY_SCAN_OBSERVE_MS) return this.strayObserved
@@ -559,13 +551,16 @@ export class AcpSessionPool {
     reapedStrays: number
     slotOverwriteDetectedCount: number
     lastSlotRecoveryAt: number | null
+    availableCommands?: readonly import('./protocol.ts').AvailableCommand[]
   } {
     let sessions = 0
     const keys: string[] = []
+    const cmdMap = new Map<string, import('./protocol.ts').AvailableCommand>()
     for (const [k, p] of this.procs) {
       if (!p.isAlive()) continue
       sessions += p.sessionCount
       keys.push(k)
+      for (const c of p.advertisedCommands ?? []) cmdMap.set(c.name, c)
     }
     const drainingKeys = [...this.draining.values()].map((e) => e.key)
     const strayPids = this.observeStrays(Date.now())
@@ -583,6 +578,7 @@ export class AcpSessionPool {
       reapedStrays: this.reapedStrays,
       slotOverwriteDetectedCount: Math.max(this.slotOverwriteDetectedCount, guards.overwriteDetected),
       lastSlotRecoveryAt: Math.max(this.lastSlotRecoveryAt ?? 0, guards.lastRecoveryAt ?? 0) || null,
+      availableCommands: [...cmdMap.values()],
     }
   }
 

@@ -511,7 +511,7 @@ export async function* runAgyAttempt(
   const slot = yield* dispatchCredentialSlot(deps, { ...input, prompt: spawn.prompt })
   recorder.setTrackerSession?.(input.sessionKey)
   const effectiveAgySettings = resolveEffectiveAgySettings(input)
-  if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && !effectiveAgySettings && !input.isAux) {
+  if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && !effectiveAgySettings) {
     const acpRec = await deps.runAcp(deps, { ...input, prompt: spawn.prompt }, slot).catch(() => null)
     if (acpRec !== null) {
       recorder.stop()

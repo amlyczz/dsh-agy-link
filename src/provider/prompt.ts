@@ -14,6 +14,7 @@ import type { CallContext } from './call-context.ts'
 import { buildCompactionPrompt } from './compaction-prompt.ts'
 import { toolCallIdOf } from './continuation.ts'
 import { cloakPromptText } from './prompt-cloak.ts'
+import { extractLeadingAgySlash, formatWithLeadingAgySlash } from './leading-slash.ts'
 import type { PurposePolicy } from './purpose-policy.ts'
 import {
   buildDigest,
@@ -159,6 +160,8 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
     messages,
   })
   let prompt = branch.prompt
+  const leadingSlash = !isAux && !isImage && !isTranslateSession ? extractLeadingAgySlash(prompt) : null
+  if (leadingSlash) prompt = leadingSlash.rest
 
   // Context digest is applied inside the chat branch only, ahead of the system
   // instruction, exactly as the pre-refactor inline block ordered it.
@@ -185,8 +188,9 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
       return sm ? textOf(sm).trim() : ''
     })()
     const sysInstruction = cloakPromptText(rawSys, cfg.cloakSystemPrompt)
-    if (sysInstruction) prompt = 'System instructions:\n' + sysInstruction + '\n\n' + prompt
+    if (sysInstruction) prompt = 'System instructions:\n' + sysInstruction + (prompt !== '' ? '\n\n' + prompt : '')
   }
+  if (leadingSlash) prompt = formatWithLeadingAgySlash(leadingSlash, prompt)
 
   // ---- multimodal staging (v0.2): images ride as staged files ----
   const newlySentImageIds: string[] = []

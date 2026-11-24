@@ -2,18 +2,18 @@
 import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { stateDir } from '../../common/config.ts'
+import { dirname } from 'node:path'
 import type { PermissionMode } from '../../common/types.ts'
 import { preemptAgyAutoUpdate } from '../../host/auto-updater.ts'
 import { killTree } from '../../runtime/agy/process.ts'
 import { consoleOutputEncoding, makeLineDecoder } from '../../runtime/agy/console.ts'
 import { withAgyQuietEnv } from '../../runtime/agy/env.ts'
 import { awaitAuthEvidence, classifyIdentity, readAuthEmailFromLog, type AuthEvidence } from './identity.ts'
-import { pickPermissionOption, type JsonRpcResponse } from './protocol.ts'
+import { clearProcSessions, nextMcpProcId } from './mcp-session.ts'
+import { extractAvailableCommands, pickPermissionOption, type AvailableCommand, type JsonRpcResponse } from './protocol.ts'
 import { runAcpTurn, type AcpPromptOptions } from './turn.ts'
 import { collectAdvertisedModelIds } from './session-models.ts'
-import { spawnAcpChild } from './spawn.ts'
+import { resolveAcpLogFile, spawnAcpChild } from './spawn.ts'
 
 export interface AcpProcessOptions {
   bin: string
@@ -100,7 +100,9 @@ export class AcpProcess extends EventEmitter {
   private supportsInlineImages = false
   private activePrompts = 0
   private readonly rebuiltSessions = new Set<string>()
+  private availableCommands: AvailableCommand[] = []
   private initPromise: Promise<Record<string, unknown>> | null = null
+  readonly mcpProcId = nextMcpProcId()
   lastUsedAt = Date.now()
 
   constructor(private readonly opts: AcpProcessOptions) {
@@ -108,6 +110,7 @@ export class AcpProcess extends EventEmitter {
   }
 
   isAlive(): boolean { return this.alive && this.child !== null }
+  get advertisedCommands(): readonly AvailableCommand[] { return this.availableCommands }
   /** Foreground prompts own the process until completion, timeout or cancellation. */
   hasActivePrompt(): boolean { return this.activePrompts > 0 }
   /** Live child pid, or null before start / after exit (stray reconciliation). */
@@ -167,18 +170,10 @@ export class AcpProcess extends EventEmitter {
    * the JSON-RPC stream and stderr both stay empty.
    */
   private resolveLogFile(): string {
-    if (this.logFile !== null) return this.logFile
-    const explicit = this.opts.logFile
-    if (explicit !== undefined && explicit !== '') {
-      this.logFile = explicit
-      return explicit
+    if (this.logFile === null) {
+      this.logFile = resolveAcpLogFile(this.opts.logFile, this.opts.logDir)
     }
-    const dir = this.opts.logDir !== undefined && this.opts.logDir !== '' ? this.opts.logDir : join(stateDir(), 'logs')
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '')
-    const rand = Math.random().toString(36).slice(2, 8)
-    const file = join(dir, `acp-${stamp}-${rand}.log`)
-    this.logFile = file
-    return file
+    return this.logFile
   }
 
   subscribeSession(sessionId: string, listener: (u: Record<string, unknown>) => void): () => void {
@@ -199,6 +194,7 @@ export class AcpProcess extends EventEmitter {
   private ensureStarted(): void {
     if (this.child !== null) return
     const env = withAgyQuietEnv(this.opts.env ?? process.env)
+    env.DSH_MCP_PROC = this.mcpProcId
     if (this.opts.preemptAutoUpdate !== false) preemptAgyAutoUpdate(env)
     const args = ['acp', '--disable-telemetry']
     if (this.opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
@@ -236,6 +232,7 @@ export class AcpProcess extends EventEmitter {
       this.openSessions.clear()
       this.sessionConfigs.clear()
       this.sessionModels.clear()
+      clearProcSessions(this.mcpProcId)
       this.emit('exit', code, sig)
     })
     child.on('error', (err) => {
@@ -262,9 +259,7 @@ export class AcpProcess extends EventEmitter {
     } catch {
       return
     }
-    // ANY inbound frame is activity: a mid-turn stream of `session/update`
-    // events used to leave `lastUsedAt` frozen at the prompt's send time, so a
-    // long mirrored-tool run looked idle for 15 minutes and was evicted.
+    // ANY inbound frame is activity so streaming mirrored-tool runs do not look idle.
     this.lastUsedAt = Date.now()
     if ((typeof msg.id === 'number' || typeof msg.id === 'string') && typeof msg.method === 'string') {
       this.handleServerRequest(msg.id, msg.method, (msg.params ?? {}) as Record<string, unknown>)
@@ -288,6 +283,8 @@ export class AcpProcess extends EventEmitter {
       const sid = typeof params.sessionId === 'string' ? params.sessionId : ''
       const update = params.update && typeof params.update === 'object' ? (params.update as Record<string, unknown>) : null
       if (sid && update) {
+        const cmds = extractAvailableCommands(update)
+        if (cmds !== null) this.availableCommands = cmds
         const set = this.sessionListeners.get(sid)
         if (set) for (const cb of [...set]) cb(update)
       }
@@ -558,11 +555,17 @@ export class AcpProcess extends EventEmitter {
     }
   }
 
-  /**
-   * Graceful close: end stdin, give agy a moment to flush its SQLite state, then
-   * kill whatever is left. Only a forced close (timeout / discard) goes straight
-   * to the kill.
-   */
+  async closeSession(sessionId: string): Promise<void> {
+    this.openSessions.delete(sessionId)
+    this.sessionConfigs.delete(sessionId)
+    this.sessionModels.delete(sessionId)
+    this.rebuiltSessions.delete(sessionId)
+    this.sessionListeners.delete(sessionId)
+    if (!this.isAlive()) return
+    await this.request('session/close', { sessionId }, 10_000).catch(() => undefined)
+  }
+
+  /** Graceful close: end stdin and let agy flush SQLite, then kill remainder. */
   async closeGracefully(timeoutMs: number): Promise<void> {
     if (!this.isAlive()) {
       this.close()
@@ -584,16 +587,13 @@ export class AcpProcess extends EventEmitter {
 
   close(): void {
     this.alive = false
+    clearProcSessions(this.mcpProcId)
     const c = this.child
     this.child = null
     this.initPromise = null
     if (!c) return
     try { c.stdin?.end() } catch { /* ignore */ }
-    // agy spawns helpers (task shells, subagents, MCP servers): a bare kill()
-    // orphans them, and an orphan keeps writing to the shared credential slot
-    // and to its conversation DB. It also ignores SIGTERM while shutting down,
-    // so the pool must escalate — this used to leak a live `agy acp` server on
-    // every eviction (see src/features/acp/strays.ts).
+    // agy spawns helpers that ignore SIGTERM and orphan if only bare kill() runs.
     killTree(c)
   }
 }

@@ -12,8 +12,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { spawn } from 'node:child_process'
 import { agyMcpConfigPath, mcpServerKey, startMcpBridge, writeMcpConfig } from '../src/host/mcp-bridge.ts'
+import { beginProcSessionTurn, clearProcSessions, resolveProcSession } from '../src/features/acp/mcp-session.ts'
 
 const BRIDGE_SCRIPT = '/nonexistent/bridge.mjs'
 
@@ -431,6 +433,99 @@ test('issue #150: /tools lists preset-scoped tools for the spawning session', as
     // No header at all: root surface, unchanged.
     assert.deepEqual(await list({}), ['progress_update'])
   } finally {
+    await bridge.close()
+  }
+})
+
+test('issue #200: shared ACP process X-DSH-Proc overrides stale DSH_MCP_SESSION across session reuse', async () => {
+  const procId = 'acp-proc-reuse-1'
+  const calledAgents: string[] = []
+  const tools = {
+    schemas: (agent?: unknown) => {
+      const sid = (agent as { session?: string } | undefined)?.session
+      if (sid === 'session-B') {
+        return [{ name: 'progress_update', description: 'B tool', parameters: { type: 'object', properties: {} } }]
+      }
+      return [{ name: 'echo', description: 'root/A tool', parameters: { type: 'object', properties: {} } }]
+    },
+    execute: async (input: { calls?: Array<{ name: string }>; agent?: unknown; signal: AbortSignal }) => {
+      const aid = (input.agent as { id?: string } | undefined)?.id ?? 'none'
+      calledAgents.push(aid)
+      return { content: [{ type: 'text', text: 'ran:' + aid }] }
+    },
+  }
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    tools: () => tools,
+    allowlist: () => '',
+    resolveAgent: (sid) => (sid === 'session-A' || sid === 'session-B' ? { id: 'agent-' + sid, session: sid } : undefined),
+    resolveProcSession: (pid) => resolveProcSession(pid),
+  })
+  const realBridge = resolve('src/host/bridge.mjs')
+  const child = spawn(process.execPath, [realBridge], {
+    env: {
+      ...process.env,
+      DSH_MCP_URL: bridge.url,
+      DSH_MCP_TOKEN: bridge.token,
+      // Frozen to the spawning session (A), just like a reused `agy acp` process
+      DSH_MCP_SESSION: 'session-A',
+      DSH_MCP_PROC: procId,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  const lines: string[] = []
+  let buf = ''
+  const waiters: Array<(msg: Record<string, unknown>) => void> = []
+  child.stdout.on('data', (chunk: Buffer) => {
+    buf += chunk.toString('utf8')
+    let idx: number
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim()
+      buf = buf.slice(idx + 1)
+      if (!line) continue
+      lines.push(line)
+      const parsed = JSON.parse(line) as Record<string, unknown>
+      const w = waiters.shift()
+      if (w) w(parsed)
+    }
+  })
+  const rpc = (id: number, method: string, params?: Record<string, unknown>) =>
+    new Promise<Record<string, unknown>>((resolveRpc) => {
+      waiters.push(resolveRpc)
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
+    })
+
+  try {
+    await rpc(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {} })
+
+    // Turn 1 on session-A
+    const endA = beginProcSessionTurn(procId, 'session-A')
+    const listA = await rpc(2, 'tools/list', {})
+    assert.deepEqual(((listA.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name), ['echo'])
+    const callA = await rpc(3, 'tools/call', { name: 'echo', arguments: {} })
+    assert.equal(((callA.result as { content: Array<{ text: string }> }).content[0]?.text), 'ran:agent-session-A')
+    endA()
+
+    // Turn 2 on session-B reuses the SAME bridge.mjs / ACP process (whose env still has DSH_MCP_SESSION=session-A!)
+    const endB = beginProcSessionTurn(procId, 'session-B')
+    const listB = await rpc(4, 'tools/list', {})
+    assert.deepEqual(((listB.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name), ['progress_update'])
+    const callB = await rpc(5, 'tools/call', { name: 'progress_update', arguments: {} })
+    assert.equal(((callB.result as { content: Array<{ text: string }> }).content[0]?.text), 'ran:agent-session-B')
+    endB()
+
+    // Post-turn trailing window before process exits still routes to session-B (last active session on procId)
+    const callTrailing = await rpc(6, 'tools/call', { name: 'progress_update', arguments: {} })
+    assert.equal(((callTrailing.result as { content: Array<{ text: string }> }).content[0]?.text), 'ran:agent-session-B')
+
+    // Once process exits and mapping clears, falls back to X-DSH-Session (session-A)
+    clearProcSessions(procId)
+    assert.equal(resolveProcSession(procId), undefined)
+    assert.deepEqual(calledAgents, ['agent-session-A', 'agent-session-B', 'agent-session-B'])
+  } finally {
+    clearProcSessions(procId)
+    child.kill()
     await bridge.close()
   }
 })

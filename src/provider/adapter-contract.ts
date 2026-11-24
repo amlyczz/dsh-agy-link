@@ -68,6 +68,8 @@ export interface AgyAdapterDeps {
    * signals decide).
    */
   sessionPlanMode?: (sessionId: string) => boolean | undefined
+  /** Consume a one-shot `/aplan` read-only guard armed for the upcoming turn. */
+  consumeForcedPlanMode?: (sessionId: string) => boolean
   /** Resolve the latest selected Antigravity model for this session (honored by compaction when DSH passes stale lastUsed). */
   sessionPendingModel?: (sessionId: string) => string | undefined
   /** Last-run telemetry surfaced by /agy status. Process completion and tool failures are distinct. */

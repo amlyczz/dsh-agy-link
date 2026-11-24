@@ -117,6 +117,29 @@ function extractAcpToolError(update: Record<string, unknown>, status: string): s
   return undefined
 }
 
+export interface AvailableCommand {
+  name: string
+  description: string
+  inputHint?: string
+}
+
+export function extractAvailableCommands(update: Record<string, unknown>): AvailableCommand[] | null {
+  if (update.sessionUpdate !== 'available_commands_update') return null
+  const raw = update.availableCommands
+  if (!Array.isArray(raw)) return null
+  const out: AvailableCommand[] = []
+  for (const item of raw) {
+    const o = asObj(item)
+    const name = typeof o?.name === 'string' ? o.name.trim() : ''
+    if (name === '') continue
+    const description = typeof o?.description === 'string' ? o.description.trim() : ''
+    const input = asObj(o?.input)
+    const inputHint = typeof input?.hint === 'string' && input.hint.trim() !== '' ? input.hint.trim() : undefined
+    out.push({ name, description, ...(inputHint !== undefined ? { inputHint } : {}) })
+  }
+  return out
+}
+
 /** Map one `session/update` payload onto normalized `AgyEvent`s. */
 export function acpUpdateToAgyEvents(
   sessionId: string,

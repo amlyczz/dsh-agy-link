@@ -16,6 +16,7 @@ import { AUTH_FAST_REVERIFY_MS } from './common/pool-types.ts'
 import { defineAgyAskTool } from './host/ask-tool.ts'
 import { defineAgyImageTool } from './host/image-tool.ts'
 import { agyCommandDefinition, buildAgyCommandDeps } from './host/commands.ts'
+import { agySlashCommandDefinitions } from './host/agy-slash-commands.ts'
 import { btwCommandDefinition } from './host/btw-command.ts'
 import { tslCommandDefinition } from './host/tsl-command.ts'
 import { defineAgyMirrorTool, MIRROR_TOOL_NAME } from './host/mirror-tool.ts'
@@ -24,6 +25,7 @@ import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv } from './host/runner
 import { agyNotInstalledMessage } from './provider/call-context.ts'
 import { sweepDir } from './host/media.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, startMcpBridge, teardownBridgeState, type ToolsServiceLike } from './host/mcp-bridge.ts'
+import { resolveProcSession } from './features/acp/index.ts'
 import type { GoalServiceLike } from './host/commands/shared.ts'
 import { runBootHygiene } from './host/boot-hygiene.ts'
 import { scheduleBootMaintenance } from './host/boot-maintenance.ts'
@@ -192,16 +194,20 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // settings directory; registering here would put an unconfigured
   // antigravity into the provider-add list and confuse the UI state.
 
-  // ---- /agy, /tsl, and /btw commands ----
-  ctx.commands.register(
-    agyCommandDefinition(
-      buildAgyCommandDeps({
-        services,
-        goals: () => (ctx.get('goals') as GoalServiceLike | undefined) ?? ((ctx as unknown as { goals?: GoalServiceLike }).goals),
-        agents: () => (ctx.get('agents') as { get(id: unknown): unknown } | undefined) ?? ((ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents),
-      }),
-    ),
-  )
+  // ---- /agy, /tsl, /atw, and full a-prefix slash bridge commands ----
+  const agyDeps = buildAgyCommandDeps({
+    services,
+    goals: () => (ctx.get('goals') as GoalServiceLike | undefined) ?? ((ctx as unknown as { goals?: GoalServiceLike }).goals),
+    agents: () => (ctx.get('agents') as { get(id: unknown): unknown } | undefined) ?? ((ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents),
+  })
+  ctx.commands.register(agyCommandDefinition(agyDeps))
+  for (const def of agySlashCommandDefinitions({
+    deps: () => agyDeps,
+    armForcedPlan: services.armForcedPlan,
+    planMode: () => ctx.get('planMode' as never) as { enter?: (agent: unknown) => unknown } | undefined,
+  })) {
+    ctx.commands.register(def)
+  }
 
   ctx.commands.register(
     btwCommandDefinition({
@@ -506,6 +512,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             // Bridged calls run on behalf of the session that spawned agy
             // (issue #55): resolve its agent so tools that require a caller work.
             resolveAgent: (sessionId) => agents()?.get(sessionId),
+            resolveProcSession: (procId) => resolveProcSession(procId),
             log,
           })
           // A scope can be disposed before asynchronous listener startup ends.

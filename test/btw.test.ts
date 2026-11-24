@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
-import type { CommandInvocation } from '@deepseek-ai/dsh-commands'
+import { Context } from '@deepseek-ai/cordis'
+import { CommandRuntime, parseCommand, type CommandInvocation } from '@deepseek-ai/dsh-commands'
 import { resolveConfig } from '../src/common/config.ts'
 import { defaultConfig, type AgyEvent } from '../src/common/types.ts'
 import { BtwService } from '../src/features/btw/service.ts'
@@ -183,8 +184,20 @@ test('parseBtwArgs and top-level /btw command handle GUI non-blocking mode, --wa
     btw: () => btw,
     isWebActive: () => webActive,
   })
-  assert.equal(def.name, 'agy-btw')
-  assert.ok(def.input?.hint)
+  assert.equal(def.name, 'atw')
+  assert.match(def.description, /\/atw/)
+  assert.ok(def.input?.hint && def.input.hint.trim().length > 0)
+
+  const helpRes = await def.handler({
+    commandId: 'cmd-help' as CommandInvocation['commandId'],
+    rawInput: ' help',
+    attachments: [],
+    signal: new AbortController().signal,
+    agent: { id: 'sess-cmd', session: {} },
+  } as unknown as CommandInvocation)
+  assert.equal(helpRes.kind, 'success')
+  assert.match(helpRes.text ?? '', /\/atw/)
+  assert.doesNotMatch(helpRes.text ?? '', /\/btw\b/)
 
   const inv = (rawInput: string): CommandInvocation => ({
     commandId: 'cmd-1' as CommandInvocation['commandId'],
@@ -233,7 +246,28 @@ test('parseBtwArgs and top-level /btw command handle GUI non-blocking mode, --wa
   // Clear
   const cleared = await def.handler(inv(' clear'))
   assert.equal(cleared.kind, 'success')
+  assert.match(cleared.text ?? '', /\/atw/)
   assert.equal(btw.view('sess-cmd').entries.length, 0)
+
+  // Empty usage in headless mode cites /atw
+  const usageRes = await def.handler(inv(''))
+  assert.equal(usageRes.kind, 'error')
+  assert.match(usageRes.text, /\/atw/)
+
+  // Real DSH CommandRuntime exposes /atw descriptor (description + input.hint) for slash menu
+  // and coexists cleanly with a community /btw command in the same scope.
+  const ctx = new Context()
+  const runtime = new CommandRuntime(ctx)
+  const disposeBtw = runtime.register({ name: 'btw', description: 'community btw', input: { hint: 'question' }, handler: async () => ({ kind: 'success' }) })
+  const disposeAtw = runtime.register(def)
+  const descriptors = runtime.list({ id: 'sess-cmd', session: {} } as unknown as CommandInvocation['agent'])
+  const atwDesc = descriptors.find((d) => d.name === 'atw')
+  assert.ok(atwDesc)
+  assert.equal(atwDesc.description, def.description)
+  assert.deepEqual(atwDesc.input, def.input)
+  assert.deepEqual(parseCommand('/atw why?'), { name: 'atw', rawInput: ' why?' })
+  disposeAtw()
+  disposeBtw()
 })
 
 test('HTTP /plugins/agy-link/btw/* routes validate inputs, control lifecycle, and push SSE updates', async () => {

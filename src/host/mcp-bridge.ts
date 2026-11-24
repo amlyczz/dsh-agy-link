@@ -164,24 +164,21 @@ export function startMcpBridge(opts: {
   allowlist: () => string
   /** Map the spawning DSH session id to the agent the call runs on behalf of. */
   resolveAgent?: (sessionId: string) => unknown | Promise<unknown>
+  /**
+   * Resolve the live DSH session owning a shared ACP process (`X-DSH-Proc`),
+   * overriding the static spawn-time `X-DSH-Session` env var (issue #200).
+   */
+  resolveProcSession?: (procId: string) => string | undefined
   log?: (msg: string) => void
   /** Max buffered request-body bytes (tests use a small value). */
   maxBodyBytes?: number
 }): Promise<McpBridge> {
-  /**
-   * Resolve the DSH agent that owns the request's `X-DSH-Session`.
-   *
-   * Shared by `/tools` and `/call`: a preset-scoped tool only exists for a
-   * caller scope, so listing without one hides every tool registered inside a
-   * preset (`present`, `todo_write`, `schedule_*`, `office_*`) even when the
-   * allowlist names it (issue #150). DSH session keys come in two forms — a
-   * top-level web session is `session-<uuid>`, a sub-agent/fork session is a
-   * bare `<uuid>` — so the value is tried as given first (a bare sub-agent key
-   * must not be rewritten) and retried once with the `session-` prefix only
-   * when that finds nothing.
-   */
   const resolveSessionAgent = async (req: IncomingMessage): Promise<unknown> => {
-    const sessionHeader = String(req.headers['x-dsh-session'] ?? '')
+    const procHeader = String(req.headers['x-dsh-proc'] ?? '')
+    const procSession = procHeader !== '' ? opts.resolveProcSession?.(procHeader) : undefined
+    const sessionHeader = procSession !== undefined && procSession !== ''
+      ? procSession
+      : String(req.headers['x-dsh-session'] ?? '')
     const resolveSession = async (id: string): Promise<unknown> =>
       id === '' ? undefined : await Promise.resolve(opts.resolveAgent?.(id))
     const agent = await resolveSession(sessionHeader)

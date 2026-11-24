@@ -226,21 +226,29 @@ test('BtwDock renders streaming tools/markdown, suppresses chat command noise, h
   })
 
   const dockSlot = slots.find((s) => s.opts.name === 'conversation.input.dock' && s.opts.id === 'agy-btw')
-  const cmdSlot = slots.find((s) => s.opts.name === 'conversation.chat.commandview' && s.opts.key === 'btw')
+  const cmdSlot = slots.find((s) => s.opts.name === 'conversation.chat.commandview' && s.opts.key === 'atw')
   assert.ok(dockSlot)
   assert.ok(cmdSlot)
   assert.equal(dockSlot.opts.order, 15)
 
-  // Command row suppresses normal /btw output in chat flow, but surfaces errors
+  // Command row suppresses normal /atw output in chat flow, but surfaces errors
   assert.equal(cmdSlot.comp({ node: { outcome: { kind: 'success', text: 'q' } } }), null)
   const errEl = cmdSlot.comp({ node: { outcome: { kind: 'error', text: 'boom' } } }) as ElementLike
   assert.equal(collectText(errEl).join(''), 'boom')
+
+  const planCmdSlot = slots.find((s) => s.opts.name === 'conversation.chat.commandview' && s.opts.key === 'aplan')
+  assert.ok(planCmdSlot)
+  assert.equal(planCmdSlot.comp({ node: { outcome: { kind: 'success' } } }), null)
+  const textRow = planCmdSlot.comp({ node: { outcome: { kind: 'success', text: 'Goal status' } } }) as ElementLike
+  assert.equal(collectText(textRow).join(''), 'Goal status')
+  const errRow = planCmdSlot.comp({ node: { outcome: { kind: 'error', text: 'Switch model' } } }) as ElementLike
+  assert.equal(collectText(errRow).join(''), 'Switch model')
 
   // Style sheet injected
   assert.ok(bodyChildren.some((n) => n.id === 'dsh-agy-link-btw-css-v1'))
 
   // Trigger command/executed wake + fetch
-  listeners.get('command/executed')?.('sess-ui', 'agy-btw')
+  listeners.get('command/executed')?.('sess-ui', 'atw')
   await new Promise((r) => setTimeout(r, 15))
 
   const tree = renderTree({ type: dockSlot.comp, props: { sessionId: 'sess-ui' }, children: [] })
@@ -277,7 +285,7 @@ test('BtwDock renders streaming tools/markdown, suppresses chat command noise, h
 })
 
 test('btw client modules contain zero hardcoded CJK literals and English locale stays ASCII', () => {
-  for (const rel of ['src/client/btw.ts', 'src/client/btw-card.ts']) {
+  for (const rel of ['src/client/btw.ts', 'src/client/btw-card.ts', 'src/client/slash-commands.ts']) {
     const src = fs.readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
     const noblock = src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     for (const line of noblock.split(/\r?\n/)) {

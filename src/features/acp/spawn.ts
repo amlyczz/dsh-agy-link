@@ -6,6 +6,8 @@
 // servers, task shells) with a single group signal. See ./strays.ts for the
 // reconciliation that catches anything that still slips through.
 import { spawn, type ChildProcess } from 'node:child_process'
+import { join } from 'node:path'
+import { stateDir } from '../../common/config.ts'
 import { isCmdShim, windowsQuote } from '../../runtime/agy/bin.ts'
 import { nodeScriptEnv } from '../../runtime/agy/env.ts'
 
@@ -13,6 +15,15 @@ export interface AcpSpawnOptions {
   bin: string
   cwd: string
   env?: NodeJS.ProcessEnv
+}
+
+/** Compute the per-process `acp-*.log` path under `<state>/logs` unless overridden. */
+export function resolveAcpLogFile(explicit?: string, logDir?: string): string {
+  if (explicit !== undefined && explicit !== '') return explicit
+  const dir = logDir !== undefined && logDir !== '' ? logDir : join(stateDir(), 'logs')
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '')
+  const rand = Math.random().toString(36).slice(2, 8)
+  return join(dir, `acp-${stamp}-${rand}.log`)
 }
 
 export function spawnAcpChild(

@@ -284,6 +284,18 @@ function renderFeaturesTab(p: ConsoleTabsProps): unknown {
 		sectionCard('btw', t('section.btw'), [
 			renderBtwRow(t, status, catalogModels, loadingAction, setCfg, effortLabels),
 		]),
+		sectionCard('slash-commands', t('section.slashCommands'), [
+			h(Row, {
+				key: 'slash-direct',
+				left: rowCaption(t('slash.directTitle'), t('slash.directDesc')),
+				right: h('code', { style: { fontSize: '11px', color: 'var(--agy-text-secondary)', wordBreak: 'break-word' } }, t('slash.directList')),
+			}),
+			h(Row, {
+				key: 'slash-meta',
+				left: rowCaption(t('slash.metaTitle'), t('slash.metaDesc')),
+				right: h('code', { style: { fontSize: '11px', color: 'var(--agy-text-secondary)', wordBreak: 'break-word' } }, t('slash.metaList')),
+			}),
+		]),
 		sectionCard('ui-display', t('section.uiDisplay'), [
 			renderHeaderBadgeRow({ t, status, loadingAction, setCfg }),
 		]),

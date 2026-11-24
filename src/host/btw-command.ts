@@ -1,6 +1,7 @@
-// Top-level `/btw` command — mirrors agy's native `/btw <question>` experience.
+// Top-level `/atw` command — mirrors agy's native `/btw <question>` experience
+// without colliding with community `/btw` plugins.
 //
-// In GUI mode (`webServer` active and no `--wait`/`--print` flag), `/btw <question>`
+// In GUI mode (`webServer` active and no `--wait`/`--print` flag), `/atw <question>`
 // launches the streaming read-only side question in BtwService and returns
 // immediately so DSH's composer never freezes while the answer streams inside
 // the dismissible BtwDock card above the composer. In headless mode or with
@@ -23,15 +24,15 @@ export interface ParsedBtwArgs {
 }
 
 const HELP = [
-  '**/btw** — 不中断当前主回合、不写入主会话历史的旁路只读提问',
-  '- `/btw <问题>` — 发起旁路提问（主回合运行中亦可；答案流式显示在输入框上方 `/btw` 卡片）',
-  '- `/btw` — 打开或切回本会话的 `/btw` 卡片',
-  '- `/btw --new <问题>` — 开启新旁路线程（不沿用上一条 `/btw` 上下文）',
-  '- `/btw --wait <问题>` — 同步等待完整答复并输出到命令结果',
-  '- `/btw --model <id> --effort <low|medium|high> <问题>` — 临时指定模型/思考档',
-  '- `/btw copy` — 输出当前 `/btw` 答复全文',
-  '- `/btw dismiss` / `/btw clear` — 收起卡片 / 清空本会话 `/btw` 记录',
-  '- `/btw help` — 本说明',
+  '**/atw** — 不中断当前主回合、不写入主会话历史的旁路只读提问',
+  '- `/atw <问题>` — 发起旁路提问（主回合运行中亦可；答案流式显示在输入框上方 `/atw` 卡片）',
+  '- `/atw` — 打开或切回本会话的 `/atw` 卡片',
+  '- `/atw --new <问题>` — 开启新旁路线程（不沿用上一条 `/atw` 上下文）',
+  '- `/atw --wait <问题>` — 同步等待完整答复并输出到命令结果',
+  '- `/atw --model <id> --effort <low|medium|high> <问题>` — 临时指定模型/思考档',
+  '- `/atw copy` — 输出当前 `/atw` 答复全文',
+  '- `/atw dismiss` / `/atw clear` — 收起卡片 / 清空本会话 `/atw` 记录',
+  '- `/atw help` — 本说明',
 ].join('\n')
 
 function ok(text?: string): CommandResult {
@@ -95,9 +96,9 @@ function sessionIdOf(invocation?: CommandInvocation): string {
 
 export function btwCommandDefinition(deps: BtwCommandDeps): CommandDefinition {
   return {
-    name: 'agy-btw',
-    description: '旁路提问：不打断主回合、不污染会话历史的只读即时问答（/agy-btw <问题>）',
-    input: { hint: '<side question> | copy | clear | help' },
+    name: 'atw',
+    description: 'Antigravity 旁路提问：不打断主回合、不污染会话历史的只读即时问答（/atw <问题>）',
+    input: { hint: '<问题> | copy | clear | help' },
     handler: async (invocation) => handleBtwCommand(deps, invocation),
   }
 }
@@ -112,15 +113,15 @@ async function handleBtwCommand(deps: BtwCommandDeps, invocation?: CommandInvoca
       return ok(HELP)
     case 'clear':
       btw.clear(sessionId)
-      return ok('Cleared `/btw` side questions for this session.')
+      return ok('Cleared `/atw` side questions for this session.')
     case 'dismiss':
       btw.dismiss(sessionId, false)
-      return ok('Dismissed `/btw` card.')
+      return ok('Dismissed `/atw` card.')
     case 'copy': {
       const view = btw.view(sessionId)
       const cur = view.entries[view.activeIndex] ?? view.entries[view.entries.length - 1]
       if (!cur || cur.answer.trim() === '') {
-        return err('No `/btw` answer available in this session yet.')
+        return err('No `/atw` answer available in this session yet.')
       }
       return ok(cur.answer)
     }
@@ -128,13 +129,13 @@ async function handleBtwCommand(deps: BtwCommandDeps, invocation?: CommandInvoca
       const view = btw.view(sessionId)
       if (view.entries.length > 0) {
         btw.dismiss(sessionId, true)
-        return ok('Opened `/btw` card.')
+        return ok('Opened `/atw` card.')
       }
       if (deps.isWebActive?.()) {
         btw.dismiss(sessionId, true)
-        return ok('Opened `/btw` card.')
+        return ok('Opened `/atw` card.')
       }
-      return err('Usage: /btw <side question>')
+      return err('Usage: /atw <side question>')
     }
     case 'ask': {
       const hasExisting = btw.view(sessionId).entries.length > 0
@@ -153,7 +154,7 @@ async function handleBtwCommand(deps: BtwCommandDeps, invocation?: CommandInvoca
       const entry = await btw.ask(req)
       if (entry.status === 'aborted') return err('Side question aborted.')
       if (entry.status === 'error') return err(`Side question failed: ${entry.error ?? 'unknown error'}`)
-      return ok(`**Side Answer (\`/btw\`)**\n\n${entry.answer}`)
+      return ok(`**Side Answer (\`/atw\`)**\n\n${entry.answer}`)
     }
   }
 }

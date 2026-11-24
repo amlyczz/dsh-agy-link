@@ -389,7 +389,7 @@ export const AGY_SINGLE_MESSAGE_MAX_BYTES = 192_000
 export const AGY_PROMPT_SAFE_BYTES = 180_000
 
 const QUOTED_AGY_SLASH_RE =
-  /(?<![A-Za-z0-9_./:\\-])\/(goal|plan|compact|schedule|browser|grill-me|teamwork|learn|boost)(?![A-Za-z0-9_/-])/gi
+  /(?<![A-Za-z0-9_./:\\-])\/(goal|plan|compact|schedule|browser|grill-me|teamwork|learn|boost|swarm|btw|fork)(?![A-Za-z0-9_/-])/gi
 
 /**
  * Neutralize standalone agy system slash commands (e.g. `/goal`, `/plan`) inside

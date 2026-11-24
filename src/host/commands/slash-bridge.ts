@@ -143,7 +143,7 @@ async function handleBtw(deps: CommandDeps, ctx: CommandContext): Promise<Comman
   return ok(`**Side Answer (\`/agy btw\`)**\n\n${res.text}`)
 }
 
-async function handleFork(deps: CommandDeps, ctx: CommandContext): Promise<CommandResult> {
+export async function handleFork(deps: CommandDeps, ctx: CommandContext): Promise<CommandResult> {
   const rest = extractAfterSub(ctx, 'fork')
   const { sessionId, workspaceRoot, historyText } = resolveSessionContext(deps, ctx)
   const forksFile = deps.forksFile ?? join(stateDir(), 'session-forks.json')
@@ -267,7 +267,7 @@ async function handleGrill(deps: CommandDeps, ctx: CommandContext): Promise<Comm
   return ok(`**Design Alignment (\`/agy grill-me\`)**\n\n${res.text}`)
 }
 
-async function handleLearn(deps: CommandDeps, ctx: CommandContext): Promise<CommandResult> {
+export async function handleLearn(deps: CommandDeps, ctx: CommandContext): Promise<CommandResult> {
   if (!deps.runOnce) return err('One-shot agy runner is not configured in this host.')
   const rawRest = extractAfterSub(ctx, 'learn')
   const apply = /(?:^|\s)--apply(?:\s|$)/i.test(rawRest)
@@ -344,7 +344,7 @@ async function handleLearn(deps: CommandDeps, ctx: CommandContext): Promise<Comm
   )
 }
 
-async function handleCompact(deps: CommandDeps, ctx: CommandContext): Promise<CommandResult> {
+export async function handleCompact(deps: CommandDeps, ctx: CommandContext): Promise<CommandResult> {
   if (!deps.runOnce) return err('One-shot agy runner is not configured in this host.')
   const focus = extractAfterSub(ctx, 'compact')
   const { sessionId, workspaceRoot, historyText } = resolveSessionContext(deps, ctx)

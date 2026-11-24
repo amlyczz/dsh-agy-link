@@ -193,7 +193,8 @@ so they are gated more strictly than the console routes:
 
 - 只给 `/call` 解析、`/tools` 不解析，会让**注册在 preset 内的工具**（`present`、`todo_write`、`job_*`、`schedule_*`、`office_*`）在列表里完全消失，即使已加入 `mcpToolAllowlist`——调用能成功、列表却看不见，属于最难排查的一类不一致。
 - 解析规则只有一处（`resolveSessionAgent()`）：先按原值查（裸子会话 key 不得改写），查不到且未带 `session-` 前缀时再试一次前缀形式。
-- 锚点：`test/mcp-bridge-registry-and-agent.test.ts`（session 作用域列表、裸 key 重试、未知 session 回落 root）。
+- **ACP 复用进程动态会话归属（issue #200）**：常驻 `agy acp` 子进程跨 DSH 会话复用时，`bridge.mjs` 环境变量里的 `DSH_MCP_SESSION` 停留在首个会话。每个 `AcpProcess` 启动时注入不可变进程标识 `DSH_MCP_PROC`，`bridge.mjs` 在 `/tools` 与 `/call` 上携带 `X-DSH-Proc`（并在 `tools/list` 时刷新工具目录）；宿主通过 `beginProcSessionTurn` / `resolveProcSession` 将该 ACP 进程当前活跃 turn（或刚结束 turn 的 `lastSessionKey`）映射到真实 DSH 会话，优先于静态 `X-DSH-Session`；进程退出时 `clearProcSessions()` 清理。CLI 一次性子进程不带 `X-DSH-Proc`，继续使用精确的 `X-DSH-Session`。
+- 锚点：`test/mcp-bridge-registry-and-agent.test.ts`（session 作用域列表、裸 key 重试、未知 session 回落 root、`X-DSH-Proc` 动态会话路由）。
 
 ## `--mode auto`、`--sandbox` 与斜杠命令写入边界
 

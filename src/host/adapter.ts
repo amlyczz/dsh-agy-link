@@ -16,6 +16,7 @@ import { deliverContext } from '../provider/context-delivery.ts'
 export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
+import { extractLeadingAgySlash, formatWithLeadingAgySlash } from '../provider/leading-slash.ts'
 import { buildAgyArgs, resolveAttemptOverrides, waitForRunSettle, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
 import { runAgyAttempt } from '../provider/attempt-outcome.ts'
 export { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from '../provider/notices.ts'
@@ -258,15 +259,7 @@ export class AgyAdapter extends LlmAdapter {
     const livePlanMode = sessionKey !== '' && this.deps.sessionPlanMode ? this.deps.sessionPlanMode(sessionKey) : undefined
     const supportsPlanExit = Boolean(options.tools?.some((t) => t.name === 'exit_plan_mode'))
       && isPlanMode(options.messages, options.system, livePlanMode)
-    // `exit_plan_mode` exists only in active DSH plan mode: a current-turn signal.
-    const agyPermissionMode = effectivePermissionMode(permissionMode, supportsPlanExit, isAux)
-
-    // ---- native tool mirroring: continuation spans (v0.3) ----
-    // When the previous span cut on a completed agy tool step, DSH dispatched
-    // the agy_tool mirror (which replayed the recorded output) and is now
-    // calling us again to continue the SAME run. Resume the recording from
-    // the cursor encoded in the trailing tool-result callId — no new process,
-    // no prompt assembly, no digest.
+    // Native tool mirroring continuation spans (v0.3): resume live RunRecording without re-running prompt assembly.
     const continuation = detectContinuation(options.messages)
     if (continuation !== null) {
       const rec = this.deps.runs.get(continuation.runId)
@@ -296,9 +289,9 @@ export class AgyAdapter extends LlmAdapter {
         )
       }
     }
-    // Session ownership (steer preemption + duplicate debounce) is decided
-    // AFTER prompt assembly below, so an identical retry can never abort a
-    // live long-running tool (issue #33), while a true steer still can.
+    // Session ownership: steer preemption + duplicate debounce AFTER prompt assembly.
+    const forcedPlan = !isAux && sessionKey !== '' && (this.deps.consumeForcedPlanMode?.(sessionKey) ?? false)
+    const agyPermissionMode = effectivePermissionMode(permissionMode, supportsPlanExit || forcedPlan, isAux)
     const catalog = this.deps.catalog.get()
     const rawModel = options.model
     const model = resolveModelSlug(rawModel)
@@ -516,7 +509,9 @@ export class AgyAdapter extends LlmAdapter {
             )
           }
           if (!wasConsumable && !prompt.includes('the previous turn was interrupted')) {
-            prompt = '[the previous turn was interrupted before it finished — do not continue or answer that unfinished work; respond only to the newest request below]\n\n' + prompt
+            const notice = '[the previous turn was interrupted before it finished — do not continue or answer that unfinished work; respond only to the newest request below]'
+            const slash = extractLeadingAgySlash(prompt)
+            prompt = slash ? formatWithLeadingAgySlash(slash, notice) : `${notice}\n\n${prompt}`
           }
         }
       }

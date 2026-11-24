@@ -162,6 +162,9 @@ export async function finishAcpAttempt(opts: {
     slot.releaseOnce()
     deps.clearInFlightPrompt(sessionKey, input.prompt)
     recorder.rec.settle(result.failure)
+    if (input.isAux && !input.persistBinding && typeof proc.closeSession === 'function') {
+      void proc.closeSession(sid)
+    }
     if (!input.isAux && sessionKey !== '') {
       deps.backgroundObserver?.onAttemptSettled?.({
         sessionKey,

@@ -42,6 +42,7 @@ import { ACP_REPORT_RECORD_TYPE, createSessionRecords } from './session-records.
 import {
   Semaphore,
   createBtwServiceForHost,
+  createForcedPlanGuard,
   findSessionLogFile,
   readSessionImage,
   resolveSessionGoal,
@@ -139,11 +140,10 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   // `onAccountUsed`; we refresh just that account (throttled) instead of waiting
   // for the next full sweep, so the panel reflects real consumption within
   // minutes. Fire-and-forget: a quota probe must never delay or fail a turn.
-  const quotaRefresher = new AccountQuotaRefresher(async (accountId) => {
-    const acc = pool.getAccount(accountId)
-    if (acc === undefined) return
-    await quota.refreshAccountQuota(acc, false)
-  })
+  const quotaRefresher = new AccountQuotaRefresher(
+    async (accountId) => { const acc = pool.getAccount(accountId); if (acc !== undefined) await quota.refreshAccountQuota(acc, false) },
+    undefined, undefined, { isBusy: () => adapter !== undefined && adapter.activeRunCount() > 0 },
+  )
   const semaphore = new Semaphore(() => getConfig().maxConcurrent)
 
   const getDiscoveryEnv = (account?: ManagedAccount): NodeJS.ProcessEnv => {
@@ -383,6 +383,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     },
   })
   let adapter!: AgyAdapter
+  const forcedPlan = createForcedPlanGuard()
   const backgroundWakeup = new BackgroundWakeWatcher({
     getConfig,
     log,
@@ -461,6 +462,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     sessionCwd: (sessionId) => sessionWorkspace(sessionId),
     sessionGoal: (sessionId) => resolveSessionGoal(ctx, sessionId),
     sessionPlanMode: (sessionId) => resolveSessionPlanMode(ctx, sessionId),
+    consumeForcedPlanMode: forcedPlan.consume,
     sessionPendingModel: (sessionId) => resolveSessionPendingModel(ctx, sessionId),
     syncSessionModel: (sessionId, model, effort) => syncSessionModelSelection(ctx, sessionId, model, effort),
     onRun: (info) => { lastRun = info },
@@ -580,7 +582,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
 
   return {
     getConfig, log, notifyPicker, bin, version, resolveVersion, status, store, pool, quota, warmup, semaphore,
-    catalog, auth, poolAuth, runs, adapter, acpPool, backgroundWakeup, ecosystem, imageService, translation, translationWorkers, btw, setOverride,
+    catalog, auth, poolAuth, runs, adapter, acpPool, backgroundWakeup, ecosystem, imageService, translation, translationWorkers, btw, setOverride, armForcedPlan: forcedPlan.arm,
     readEffortUnsupported: effortStore.read,
     rememberEffortUnsupported: effortStore.remember,
     sessionsSvc, sessionAuto,

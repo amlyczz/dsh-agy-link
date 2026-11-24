@@ -24,6 +24,7 @@ export interface AcpStatusView {
   drainingKeys?: readonly string[]
   slotOverwriteDetectedCount?: number
   lastSlotRecoveryAt?: number | null
+  availableCommands?: readonly import('../../features/acp/protocol.ts').AvailableCommand[]
 }
 
 export interface GoalViewLike {
@@ -157,6 +158,13 @@ export const HELP = [
   '- `/agy clear` — drop the most recent conversation binding',
   '- `/agy doctor` — write a diagnostic report and return its path',
   '- `/agy help` — this text',
+  '',
+  '**Top-level Quick Commands (`/a*` & `/tsl`)**',
+  '- `/atw <question>` — read-only side question dock (alias of `/agy btw`)',
+  '- `/tsl [turn|--text ...|auto on|off]` — Gemini plain-language translation card',
+  '- `/aplan [task]` · `/agoal <obj|status|pause|...>` · `/agrill [topic]` · `/aboost [task]` — direct conversation launch (`/aplan` enforces read-only plan mode)',
+  '- `/aswarm <task>` · `/ateamwork <task>` · `/aschedule <task>` · `/abrowser <task>` · `/acmd </cmd|list>` — native agy workflow passthrough into this session',
+  '- `/acompact [focus]` · `/afork [list|restore <id>]` · `/alearn [--apply] [focus]` — session compaction, branching, and `.agents/` skill extraction',
 ].join('\n')
 
 export function ok(text: string): CommandResult {

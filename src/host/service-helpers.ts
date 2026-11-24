@@ -409,3 +409,24 @@ export function createBtwServiceForHost(opts: {
 }
 
 export type { BtwOneShotRequest, BtwOneShotResult }
+
+const FORCED_PLAN_TTL_MS = 5 * 60_000
+
+/** Tracks one-shot `/aplan` read-only permissions per session without leaking into later turns. */
+export function createForcedPlanGuard(now: () => number = Date.now): {
+  arm: (sessionId: string) => void
+  consume: (sessionId: string) => boolean
+} {
+  const armed = new Map<string, number>()
+  return {
+    arm: (sessionId: string): void => {
+      if (sessionId !== '') armed.set(sessionId, now())
+    },
+    consume: (sessionId: string): boolean => {
+      const ts = armed.get(sessionId)
+      if (ts === undefined) return false
+      armed.delete(sessionId)
+      return now() - ts <= FORCED_PLAN_TTL_MS
+    },
+  }
+}

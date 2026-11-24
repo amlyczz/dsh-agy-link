@@ -18,6 +18,7 @@ import {
 } from '../src/features/acp/index.ts'
 import { RunRegistry } from '../src/host/recording.ts'
 import { SessionStore } from '../src/host/sessions.ts'
+import { runAgyAttempt } from '../src/provider/attempt-outcome.ts'
 import type { AttemptDeps, AttemptInput, AttemptSlot } from '../src/provider/attempt.ts'
 
 function createMockAcpBin(dir: string, behavior: 'normal' | 'fail-resume-load' | 'hang-prompt' | 'crash-on-prompt' | 'crash-after-chunk' = 'normal'): string {
@@ -80,9 +81,13 @@ rl.on('line', (line) => {
     send({ jsonrpc: '2.0', id: msg.id, result: {} });
     return;
   }
-  if (msg.method === 'session/set_mode' || msg.method === 'session/set_config_option') {
+  if (msg.method === 'session/set_mode' || msg.method === 'session/set_config_option' || msg.method === 'session/close') {
     if (process.env.MOCK_ACP_RECORD_DIR) {
       try { appendFileSync(process.env.MOCK_ACP_RECORD_DIR + '/calls.log', msg.method + ' ' + JSON.stringify(msg.params) + '\\n'); } catch {}
+    }
+    if (msg.method === 'session/close') {
+      send({ jsonrpc: '2.0', id: msg.id, result: {} });
+      return;
     }
     send({ jsonrpc: '2.0', id: msg.id, result: { ok: true } });
     return;
@@ -624,6 +629,199 @@ test('issue #167: without an advertised id the two-step config switch still work
     assert.equal(calls.filter((l) => l.startsWith('session/set_config_option')).length, 2)
   } finally {
     await closeProc(proc)
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+  }
+})
+
+test('AcpProcess.closeSession sends session/close and clears sessionCount', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-close-sess-'))
+  const bin = createMockAcpBin(dir, 'normal')
+  const proc = new AcpProcess({
+    bin,
+    cwd: dir,
+    permissionMode: 'skip',
+    preemptAutoUpdate: false,
+    env: { ...process.env, MOCK_ACP_RECORD_DIR: dir },
+  })
+  try {
+    const opened = await proc.openSession({ cwd: dir, model: 'gemini-4-hydrogen', mode: 'skip' })
+    assert.equal(proc.sessionCount, 1)
+    await proc.closeSession(opened.sessionId)
+    assert.equal(proc.sessionCount, 0)
+    const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n')
+    const closed = calls.filter((l) => l.startsWith('session/close'))
+    assert.equal(closed.length, 1)
+    assert.match(closed[0] ?? '', /acp-sess-1/)
+  } finally {
+    await closeProc(proc)
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+  }
+})
+
+test('runAcpAttempt closes ephemeral isAux sessions without persisting binding', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-aux-'))
+  const bin = createMockAcpBin(dir, 'normal')
+  const cfg = defaultConfig()
+  const store = new SessionStore(join(dir, 'sessions.json'))
+  const runs = new RunRegistry()
+  const spawnedProcs: AcpProcess[] = []
+  let registered = 0
+  let lastRunCalled = false
+  const deps: AttemptDeps = {
+    acquire: async () => () => {},
+    runs,
+    store,
+    clearInFlightPrompt: () => {},
+    registerActiveRun: () => { registered += 1 },
+    unregisterActiveRun: () => {},
+    isSuperseded: () => false,
+    noteNetworkFailure: () => 0,
+    clearNetworkStreak: () => {},
+    dropFailoverBudget: () => {},
+    clearRateLimitFailover: () => {},
+    sharesSingleEgress: () => false,
+    lastAccountSpawnTime: new Map(),
+    minSpawnIntervalMs: 0,
+    onRun: () => { lastRunCalled = true },
+  }
+  const slot: AttemptSlot = {
+    releaseOnce: () => {},
+    armHandoff: () => null,
+  }
+  const pool = new AcpSessionPool({
+    bin: () => bin,
+    cfg: () => cfg,
+    createProcess: (o) => {
+      const p = new AcpProcess({ ...o, preemptAutoUpdate: false, env: { ...process.env, MOCK_ACP_RECORD_DIR: dir } })
+      spawnedProcs.push(p)
+      return p
+    },
+  })
+  const input: AttemptInput = {
+    cfg,
+    bin,
+    permissionMode: 'skip',
+    sessionKey: 'sess-aux-1',
+    workspaceRoot: dir,
+    isAux: true,
+    account: undefined,
+    prompt: 'title this',
+    model: 'gemini-3.8-flash',
+    activeModel: 'gemini-3.8-flash',
+    effort: undefined,
+    addDirs: [],
+    persistBinding: false,
+    binding: undefined,
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'title this' }] } as unknown as Message],
+    newlySentImageIds: [],
+    sessionAccountKey: 'sess-aux-1',
+    family: 'google',
+    signal: undefined,
+    agyOnEvent: undefined,
+    sandbox: false,
+    agent: '',
+  }
+  try {
+    const rec = await runAcpAttempt(pool, deps, input, slot)
+    assert.ok(rec)
+    for await (const _ of rec.eventsFrom(0)) { /* drain */ }
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(registered, 0)
+    assert.equal(lastRunCalled, true)
+    assert.equal(store.get('sess-aux-1'), undefined)
+    assert.equal(spawnedProcs[0]?.sessionCount, 0)
+    const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n')
+    assert.equal(calls.filter((l) => l.startsWith('session/close')).length, 1)
+  } finally {
+    await Promise.all(spawnedProcs.map((p) => closeProc(p)))
+    pool.dispose()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+  }
+})
+
+test('runAgyAttempt routes isAux calls via ACP unless CLI overrides require CLI', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-aux-route-'))
+  try {
+    const scriptPath = join(dir, 'cli-mock.mjs')
+    writeFileSync(
+      scriptPath,
+      `console.log(JSON.stringify({ event: 'response', content: 'ok' }));
+console.log(JSON.stringify({ event: 'complete', stats: { total_tokens: 3 } }));
+`,
+      'utf8',
+    )
+    const fakeBin = process.platform === 'win32' ? join(dir, 'agy.cmd') : join(dir, 'agy')
+    if (process.platform === 'win32') {
+      writeFileSync(fakeBin, `@echo off\r\nnode "${scriptPath}" %*\r\n`, 'utf8')
+    } else {
+      writeFileSync(fakeBin, `#!/usr/bin/env node\nconsole.log(JSON.stringify({ event: 'response', content: 'ok' }));\nconsole.log(JSON.stringify({ event: 'complete', stats: { total_tokens: 3 } }));\n`, 'utf8')
+      chmodSync(fakeBin, 0o755)
+    }
+    const runs = new RunRegistry()
+    const store = new SessionStore(join(dir, 'sessions.json'))
+    let acpCalls = 0
+    const cfg = { ...defaultConfig(), transport: 'acp' as const }
+    const deps: AttemptDeps = {
+      acquire: async () => () => undefined,
+      runs,
+      store,
+      clearInFlightPrompt: () => undefined,
+      registerActiveRun: () => undefined,
+      unregisterActiveRun: () => undefined,
+      isSuperseded: () => false,
+      noteNetworkFailure: () => 0,
+      clearNetworkStreak: () => undefined,
+      dropFailoverBudget: () => undefined,
+      clearRateLimitFailover: () => undefined,
+      sharesSingleEgress: () => false,
+      lastAccountSpawnTime: new Map(),
+      minSpawnIntervalMs: 0,
+      runAcp: async () => {
+        acpCalls++
+        const rec = runs.create()
+        rec.settle(null)
+        return rec
+      },
+    }
+    const baseInput: AttemptInput = {
+      cfg,
+      bin: fakeBin,
+      permissionMode: 'skip',
+      sessionKey: 'sess-route',
+      workspaceRoot: dir,
+      isAux: true,
+      account: undefined,
+      prompt: 'hi',
+      model: 'gemini-3.8-flash',
+      activeModel: 'gemini-3.8-flash',
+      effort: undefined,
+      addDirs: [],
+      persistBinding: false,
+      binding: undefined,
+      messages: [],
+      newlySentImageIds: [],
+      sessionAccountKey: 'sess-route',
+      family: 'google',
+      signal: undefined,
+      agyOnEvent: undefined,
+      sandbox: false,
+      agent: '',
+    }
+    const drain = async (input: AttemptInput) => {
+      const gen = runAgyAttempt(deps, input)
+      while (true) {
+        const step = await gen.next()
+        if (step.done) {
+          for await (const _ of step.value.eventsFrom(0)) { /* drain */ }
+          break
+        }
+      }
+    }
+    await drain(baseInput)
+    assert.equal(acpCalls, 1, 'isAux without CLI overrides should route via ACP')
+    await drain({ ...baseInput, jsonSchema: '{"type":"object"}' })
+    assert.equal(acpCalls, 1, 'isAux with jsonSchema must stay on CLI')
+  } finally {
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
   }
 })

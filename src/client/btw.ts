@@ -1,4 +1,4 @@
-// Client half of `/btw` side questions: module-level per-session store,
+// Client half of `/atw` side questions: module-level per-session store,
 // SSE streaming subscription (with fetch fallback), `conversation.input.dock`
 // card mount, `conversation.chat.commandview` noise suppression, and Esc handling.
 import type { BtwSessionView } from '../common/btw-types.ts'
@@ -215,7 +215,7 @@ export function BtwDock(props?: Record<string, unknown>): unknown {
 }
 
 /**
- * Suppress noisy GenericCommandCard rows for `/btw` in the main chat transcript:
+ * Suppress noisy GenericCommandCard rows for `/atw` in the main chat transcript:
  * the BtwDock card above the composer owns live streaming, tool steps, and
  * answers. Only surface an inline error line if a headless/sync run failed.
  */
@@ -251,7 +251,7 @@ export function installBtwUi(ctx: ClientContextLike, localeNs: string): () => vo
       ctx.slots.register(
         {
           name: 'conversation.chat.commandview',
-          key: 'btw',
+          key: 'atw',
           locale: localeNs,
         },
         BtwCommandRow as never,
@@ -266,7 +266,7 @@ export function installBtwUi(ctx: ClientContextLike, localeNs: string): () => vo
     const on = (ctx as { on?: (ev: string, fn: (sid: unknown, name: unknown) => void) => (() => void) | undefined }).on
     if (typeof on === 'function') {
       const off = on.call(ctx, 'command/executed', (sid: unknown, cmdName: unknown) => {
-        if (cmdName === 'agy-btw' && typeof sid === 'string' && sid !== '') {
+        if (cmdName === 'atw' && typeof sid === 'string' && sid !== '') {
           void wakeBtwSession(sid)
         }
       })
