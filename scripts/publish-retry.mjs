@@ -62,7 +62,11 @@ export async function publishWithRetry(o = {}) {
   const log = o.log ?? ((m) => console.log('[publish-retry] ' + m))
   const attempts = o.attempts ?? 3
   const delays = o.delays ?? [5000, 15000, 30000]
-  const verifyAttempts = o.verifyAttempts ?? 12
+  // Propagation has measured 2-6 minutes; 36 x 10s covers the upper end. Under
+  // PUBLISH_STRICT_VERIFY a too-short window turns a healthy publish red
+  // (v0.6.76 did exactly that: the run failed, the version appeared minutes
+  // later), which is as misleading as a silent skip.
+  const verifyAttempts = o.verifyAttempts ?? 36
   const verifyDelayMs = o.verifyDelayMs ?? 10_000
   const strictVerify = o.strictVerify ?? (process.env.PUBLISH_STRICT_VERIFY === '1')
 

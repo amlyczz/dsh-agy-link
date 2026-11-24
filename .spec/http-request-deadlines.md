@@ -29,6 +29,7 @@
 - **`/pool/refresh-quota`（非阻塞立即确认 + 按账号去重 + 真实进度 + 目录解耦）**：立即返回 `{ ok: true, pending: true, alreadyRunning, pool }`，后台通过 `quotaRefreshInFlight` 去重执行并在数据或模型变化时广播选择器更新，控制台 3s 轮询自动带出最新额度；后续 `triggerCatalogWarm()` 以后台方式异步触发 `catalog.warmAccounts()`，不再阻塞 `quotaRefreshInFlight` 的锁释放。
   - `alreadyRunning: true` 表示**同 key 刷新仍在途**，本次点击不会新建管线；客户端据此提示「正在刷新中」而不是谎报「已开始刷新」（旧行为让用户在去重窗口内反复点击却毫无反馈）。
   - 刷新中的账号 id 由 `/status.quotaRefreshing`（`QuotaService.refreshingAccounts()`）透出，账号卡据此渲染真实的「同步中」；不再由客户端点击状态推导（关闭弹窗重开不丢态）。
+- **`/lease/acquire`（有界等槽）**：等槽时长由注册表内部的 `waitMs` 截止时间约束（默认 `dispatchTimeoutMinutes × 60000`，上限 1 小时，到点 `504 slot_timeout`）；路由兜底 deadline 为 `longRouteTimeout(1h)`。若兜底先应答，之后才拿到的租约立即释放，不留孤儿槽持有者。
 - **`/pool/warmup`（非阻塞后台作业 + 去重 + 宿主态进度）与 `/translate`（长任务 deadline）**：
   - `/translate` 宿主路由使用 `longRouteTimeout(cfg.translateTimeoutMs)`。
   - `/pool/warmup` 立即返回 `{ ok: true, pending: true, alreadyRunning, warmupState, pool }`，宿主通过 `warmupInFlight` 去重执行（`WARMUP_DEDUP_MS = 180_000`），成功唤醒的账号立即单号刷新配额；`/status.warmupState` 实时透出 `running`、`totalAccounts`、`completedAccounts`、`currentAccountId`、`currentAlias`、`lastRun` 等快照，使客户端关闭/重开管理弹窗仍可持续展示预热转圈与上次摘要，并彻底消除 `useBusyAction` 25s 提前报错与长 CLI 预热阻塞。

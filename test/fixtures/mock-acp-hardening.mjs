@@ -15,6 +15,7 @@ const logIdx = argv.indexOf('--log-file')
 const logFile = logIdx >= 0 ? argv[logIdx + 1] : ''
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 let closed = false
+let heldPromptId = null
 
 function send(obj) {
   if (!closed) process.stdout.write(JSON.stringify(obj) + '\n')
@@ -54,8 +55,18 @@ rl.on('line', (line) => {
     send({ jsonrpc: '2.0', id: msg.id, result: { ok: true } })
     return
   }
+  if (msg.method === 'test/release_prompt' && heldPromptId !== null) {
+    send({ jsonrpc: '2.0', id: heldPromptId, result: { stopReason: 'end_turn' } })
+    heldPromptId = null
+    return
+  }
   if (msg.method === 'session/prompt') {
     const sid = msg.params.sessionId
+    if (mode === 'held') {
+      heldPromptId = msg.id
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'started' } } } })
+      return
+    }
     if (mode === 'empty-proxy') {
       note('proxyconnect tcp: dial tcp 127.0.0.1:9: connectex: No connection could be made because the target machine actively refused it.')
       note('failed to construct executor: plan model not specified')

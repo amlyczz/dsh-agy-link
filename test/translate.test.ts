@@ -19,7 +19,7 @@ import {
   type SessionEventLike,
   type TranslationRecord,
 } from '../src/host/translate.ts'
-import { defaultConfig } from '../src/common/types.ts'
+import { defaultConfig, Err } from '../src/common/types.ts'
 import type { Catalog } from '../src/host/models.ts'
 
 const catalog: Catalog = {
@@ -197,6 +197,7 @@ function makeService(options: {
   autoEnabled?: (id: string) => boolean
   cfg?: ReturnType<typeof defaultConfig>
   onRun?: (call: RunnerCall) => void
+  schedule?: (fn: () => Promise<unknown>, ms: number) => void
 }) {
   const calls: RunnerCall[] = []
   const records: Array<{ sessionId: string; record: TranslationRecord }> = []
@@ -230,6 +231,7 @@ function makeService(options: {
       return 42
     },
     ...(options.autoEnabled === undefined ? {} : { autoEnabled: options.autoEnabled }),
+    ...(options.schedule === undefined ? {} : { schedule: options.schedule }),
     now: (() => {
       let t = 1_000
       return () => (t += 10)
@@ -467,6 +469,57 @@ test('autoTranslateTurn translates and persists when enabled', async () => {
   const res = await service.autoTranslateTurn('s1', 1)
   assert.equal(res?.ok, true)
   assert.equal(records.length, 1)
+})
+
+test('a failed auto translation is retried later and stops once it lands', async () => {
+  const scheduled: Array<{ fn: () => Promise<unknown>; ms: number }> = []
+  const { service, records } = makeService({
+    runs: [{ ok: false, code: 'AGY_ERROR', error: 'HTTP 503: No capacity available for model gemini-4-hydrogen-low' }, { ok: true, text: '人话版' }],
+    autoEnabled: () => true,
+    schedule: (fn, ms) => void scheduled.push({ fn, ms }),
+  })
+  assert.equal((await service.autoTranslateTurn('s1', 1))?.ok, false)
+  assert.deepEqual(scheduled.map((s) => s.ms), [60_000])
+  assert.equal(records.length, 0)
+  const retried = (await scheduled[0]!.fn()) as { ok: boolean } | null
+  assert.equal(retried?.ok, true)
+  assert.equal(records.length, 1)
+  assert.equal(scheduled.length, 1, 'nothing more is scheduled after a success')
+})
+
+test('auto-translate retries are bounded and skip failures a retry cannot fix', async () => {
+  const scheduled: Array<{ fn: () => Promise<unknown>; ms: number }> = []
+  const failing = makeService({
+    runs: [{ ok: false, code: 'AGY_ERROR', error: 'HTTP 503' }],
+    autoEnabled: () => true,
+    schedule: (fn, ms) => void scheduled.push({ fn, ms }),
+  })
+  await failing.service.autoTranslateTurn('s1', 1)
+  for (let i = 0; i < scheduled.length; i++) await scheduled[i]!.fn()
+  assert.deepEqual(scheduled.map((s) => s.ms), [60_000, 120_000, 300_000, 600_000])
+  assert.equal(failing.calls.length, 5)
+
+  const never: number[] = []
+  const disabled = makeService({
+    runs: [{ ok: false, code: Err.AUX_DISABLED }],
+    autoEnabled: () => true,
+    schedule: (_fn, ms) => void never.push(ms),
+  })
+  await disabled.service.autoTranslateTurn('s1', 1)
+  assert.deepEqual(never, [], 'aux-disabled is not retried')
+
+  // Switching auto-translate off stops a pending retry.
+  let on = true
+  const later: Array<() => Promise<unknown>> = []
+  const toggled = makeService({
+    runs: [{ ok: false, code: 'AGY_ERROR', error: 'HTTP 503' }],
+    autoEnabled: () => on,
+    schedule: (fn) => void later.push(fn),
+  })
+  await toggled.service.autoTranslateTurn('s1', 1)
+  on = false
+  assert.equal(await later[0]!(), null)
+  assert.equal(toggled.calls.length, 1)
 })
 
 test('translateMessage explains the CLICKED message, not the turn final answer', async () => {

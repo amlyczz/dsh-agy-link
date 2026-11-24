@@ -197,3 +197,19 @@ describe('MCP bridge: no array may reach agy without `items`', () => {
     assert.deepEqual(twice, once)
   })
 })
+
+describe('Gemini enum hygiene', () => {
+  it('drops empty-string and null enum members (enum[N]: cannot be empty)', () => {
+    const clean = sanitizeMcpSchema({
+      type: 'object',
+      properties: {
+        permission: { type: 'string', enum: ['read', 'write', 'admin', ''] },
+        mode: { anyOf: [{ const: 'a' }, { const: '' }, { type: 'null' }] },
+        onlyEmpty: { type: 'string', enum: [''] },
+      },
+    }) as { properties: Record<string, { enum?: unknown[] }> }
+    assert.deepEqual(clean.properties.permission?.enum, ['read', 'write', 'admin'])
+    assert.deepEqual(clean.properties.mode?.enum, ['a'])
+    assert.equal(clean.properties.onlyEmpty?.enum, undefined)
+  })
+})

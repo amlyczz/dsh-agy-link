@@ -78,6 +78,7 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
 - **传输通道（`transport: 'cli' | 'acp'`，默认 `'acp'`）**：
   - `'cli'` 为每轮短生命周期 `agy -p` 子进程；`'acp'` 通过 `AcpSessionPool` + `AcpProcess`（`src/features/acp/`）复用常驻 `agy acp` stdio JSON-RPC 进程，保持会话并降低冷启动开销。
   - **惰性清扫定时器**：`AcpSessionPool` 在构造函数中**绝不创建**后台 `setInterval`，仅在首次 `acquireProcess()` 时启动，并在进程全部退出/驱逐或 `dispose()` 时立刻清理，防止空闲定时器泄漏。
+  - **进程池空闲不是回合运行时长**：前台 `AcpProcess.prompt()` 未结束时，`evictIdle()` 不得回收该进程，与后台唤醒开关无关。最后一个前台 prompt 成功、失败或取消后，才重新开始计算进程池空闲时间；真正空闲进程仍按默认 15 分钟回收。正常的轮内超时不变，主动空闲回收记录 PID 和空闲时长。回归：`test/acp-pool-idle.test.ts`。
   - **前置失败自动回退**：当 `runAcpAttempt()` 在流式启动前失败（未配置、进程拉起失败或 `openSession` 失败）时返回 `null` 并保留并发/凭据槽位，由 `runAgyAttempt()` 无缝回退至 CLI `-p` 路径；若进入 `runAcpAttempt()` 成功路径，须先调用 `recorder.stop()` 释放未使用的 CLI 录制器资源；当存在 `--json-schema`、`--settings` 或 `isAux` 辅助调用时自动走 CLI 通道。
   - **Windows 凭据槽安全**：在 Windows 下切号时，`AcpSessionPool.acquireProcess()` 会主动 `evictOtherAccounts()` 关闭旧账号常驻进程，避免并发凭据槽冲突。
   - **ACP 轮内超时对齐**：`AcpProcess.prompt()` 同样遵循 `timeoutMs` 空闲看门狗、工具进行中切换至 `longToolIdleMs`、`maxTurnMs` 硬上限以及 `AbortSignal` 触发 `session/cancel`。

@@ -98,6 +98,7 @@ export class AcpProcess extends EventEmitter {
   private identityProbe: Promise<AuthEvidence> | null = null
   private alive = false
   private supportsInlineImages = false
+  private activePrompts = 0
   private readonly rebuiltSessions = new Set<string>()
   private initPromise: Promise<Record<string, unknown>> | null = null
   lastUsedAt = Date.now()
@@ -107,14 +108,11 @@ export class AcpProcess extends EventEmitter {
   }
 
   isAlive(): boolean { return this.alive && this.child !== null }
+  /** Foreground prompts own the process until completion, timeout or cancellation. */
+  hasActivePrompt(): boolean { return this.activePrompts > 0 }
   /** Live child pid, or null before start / after exit (stray reconciliation). */
   get pid(): number | null { return this.child?.pid ?? null }
-  /**
-   * A `session/prompt` is still in flight: the child is mid-turn, however quiet
-   * it has been. The idle sweep used to read that silence as "idle" and kill
-   * live 15-minute turns (`agy acp exited (code=1, signal=null)`), after which
-   * every retry replayed the dead recording (2026-11-23).
-   */
+  /** A `session/prompt` is still in flight — the child is mid-turn, however quiet (#182). */
   get isBusy(): boolean {
     for (const p of this.pending.values()) if (p.method === 'session/prompt') return true
     return false
@@ -551,7 +549,13 @@ export class AcpProcess extends EventEmitter {
 
   async prompt(opts: AcpPromptOptions): Promise<Record<string, unknown>> {
     const effectiveOpts = this.supportsInlineImages ? opts : { ...opts, images: undefined }
-    return runAcpTurn(this, effectiveOpts)
+    this.activePrompts++
+    try {
+      return await runAcpTurn(this, effectiveOpts)
+    } finally {
+      this.activePrompts--
+      if (!this.hasActivePrompt()) this.lastUsedAt = Date.now()
+    }
   }
 
   /**

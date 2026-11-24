@@ -35,6 +35,13 @@ jobs:
       # publish step, and nothing verified the version was actually readable.
       # The wrapper retries transient failures and polls `npm view` before the
       # run may pass; fatal auth/version errors still fail fast.
+      #
+      # STRICT on purpose: v0.6.75 proved the failure mode is not only a non-zero
+      # exit. `npm publish` reported **exit 0** and the version never appeared on
+      # the registry, so the default "warn but pass" left a published Release with
+      # an uninstallable version. A release run must go red instead; the fix is a
+      # human re-run (v0.6.75 succeeded on its second attempt).
       - run: node scripts/publish-retry.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH_STRICT_VERIFY: '1'

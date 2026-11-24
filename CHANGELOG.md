@@ -12,6 +12,48 @@
 - **修复(关键)：逐模型配额读数落进它真正描述的窗口。** `fetchAvailableModels` 的 `quotaInfo` 不带窗口标签；`retrieveUserQuotaSummary` 被拒时（免费档 403 PERMISSION_DENIED）没有任何桶可匹配 reset，于是**周读数被写进了 5 小时行**。主账号卡片因此显示「5 小时额度 100% · 周额度（空白）· 11/30 22:46」外加 Pro 徽章——四个数字描述的都是该账号根本没有的桶，还被 `mergeFallbackFamilyQuota` 永久冻住（实测 2026-11-23/24）。新增物理判据 `looksLikeWeeklyWindow()`（`reset - now > 6h` ⇒ 周窗口，因为活的 5 小时桶永远在 5 小时内重置）：`ingestModelCatalog` 遇到这种读数只写 `weeklyFraction`/`weeklyResetTime`，5 小时槽位保持「未知」；`undoWeeklyInFiveHourSlot()` 迁移已经按错法落盘的行；`isStalePlanTier('pro', …, quotaUnavailable)` 在 `no_summary_access` 且无 5h 证据时撤掉持久化的 Pro 徽章。瞬时被拒的付费账号仍保留 Pro（它的 5h 读数仍是证据）。
 - **测试：** `test/announcement-nudge.test.ts`（8 条）、`test/quota-weekly-window-filing.test.ts`（8 条）。
 
+## 0.6.76 (2026-11-24)
+
+### English
+
+- **Fix(mcp): drop empty-string enum members — this was failing EVERY turn since 0.6.73 (merges PR #189).** A tool schema declaring `enum: ["read", "write", "admin", ""]` made Gemini answer `400 INVALID_ARGUMENT … enum[3]: cannot be empty`, and one such tool fails the whole `GenerateContentRequest` even if it is never called. `sanitizeMcpSchema` only removed a completely empty `enum`, not empty members; it now filters `''` and `null` (including values merged from `anyOf`/`oneOf` `const` branches) and then applies the existing empty-enum cleanup. Rolling back to 0.6.61 was the only workaround.
+- **Fix(translate): a re-translation replaces the reply's card instead of stacking (merges PR #186).** Every `plugin:agy-link/translation` record became its own chat node, so translating the same reply again with `force` left the old translation in place too. In `card` mode that is two stacked cards; in `replace` mode (#178) every stacked card is shown in place of the reply — one reported reply ended up showing six translations in a row. Records are now identified by the reply they belong to, so a re-translation replaces the previous one.
+- **Fix(translate): retry a failed automatic translation (merges PR #187).** `autoTranslateTurn` made exactly one attempt per finished turn; a transient failure left the reply untranslated for ever. When Google answered `503 No capacity available` for hours, replies stayed in the original language until someone retried by hand. A failed automatic attempt is now retried within a bounded budget.
+
+### 中文
+
+- **修复(mcp)：去掉空字符串 enum 成员——自 0.6.73 起这会让**每个回合**都失败（合并 PR #189）。** 某工具 schema 声明 `enum: ["read", "write", "admin", ""]`，Gemini 便返回 `400 INVALID_ARGUMENT … enum[3]: cannot be empty`，而**只要有一个这样的工具，整个 `GenerateContentRequest` 就失败**（即使从不调用它）。`sanitizeMcpSchema` 此前只清理完全空的 `enum`，不清理空成员；现在会过滤 `''` 与 `null`（含从 `anyOf`/`oneOf` 的 `const` 分支合并来的值），再套用原有的空 enum 清理。此前只能回退到 0.6.61 规避。
+- **修复(翻译)：重复翻译替换原卡片而不是堆叠（合并 PR #186）。** 每条 `plugin:agy-link/translation` 记录都会成为独立聊天节点，于是用 `force` 重新翻译同一回复时，旧译文仍留在原处。`card` 模式下是两个卡片叠着；`replace` 模式（#178）下更糟——每个堆叠的卡片都会顶替原回复，有用户的一条回复最终连续显示了六份译文。现在记录以"它翻译的那条回复"为标识，重复翻译会替换前一份。
+- **修复(翻译)：自动翻译失败后重试（合并 PR #187）。** `autoTranslateTurn` 每个回合只尝试一次，瞬时失败后该回复就永久不翻译了。当 Google 连续数小时返回 `503 No capacity available` 时，回复会一直停留在原文，直到有人手动重试。现在失败的自动尝试会在有界预算内重试。
+
+## 0.6.75 (2026-11-24)
+
+### English
+
+- **Fix(acp): a foreground turn is never evicted from the process pool (merges PR #184, fixes #182).** `AcpProcess.lastUsedAt` only moved on outbound JSON-RPC writes. During a single `session/prompt` that runs longer than `idleTtlMs` (default 15 minutes) the server only pushes `session/update`, so nothing re-stamped the process: the 60-second sweep read it as idle and closed it **mid-turn**, killing long multi-step workflows. The pool now refuses to evict a process with an in-flight prompt (and re-stamps it), the idle window restarts when the last prompt settles, and an actual eviction logs the pid plus how long it had been idle.
+
+### 中文
+
+- **修复(acp)：正在跑前台回合的进程不再被进程池回收（合并 PR #184，修复 #182）。** `AcpProcess.lastUsedAt` 只在出站 JSON-RPC 写入时更新。当单个 `session/prompt` 运行超过 `idleTtlMs`（默认 15 分钟）时，服务端只会持续推送 `session/update`，没有任何东西刷新该时间戳：于是每 60 秒一次的清扫把它判为空闲并**在回合中途关掉**，长链多步工作流因此被强行中断。现在进程池会拒绝回收仍有在飞 prompt 的进程（并重新打时间戳），最后一个 prompt 结束时会重置空闲窗口，真正发生回收时也会记录 pid 与已空闲时长。
+
+## 0.6.74 (2026-11-24)
+
+### English
+
+- **Feat(credentials): external credential leases with bearer auth (merges PR #181, supersedes #173).** A process that launches the official `agy` itself — e.g. a long-running runner whose jobs must survive a DSH restart — can now borrow a pool account through the plugin's own selection, credential-slot and failure-settlement code, instead of fighting it for the machine-wide slot.
+  - **Four routes** (`POST /lease/acquire|renew|release`, `GET /lease`) plus a discovery file `<pool dir>/.link-endpoint.json`.
+  - **An isolated account on agy ≥ 1.5 is leased without the slot**: the lease prepares that account's token file and returns the exact `env` the caller sets on `agy`. The primary account (and isolated accounts on older agy) holds the slot for the lease's lifetime, like any in-plugin run.
+  - **Auth (the point that blocked #173):** a 256-bit token is generated per plugin start and published **only** in the discovery file, which is written atomically with mode `0600`; on POSIX the owner and mode are verified after the write and the file is deleted if either is wrong. Every `/lease*` request must send `Authorization: Bearer <token>`, checked with `timingSafeEqual` **before** the cross-origin and method gates. No discovery file, no token, no lease.
+  - **Bounded leases:** TTL defaults to 2 minutes (min 15s, max 10min) and a sweeper reclaims expired leases every 5 seconds, so a crashed external process cannot pin an account for ever.
+
+### 中文
+
+- **特性(凭证)：带 bearer 鉴权的外部凭证租约（合并 PR #181，取代 #173）。** 自己启动官方 `agy` 的进程——例如长任务必须跨 DSH 重启存活的 runner——现在可以通过插件自己的选号、凭证槽与失败结算逻辑**借用**池账号，而不是去抢那个机器级槽位。
+  - **四条路由**（`POST /lease/acquire|renew|release`、`GET /lease`）加一个发现文件 `<pool dir>/.link-endpoint.json`。
+  - **agy ≥ 1.5 上的隔离账号租约不占槽位**：租约只准备该账号的 token 文件，并返回调用方设置到 `agy` 上的确切 `env`。主账号（以及旧版 agy 的隔离账号）则在租约期间持有槽位，与在插件内运行完全一致。
+  - **鉴权（正是当初拦下 #173 的那一条）**：每次插件启动生成 256-bit 随机 token，**只**公布在发现文件里；该文件原子写入且权限 `0600`，POSIX 下还会在写入后校验 owner 与 mode，任一不符即删除文件。所有 `/lease*` 请求必须携带 `Authorization: Bearer <token>`，用 `timingSafeEqual` 校验，且**先于**跨源与方法门禁。没有发现文件就没有 token，也就没有租约。
+  - **租约有界**：TTL 默认 2 分钟（最小 15 秒、最大 10 分钟），并有每 5 秒运行的清扫器回收过期租约——外部进程崩溃也不会永久占住账号。
+
 ## 0.6.73 (2026-11-24)
 
 ### English
