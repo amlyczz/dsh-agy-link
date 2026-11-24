@@ -115,6 +115,25 @@ export async function schemaArgs(schema: unknown): Promise<{ args: string[]; cle
   return { args: ['--json-schema', file], cleanup: () => rm(dir, { recursive: true, force: true }) }
 }
 
+/**
+ * Environment for one `agy -p` one-shot run (ask tool, title, translation
+ * helpers, quota probes).
+ *
+ * One-shots used to build the environment without `telemetryFlags`, which made
+ * `buildAgyEnv` DELETE `DO_NOT_TRACK` / `DISABLE_TELEMETRY` /
+ * `GOOGLE_CLOUD_DISABLE_TELEMETRY` / `ANTIGRAVITY_DISABLE_TELEMETRY` — even
+ * though `disableTelemetry` defaults to true. agy's built-in Clearcut client
+ * then uploads session traces to `play.googleapis.com`; on a host with a
+ * constrained uplink its 30 s timeout plus a fixed 5 s retry (no backoff, no
+ * retry cap, head-of-line batch never dropped) turns that into an unbounded
+ * retransmission loop that saturates egress and slows the real model endpoint.
+ * Every other spawn path (attempt / ACP / warmup / host services) already passes
+ * the flag, so this closes the last gap.
+ */
+export function oneshotEnv(cfg: PluginConfig, account?: ManagedAccount): NodeJS.ProcessEnv {
+  return buildAgyEnv({ ...(account === undefined ? {} : { account }), cfg, telemetryFlags: cfg.disableTelemetry })
+}
+
 export interface OneShotResult {
   ok: boolean
   text: string
@@ -258,7 +277,7 @@ async function runSingleOneShotAttempt(opts: {
       cwd: effectiveCwd,
       timeoutMs,
       signal,
-      env: buildAgyEnv({ ...(account ? { account } : {}), cfg }),
+      env: oneshotEnv(cfg, account),
       stdinPayload,
       stderrKeepalive: true,
       preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
