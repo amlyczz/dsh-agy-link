@@ -14,6 +14,7 @@ import type {
   ToolCallView,
   ToolResultView,
 } from '@deepseek-ai/dsh-tools'
+import { formatChecklistMarkdown, parseChecklistSteps, summarizeChecklist } from '../../common/checklist.ts'
 import { isMirrorToolNotFoundText, MIRROR_TOOL_RELOAD_NOTICE } from '../../common/mirror-error.ts'
 import { cleanResultText, pick, resultText, unwrapMcpTool, clip } from './args.ts'
 import { getGitHeadContent } from './git-head.ts'
@@ -283,6 +284,24 @@ function presentGenerateImageCall(input: Record<string, unknown>): ToolCallView 
   return { card: 'generic', title: prompt ? `Generate Image: ${prompt}` : 'Generate Image' }
 }
 
+function presentChecklistCall(input: Record<string, unknown>): ToolCallView {
+  const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+  const steps = parseChecklistSteps(input)
+  if (steps.length === 0) {
+    return { card: 'generic', title: desc ?? 'Checklist', rawInput: input }
+  }
+  const sum = summarizeChecklist(steps)
+  const title = desc ?? `Checklist · ${sum.done}/${sum.total} steps${sum.activeTitle ? ` · ${sum.activeTitle}` : ''}`
+  return { card: 'generic', title, rawInput: input }
+}
+
+function presentFocusCall(input: Record<string, unknown>): ToolCallView {
+  const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
+  const focus = pick(input, 'focus', 'Focus', 'title', 'Title')
+  const title = desc ?? (focus ? `Focus · ${focus}` : 'Focus')
+  return { card: 'generic', title, rawInput: input }
+}
+
 function presentDefaultCall(input: Record<string, unknown>, name: string, server: string | undefined): ToolCallView {
   const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary')
   const fallbackTitle = server ? `${server}: ${name}` : (name !== '' ? name : 'agy tool')
@@ -357,6 +376,11 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
       return presentSendMessageCall(input)
     case 'generate_image':
       return presentGenerateImageCall(input)
+    case 'update_steps':
+    case 'todo_write':
+      return presentChecklistCall(input)
+    case 'update_focus':
+      return presentFocusCall(input)
     default:
       return presentDefaultCall(input, name, server)
   }
@@ -418,6 +442,15 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
     }
     case 'schedule': {
       const rendered = formatScheduleResultOutput(unwrapped.input, text)
+      const view: GenericResultView = { card: 'generic', content: [{ type: 'text', text: clip(rendered, 4000) }] }
+      return view
+    }
+    case 'update_steps':
+    case 'todo_write': {
+      const steps = parseChecklistSteps(unwrapped.input, text)
+      const rendered = (text === '' || /^OK$/i.test(text.trim())) && steps.length > 0
+        ? formatChecklistMarkdown(steps)
+        : text
       const view: GenericResultView = { card: 'generic', content: [{ type: 'text', text: clip(rendered, 4000) }] }
       return view
     }

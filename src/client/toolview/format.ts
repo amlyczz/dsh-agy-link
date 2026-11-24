@@ -1,5 +1,7 @@
 // Presentation helpers: paths, clipping, previews, titles and diff stats.
 
+import { summarizeChecklist } from '../../common/checklist.ts';
+import { fillTemplate, translateOr } from '../i18n-bridge.ts';
 import type { MirrorCardModel } from './types.ts';
 
 export function relativize(p: string, cwd?: string, home?: string): string {
@@ -51,15 +53,12 @@ export function tr(t: Translate | undefined, key: string, fallback: string, para
 	if (typeof t === 'function') {
 		try {
 			const v = t(key, params);
-			if (typeof v === 'string' && v !== '' && v !== key) return v;
+			if (typeof v === 'string' && v !== '' && v !== key) return fillTemplate(v, params);
 		} catch {
 			// unbound namespace — fall through
 		}
 	}
-	if (params !== undefined && params.count !== undefined && fallback.includes('{count}')) {
-		return fallback.replace('{count}', String(params.count));
-	}
-	return fallback;
+	return params !== undefined ? fillTemplate(fallback, params) : fallback;
 }
 
 export function displayTitle(model: MirrorCardModel, t?: Translate): string {
@@ -92,6 +91,10 @@ export function displayTitle(model: MirrorCardModel, t?: Translate): string {
 			return tr(t, 'tv.subagent', 'Subagent');
 		case 'browser':
 			return tr(t, 'tv.browser', 'Browser');
+		case 'checklist':
+			return tr(t, 'tv.checklist', 'Checklist');
+		case 'focus':
+			return tr(t, 'tv.focus', 'Focus');
 		default:
 			if (model.tool && model.tool !== 'agy_tool') {
 				return model.server ? `${model.server}: ${model.tool}` : model.tool.replace(/_/g, ' ');
@@ -100,7 +103,24 @@ export function displayTitle(model: MirrorCardModel, t?: Translate): string {
 	}
 }
 
-export function displaySummary(model: MirrorCardModel, cwd?: string, home?: string): string {
+export function displaySummary(model: MirrorCardModel, cwd?: string, home?: string, t?: Translate): string {
+	if (model.kind === 'checklist' && model.checklist && model.checklist.length > 0) {
+		const sum = summarizeChecklist(model.checklist);
+		const progress = t
+			? tr(t, 'tv.checklistProgress', '{done}/{total} steps', { done: sum.done, total: sum.total })
+			: translateOr('tv.checklistProgress', '{done}/{total} steps', { done: sum.done, total: sum.total });
+		if (sum.activeTitle) return `${progress} · ${sum.activeTitle}`;
+		if (sum.inProgress > 1) {
+			const ip = t
+				? tr(t, 'tv.checklistInProgress', '{count} in progress', { count: sum.inProgress })
+				: translateOr('tv.checklistInProgress', '{count} in progress', { count: sum.inProgress });
+			return `${progress} · ${ip}`;
+		}
+		return progress;
+	}
+	if (model.kind === 'focus') {
+		return model.brief || model.title;
+	}
 	if (model.kind === 'terminal') {
 		return model.command ?? model.title;
 	}

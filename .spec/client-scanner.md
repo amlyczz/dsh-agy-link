@@ -12,7 +12,7 @@
 | markdown 图片 alt span | `data-agy-alt-scanned` / `data-agy-enhanced` | 无未处理 span 时立即返回 |
 | media origin 改写 | `data-agy-origin-rewritten` | 仅查询未改写的 `img[src*="/plugins/agy-link/media"]` |
 | Generative UI 微件（`<agent-embed>`） | `data-agy-embed-scanned` | `embed.ts` 将 `/plugins/agy-link/embed` 链接升级为 `<iframe sandbox="allow-scripts">` 卡片，按 `id` + `ev.source === frame.contentWindow` 校验证 `agy-embed-resize` 自动高度（80–800px）并同步 DSH 深浅主题变量 |
-| 扩展工具镜像卡片 | — | `extended-model.ts` / `extended-cards.ts` 为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理生命周期、`browser`/`chrome-devtools` 提供结构化标签与输出卡片；`invoke_subagent(image-generator)` 路由至图片卡片 |
+| 扩展工具镜像卡片 | — | `extended-model.ts` / `extended-cards.ts` / `checklist-card.ts` 为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理生命周期、`browser`/`chrome-devtools`、`update_steps`（步骤检查清单卡片，默认展开呈现 `N/M steps` 进度与逐项状态图标，并在宿主侧同步发射 DSH 原生 `todo/write` 会话事件以点亮 `TodoPanel`）与 `update_focus`（当前焦点卡片）提供结构化标签、图标与输出卡片；`invoke_subagent(image-generator)` 路由至图片卡片 |
 
 ## 2. 流式跳过可恢复不变式（PR #110 / v0.6.25）
 

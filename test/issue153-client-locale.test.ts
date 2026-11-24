@@ -26,6 +26,7 @@ function cjkLiterals(rel: string): string[] {
 
 const LOCALIZED = [
   'src/client/toolview/question-card.ts',
+  'src/client/toolview/checklist-card.ts',
   'src/client/toolview/extended-cards.ts',
   'src/client/toolview/image-card.ts',
   'src/client/mermaid-render.ts',

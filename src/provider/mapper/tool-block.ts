@@ -42,9 +42,24 @@ export function buildToolCallBlock(input: ToolCallBlockInput): ToolCallBlockResu
   // otherwise fall back to whatever survived the stream so the card still
   // renders what it has.
   const fullArgs = input.resolvedFullArgs
-  const effectiveArgs = fullArgs !== undefined
-    ? { ...fullArgs, ...(typeof input.args === 'object' ? input.args as Record<string, unknown> : {}) }
+  const streamArgsObj = typeof input.args === 'object' && input.args !== null ? input.args as Record<string, unknown> : undefined
+  const mergedArgs = fullArgs !== undefined
+    ? { ...fullArgs, ...(streamArgsObj ?? {}) }
     : input.args
+  if (
+    fullArgs !== undefined &&
+    mergedArgs !== null &&
+    typeof mergedArgs === 'object' &&
+    Array.isArray(fullArgs.steps) &&
+    fullArgs.steps.length > 0 &&
+    (!Array.isArray((mergedArgs as Record<string, unknown>).steps) || ((mergedArgs as Record<string, unknown>).steps as unknown[]).length === 0)
+  ) {
+    ;(mergedArgs as Record<string, unknown>).steps = fullArgs.steps
+    if (typeof fullArgs.markdown === 'string' && typeof (mergedArgs as Record<string, unknown>).markdown !== 'string') {
+      ;(mergedArgs as Record<string, unknown>).markdown = fullArgs.markdown
+    }
+  }
+  const effectiveArgs = mergedArgs
   const unwrapped = unwrapMcpTool(input.toolName, effectiveArgs)
   const brief = toolStepBrief(unwrapped.tool, unwrapped.input, unwrapped.server)
   const argumentsJson = useCode

@@ -20,5 +20,5 @@ export {
 export { mirrorCardModel } from './card-model.ts';
 export { trimTrailingBlankLines, previewLine } from './format.ts';
 export { AgyMirrorToolView } from './mirror-view.ts';
-export { runCodeModel, AgyCodeToolView } from './run-code-view.ts';
+export { runCodeModel, AgyCodeToolView, AgyRunCodeToolView } from './run-code-view.ts';
 export { installAgyToolView } from './register.ts';

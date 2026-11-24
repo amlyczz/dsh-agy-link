@@ -1,4 +1,5 @@
 // Structural types shared by the mirror card model and renderers.
+import type { ChecklistStepItem } from '../../common/checklist.ts';
 
 export type ToolResultBlock = {
 	call: { name: string; argsRaw: string } | null;
@@ -47,6 +48,8 @@ export type CardKind =
 	| 'task'
 	| 'subagent'
 	| 'browser'
+	| 'checklist'
+	| 'focus'
 	| 'generic';
 
 export interface CardBadge {
@@ -77,4 +80,5 @@ export interface MirrorCardModel {
 	brief?: string;
 	url?: string;
 	badges?: readonly CardBadge[];
+	checklist?: readonly ChecklistStepItem[];
 }

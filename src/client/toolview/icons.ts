@@ -249,6 +249,21 @@ export function IconBrowser16(size = 14, className = ''): unknown {
 	);
 }
 
+export function IconChecklist16(size = 14, className = ''): unknown {
+	return glyph(size, className,
+		hx('circle', { cx: 8, cy: 8, r: 5.8 }),
+		hx('path', { d: 'M5.4 8.2l1.8 1.8 3.5-3.7' }),
+	);
+}
+
+export function IconFocus16(size = 14, className = ''): unknown {
+	return glyph(size, className,
+		hx('circle', { cx: 8, cy: 8, r: 5.4 }),
+		hx('circle', { cx: 8, cy: 8, r: 1.9 }),
+		hx('path', { d: 'M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7' }),
+	);
+}
+
 export function toolIconFor(kind: CardKind, size = 14): unknown {
 	switch (kind) {
 		case 'terminal':
@@ -276,6 +291,10 @@ export function toolIconFor(kind: CardKind, size = 14): unknown {
 			return IconSubagent16(size);
 		case 'browser':
 			return IconBrowser16(size);
+		case 'checklist':
+			return IconChecklist16(size);
+		case 'focus':
+			return IconFocus16(size);
 		default:
 			return IconCodeOutline16(size);
 	}

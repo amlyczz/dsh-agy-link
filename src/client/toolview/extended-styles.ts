@@ -64,6 +64,76 @@ const EXT_CSS = `
 	padding: 8px 12px;
 	border-bottom: 0.5px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.14));
 }
+.agy-tv-checklist-wrap {
+	display: flex;
+	flex-direction: column;
+}
+.agy-tv-checklist-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 10px 14px;
+	max-height: 360px;
+	overflow-y: auto;
+	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif);
+	scrollbar-width: thin;
+	scrollbar-color: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.2)) transparent;
+}
+.agy-tv-checklist-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	font-size: 13px;
+	line-height: 20px;
+	color: var(--dsw-alias-label-secondary, #334155);
+}
+.agy-tv-checklist-row[data-status="done"] {
+	color: var(--dsw-alias-label-primary, #0f172a);
+}
+.agy-tv-checklist-row[data-status="in_progress"] {
+	color: var(--dsw-alias-label-primary, #0f172a);
+	font-weight: 500;
+}
+.agy-tv-checklist-row[data-status="pending"] {
+	color: var(--dsw-alias-label-tertiary, #64748b);
+}
+.agy-tv-checklist-row[data-status="skipped"] {
+	color: var(--dsw-alias-label-caption, #94a3b8);
+	text-decoration: line-through;
+}
+.agy-tv-checklist-row[data-status="failed"] {
+	color: var(--dsw-alias-state-error-primary, #dc2626);
+}
+.agy-tv-checklist-icon {
+	width: 16px;
+	height: 16px;
+	margin-top: 2px;
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--dsw-alias-label-caption, #94a3b8);
+}
+.agy-tv-checklist-row[data-status="done"] .agy-tv-checklist-icon {
+	color: var(--dsw-alias-state-success-primary, #10b981);
+}
+.agy-tv-checklist-row[data-status="in_progress"] .agy-tv-checklist-icon {
+	color: var(--dsw-alias-state-business-primary, #3b82f6);
+}
+.agy-tv-checklist-row[data-status="failed"] .agy-tv-checklist-icon {
+	color: var(--dsw-alias-state-error-primary, #dc2626);
+}
+.agy-tv-checklist-title {
+	flex: 1;
+	min-width: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.agy-tv-checklist-empty {
+	padding: 10px 14px;
+	font-size: 12.5px;
+	color: var(--dsw-alias-label-tertiary, #64748b);
+}
 `;
 
 export function ensureExtendedToolStyles(): void {

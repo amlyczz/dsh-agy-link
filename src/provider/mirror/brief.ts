@@ -2,6 +2,7 @@
 // result labels).
 //
 // MOVED VERBATIM from src/host/mirror-tool.ts (Phase 5h).
+import { parseChecklistSteps, summarizeChecklist } from '../../common/checklist.ts'
 import { unwrapMcpTool } from './args.ts'
 
 /** Short human preview for a recorded tool step (used in Code Mode titles). */
@@ -74,6 +75,18 @@ export function toolStepBrief(toolName: string, args: unknown, server?: string):
   if (effTool === 'send_message') {
     const recipient = pickStr('Recipient', 'recipient', 'to')
     return recipient ? 'msg ' + recipient : 'send message'
+  }
+  if (effTool === 'update_steps' || effTool === 'todo_write') {
+    const steps = parseChecklistSteps(a)
+    if (steps.length > 0) {
+      const sum = summarizeChecklist(steps)
+      return `steps: ${sum.done}/${sum.total}${sum.activeTitle ? ` · ${sum.activeTitle.slice(0, 60)}` : ''}`
+    }
+    return 'update steps'
+  }
+  if (effTool === 'update_focus') {
+    const focus = pickStr('focus', 'Focus', 'title', 'Title')
+    return focus !== '' ? 'focus: ' + focus.slice(0, 80) : 'update focus'
   }
   return effServer ? effServer + ': ' + effTool : effTool
 }

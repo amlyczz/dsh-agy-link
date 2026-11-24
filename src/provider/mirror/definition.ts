@@ -3,6 +3,7 @@
 // MOVED VERBATIM from src/host/mirror-tool.ts (Phase 5h): same tool name,
 // description, parameters, presenters and execute body.
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { checklistToDshTodos, formatChecklistMarkdown, parseChecklistSteps } from '../../common/checklist.ts'
 import type { RunRegistry } from '../../host/recording.ts'
 import { toolInput, unwrapMcpTool } from './args.ts'
 import { toolStepBrief } from './brief.ts'
@@ -111,6 +112,22 @@ export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
         throw new Error('agy tool ' + t.name + ' failed: ' + t.error)
       }
       const out = t.output
+      const outStr = typeof out === 'string' ? out : ''
+      const effTool = unwrapMcpTool(t.name, t.args).tool
+      if (effTool === 'update_steps' || effTool === 'todo_write') {
+        const steps = parseChecklistSteps(t.args, outStr)
+        if (steps.length > 0) {
+          try {
+            const sess = (exec as { agent?: { session?: { append?: (type: string, data: unknown) => void } } } | undefined)?.agent?.session
+            sess?.append?.('todo/write', { todos: checklistToDshTodos(steps) })
+          } catch {
+            // Best-effort projection into DSH native TodoPanel; never fail the mirror step.
+          }
+          if (outStr.trim() === '' || /^OK$/i.test(outStr.trim())) {
+            return formatChecklistMarkdown(steps)
+          }
+        }
+      }
       if (out === undefined || out === null) return ''
       if (typeof out === 'string') return out
       try {

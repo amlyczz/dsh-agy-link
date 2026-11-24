@@ -151,5 +151,13 @@ export function AgyRunCodeToolView(props?: unknown): unknown {
 			}),
 		},
 	} as unknown as ToolBlock;
-	return AgyMirrorToolView({ block: synthetic, t: typed?.t } as never);
+	return AgyMirrorToolView({
+		...(typed?.callId !== undefined ? { callId: typed.callId } : {}),
+		...(typed?.cwd !== undefined ? { cwd: typed.cwd } : {}),
+		...(typed?.home !== undefined ? { home: typed.home } : {}),
+		...(typed?.openFile !== undefined ? { openFile: typed.openFile } : {}),
+		...(typed?.inspect !== undefined ? { inspect: typed.inspect } : {}),
+		block: synthetic,
+		t: typed?.t,
+	} as never);
 }

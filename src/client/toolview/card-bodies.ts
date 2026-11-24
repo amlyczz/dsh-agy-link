@@ -2,9 +2,11 @@
 // and one body renderer per card kind. Each helper returns the same DOM the
 // original single switch produced.
 
+import { formatChecklistMarkdown } from '../../common/checklist.ts';
 import {
 	IconBrowseOutline16,
 	IconCheckOutline14,
+	IconChecklist16,
 	IconCodeOutline16,
 	IconCopyOutline16,
 	IconEditOutline16,
@@ -13,9 +15,10 @@ import {
 	IconQuestionOutline16,
 	IconSearchOutline16,
 } from './icons.ts';
-import { clip, diffStat, relativize, tr, trimTrailingBlankLines, type Translate } from './format.ts';
+import { clip, diffStat, displaySummary, relativize, tr, trimTrailingBlankLines, type Translate } from './format.ts';
 import { hx, react } from './runtime.ts';
 import type { MirrorCardModel } from './types.ts';
+import { ChecklistCardBody } from './checklist-card.ts';
 import { ExtendedCardBody } from './extended-cards.ts';
 import { ImageCardBody } from './image-card.ts';
 import { QuestionCardBody } from './question-card.ts';
@@ -190,6 +193,16 @@ function imageCard(model: MirrorCardModel, inspectNode: unknown): unknown {
 	], hx(CopyButton, { text: model.prompt || (model.raw ?? '') }), hx(ImageCardBody, { model }), inspectNode);
 }
 
+function checklistCard(model: MirrorCardModel, cwd: string | undefined, home: string | undefined, t: Translate | undefined, inspectNode: unknown): unknown {
+	const steps = model.checklist ?? [];
+	const copyText = steps.length > 0 ? formatChecklistMarkdown(steps) : (model.output ?? model.raw ?? '');
+	const headerTitle = displaySummary(model, cwd, home, t);
+	return cardShell([
+		IconChecklist16(13),
+		hx('span', { className: 'agy-tv-card-path' }, headerTitle),
+	], hx(CopyButton, { text: copyText, t }), hx(ChecklistCardBody, { model, t }), inspectNode);
+}
+
 function extendedCard(model: MirrorCardModel, t: Translate | undefined, inspectNode: unknown): unknown {
 	const copyText = model.output !== undefined && model.output !== ''
 		? model.output
@@ -235,6 +248,9 @@ export function CardBody({ model, openFile, cwd, home, inspect, t }: {
 			return questionCard(model, inspectNode);
 		case 'image':
 			return imageCard(model, inspectNode);
+		case 'checklist':
+			return checklistCard(model, cwd, home, t, inspectNode);
+		case 'focus':
 		case 'swarm':
 		case 'workflow':
 		case 'schedule':

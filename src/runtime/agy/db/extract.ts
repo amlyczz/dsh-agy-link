@@ -1,5 +1,6 @@
 // Extract thought prose and full tool arguments from protobuf step_payload
 // blobs. Pure byte parsing: no disk, no clock.
+import { parseChecklistMarkdown, parseChecklistSteps } from '../../../common/checklist.ts'
 import type { CachedStep } from './schema.ts'
 
 function readVarint(b: Buffer, offset: number): { val: number; next: number } | null {
@@ -164,6 +165,52 @@ function walkProtobuf(
   }
 }
 
+function collectChecklistStrings(buf: Buffer, depth: number, out: string[]): void {
+  if (depth > 4) return
+  let pos = 0
+  while (pos < buf.length) {
+    const res = readVarint(buf, pos)
+    if (res === null) break
+    pos = res.next
+    const wireType = res.val & 0x7
+    if (wireType === 2) {
+      const lenRes = readVarint(buf, pos)
+      if (lenRes === null) break
+      pos = lenRes.next
+      const len = lenRes.val
+      if (len < 0 || len > buf.length - pos) break
+      const slice = buf.subarray(pos, pos + len)
+      pos += len
+      if (slice.includes('- [')) {
+        out.push(slice.toString('utf8'))
+      }
+      if (len >= 8 && len < 200_000) collectChecklistStrings(slice, depth + 1, out)
+    } else if (wireType === 0) {
+      const vRes = readVarint(buf, pos)
+      if (vRes === null) break
+      pos = vRes.next
+    } else if (wireType === 1) {
+      pos += 8
+    } else if (wireType === 5) {
+      pos += 4
+    } else {
+      break
+    }
+  }
+}
+
+function extractChecklistMarkdownFromPayload(payload: Buffer): string | null {
+  if (!payload.includes('- [')) return null
+  const candidates: string[] = []
+  collectChecklistStrings(payload, 0, candidates)
+  for (const c of candidates) {
+    if (parseChecklistMarkdown(c).length > 0) return c.trim()
+  }
+  const text = payload.toString('utf8')
+  const m = /(- \[(?: |x|X|>|\/|-|!)\] [^\r\n\u0000-\u0008\u000b-\u001f]+(?:\r?\n- \[(?: |x|X|>|\/|-|!)\] [^\r\n\u0000-\u0008\u000b-\u001f]+)*)/.exec(text)
+  return m?.[1]?.trim() ?? null
+}
+
 /**
  * Extract tool name and full JSON args from a protobuf step_payload.
  *
@@ -190,7 +237,15 @@ export function extractToolInfo(payload: Buffer): CachedStep | null {
                 try {
                   const obj = JSON.parse(jsonSlice.toString('utf-8')) as unknown
                   if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
-                    return { name: nameStr, args: obj as Record<string, unknown> }
+                    const rec = obj as Record<string, unknown>
+                    if (nameStr === 'update_steps' && parseChecklistSteps(rec).length === 0) {
+                      const md = extractChecklistMarkdownFromPayload(payload)
+                      if (md !== null) {
+                        const steps = parseChecklistMarkdown(md)
+                        if (steps.length > 0) return { name: nameStr, args: { ...rec, steps, markdown: md } }
+                      }
+                    }
+                    return { name: nameStr, args: rec }
                   }
                 } catch {
                   // ignore JSON parse error, keep scanning
@@ -204,11 +259,21 @@ export function extractToolInfo(payload: Buffer): CachedStep | null {
   }
 
   // Fallback: scan for any embedded JSON object containing tool parameter keys
-  return scanFallbackJson(payload)
+  const fallback = scanFallbackJson(payload)
+  if (fallback !== null) return fallback
+
+  if (payload.includes('update_steps')) {
+    const md = extractChecklistMarkdownFromPayload(payload)
+    if (md !== null) {
+      const steps = parseChecklistMarkdown(md)
+      if (steps.length > 0) return { name: 'update_steps', args: { steps, markdown: md } }
+    }
+  }
+  return null
 }
 
 function scanFallbackJson(payload: Buffer): CachedStep | null {
-  const toolKeys = ['TargetFile', 'TargetContent', 'ReplacementContent', 'CodeContent', 'CommandLine', 'AbsolutePath', 'Query', 'Pattern', 'DirectoryPath']
+  const toolKeys = ['TargetFile', 'TargetContent', 'ReplacementContent', 'CodeContent', 'CommandLine', 'AbsolutePath', 'Query', 'Pattern', 'DirectoryPath', 'steps', 'Steps', 'focus', 'Focus']
   let pos = 0
   let bestObj: Record<string, unknown> | null = null
   let bestKeyCount = 0

@@ -1,5 +1,7 @@
-// Card classification for agy's advanced orchestration & browser tools:
-// swarm, run_workflow, schedule, manage_task, subagent lifecycle, and browser/devtools.
+// Card classification for agy's advanced orchestration, checklist, focus & browser tools:
+// swarm, run_workflow, schedule, manage_task, subagent lifecycle, update_steps/focus, and browser/devtools.
+import { formatChecklistMarkdown, parseChecklistSteps, summarizeChecklist } from '../../common/checklist.ts';
+import { translateOr } from '../i18n-bridge.ts';
 import { extractImagePathsFromText, num, pick } from './args.ts';
 import type { CardBadge, MirrorCardModel } from './types.ts';
 
@@ -23,6 +25,53 @@ export function classifyExtendedCard(
 	raw: string,
 	server?: string,
 ): MirrorCardModel | null {
+	if (tool === 'update_steps' || tool === 'todo_write' || Array.isArray(input.steps)) {
+		const steps = parseChecklistSteps(input, out);
+		if (steps.length > 0 || tool === 'update_steps' || tool === 'todo_write') {
+			const sum = summarizeChecklist(steps);
+			const progress = translateOr('tv.checklistProgress', '{done}/{total} steps', { done: sum.done, total: sum.total });
+			const detail = sum.activeTitle
+				? `${progress} · ${sum.activeTitle}`
+				: (sum.inProgress > 1
+					? `${progress} · ${translateOr('tv.checklistInProgress', '{count} in progress', { count: sum.inProgress })}`
+					: progress);
+			const badges: CardBadge[] = [
+				...badge(progress, sum.done === sum.total && sum.total > 0 ? 'ok' : (sum.inProgress > 0 ? 'accent' : 'neutral')),
+				...(sum.inProgress > 0 ? badge(translateOr('tv.checklistInProgress', '{count} in progress', { count: sum.inProgress }), 'accent') : []),
+				...(sum.skipped > 0 ? badge(translateOr('tv.checklistSkipped', '{count} skipped', { count: sum.skipped }), 'neutral') : []),
+				...(sum.failed > 0 ? badge(translateOr('tv.checklistFailed', '{count} failed', { count: sum.failed }), 'warn') : []),
+			];
+			const markdownOut = out !== '' && !/^OK$/i.test(out.trim()) ? out : formatChecklistMarkdown(steps);
+			const cleanDesc = desc && /^steps:\s+/i.test(desc) ? desc.replace(/^steps:\s+/i, '') : desc;
+			return {
+				kind: 'checklist',
+				tool,
+				server,
+				title: steps.length > 0 ? detail : (cleanDesc ?? detail),
+				checklist: steps,
+				badges,
+				output: markdownOut,
+				raw,
+			};
+		}
+	}
+
+	if (tool === 'update_focus' || (typeof input.focus === 'string' && tool.includes('focus'))) {
+		const rawFocus = pick(input, 'focus', 'Focus', 'title', 'Title');
+		const cleanDesc = desc && /^focus:\s+/i.test(desc) ? desc.replace(/^focus:\s+/i, '') : desc;
+		const focus = rawFocus ?? cleanDesc;
+		return {
+			kind: 'focus',
+			tool,
+			server,
+			title: focus || tool.replace(/_/g, ' '),
+			badges: badge(translateOr('tv.focus', 'Focus'), 'accent'),
+			...(focus ? { brief: focus } : {}),
+			output: out !== '' && !/^OK$/i.test(out.trim()) ? out : '',
+			raw,
+		};
+	}
+
 	if (tool === 'swarm') {
 		const action = pick(input, 'action', 'Action') ?? 'status';
 		const name = pick(input, 'name', 'Name', 'title', 'Title');
