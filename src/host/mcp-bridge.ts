@@ -501,13 +501,18 @@ export function writeMcpConfig(file: string, bridge: McpBridge, log?: (message: 
     if (existingKey === key || !existingKey.startsWith(MCP_SERVER_KEY + '-')) continue
     const envObj = (val as { env?: Record<string, unknown> } | null)?.env
     const rawPid = envObj?.DSH_MCP_PID
+    // Entries written before DSH_MCP_PID existed can never be proven alive, so
+    // they were never pruned and piled up (8-9 per account seen in the wild).
+    // agy waits for EVERY registered server before sending the turn, so dead
+    // bridges stall each warmup probe until `--print-timeout` with 0 tokens
+    // used, and the quota window is never activated. Treat them as stale.
     const legacyWithoutPid = rawPid === undefined
     const deadPid = typeof rawPid === 'string' && /^\d+$/.test(rawPid) && !isPidAlive(Number(rawPid))
     if (legacyWithoutPid || deadPid) {
       delete servers[existingKey]
     }
   }
-servers[key] = mcpServerEntry(bridge, process.execPath, process.versions.electron !== undefined)
+  servers[key] = mcpServerEntry(bridge, process.execPath, process.versions.electron !== undefined)
   // Foreign stdio servers (godot, blender, chrome-devtools, …) are declared to
   // Google verbatim by `agy`: ONE array without `items` fails every turn with
   // `400 INVALID_ARGUMENT … items: missing field`, so they are routed through

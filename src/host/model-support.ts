@@ -35,9 +35,16 @@ function refusalHealed(acc: ManagedAccount, model: string, learnedAt: number): b
  * Whether `acc` can serve `model`.
  *
  * A learned refusal is final while the account's own quota snapshot does not
- * list the model. When it does, a transient `loadCodeAssist` TLS timeout can
- * heal as soon as a newer quota snapshot lists the model or after
- * LISTED_REFUSAL_RETRY_MS.
+ * list the model. When it does, agy's "not recognized" may just mean it could
+ * not load its model list (a TLS timeout once shut a model out of the whole
+ * pool until the host restarted), so the refusal ends with a quota refresh
+ * after it, or after LISTED_REFUSAL_RETRY_MS (the poll runs hourly and goes
+ * through the same network). Otherwise the per-model quota
+ * snapshot and the discovered catalog decide. Deliberately ACCOUNT-scoped: this
+ * is what `selectAccount` routes on, so a sibling account must never make an
+ * account look capable of a model its own evidence denies (that would route an
+ * unsupported model to the wrong account). Pool-wide "nobody serves this" is
+ * handled by the self-heal refresh in account-selection instead (issue #125).
  */
 export function accountCanServeModel(acc: ManagedAccount, model: string, ctx: ModelSupportContext): boolean {
   const entry = ctx.unsupportedModels.get(acc.id)

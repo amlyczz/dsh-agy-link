@@ -40,8 +40,14 @@ export interface ChipClickPlan {
 /**
  * Pure click planner for one model chip.
  *
- * Clicking a chip denied by a legacy `hiddenModels` entry un-denies it (and its
- * effort variants) and ticks it when the allow-list is restrictive.
+ * A chip denied by `hiddenModels` used to be a dead end: older builds wrote that
+ * deny-list from their own visibility toggles, the current panel only edits the
+ * allow-list, and the deny-list wins on a conflict. Ticking such a chip added it
+ * to `selectedModels` and changed nothing on screen (seen live with Claude Opus
+ * 5.5: selected AND hidden, impossible to pick). Clicking a denied chip now
+ * means "show it": its deny-list entries (including effort variants such as
+ * `claude-opus-5-5-high`) are dropped and it is ticked if the allow-list is
+ * restrictive.
  */
 export function planChipClick(params: {
 	id: string;
@@ -59,11 +65,16 @@ export function planChipClick(params: {
 		if (!isTicked(id)) plan.selected = [...selected, id];
 		return plan;
 	}
+	// The allow-list currently restricts to an explicit subset: just add or
+	// remove this one id.
 	if (!unrestricted) {
 		const next = new Set(selected.filter((want) => !modelMatches(want, id)));
 		if (!isTicked(id)) next.add(id);
 		return { selected: Array.from(next) };
 	}
+	// "No restriction" state: unticking one model has to materialise what is
+	// currently visible minus that model. Writing `[id]` (or `[]`) here would
+	// hide every OTHER model — a surprising regression from one click.
 	return { selected: catalogIds.filter((m) => !hiddenSet.has(m) && m !== id) };
 }
 

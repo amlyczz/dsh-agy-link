@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.77 (2026-11-24)
+
+### English
+
+- **Fix(settings): ticking a model that was in `hiddenModels` now un-hides it (merges PR #193).** `hiddenModels` was written by the old visibility toggles; the tick-list panel then managed `selectedModels`, so a model present in **both** lists could not be selected at all — and ticking it changed nothing. The panel now removes a model from `hiddenModels` when it is ticked, so the two lists can no longer disagree.
+- **Fix(pool): heal a learned model refusal once a later quota refresh lists the model (merges PR #191).** `markModelUnsupported` is learned from agy's "model X is not recognized"; the pool then treated that as final for the account until the host restarted. agy also answers that way when it merely **failed to load its model list** (TLS handshake timeout), so one bad network moment could bench a model for the whole session. A quota refresh that lists the model now clears the refusal.
+- **Fix(warmup): detect and retry quota windows that never activate (merges PR #190).** Warmup reported success while the window stayed at 100% and every sync slid the reset time forward again — because the probe hit agy's `print timeout` with `num_turns: 0` (`MCP: 8 server(s) still connecting after 1m0s: dsh`). The probe now recognises that outcome as a failed activation and retries instead of reporting success.
+
+### 中文
+
+- **修复(设置)：勾选原本在 `hiddenModels` 里的模型会把它取消隐藏（合并 PR #193）。** `hiddenModels` 是旧可见性开关写入的，而勾选面板管理的是 `selectedModels`；于是同时出现在**两个**列表里的模型根本无法选中，勾选也没有任何变化。现在勾选会把该模型从 `hiddenModels` 移除，两套列表不会再互相矛盾。
+- **修复(池)：后续配额刷新列出该模型时，撤销"模型不受支持"的学习结果（合并 PR #191）。** `markModelUnsupported` 从 agy 的"model X is not recognized"学习而来，之后池会把它视为该账号的最终结论直到宿主重启。但 agy 在**模型列表加载失败**时也会这样回答（TLS handshake timeout），一次网络抖动就可能让某个模型在整段会话里被禁用。现在只要配额刷新里出现了该模型，就会清除这条拒绝记录。
+- **修复(warmup)：识别并重试"配额窗口从未激活"的情况（合并 PR #190）。** Warmup 报告成功，但配额窗口一直是 100%、每次同步都把重置时间往后推——因为探测命中了 agy 的 `print timeout` 且 `num_turns: 0`（日志为 `MCP: 8 server(s) still connecting after 1m0s: dsh`）。现在探测会把这种结果判为激活失败并重试，而不是报成功。
+
 ## Unreleased
 
 ### English

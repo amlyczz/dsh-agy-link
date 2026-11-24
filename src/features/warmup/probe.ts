@@ -101,6 +101,9 @@ function classifyProbe(account: ManagedAccount, ctx: WarmupProbeContext, cliMode
   }
 
   if (raw.code === 0 && !parser.stats.lastResultError) {
+    // A turn that spent zero tokens never reached the model, so the quota
+    // window did not start. Reporting it as success hid the failure behind the
+    // long success cooldown (and lied to a user who clicked "warm up").
     if (resultTotalTokens === 0) {
       return { ok: false, error: 'Warmup probe reached no model (0 tokens used); quota window not activated', durationMs: raw.durationMs }
     }
