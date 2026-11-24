@@ -11,7 +11,7 @@
 | 模型列表与真实档位 | `agy models`（及配额 `agentModelSorts` 辅助） | `listModels`、`/plugins/agy-link/status.catalogModels`、`/plugins/agy-link/status.accountModels`、`/agy models` |
 | 单账号模型展示收敛（0 冗余） | `buildAccountModelRows()`（`src/common/account-models.ts`） | 账号卡片展开列表（优先该账号真实发现目录 `accountModels[acc.id]`，回退折叠 `-tiered`/档位后缀、过滤 `-sonar`/`-image`、按名称去重；未知余量不伪造 `100%`） |
 
-当前基准阵容（`agy >= 1.5.7`）：`gemini-4-argon`（low/medium/high）、`gemini-4-hydrogen`（low/medium/high/xhigh[Extra]）、`gemini-pro-orchestrator-g1-pro`、`gemini-3.8-flash`（low/medium/high）、`claude-opus-5-5`（low/medium/high）、`claude-sonnet-5-5`（low/medium/high）、`gpt-oss-120b-medium`。已下线型号（`gemini-4-carbon`、`claude-*-4-6*`）不进入默认兜底目录。
+当前基准阵容（`agy >= 1.5.15`）：`gemini-4-neon`（low/medium/high/xhigh[Extra]）、`gemini-4-carbon`（low/medium/high，Pro/Ultra）、`gemini-4-argon`（low/medium/high）、`gemini-4-hydrogen`（low/medium/high/xhigh[Extra]，全用户开放）、`gemini-pro-orchestrator-neon`、`gemini-pro-orchestrator`（Orchestrator (Carbon)）、`gemini-pro-orchestrator-argon`、`gemini-3.8-flash`（low/medium/high）、`claude-opus-5-5`（low/medium/high）、`claude-sonnet-5-5`（low/medium/high）、`gpt-oss-120b-medium`。已下线型号（`claude-*-4-6*`）不进入默认兜底目录。
 
 ## 2. `agy models` 静默未登录兜底识别（issue #122 根治）
 
@@ -19,7 +19,7 @@
 
 - `isUnauthenticatedModelsFallback(stdout, stderr)`（`src/domain/models/parse.ts`）识别此类伪发现结果，**严禁将其标为 `source: 'discovered'`**，而是记入 `lastError` 并保持 `'fallback'`，避免用假目录否决 Pro/Ultra 账号真实的 Gemini 4 Hydrogen / Argon 权限。
 - 当显式传入 `accountId` 探测单账号目录而该账号缺失、已停用或处于 `authRequired` 时，必须直接失败返回，**严禁回退借用主账号或当前活跃账号代探并将结果写入 `accountId`**；`POST /plugins/agy-link/pool/refresh-quota` 单账号同步时显式传 `catalog.forceRefresh(id)`，全量同步与选号自愈（`refreshQuota`）同步触发 `catalog.warmAccounts()`；全局 `forceRefresh()` 发现成功时同步将结果归属写入实际被探测的 `probedAccount.id` 账号目录，防止全局目录已列出模型而该账号 `accountCatalogs` 仍为空。
-- **CLI 虚拟编排模型（`gemini-pro-orchestrator-neon` / `gemini-pro-orchestrator-g1-pro`）与 `-xhigh`/`-tiered-*` 后缀兼容**：Google REST 配额接口（`fetchAvailableModels`）只返回底层模型（`gemini-4-neon-*`、`gemini-4-argon-*`）而不包含 CLI 编排 slug；`accountSupportsModel()` 在单账号目录尚未预热或陈旧时，允许分别凭 `gemini-4-neon` 配额证据与 `accountHasArgon` 判定可用性，避免 Pro/Ultra 账号误报 `lack model "gemini-pro-orchestrator-neon"`。
+- **CLI 虚拟编排模型（`gemini-pro-orchestrator-neon` / `gemini-pro-orchestrator` / `gemini-pro-orchestrator-argon` / `gemini-pro-orchestrator-g1-pro`）与 `-xhigh`/`-tiered-*` 后缀兼容**：Google REST 配额接口（`fetchAvailableModels`）只返回底层模型（`gemini-4-neon-*`、`gemini-4-carbon-*`、`gemini-4-argon-*`）而不包含 CLI 编排 slug；`accountSupportsModel()` 在单账号目录尚未预热或陈旧时，允许分别凭 `gemini-4-neon`、`gemini-4-carbon` 配额证据与 `accountHasArgon` 判定可用性，避免 Pro/Ultra 账号误报 `lack model "gemini-pro-orchestrator*"`。
 - **持久化磁盘缓存（`<stateDir>/model-catalog.json`）**：`ModelCatalog` 将已发现的全局与分账号目录连同 `agyVersion` 与 `discoveredAt` 原子落盘；宿主冷启动时 0ms 同步水合真实模型列表（若 `agy --version` 升级则自动失效重探），`warmAccounts()` 自动跳过仍在 `ttlMs` 有效期内的已缓存账号并在剩余未缓存探测间保持随机错峰抖动。
 - Windows 下对隔离辅账号执行 `agy models` 时必须受 `acquireCredentialSlot` 保护，防止读取到系统槽内主账号的模型清单张冠李戴（issue #108/#109）。
 
@@ -66,7 +66,14 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
 - 当模型拒绝 `--effort` 时，`streamWithEffortRetry()` 自动去掉 `--effort` 无感重放一次。
 - 仅当已发现的实时目录未声明该模型支持档位（`catalogAdvertisesEffort(model) === false`）时，才写入 `effort-unsupported.json` 并广播 `notifyPicker()`（避免 `loadCodeAssist` 瞬时超时造成永久误学，issue #115）。
 
-## 6. 测试锚点
+## 6. Orchestrator 上下级模型与思考档位（issue #174）
+
+- 自 `agy 1.5.14` 起，命令行 `agy --settings '{"orchestrator":{"planner":"<tiered-slug>","executor":"<tiered-slug>"}}'` 支持为编排器角色模型（`gemini-pro-orchestrator*`）分别覆盖上级（Planner）与下级（Executor）模型及各自思考档位，而 `agy acp` 仍无 `--settings` 入参且会拒绝嵌套对象格式 `{ planner: { model, effort } }`。
+- **唯一格式化与合并源（`src/common/orchestrator.ts`）**：`isOrchestratorModel()`、`resolveOrchestratorRoleSlug()`（保留 `gpt-oss-120b-medium` 等无独立档位枚举模型后缀、剥离其余已有档位后再拼接 `<base>-<effort>`）、`buildOrchestratorSettingsObject()` 与 `mergeOrchestratorIntoAgySettings()`（合并进现有内联 JSON 或文件路径型 `agySettings` 的 `orchestrator` 对象，不覆盖无关字段）。
+- **生效路由边界**：仅当当前会话模型（或 `runAgyOnce` 请求模型）命中 `isOrchestratorModel()` 且配置了至少一个上级/下级模型时，`resolveEffectiveAgySettings()`（`src/provider/attempt.ts`）与 `runAgyOnce`（`src/host/oneshot.ts`）才会注入 `--settings`；`runAgyAttempt`（`src/provider/attempt-outcome.ts`）基于 `resolveEffectiveAgySettings(input)` 判定仅在此场景下绕开 ACP 走 CLI `-p --settings`，非编排器模型与未自定义编排器继续走 ACP 不受影响。
+- **配置与界面**：`orchestratorPlannerModel`、`orchestratorPlannerEffort`、`orchestratorExecutorModel`、`orchestratorExecutorEffort`（`src/common/types/config.ts` / `config.ts` / `/config` / `/status` / `/agy status` / `OrchestratorSettingsRows.ts`）；Role 下拉排除 `isOrchestratorModel` 本身，模型选「自动」或固定无档位模型时档位下拉仅允许「自动」。
+
+## 7. 测试锚点
 
 - `test/models.test.ts`：折叠规则、按账号独立 single-flight 并发刷新、`name`/`efforts` 变更广播、`agy models` 未登录兜底输出不误标 `discovered`、`accountHasArgon` 目录优先于折叠 REST 列表。
 - `test/pool.test.ts` / `test/pool-auth.test.ts` / `test/http-contract.test.ts`：切号单次触发不双倍 spawn、429 自动切号广播、OAuth `finishWithCode` 广播、`manualPinAt` 优先于旧会话 `stickyAccount`、`/config` 修改 `defaultEffort`/`enabled` 同步刷新选择器。

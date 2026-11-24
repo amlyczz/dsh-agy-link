@@ -145,6 +145,10 @@ export function resolveConfig(
     mediaMaxFileBytes: asNum(get('mediaMaxFileBytes')) ?? base.mediaMaxFileBytes,
     defaultModel: asString(get('defaultModel')) ?? base.defaultModel,
     defaultEffort: asString(get('defaultEffort')) ?? base.defaultEffort,
+    orchestratorPlannerModel: asString(get('orchestratorPlannerModel')) ?? base.orchestratorPlannerModel,
+    orchestratorPlannerEffort: asString(get('orchestratorPlannerEffort')) ?? base.orchestratorPlannerEffort,
+    orchestratorExecutorModel: asString(get('orchestratorExecutorModel')) ?? base.orchestratorExecutorModel,
+    orchestratorExecutorEffort: asString(get('orchestratorExecutorEffort')) ?? base.orchestratorExecutorEffort,
     timeoutMs: asNum(get('timeoutMs')) ?? base.timeoutMs,
     longToolIdleMinutes: asNum(get('longToolIdleMinutes')) ?? base.longToolIdleMinutes,
     maxTurnMinutes: asNum(get('maxTurnMinutes')) ?? base.maxTurnMinutes,
@@ -219,6 +223,8 @@ export function resolveConfig(
     imageMaxBytes: asNum(get('imageMaxBytes')) ?? base.imageMaxBytes,
     imageOutputDir: asString(get('imageOutputDir')) ?? base.imageOutputDir,
     imageRetries: asNum(get('imageRetries')) ?? base.imageRetries,
+    btwModel: asString(get('btwModel')) ?? base.btwModel,
+    btwEffort: asString(get('btwEffort')) ?? base.btwEffort,
     backgroundWakeup: asBool(get('backgroundWakeup')) ?? base.backgroundWakeup,
     backgroundWakeupTtlMinutes: asNum(get('backgroundWakeupTtlMinutes')) ?? base.backgroundWakeupTtlMinutes,
     backgroundWakeupMaxPerSession: asNum(get('backgroundWakeupMaxPerSession')) ?? base.backgroundWakeupMaxPerSession,
@@ -258,6 +264,10 @@ export function resolveConfig(
   }
   if (env.DSH_AGY_DEFAULT_MODEL) cfg.defaultModel = env.DSH_AGY_DEFAULT_MODEL
   if (env.DSH_AGY_DEFAULT_EFFORT) cfg.defaultEffort = env.DSH_AGY_DEFAULT_EFFORT
+  if (env.DSH_AGY_ORCHESTRATOR_PLANNER_MODEL !== undefined) cfg.orchestratorPlannerModel = env.DSH_AGY_ORCHESTRATOR_PLANNER_MODEL
+  if (env.DSH_AGY_ORCHESTRATOR_PLANNER_EFFORT !== undefined) cfg.orchestratorPlannerEffort = env.DSH_AGY_ORCHESTRATOR_PLANNER_EFFORT
+  if (env.DSH_AGY_ORCHESTRATOR_EXECUTOR_MODEL !== undefined) cfg.orchestratorExecutorModel = env.DSH_AGY_ORCHESTRATOR_EXECUTOR_MODEL
+  if (env.DSH_AGY_ORCHESTRATOR_EXECUTOR_EFFORT !== undefined) cfg.orchestratorExecutorEffort = env.DSH_AGY_ORCHESTRATOR_EXECUTOR_EFFORT
   if (env.DSH_AGY_TIMEOUT_MS) {
     const t = asNum(env.DSH_AGY_TIMEOUT_MS)
     if (t && t > 0) cfg.timeoutMs = t
@@ -404,6 +414,8 @@ export function resolveConfig(
     const v = asNum(env.DSH_AGY_IMAGE_RETRIES)
     if (v !== undefined) cfg.imageRetries = v
   }
+  if (env.DSH_AGY_BTW_MODEL !== undefined) cfg.btwModel = env.DSH_AGY_BTW_MODEL
+  if (env.DSH_AGY_BTW_EFFORT !== undefined) cfg.btwEffort = env.DSH_AGY_BTW_EFFORT
   if (env.DSH_AGY_CLOAK_SYSTEM_PROMPT !== undefined) {
     const csp = asBool(env.DSH_AGY_CLOAK_SYSTEM_PROMPT)
     if (csp !== undefined) cfg.cloakSystemPrompt = csp

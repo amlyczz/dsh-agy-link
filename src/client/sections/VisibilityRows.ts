@@ -64,8 +64,8 @@ function translateDisplayRow(o: {
 	});
 }
 
-/** Returns the display rows; React flattens the array inside the parent's children. */
-export function renderVisibilityRows(args: {
+/** Translation action button + card/replace display mode rows. */
+export function renderTranslateVisibilityRows(args: {
 	t: Translator;
 	status: StatusPayload;
 	loadingAction: string | null;
@@ -75,18 +75,42 @@ export function renderVisibilityRows(args: {
 	return [
 		visibilityRow({
 			...common,
-			label: 'config.showHeaderBadge',
-			desc: 'config.showHeaderBadgeDesc',
-			key: 'showHeaderBadge',
-			visible: args.status.showHeaderBadge !== false,
-		}),
-		visibilityRow({
-			...common,
 			label: 'config.showTranslateAction',
 			desc: 'config.showTranslateActionDesc',
 			key: 'showTranslateAction',
 			visible: args.status.showTranslateAction !== false,
 		}),
 		translateDisplayRow({ ...common, mode: args.status.translateDisplay === 'replace' ? 'replace' : 'card' }),
+	];
+}
+
+/** Conversation header badge visibility row. */
+export function renderHeaderBadgeRow(args: {
+	t: Translator;
+	status: StatusPayload;
+	loadingAction: string | null;
+	setCfg: (key: string, value: unknown) => Promise<void>;
+}): unknown {
+	return visibilityRow({
+		t: args.t,
+		loadingAction: args.loadingAction,
+		setCfg: args.setCfg,
+		label: 'config.showHeaderBadge',
+		desc: 'config.showHeaderBadgeDesc',
+		key: 'showHeaderBadge',
+		visible: args.status.showHeaderBadge !== false,
+	});
+}
+
+/** Returns the display rows; React flattens the array inside the parent's children. */
+export function renderVisibilityRows(args: {
+	t: Translator;
+	status: StatusPayload;
+	loadingAction: string | null;
+	setCfg: (key: string, value: unknown) => Promise<void>;
+}): unknown[] {
+	return [
+		renderHeaderBadgeRow(args),
+		...renderTranslateVisibilityRows(args),
 	];
 }

@@ -14,6 +14,7 @@
 | [context-budget.md](context-budget.md) | 发给 `agy` 的上下文预算：四条投递路径、字节上限与 8:2 掐头去尾策略 | 修改 prompt 组装、历史摘要或大消息截断时 |
 | [cache-and-usage.md](cache-and-usage.md) | ACP 缓存命中/上下文占用的计算口径、agy 1.5.x usage 形状、冷启动归因与每轮缓存日志 | 修改 usage 上报、上下文圆环、辅助调用工作区、切模型或换号策略时 |
 | [translation.md](translation.md) | 人话翻译：`/tsl` 入口、译文持久记录卡片、自动后处理与额度切号 | 修改翻译服务、`/tsl` 命令或客户端译文条时 |
+| [btw.md](btw.md) | 旁路提问：`/btw` 顶级命令、非阻塞只读问答流、工具步骤、追问线程与输入框上方 `BtwDock` 卡片 | 修改 `/btw` 服务、命令、HTTP 流路由或 `BtwDock` UI 时 |
 | [image.md](image.md) | 生图：`generate_image` 桥接、`dsh-agy-image` CLI、产物魔数/比例校验与失败分类 | 修改生图服务或 `dsh-agy-image` CLI 时 |
 | [subagent-activity.md](subagent-activity.md) | 子代理活动镜像：`transcript.jsonl` 增量 tail、去重与看门狗保活 | 修改 `SubagentTracker` 或子代理思考流展示时 |
 | [client-scanner.md](client-scanner.md) | 客户端 DOM 扫描预算、流式指纹可恢复性与全屏控制台浮层防闪屏契约 | 修改前端 DOM 扫描器、图片增强、样式或控制台弹层时 |

@@ -171,3 +171,18 @@ test('REGRESSION: scrolling menu/console has no GPU layer promotion traps on quo
 	release2()
 	assert.equal(isOverlaySuspended(), false)
 })
+
+test('REGRESSION: modal pins top edge, lets bottom adapt to tab height, and refreshes injected CSS', () => {
+	const backdrop = cssRule('.agy-modal-backdrop')
+	assert.match(backdrop, /align-items\s*:\s*flex-start/, 'modal must pin its top edge rather than centering vertically')
+
+	const panel = cssRule('.agy-modal-panel')
+	assert.match(panel, /max-height\s*:/, 'modal panel stays bounded by viewport height')
+	assert.equal(/(?:^|[;\s])height\s*:/.test(panel), false, 'modal bottom should adapt to active tab height instead of forcing fixed height')
+
+	const body = cssRule('.agy-modal-body')
+	assert.match(body, /scrollbar-gutter\s*:\s*stable/, 'scrollbar appearance across tabs must not shift header/tab layout horizontally')
+
+	const stylesSrc = readFileSync(join(root, 'src/client/styles.ts'), 'utf8')
+	assert.match(stylesSrc, /existing\.textContent\s*!==\s*GLOBAL_CSS/, 'hot-reloading the plugin must refresh the existing style node')
+})

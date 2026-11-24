@@ -16,6 +16,7 @@ export interface EcosystemPanelProps {
 	loadingAction: string | null;
 	setCfg: (key: string, value: unknown) => Promise<void>;
 	showToast: (text: string, type?: ToastType) => void;
+	defaultExpanded?: boolean;
 }
 
 function summaryBadge(key: string, text: string): unknown {
@@ -125,8 +126,8 @@ function renderCompactSummaryList(
 }
 
 export function EcosystemPanel(props: EcosystemPanelProps): unknown {
-	const { t, currentAgent, loadingAction, setCfg, showToast } = props;
-	const [expanded, setExpanded] = useState(false);
+	const { t, currentAgent, loadingAction, setCfg, showToast, defaultExpanded = false } = props;
+	const [expanded, setExpanded] = useState(defaultExpanded);
 	const [snap, setSnap] = useState<EcosystemSnapshot | null>(null);
 	const [syncing, setSyncing] = useState(false);
 	const [togglingPlugin, setTogglingPlugin] = useState<string | null>(null);

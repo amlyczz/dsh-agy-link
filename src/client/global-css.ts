@@ -356,9 +356,9 @@ body.dark,
 	   闪屏" root cause. The rgba dim below is stable and flicker-free. */
 	overscroll-behavior: contain;
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	justify-content: center;
-	padding: 16px;
+	padding: clamp(20px, 6vh, 48px) 16px 20px;
 	box-sizing: border-box;
 }
 /* While the console is open, freeze the conversation scroller behind it so
@@ -381,7 +381,7 @@ html.agy-modal-open body {
 	position: relative;
 	width: 100%;
 	max-width: 640px;
-	max-height: min(820px, calc(100vh - 48px));
+	max-height: min(820px, calc(100vh - 68px));
 	background: var(--agy-bg-panel);
 	border: 1px solid var(--agy-border-card);
 	border-radius: 14px;
@@ -399,6 +399,7 @@ html.agy-modal-open body {
 	   it worse (big fixed layer + shadow re-composited per frame). A 640px panel
 	   needs neither hint; plain overflow: hidden already clips it. */
 }
+.agy-modal-body { scrollbar-gutter: stable; }
 .agy-console {
 	max-width: 100%;
 	box-sizing: border-box;

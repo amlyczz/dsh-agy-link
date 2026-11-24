@@ -58,6 +58,22 @@ function resolveSideModel(deps: CommandDeps): string {
   return PREFERRED_GEMINI_FLASH
 }
 
+function resolveBtwModel(deps: CommandDeps): string {
+  const btwModel = (deps.cfg().btwModel ?? '').trim()
+  if (btwModel !== '') return btwModel
+  const explicit = deps.cfg().defaultModel.trim()
+  if (explicit !== '') return explicit
+  const cat = deps.catalog?.()?.get?.()
+  if (cat?.source === 'discovered' && cat.models.length > 0) {
+    if (cat.models.some((m) => m.id === PREFERRED_GEMINI_HYDROGEN)) return PREFERRED_GEMINI_HYDROGEN
+    if (cat.models.some((m) => m.id === PREFERRED_GEMINI_FLASH)) return PREFERRED_GEMINI_FLASH
+    const gemini = cat.models.find((m) => isGeminiFamilyModel(m.id))
+    if (gemini) return gemini.id
+    return cat.models[0]!.id
+  }
+  return PREFERRED_GEMINI_HYDROGEN
+}
+
 function readForkStore(file: string): Record<string, ForkCheckpoint[]> {
   try {
     if (!existsSync(file)) return {}
@@ -119,8 +135,8 @@ async function handleBtw(deps: CommandDeps, ctx: CommandContext): Promise<Comman
     mode: 'default',
     disableSlashCommands: true,
     cwd: workspaceRoot,
-    model: resolveSideModel(deps),
-    effort: 'low',
+    model: resolveBtwModel(deps),
+    effort: (deps.cfg().btwEffort ?? '').trim() || 'medium',
     ...(ctx.invocation?.signal ? { signal: ctx.invocation.signal } : {}),
   })
   if (!res.ok) return err(`Side question failed: ${res.error ?? 'unknown error'}`)

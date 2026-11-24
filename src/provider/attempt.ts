@@ -35,6 +35,8 @@ import { createAttemptSlot, type AttemptSlot } from './attempt-slot.ts'
 export { createAttemptSlot, type AttemptSlot } from './attempt-slot.ts'
 import { buildAgyEnv, pickProxy } from '../runtime/net/account-env.ts'
 import type { SpawnLimiter } from './spawn-limiter.ts'
+import { readFileSync } from 'node:fs'
+import { buildOrchestratorSettingsObject, isOrchestratorModel, mergeOrchestratorIntoAgySettings } from '../common/orchestrator.ts'
 import { resolveModelSlug } from '../host/models.ts'
 import type { RunTelemetry } from './finalize.ts'
 import { SubagentTracker } from '../features/subagent/tracker.ts'
@@ -244,6 +246,7 @@ export function buildSpawnArgs(
   }
   const activeModelForArgs = input.activeModel === '' ? input.cfg.defaultModel : input.activeModel
   const conversationId = input.persistBinding && input.binding !== undefined ? input.binding.conversationId : undefined
+  const effectiveAgySettings = resolveEffectiveAgySettings(input)
   const base = {
     prompt,
     model: activeModelForArgs,
@@ -256,7 +259,7 @@ export function buildSpawnArgs(
     addDirs: input.addDirs,
     sandbox: input.sandbox ?? input.cfg.sandbox,
     ...((input.agent ?? input.cfg.agent).trim() !== '' ? { agent: (input.agent ?? input.cfg.agent).trim() } : {}),
-    ...((input.agySettings ?? input.cfg.agySettings).trim() !== '' ? { agySettings: (input.agySettings ?? input.cfg.agySettings).trim() } : {}),
+    ...(effectiveAgySettings !== undefined ? { agySettings: effectiveAgySettings } : {}),
     ...(input.jsonSchema && input.jsonSchema.trim() !== '' ? { jsonSchema: input.jsonSchema.trim() } : {}),
   }
   const argsBase = buildAgyArgs(base)
@@ -266,6 +269,27 @@ export function buildSpawnArgs(
   const args = promptViaStdin ? buildAgyArgs({ ...base, promptViaStdin: true }) : argsBase
   const stdinPayload = promptViaStdin ? buildStreamInputLine(prompt) : undefined
   return { prompt, args, stdinPayload }
+}
+
+/**
+ * Resolve effective `--settings` for an attempt: merges configured Orchestrator
+ * planner/executor overrides when targeting an Orchestrator model.
+ */
+export function resolveEffectiveAgySettings(
+  input: Pick<AttemptInput, 'activeModel' | 'agySettings' | 'cfg'>,
+  effortsForModel?: (modelId: string) => readonly string[] | null | undefined,
+): string | undefined {
+  const baseSettings = (input.agySettings ?? input.cfg.agySettings).trim()
+  const activeModel = input.activeModel === '' ? input.cfg.defaultModel : input.activeModel
+  const effectiveModel = resolveModelSlug(activeModel)
+  const orchestrator = isOrchestratorModel(effectiveModel)
+    ? buildOrchestratorSettingsObject(input.cfg, effortsForModel)
+    : undefined
+  return mergeOrchestratorIntoAgySettings(
+    baseSettings === '' ? undefined : baseSettings,
+    orchestrator,
+    (filePath) => readFileSync(filePath, 'utf8'),
+  )
 }
 
 export interface AttemptRecorder {

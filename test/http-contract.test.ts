@@ -70,6 +70,12 @@ const EXPECTED_ROUTES: ReadonlyArray<readonly [kind: string, path: string]> = [
   ['exact', '/plugins/agy-link/ecosystem'],
   ['exact', '/plugins/agy-link/ecosystem/sync'],
   ['exact', '/plugins/agy-link/ecosystem/plugin'],
+  ['exact', '/plugins/agy-link/btw/state'],
+  ['exact', '/plugins/agy-link/btw/stream'],
+  ['exact', '/plugins/agy-link/btw/ask'],
+  ['exact', '/plugins/agy-link/btw/cancel'],
+  ['exact', '/plugins/agy-link/btw/dismiss'],
+  ['exact', '/plugins/agy-link/btw/clear'],
   ['exact', '/plugins/agy-link/lease'],
   ['exact', '/plugins/agy-link/lease/acquire'],
   ['exact', '/plugins/agy-link/lease/renew'],
@@ -104,6 +110,10 @@ const POST_ONLY_ROUTES = [
   '/plugins/agy-link/open',
   '/plugins/agy-link/ecosystem/sync',
   '/plugins/agy-link/ecosystem/plugin',
+  '/plugins/agy-link/btw/ask',
+  '/plugins/agy-link/btw/cancel',
+  '/plugins/agy-link/btw/dismiss',
+  '/plugins/agy-link/btw/clear',
 ] as const
 
 type FakeWebServer = {
@@ -159,6 +169,8 @@ const BASE_CONFIG: Record<string, unknown> = {
   imageModel: '',
   imageEffort: '',
   imageOutputDir: '',
+  btwModel: '',
+  btwEffort: 'low',
   proxyUrl: '',
   mcpConfigScope: 'global',
   mcpConfigPath: '',
@@ -446,6 +458,7 @@ test('/status answers 200 with the client-visible shape', async () => {
     'permissionMode', 'workspaceRoot', 'defaultModel', 'defaultEffort', 'askTool', 'auth', 'poolAuth',
     'autoWarmup', 'warmupModels', 'autoTranslate', 'translateModel', 'translateEffort',
     'translateTargetLanguage', 'imageModel', 'imageEffort', 'imageOutputDir',
+    'btwModel', 'btwEffort',
     'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog',
   ]) {
     assert.ok(key in body, 'status must keep field ' + key)
@@ -598,9 +611,9 @@ test('every POST-only route rejects GET/PUT/DELETE with 405 before touching serv
       assert.deepEqual(captured.json(), { error: 'POST only' }, path + ' ' + method)
     }
   }
-  // POST-only + 12 GET/method-agnostic routes + 4 lease routes (their own
+  // POST-only + 14 GET/method-agnostic routes (incl. /btw/state & /btw/stream) + 4 lease routes (their own
   // `{ok,code,error}` envelope; gated in test/lease-routes.test.ts).
-  assert.equal(POST_ONLY_ROUTES.length + 12 + 4, EXPECTED_ROUTES.length)
+  assert.equal(POST_ONLY_ROUTES.length + 14 + 4, EXPECTED_ROUTES.length)
 })
 
 test('GET-style routes do not gate on method (current contract, asserted verbatim)', async (t) => {
@@ -707,12 +720,14 @@ test('/config is POST-only and validates keys before writing', async () => {
 
   // issue #105: both visibility switches are settable through the same guarded
   // endpoint; neither is a picker event.
-  for (const [key, value] of [['showHeaderBadge', false], ['showTranslateAction', false], ['translateDisplay', 'replace']] as const) {
+  for (const [key, value] of [['showHeaderBadge', false], ['showTranslateAction', false], ['translateDisplay', 'replace'], ['btwModel', 'gemini-4-hydrogen'], ['btwEffort', 'medium']] as const) {
     const res = await invoke(route, fakeReq('POST', '/', { key, value }))
     assert.equal(res.status(), 200, key + ' must be an allowed config key')
     assert.deepEqual(res.json(), { ok: true, key, value })
     assert.deepEqual(writes.at(-1), [key, value])
   }
+  const badBtwEffort = await invoke(route, fakeReq('POST', '/', { key: 'btwEffort', value: 'turbo' }))
+  assert.equal(badBtwEffort.status(), 400)
   // issue #108/#109: toggling the pool-wide catalog CHANGES the visible model
   // set, so it must announce a picker update (otherwise the cached picker
   // keeps showing the old account's models until a restart).

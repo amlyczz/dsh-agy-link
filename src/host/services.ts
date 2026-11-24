@@ -41,6 +41,7 @@ import { buildCliQuotaDeps } from './quota-cli-deps.ts'
 import { ACP_REPORT_RECORD_TYPE, createSessionRecords } from './session-records.ts'
 import {
   Semaphore,
+  createBtwServiceForHost,
   findSessionLogFile,
   readSessionImage,
   resolveSessionGoal,
@@ -569,9 +570,17 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     log,
   })
 
+  const btw = createBtwServiceForHost({
+    cfg: getConfig, bin, pool, catalog, semaphore, log,
+    effortUnsupported: () => effortStore.read(),
+    onEffortUnsupported: (model) => effortStore.remember(model),
+    sessions: sessionsSvc,
+    activeRun: (id) => adapter.activeRun(id),
+  })
+
   return {
     getConfig, log, notifyPicker, bin, version, resolveVersion, status, store, pool, quota, warmup, semaphore,
-    catalog, auth, poolAuth, runs, adapter, acpPool, backgroundWakeup, ecosystem, imageService, translation, translationWorkers, setOverride,
+    catalog, auth, poolAuth, runs, adapter, acpPool, backgroundWakeup, ecosystem, imageService, translation, translationWorkers, btw, setOverride,
     readEffortUnsupported: effortStore.read,
     rememberEffortUnsupported: effortStore.remember,
     sessionsSvc, sessionAuto,

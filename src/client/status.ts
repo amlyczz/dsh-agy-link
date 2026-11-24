@@ -48,6 +48,10 @@ export interface StatusPayload {
 	workspaceRoot?: string;
 	defaultModel?: string;
 	defaultEffort?: string;
+	orchestratorPlannerModel?: string;
+	orchestratorPlannerEffort?: string;
+	orchestratorExecutorModel?: string;
+	orchestratorExecutorEffort?: string;
 	auth?: {
 		phase: string;
 		accountId?: string;
@@ -100,6 +104,8 @@ export interface StatusPayload {
 	imageModel?: string;
 	imageEffort?: string;
 	imageOutputDir?: string;
+	btwModel?: string;
+	btwEffort?: string;
 	bindings?: number;
 	/**
 	 * Host summary of the most recent run. Diagnostic only: no client surface
@@ -259,6 +265,7 @@ export function ensureStatusPolling(): void {
 	statusPollInterval = 3000;
 	void statusPollTick(false);
 	statusPollTimer = setInterval(() => { void statusPollTick(false); }, 3000);
+	(statusPollTimer as unknown as { unref?: () => void })?.unref?.();
 }
 
 export function stopStatusPollingIfIdle(): void {
@@ -268,6 +275,7 @@ export function stopStatusPollingIfIdle(): void {
 		clearInterval(statusPollTimer);
 		statusPollInterval = 15000;
 		statusPollTimer = setInterval(() => { void statusPollTick(false); }, 15000);
+		(statusPollTimer as unknown as { unref?: () => void })?.unref?.();
 	}
 }
 

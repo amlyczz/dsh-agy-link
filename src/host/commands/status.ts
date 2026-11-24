@@ -3,6 +3,7 @@ import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { classifyToolError } from '../recording.ts'
 import { ok, type AcpStatusView, type CommandDeps } from './shared.ts'
 import { cacheMetrics, formatCacheBucket } from '../cache-metrics.ts'
+import { buildOrchestratorSettingsObject } from '../../common/orchestrator.ts'
 
 /** One-line ACP pool summary, including drains and credential-slot recoveries. */
 function describeAcp(s: AcpStatusView): string {
@@ -35,6 +36,7 @@ export async function renderStatus(deps: CommandDeps): Promise<string> {
   const last = deps.lastRun()
   const errorKinds = last?.toolErrors.map(classifyToolError) ?? []
   const hasHeadlessPermissionDenial = errorKinds.includes('approval')
+  const orchestrator = buildOrchestratorSettingsObject(cfg)
   const lines = [
     '**dsh-agy-link status**',
     '- agy binary: ' + (bin ?? 'not found — install via https://antigravity.google/docs/cli/install'),
@@ -45,7 +47,10 @@ export async function renderStatus(deps: CommandDeps): Promise<string> {
     '- transport: ' + cfg.transport + (cfg.transport === 'acp' && deps.acpStatus ? describeAcp(deps.acpStatus()) : ''),
     '- background wakeup: ' + (cfg.backgroundWakeup ? 'on' : 'off') + (deps.backgroundStatus ? (() => { const w = deps.backgroundStatus(); return ` (watches: ${w.activeWatches}, timers: ${w.pendingTimers}, tasks: ${w.pendingTasks})`; })() : ''),
     ...(cfg.agent.trim() !== '' ? ['- agent: ' + cfg.agent.trim()] : []),
-    ...(cfg.agySettings.trim() !== '' ? ['- settings override: ' + cfg.agySettings.trim()] : ''),
+    ...(cfg.agySettings.trim() !== '' ? ['- settings override: ' + cfg.agySettings.trim()] : []),
+    ...(orchestrator
+      ? [`- orchestrator: planner=${orchestrator.planner ?? '(auto)'}, executor=${orchestrator.executor ?? '(auto)'}`]
+      : []),
     '- workspace: ' + (cfg.workspaceRoot !== '' ? cfg.workspaceRoot : '(session cwd / process cwd)'),
     '- default model: ' + (cfg.defaultModel === '' ? '(agy default)' : cfg.defaultModel),
     '- default effort: ' + (cfg.defaultEffort === '' ? '(model default)' : cfg.defaultEffort),

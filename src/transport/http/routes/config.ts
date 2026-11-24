@@ -1,3 +1,4 @@
+import { isEffortId } from '../../../common/reasoning.ts'
 import { MIN_WARMUP_INTERVAL_HOURS } from '../../../common/timeouts.ts'
 import type { HostServices } from '../../../host/services.ts'
 import { runRoute, sendJson, readBody, methodOf, type RawRes, type RouteRegistrar } from '../respond.ts'
@@ -69,8 +70,16 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'warmupMaxProbesPerRun must be a number between 0 and 200 (0 = unlimited)'
   }
-  if (key === 'agent') {
-    return typeof value === 'string' ? null : 'agent must be a string'
+  if (key === 'agent' || key === 'orchestratorPlannerModel' || key === 'orchestratorExecutorModel' || key === 'btwModel') {
+    return typeof value === 'string' ? null : `${key} must be a string`
+  }
+  if (key === 'orchestratorPlannerEffort' || key === 'orchestratorExecutorEffort' || key === 'btwEffort') {
+    if (typeof value !== 'string') return `${key} must be a string`
+    const trimmed = value.trim().toLowerCase()
+    if (trimmed !== '' && !isEffortId(trimmed)) {
+      return `${key} must be empty or a valid reasoning effort`
+    }
+    return null
   }
   if (key === 'quotaPollIntervalMs') {
     return typeof value === 'number' && Number.isFinite(value) && value >= 60_000
@@ -107,10 +116,13 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const allowed = [
           'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup',
           'cloakSystemPrompt', 'respectExternalSignIn', 'auxNeutralWorkspace',
-          'defaultModel', 'defaultEffort', 'askTool', 'workspaceRoot', 'hiddenModels',
+          'defaultModel', 'defaultEffort',
+          'orchestratorPlannerModel', 'orchestratorPlannerEffort', 'orchestratorExecutorModel', 'orchestratorExecutorEffort',
+          'askTool', 'workspaceRoot', 'hiddenModels',
           'autoWarmup', 'warmupModels', 'warmupWindows', 'warmupDailyTime', 'warmupTimezone', 'warmupIntervalHours', 'warmupMaxProbesPerRun',
           'autoTranslate', 'translateDisplay', 'translateModel', 'translateEffort', 'translateTargetLanguage', 'translateMaxChars', 'translateSkipSameModel', 'translateBindConversation', 'translateMinIntervalMs',
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
+          'btwModel', 'btwEffort',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',
           'quotaPollIntervalMs',
         ]

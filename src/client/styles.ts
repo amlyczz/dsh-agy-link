@@ -7,13 +7,16 @@ import { GLOBAL_CSS } from './global-css.ts';
 export function injectGlobalStyles(): void {
 	if (typeof document === 'undefined') return;
 	const styleId = 'dsh-agy-link-global-css';
-	if (document.getElementById(styleId) === null) {
-		const st = document.createElement('style');
-		st.id = styleId;
-		st.textContent = GLOBAL_CSS;
-		const host = document.head ?? document.documentElement;
-		if (host) host.appendChild(st);
+	const existing = document.getElementById(styleId);
+	if (existing !== null) {
+		if (existing.textContent !== GLOBAL_CSS) existing.textContent = GLOBAL_CSS;
+		return;
 	}
+	const st = document.createElement('style');
+	st.id = styleId;
+	st.textContent = GLOBAL_CSS;
+	const host = document.head ?? document.documentElement;
+	if (host) host.appendChild(st);
 }
 
 export const S: Record<string, Record<string, unknown>> = {
@@ -309,5 +312,89 @@ export const S: Record<string, Record<string, unknown>> = {
 		padding: '14px 16px',
 		marginBottom: '14px',
 		color: 'var(--agy-text-primary)',
+	},
+	tabBar: {
+		display: 'flex',
+		alignItems: 'center',
+		gap: '4px',
+		padding: '4px',
+		marginBottom: '12px',
+		background: 'var(--agy-seg-group-bg)',
+		border: '1px solid var(--agy-seg-group-border)',
+		borderRadius: '9px',
+		flexWrap: 'wrap',
+	},
+	tabBtn: {
+		flex: '1 1 auto',
+		display: 'inline-flex',
+		alignItems: 'center',
+		justifyContent: 'center',
+		gap: '6px',
+		padding: '6px 10px',
+		borderRadius: '6px',
+		border: 'none',
+		background: 'transparent',
+		color: 'var(--agy-text-secondary)',
+		cursor: 'pointer',
+		fontSize: '12px',
+		fontWeight: 600,
+		whiteSpace: 'nowrap',
+		transition: 'background 0.14s ease, color 0.14s ease',
+	},
+	tabBtnActive: {
+		flex: '1 1 auto',
+		display: 'inline-flex',
+		alignItems: 'center',
+		justifyContent: 'center',
+		gap: '6px',
+		padding: '6px 10px',
+		borderRadius: '6px',
+		border: 'none',
+		background: 'var(--agy-seg-btn-active-bg)',
+		color: 'var(--agy-seg-btn-active-text)',
+		cursor: 'pointer',
+		fontSize: '12px',
+		fontWeight: 700,
+		boxShadow: '0 2px 5px rgba(37, 99, 235, 0.28)',
+		whiteSpace: 'nowrap',
+		transition: 'background 0.14s ease, color 0.14s ease',
+	},
+	tabCount: {
+		display: 'inline-flex',
+		alignItems: 'center',
+		justifyContent: 'center',
+		minWidth: '17px',
+		height: '16px',
+		padding: '0 5px',
+		borderRadius: '999px',
+		fontSize: '10.5px',
+		fontWeight: 700,
+		background: 'rgba(127, 127, 127, 0.18)',
+		color: 'inherit',
+	},
+	sectionCard: {
+		background: 'var(--agy-bg-card)',
+		border: '1px solid var(--agy-border-card)',
+		borderRadius: '9px',
+		padding: '12px 14px',
+		boxShadow: 'var(--agy-shadow-card)',
+		display: 'flex',
+		flexDirection: 'column',
+		gap: '10px',
+	},
+	sectionCardHead: {
+		display: 'flex',
+		alignItems: 'center',
+		justifyContent: 'space-between',
+		gap: '8px',
+		paddingBottom: '7px',
+		borderBottom: '1px solid var(--agy-border-divider)',
+	},
+	sectionCardTitle: {
+		fontSize: '12.5px',
+		fontWeight: 700,
+		color: 'var(--agy-text-primary)',
+		letterSpacing: '0.01em',
+		whiteSpace: 'nowrap',
 	},
 };

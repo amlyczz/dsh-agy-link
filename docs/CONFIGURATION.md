@@ -144,6 +144,15 @@ classification and the retry-on-effort-refusal all come from the same code path 
 normal turn uses. `--json` returns the validated artifact (`path`, `mime`,
 `width`, `height`, `bytes`, `aspectRatio`, `accountId`) or a stable failure `code`.
 
+## Side questions (`/btw`)
+
+| Key | Environment | Default | Description |
+| --- | --- | --- | --- |
+| `btwModel` | `DSH_AGY_BTW_MODEL` | (empty) | Antigravity model for `/btw` read-only side questions; empty → `defaultModel` → Gemini 4 Hydrogen → Gemini Flash |
+| `btwEffort` | `DSH_AGY_BTW_EFFORT` | `medium` | Reasoning effort for `/btw` (`medium` balanced, `low` faster, `high` deeper) |
+
+Both are editable in **Settings → Antigravity** (in the `/btw Side Questions` card).
+
 ## Client UI visibility (issue #105)
 
 | Key | Environment | Default | Description |

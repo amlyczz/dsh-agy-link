@@ -15,11 +15,10 @@ import { PROVIDER_ID } from './common/types.ts'
 import { AUTH_FAST_REVERIFY_MS } from './common/pool-types.ts'
 import { defineAgyAskTool } from './host/ask-tool.ts'
 import { defineAgyImageTool } from './host/image-tool.ts'
-import { agyCommandDefinition } from './host/commands.ts'
+import { agyCommandDefinition, buildAgyCommandDeps } from './host/commands.ts'
+import { btwCommandDefinition } from './host/btw-command.ts'
 import { tslCommandDefinition } from './host/tsl-command.ts'
-import { writeDoctorReport } from './host/diagnostics.ts'
 import { defineAgyMirrorTool, MIRROR_TOOL_NAME } from './host/mirror-tool.ts'
-import { runAgyOnce } from './host/oneshot.ts'
 import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv } from './host/runner.ts'
 import { agyNotInstalledMessage } from './provider/call-context.ts'
@@ -41,7 +40,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   const services = createHostServices(ctx, entryConfig)
   const {
     getConfig, log, bin, version, store, pool, quota, warmup, catalog, auth, poolAuth, runs,
-    adapter, acpPool, ecosystem, imageService, translation, setOverride, notifyPicker, readEffortUnsupported, rememberEffortUnsupported,
+    adapter, acpPool, ecosystem, imageService, translation, btw, setOverride, notifyPicker, readEffortUnsupported, rememberEffortUnsupported,
     sessionsSvc, sessionAuto, mediaDir, bridgeState, webServerPort,
   } = services
 
@@ -193,50 +192,21 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   // settings directory; registering here would put an unconfigured
   // antigravity into the provider-add list and confuse the UI state.
 
-  // ---- /agy command ----
+  // ---- /agy, /tsl, and /btw commands ----
   ctx.commands.register(
-    agyCommandDefinition({
-      cfg: getConfig,
-      bin,
-      version,
-      auth: () => auth,
-      catalog: () => catalog,
-      store: () => store,
-      pool: () => pool,
-      poolAuth: () => poolAuth,
-      quota: () => quota,
-      lastRun: () => services.lastRun,
-      imageService: () => imageService,
-      acpStatus: () => acpPool.status(),
-      backgroundStatus: () => services.backgroundWakeup.status(),
-      ecosystem: () => ecosystem,
-      activeRun: (sessionId) => adapter.activeRun(sessionId),
-      runOnce: (req) => runAgyOnce({
-        cfg: getConfig,
-        bin,
-        pool: () => pool,
-        acquire: (sig) => services.semaphore.acquire(sig),
-        log,
-        effortUnsupported: () => readEffortUnsupported(),
-        onEffortUnsupported: (model) => rememberEffortUnsupported(model),
-      }, req),
-      setOverride,
-      notifyPicker,
-      sessions: () => sessionsSvc(),
-      goals: () => (ctx.get('goals') as GoalServiceLike | undefined) ?? ((ctx as unknown as { goals?: GoalServiceLike }).goals),
-      agents: () => (ctx.get('agents') as { get(id: unknown): unknown } | undefined) ?? ((ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents),
-      runDoctor: async () => {
-        return writeDoctorReport({
-          cfg: getConfig,
-          bin,
-          version,
-          catalog: () => catalog,
-          store: () => store,
-          recentLines: () => services.lastParser.recentLines,
-          effortUnsupported: () => adapter.effortUnsupportedModels(),
-          accounts: () => services.pool.getAccounts(),
-        })
-      },
+    agyCommandDefinition(
+      buildAgyCommandDeps({
+        services,
+        goals: () => (ctx.get('goals') as GoalServiceLike | undefined) ?? ((ctx as unknown as { goals?: GoalServiceLike }).goals),
+        agents: () => (ctx.get('agents') as { get(id: unknown): unknown } | undefined) ?? ((ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents),
+      }),
+    ),
+  )
+
+  ctx.commands.register(
+    btwCommandDefinition({
+      btw: () => btw,
+      isWebActive: () => webServerPort.current !== undefined,
     }),
   )
 
@@ -585,6 +555,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       bridgeDisposed = true
       services.backgroundWakeup.dispose()
       services.translationWorkers?.dispose()
+      services.btw.dispose()
       acpPool.dispose()
       auth.dispose()
       void poolAuth.cancel()

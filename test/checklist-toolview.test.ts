@@ -232,13 +232,22 @@ test('client toolview: update_steps renders auto-expanded Varun Mohan style chec
     block,
     t: zhT,
   }))
-  assert.ok(htmlZh.includes('data-kind="checklist"'))
-  assert.ok(htmlZh.includes('aria-expanded="true"'), 'checklist cards expand automatically like Antigravity Neon')
-  assert.ok(htmlZh.includes('检查清单'))
-  assert.ok(htmlZh.includes('12/12 步'))
-  assert.ok(htmlZh.includes('agy-tv-checklist-list'))
-  assert.ok(htmlZh.includes('data-status="done"'))
-  assert.ok(htmlZh.includes('Step 12'))
+  assert.equal(htmlZh, '', 'non-error checklist cards stay hidden in chat because todo/write projects to DSH TodoPanel')
+
+  // Error checklist cards still surface so failures are never swallowed silently
+  const errChecklistBlock = {
+    ...block,
+    isError: true,
+    content: [{ type: 'text', text: 'checklist update failed' }],
+  }
+  const htmlErrZh = renderToStaticMarkup(createElement(AgyMirrorToolView, {
+    callId: 'chk-err',
+    toolName: 'agy_tool',
+    block: errChecklistBlock,
+    t: zhT,
+  }))
+  assert.ok(htmlErrZh.includes('data-kind="checklist"'))
+  assert.ok(htmlErrZh.includes('data-state="err"'))
 
   // English localization + focus card
   resetTranslatorForTest()
@@ -252,7 +261,7 @@ test('client toolview: update_steps renders auto-expanded Varun Mohan style chec
     block,
     t: enT,
   }))
-  assert.ok(htmlEn.includes('12/12 steps'))
+  assert.equal(htmlEn, '')
 
   const focusBlock = {
     kind: 'tool-result',
@@ -334,11 +343,7 @@ test('code mode & tool-block: AgyRunCodeToolView renders checklist/focus from ma
     block: runCodeChecklist,
     t: enT,
   }))
-  assert.ok(htmlCodeChecklist.includes('data-kind="checklist"'))
-  assert.ok(htmlCodeChecklist.includes('aria-expanded="true"'))
-  assert.ok(htmlCodeChecklist.includes('1/2 steps'))
-  assert.ok(htmlCodeChecklist.includes('Audit config'))
-  assert.ok(htmlCodeChecklist.includes('Run unit tests'))
+  assert.equal(htmlCodeChecklist, '')
 
   const runCodeFocus = {
     kind: 'tool-result',

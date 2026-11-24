@@ -37,6 +37,14 @@ export interface PluginConfig {
   mediaMaxFileBytes: number
   defaultModel: string
   defaultEffort: string
+  /** Orchestrator Planner (upstream) model id (empty = agy default). */
+  orchestratorPlannerModel: string
+  /** Orchestrator Planner thinking effort id (empty = model/agy default). */
+  orchestratorPlannerEffort: string
+  /** Orchestrator Executor (downstream) model id (empty = agy default). */
+  orchestratorExecutorModel: string
+  /** Orchestrator Executor thinking effort id (empty = model/agy default). */
+  orchestratorExecutorEffort: string
   /** Watchdog for one full agy -p run. */
   timeoutMs: number
   /**
@@ -297,6 +305,11 @@ export interface PluginConfig {
   imageOutputDir: string
   /** Extra attempts after a retryable image failure (default 1). */
   imageRetries: number
+  // ---- `/btw` side questions ----
+  /** Model used for `/btw` side questions (`''` = auto: `defaultModel` → Gemini 4 Hydrogen → Gemini Flash). */
+  btwModel: string
+  /** Reasoning effort for `/btw` side questions (default `'medium'` for balanced quality and speed). */
+  btwEffort: string
   /**
    * Wake idle DSH sessions across turns when an agy `schedule` timer,
    * detached background task/subagent, or persistent ACP update finishes
@@ -344,6 +357,10 @@ export function defaultConfig(): PluginConfig {
     // Explicit 'high' (not ''): effort-capable models default to the highest
     // agy offers, and the per-model choice now lives in DSH's model menu.
     defaultEffort: 'high',
+    orchestratorPlannerModel: '',
+    orchestratorPlannerEffort: '',
+    orchestratorExecutorModel: '',
+    orchestratorExecutorEffort: '',
     timeoutMs: 600_000,
     longToolIdleMinutes: 240,
     maxTurnMinutes: 0,
@@ -450,6 +467,8 @@ export function defaultConfig(): PluginConfig {
     imageMaxBytes: 20 * 1024 * 1024,
     imageOutputDir: '',
     imageRetries: 1,
+    btwModel: '',
+    btwEffort: 'medium',
     backgroundWakeup: false,
     backgroundWakeupTtlMinutes: 30,
     backgroundWakeupMaxPerSession: 12,

@@ -547,13 +547,7 @@ export class PoolAdmin {
     this.deps.persist()
   }
 
-  /**
-   * Move the active pointer past `fromId` for one family WITHOUT cooling the
-   * account down, and return the account the next run should use. Used when a
-   * run produced no output at all (silent timeout): the retry must try another
-   * account, but a healthy account should not be punished with a cooldown
-   * because the network blipped.
-   */
+  /** Move the active pointer past `fromId` without setting cooldown (used on silent timeout). */
   advanceAccount(fromId: string, family: ModelFamily, model?: string): string | null {
     const data = this.deps.getData()
     const now = Date.now()

@@ -9,6 +9,12 @@ import { Err, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import type { MediaRefLike } from './media.ts'
 import type { TranslationRunnerRequest, TranslationRunnerResult } from '../features/translation/types.ts'
 import type { TranslationWorkerPool } from '../features/translation/worker.ts'
+import { BtwService, type BtwContextSnapshot, type BtwOneShotRequest, type BtwOneShotResult } from '../features/btw/service.ts'
+import { extractLiveRunProgress, extractRecentHistory, type SessionLike } from './commands/slash-context.ts'
+import { runAgyOnce } from './oneshot.ts'
+import type { AccountPoolManager } from './pool.ts'
+import type { ModelCatalog } from './models.ts'
+import type { CommandDeps } from './commands/shared.ts'
 
 /** Cross-session concurrency limiter (ADR-12). max() <= 0 means unlimited. */
 export class Semaphore {
@@ -351,3 +357,55 @@ export async function runTranslationStream(
     clearTimeout(timer)
   }
 }
+
+export function resolveBtwContextSnapshot(opts: {
+  cfg: () => PluginConfig
+  sessions: () => { get(id: unknown): unknown } | undefined
+  activeRun: CommandDeps['activeRun']
+  sessionId: string
+}): BtwContextSnapshot {
+  const session = opts.sessions()?.get(opts.sessionId) as SessionLike | undefined
+  const cwd = typeof session?.header?.cwd === 'string' && session.header.cwd.trim() !== ''
+    ? session.header.cwd.trim()
+    : (opts.cfg().workspaceRoot.trim() || process.cwd())
+  return {
+    workspaceRoot: cwd,
+    historyText: extractRecentHistory(session),
+    liveProgress: extractLiveRunProgress({ cfg: opts.cfg, activeRun: opts.activeRun } as CommandDeps, opts.sessionId),
+  }
+}
+
+export function createBtwServiceForHost(opts: {
+  cfg: () => PluginConfig
+  bin: () => string | null
+  pool: AccountPoolManager
+  catalog: ModelCatalog
+  semaphore: Semaphore
+  log: (msg: string) => void
+  effortUnsupported: () => readonly string[]
+  onEffortUnsupported: (model: string) => void
+  sessions: () => { get(id: unknown): unknown } | undefined
+  activeRun: CommandDeps['activeRun']
+}): BtwService {
+  return new BtwService({
+    cfg: opts.cfg,
+    catalog: () => opts.catalog,
+    resolveContext: (sessionId) => resolveBtwContextSnapshot({
+      cfg: opts.cfg,
+      sessions: opts.sessions,
+      activeRun: opts.activeRun,
+      sessionId,
+    }),
+    runOnce: (req) => runAgyOnce({
+      cfg: opts.cfg,
+      bin: opts.bin,
+      pool: () => opts.pool,
+      acquire: (sig) => opts.semaphore.acquire(sig),
+      log: opts.log,
+      effortUnsupported: opts.effortUnsupported,
+      onEffortUnsupported: opts.onEffortUnsupported,
+    }, req),
+  })
+}
+
+export type { BtwOneShotRequest, BtwOneShotResult }

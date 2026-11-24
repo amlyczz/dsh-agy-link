@@ -342,14 +342,18 @@ function quotaSupportsModel(
     return true
   }
   // CLI-synthesized orchestrator slugs (`gemini-pro-orchestrator-neon`,
-  // `gemini-pro-orchestrator-g1-pro`) never appear in Google's REST quota
-  // breakdown (`fetchAvailableModels`), which only returns their backing
-  // models (`gemini-4-neon-*`, Argon). Infer support from that backing
-  // evidence so Pro/Ultra accounts are never falsely rejected before per-account
+  // `gemini-pro-orchestrator`, `gemini-pro-orchestrator-argon` / `-g1-pro`)
+  // never appear in Google's REST quota breakdown (`fetchAvailableModels`),
+  // which only returns their backing models (`gemini-4-neon-*`,
+  // `gemini-4-carbon-*`, Argon). Infer support from that backing evidence so
+  // Pro/Ultra accounts are never falsely rejected before per-account
   // `agy models` discovery finishes or when a cached catalog predates a rollout.
   const lower = clean.toLowerCase()
   if (lower === 'gemini-pro-orchestrator-neon') {
     return Array.isArray(familyQuotaModels) && familyQuotaModels.some((m) => modelMatches('gemini-4-neon', m.modelId))
+  }
+  if (lower === 'gemini-pro-orchestrator' || lower === 'gemini-pro-orchestrator-carbon') {
+    return Array.isArray(familyQuotaModels) && familyQuotaModels.some((m) => modelMatches('gemini-4-carbon', m.modelId))
   }
   if (lower === 'gemini-pro-orchestrator-g1-pro' || lower === 'gemini-pro-orchestrator-argon') {
     return accountHasArgon(acc, pool, catalog)

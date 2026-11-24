@@ -17,6 +17,9 @@ export function AgyMirrorToolView(props: AgyToolViewProps): unknown {
 	const transientMirrorMiss = isTransientMirrorToolNotFound(block);
 	const err = !transientMirrorMiss && isError(block);
 	const baseModel = mirrorCardModel(block, cwd, home);
+	if (baseModel.kind === 'checklist' && !err) {
+		return null;
+	}
 	const model = transientMirrorMiss
 		? { ...baseModel, output: tr(t, 'tv.mirrorReloadSkipped', MIRROR_TOOL_RELOAD_NOTICE) }
 		: baseModel;

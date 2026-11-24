@@ -22,9 +22,13 @@ import {
 import { buildAgyEnv } from '../runtime/net/account-env.ts'
 import { parseEffortUnsupported, sameModelId } from '../provider/effort-policy.ts'
 import { settleRunFailure, settleSlotUnavailable } from './run-settlement.ts'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { buildOrchestratorSettingsObject, isOrchestratorModel, mergeOrchestratorIntoAgySettings } from '../common/orchestrator.ts'
+import { resolveModelSlug } from './models.ts'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
+import type { AgyEvent } from '../common/types.ts'
 
 /** Per-file inline cap; larger files are truncated. */
 const INLINE_MAX_BYTES = 256 * 1024
@@ -152,8 +156,10 @@ async function runSingleOneShotAttempt(opts: {
   family: ModelFamily
   model?: string
   canRetry: boolean
+  onEvent?: (ev: AgyEvent) => void
+  onAttemptStart?: () => void
 }): Promise<SingleOneShotAttemptOutcome> {
-  const { deps, cfg, bin, baseArgs, prompt, conversationId: reqCid, cwd, hasSchema, effort, timeoutMs, signal, pool, account, family, model, canRetry } = opts
+  const { deps, cfg, bin, baseArgs, prompt, conversationId: reqCid, cwd, hasSchema, effort, timeoutMs, signal, pool, account, family, model, canRetry, onEvent, onAttemptStart } = opts
   const accountTag = account ? { accountId: account.id } : {}
   const args = [...baseArgs]
   if (reqCid && reqCid.trim() !== '') args.push('--conversation', reqCid.trim())
@@ -225,6 +231,7 @@ async function runSingleOneShotAttempt(opts: {
       }
     }
     const handleEv = (ev: ReturnType<StreamJsonParser['feed']>[number]) => {
+      onEvent?.(ev)
       if (ev.kind === 'init' && ev.conversationId) conversationId = ev.conversationId
       if (ev.kind === 'step' && ev.stepKind === 'text') appendTextEv(ev.text, ev.fragment)
       if (ev.kind === 'step' && ev.tool?.error && toolErrors.length < 4) {
@@ -244,6 +251,7 @@ async function runSingleOneShotAttempt(opts: {
       }
     }
     const effectiveCwd = cwd && cwd.trim() !== '' ? cwd.trim() : (cfg.workspaceRoot !== '' ? cfg.workspaceRoot : undefined)
+    onAttemptStart?.()
     const proc = startAgyProcess({
       bin,
       args,
@@ -340,6 +348,8 @@ export async function runAgyOnce(
     sandbox?: boolean
     agySettings?: string
     conversationId?: string
+    onEvent?: (ev: AgyEvent) => void
+    onAttemptStart?: () => void
   },
 ): Promise<OneShotResult> {
   const cfg = deps.cfg()
@@ -357,9 +367,18 @@ export async function runAgyOnce(
   if (req.sandbox ?? cfg.sandbox) baseArgs.push('--sandbox')
   const agent = (req.agent ?? cfg.agent).trim()
   if (agent !== '') baseArgs.push('--agent', agent)
-  const agySettings = (req.agySettings ?? cfg.agySettings).trim()
-  if (agySettings !== '') baseArgs.push('--settings', agySettings)
   const effectiveModel = (req.model ?? cfg.defaultModel ?? '').trim()
+  const resolvedModel = effectiveModel !== '' ? resolveModelSlug(effectiveModel) : ''
+  const orchestrator = isOrchestratorModel(resolvedModel)
+    ? buildOrchestratorSettingsObject(cfg)
+    : undefined
+  const rawAgySettings = (req.agySettings ?? cfg.agySettings).trim()
+  const agySettings = mergeOrchestratorIntoAgySettings(
+    rawAgySettings === '' ? undefined : rawAgySettings,
+    orchestrator,
+    (filePath) => readFileSync(filePath, 'utf8'),
+  )
+  if (agySettings !== undefined) baseArgs.push('--settings', agySettings)
   if (effectiveModel !== '') baseArgs.push('--model', effectiveModel)
 
   let activeEffort = (req.effort ?? '').trim()
@@ -431,6 +450,8 @@ export async function runAgyOnce(
         family,
         ...(effectiveModel !== '' ? { model: effectiveModel } : {}),
         canRetry: attempt + 1 < maxAttempts,
+        ...(req.onEvent !== undefined ? { onEvent: req.onEvent } : {}),
+        ...(req.onAttemptStart !== undefined ? { onAttemptStart: req.onAttemptStart } : {}),
       })
       if (out.kind === 'effort-refused') {
         totalDurationMs += out.durationMs

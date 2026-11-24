@@ -57,15 +57,15 @@ test('parseModelsOutput handles dotted current-gen slugs', () => {
   assert.deepEqual(base?.efforts, ['medium'])
 })
 
-// Verbatim `agy models` output (agy 1.5.7, macOS). This is the ground truth
-// for the reported bug: DSH listed a bogus `gemini-4-hydrogen-xhigh` MODEL
-// because the fold did not know `xhigh`, while agy's own picker shows it as
-// the "Extra" level of Gemini 4 Hydrogen.
+// Verbatim `agy models` output (agy 1.5.15, macOS, 2026-11-24).
 const AGY_1515_MODELS = [
   'gemini-4-neon-high\tGemini 4 Neon (High)',
   'gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)',
   'gemini-4-neon-medium\tGemini 4 Neon (Medium)',
   'gemini-4-neon-low\tGemini 4 Neon (Low)',
+  'gemini-4-carbon-medium\tGemini 4 Carbon (Medium)',
+  'gemini-4-carbon-high\tGemini 4 Carbon (High)',
+  'gemini-4-carbon-low\tGemini 4 Carbon (Low)',
   'gemini-4-argon-medium\tGemini 4 Argon (Medium)',
   'gemini-4-argon-high\tGemini 4 Argon (High)',
   'gemini-4-argon-low\tGemini 4 Argon (Low)',
@@ -74,7 +74,8 @@ const AGY_1515_MODELS = [
   'gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)',
   'gemini-4-hydrogen-low\tGemini 4 Hydrogen (Low)',
   'gemini-pro-orchestrator-neon\tOrchestrator (Neon)',
-  'gemini-pro-orchestrator-g1-pro\tOrchestrator (Argon)',
+  'gemini-pro-orchestrator\tOrchestrator (Carbon)',
+  'gemini-pro-orchestrator-argon\tOrchestrator (Argon)',
   'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
   'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
   'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
@@ -93,10 +94,12 @@ test('REGRESSION: the DSH catalog is agy 1.5.15 folded — no effort leaks in as
     folded.map((m) => [m.id, m.efforts]),
     [
       ['gemini-4-neon', ['low', 'medium', 'high', 'xhigh']],
+      ['gemini-4-carbon', ['low', 'medium', 'high']],
       ['gemini-4-argon', ['low', 'medium', 'high']],
       ['gemini-4-hydrogen', ['low', 'medium', 'high', 'xhigh']],
       ['gemini-pro-orchestrator-neon', null],
-      ['gemini-pro-orchestrator-g1-pro', null],
+      ['gemini-pro-orchestrator', null],
+      ['gemini-pro-orchestrator-argon', null],
       ['gemini-3.8-flash', ['low', 'medium', 'high']],
       ['claude-opus-5-5', ['low', 'medium', 'high']],
       ['claude-sonnet-5-5', ['low', 'medium', 'high']],
@@ -124,29 +127,32 @@ test('fallback catalog mirrors agy 1.5.15 exactly — nothing agy does not list'
   // Ground truth: `agy models` on 1.5.15, in its own order.
   assert.deepEqual(ids, [
     'gemini-4-neon',
+    'gemini-4-carbon',
     'gemini-4-argon',
     'gemini-4-hydrogen',
     'gemini-pro-orchestrator-neon',
-    'gemini-pro-orchestrator-g1-pro',
+    'gemini-pro-orchestrator',
+    'gemini-pro-orchestrator-argon',
     'gemini-3.8-flash',
     'claude-opus-5-5',
     'claude-sonnet-5-5',
     'gpt-oss-120b-medium',
   ])
-  // Retired / unavailable upstream: offering them here is exactly how DSH ends
+  // Retired upstream: offering them here is exactly how DSH ends
   // up listing models agy's own picker does not have.
-  assert.equal(ids.includes('gemini-4-carbon'), false, 'Carbon is "Unavailable" in agy')
   assert.equal(ids.includes('claude-opus-4-6-thinking'), false, 'Claude 4.6 line is retired')
   assert.equal(ids.includes('claude-sonnet-4-6'), false, 'Claude 4.6 line is retired')
   assert.equal(ids.includes('gemini-3.7-flash'), false, 'retired 3.7 flash is gone')
 
   const byId = (id: string) => cat.find((e) => e.id === id)
   assert.deepEqual(byId('gemini-3.8-flash')?.efforts, ['low', 'medium', 'high'])
+  assert.deepEqual(byId('gemini-4-carbon')?.efforts, ['low', 'medium', 'high'])
   assert.deepEqual(byId('gemini-4-argon')?.efforts, ['low', 'medium', 'high'])
   // agy 1.5.7 added `xhigh` to the Hydrogen family (its picker labels it "Extra").
   assert.deepEqual(byId('gemini-4-hydrogen')?.efforts, ['low', 'medium', 'high', 'xhigh'])
   // Orchestrator is a single fixed slug — no --effort.
-  assert.equal(byId('gemini-pro-orchestrator-g1-pro')?.efforts, null)
+  assert.equal(byId('gemini-pro-orchestrator')?.efforts, null)
+  assert.equal(byId('gemini-pro-orchestrator-argon')?.efforts, null)
   // Verified on agy 1.5.3: a base Claude 5.5 slug accepts --effort, while a
   // tiered slug conflicts with it, so the catalog advertises base + tiers.
   assert.deepEqual(byId('claude-sonnet-5-5')?.efforts, ['low', 'medium', 'high'])
@@ -251,7 +257,7 @@ test('buildFallbackCatalog carries configurable efforts', () => {
   assert.deepEqual(flash38?.efforts, ['low', 'medium', 'high'])
   const hydrogen = cat.find((e) => e.id === 'gemini-4-hydrogen')
   assert.deepEqual(hydrogen?.efforts, ['low', 'medium', 'high', 'xhigh'])
-  const orchestrator = cat.find((e) => e.id === 'gemini-pro-orchestrator-g1-pro')
+  const orchestrator = cat.find((e) => e.id === 'gemini-pro-orchestrator-argon')
   assert.equal(orchestrator?.efforts, null)
   const gpt = cat.find((e) => e.id === 'gpt-oss-120b-medium')
   assert.equal(gpt?.efforts, null)

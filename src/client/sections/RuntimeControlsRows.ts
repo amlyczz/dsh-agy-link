@@ -14,6 +14,10 @@ export interface RuntimeControlsProps {
 	status: StatusPayload;
 	loadingAction: string | null;
 	setCfg: (key: string, value: unknown) => Promise<void>;
+	exclude?: {
+		imageTool?: boolean;
+		syncCustomizations?: boolean;
+	};
 }
 
 function boolRow(opts: {
@@ -149,8 +153,32 @@ function renderAgentRow(props: RuntimeControlsProps & {
 	});
 }
 
+export function renderImageToolRow(props: RuntimeControlsProps): unknown {
+	return boolRow({
+		t: props.t,
+		title: props.t('config.imageTool'),
+		desc: props.t('config.imageToolDesc'),
+		cfgKey: 'imageTool',
+		value: props.status.imageTool !== false,
+		loadingAction: props.loadingAction,
+		setCfg: props.setCfg,
+	});
+}
+
+export function renderSyncCustomizationsRow(props: RuntimeControlsProps): unknown {
+	return boolRow({
+		t: props.t,
+		title: props.t('config.syncCustomizations'),
+		desc: props.t('config.syncCustomizationsDesc'),
+		cfgKey: 'syncAccountCustomizations',
+		value: props.status.syncAccountCustomizations !== false,
+		loadingAction: props.loadingAction,
+		setCfg: props.setCfg,
+	});
+}
+
 export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
-	const { t, status, loadingAction, setCfg } = props;
+	const { t, status, loadingAction, setCfg, exclude } = props;
 	const [agentDraft, setAgentDraft] = useState(status.agent ?? '');
 	useEffect(() => {
 		setAgentDraft(status.agent ?? '');
@@ -168,24 +196,8 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			setCfg,
 		}),
 		renderTransportRow(props),
-		boolRow({
-			t,
-			title: t('config.imageTool'),
-			desc: t('config.imageToolDesc'),
-			cfgKey: 'imageTool',
-			value: status.imageTool !== false,
-			loadingAction,
-			setCfg,
-		}),
-		boolRow({
-			t,
-			title: t('config.syncCustomizations'),
-			desc: t('config.syncCustomizationsDesc'),
-			cfgKey: 'syncAccountCustomizations',
-			value: status.syncAccountCustomizations !== false,
-			loadingAction,
-			setCfg,
-		}),
+		exclude?.imageTool ? null : renderImageToolRow(props),
+		exclude?.syncCustomizations ? null : renderSyncCustomizationsRow(props),
 		// Opt-in: an absent field means "off", so the switch must not claim to be
 		// on when the host never reported a value.
 		boolRow({

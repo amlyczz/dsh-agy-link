@@ -15,6 +15,7 @@ import { installAgentEmbedRenderer } from './embed.ts';
 import { installDecisionChips } from './decisions.ts';
 import { installTranslationUi } from './translate.ts';
 import { installAcpCards } from './acp-notice.ts';
+import { installBtwUi } from './btw.ts';
 import { installCompactionCard } from './compaction.ts';
 import { ensureScrollListener, disposeScrollListener, setOverlaySuspended } from './scroll-guard.ts';
 import { installSettingsNavIcon } from './icons.ts';
@@ -238,7 +239,14 @@ export function apply(ctx: ClientContext): void {
 			} catch (e) {
 				console.warn('[dsh-agy-link] ACP cards unavailable:', e);
 			}
+			let disposeBtw = () => {};
+			try {
+				disposeBtw = installBtwUi(ctx as never, NS);
+			} catch (e) {
+				console.warn('[dsh-agy-link] btw UI unavailable:', e);
+			}
 			return () => {
+				disposeBtw();
 				disposeAcp();
 				dispose();
 			};

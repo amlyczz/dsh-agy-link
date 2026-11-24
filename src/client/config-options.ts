@@ -10,6 +10,7 @@
 //     selectable, otherwise the control would silently misreport the state.
 
 import { isGeminiFamilyModel } from '../common/model-lineup.ts'
+import { isOrchestratorModel } from '../common/orchestrator.ts'
 
 export interface SelectOption {
 	value: string
@@ -88,6 +89,30 @@ export function translateModelOptions(
  */
 export function geminiCatalogModels(models: ReadonlyArray<CatalogModelLike>): CatalogModelLike[] {
 	return models.filter((model) => typeof model?.id === 'string' && isGeminiFamilyModel(model.id))
+}
+
+/** Models eligible as Orchestrator Planner or Executor (excludes orchestrator role slugs themselves). */
+export function orchestratorRoleModels(models: ReadonlyArray<CatalogModelLike>): CatalogModelLike[] {
+	return models.filter((model) => typeof model?.id === 'string' && !isOrchestratorModel(model.id))
+}
+
+/**
+ * Effort options for an Orchestrator Planner/Executor slot:
+ * only `Auto` is valid until a concrete model is selected.
+ */
+export function orchestratorEffortOptions(
+	current: string,
+	labels: EffortLabels,
+	modelId: string,
+	models: ReadonlyArray<CatalogModelLike>,
+): SelectOption[] {
+	if (modelId.trim() === '') {
+		const cur = current.trim().toLowerCase()
+		const opts: SelectOption[] = [{ value: '', label: labels.auto }]
+		if (cur !== '') opts.push({ value: cur, label: labels.level(cur) })
+		return opts
+	}
+	return translateEffortOptions(current, labels, modelId, models)
 }
 
 /**

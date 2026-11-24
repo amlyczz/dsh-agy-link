@@ -208,7 +208,8 @@ test('slash-bridge handles btw, fork/restore/list, grill-me, learn --apply with 
   assert.equal(runs.at(-1)?.mode, 'default')
   assert.equal(runs.at(-1)?.disableSlashCommands, true)
   assert.equal(runs.at(-1)?.cwd, wsDir)
-  assert.equal(runs.at(-1)?.model, 'gemini-3.8-flash')
+  assert.equal(runs.at(-1)?.model, 'gemini-4-hydrogen')
+  assert.equal(runs.at(-1)?.effort, 'medium')
   assert.match(String(runs.at(-1)?.prompt), /Build module A/)
 
   // fork empty -> saves checkpoint + drops binding; fork with prompt -> creates branch checkpoint; list & restore

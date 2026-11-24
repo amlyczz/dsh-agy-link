@@ -1,11 +1,10 @@
-// Antigravity settings console: header, OAuth form, account pool, and runtime controls.
+// Antigravity settings console: header, OAuth form, and tabbed module router.
 
 import { win, WRITE_TIMEOUT_MS } from '../api.ts';
 import type { AccountPoolData } from '../../common/pool-types.ts';
 import type { QuotaFamily } from '../../common/quota-bench.ts';
-import { catalogEfforts, geminiCatalogModels, translateEffortOptions, translateModelOptions, type EffortLabels } from '../config-options.ts';
+import { type EffortLabels } from '../config-options.ts';
 import { effortLabel } from '../../common/reasoning.ts';
-import type { CatalogModelView } from '../status.ts';
 import { useAgyTranslation, type LocaleLike, type Translator } from '../hooks/useTranslation.ts';
 import { useAccounts } from '../hooks/useAccounts.ts';
 import { useAuthFlow } from '../hooks/useAuthFlow.ts';
@@ -16,20 +15,16 @@ import { acquireOverlaySuspend } from '../scroll-guard.ts';
 import { useAgyStatus } from '../status.ts';
 import { S } from '../styles.ts';
 import { Button } from '../ui/Button.ts';
-import { Row, rowCaption } from '../ui/Row.ts';
-import { segGroup } from '../ui/SegGroup.ts';
-import { Select } from '../ui/Select.ts';
 import { Spinner } from '../ui/Spinner.ts';
 import { Toast, type ToastNotice, type ToastType } from '../ui/Toast.ts';
-import { AccountsPanel } from './AccountsPanel.ts';
-import { EcosystemPanel } from './EcosystemPanel.ts';
-import { ModelsPanel } from './ModelsPanel.ts';
-import { RuntimeControlsSection } from './RuntimeControlsRows.ts';
-import { IMAGE_CLI_SAMPLE, renderImageRow } from './ImageSettingsRows.ts';
-import { WarmupStatusBar } from './WarmupStatusBar.ts';
-import { warmupConfigRows } from './WarmupConfigRows.ts';
-import { renderVisibilityRows } from './VisibilityRows.ts';
-import { renderPoolWideCatalogRow } from './CatalogRows.ts';
+import { renderConsoleTabContent, type ConsoleTabId } from './ConsoleTabs.ts';
+import { IMAGE_CLI_SAMPLE } from './ImageSettingsRows.ts';
+
+let rememberedConsoleTab: ConsoleTabId = 'accounts';
+
+export function resetConsoleTabForTest(): void {
+	rememberedConsoleTab = 'accounts';
+}
 
 /** Bound any action busy flag so a stalled fetch never leaves a spinner stuck. */
 function useBusyAction(): [string | null, (value: string | null) => void] {
@@ -52,6 +47,30 @@ function useBusyAction(): [string | null, (value: string | null) => void] {
 /** Slightly longer than a bounded write, so a normal failure still shows its own toast. */
 const BUSY_TIMEOUT_MS = WRITE_TIMEOUT_MS + 5_000;
 
+function useConsoleToast(): {
+	toast: ToastNotice | null;
+	clearToast: () => void;
+	showToast: (text: string, type?: ToastType) => void;
+} {
+	const [toast, setToast] = useState<ToastNotice | null>(null);
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	useEffect(() => () => {
+		// Unmount must not leave a pending timer writing state into a dead
+		// component; a second same-text toast also used to be cleared early
+		// by the FIRST toast's leftover timer.
+		if (timerRef.current !== null) clearTimeout(timerRef.current);
+	}, []);
+	const showToast = (text: string, type: ToastType = 'info') => {
+		setToast({ text, type, id: Date.now() });
+		if (timerRef.current !== null) clearTimeout(timerRef.current);
+		timerRef.current = setTimeout(() => {
+			timerRef.current = null;
+			setToast((prev) => (prev !== null && prev.text === text ? null : prev));
+		}, 6000);
+	};
+	return { toast, clearToast: () => setToast(null), showToast };
+}
+
 export interface SettingsSectionProps {
 	isModal?: boolean;
 	onClose?: () => void;
@@ -61,23 +80,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 	return function AgySettingsSection(_props?: SettingsSectionProps): unknown {
 		const t = useAgyTranslation(locale);
 		const { status, refresh } = useAgyStatus();
-
-		const [toast, setToast] = useState<ToastNotice | null>(null);
-		const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-		useEffect(() => () => {
-			// Unmount must not leave a pending timer writing state into a dead
-			// component; a second same-text toast also used to be cleared early
-			// by the FIRST toast's leftover timer.
-			if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
-		}, []);
-		const showToast = (text: string, type: ToastType = 'info') => {
-			setToast({ text, type, id: Date.now() });
-			if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
-			toastTimerRef.current = setTimeout(() => {
-				toastTimerRef.current = null;
-				setToast((prev) => (prev !== null && prev.text === text ? null : prev));
-			}, 6000);
-		};
+		const { toast, clearToast, showToast } = useConsoleToast();
 
 		const [loadingAction, setLoadingAction] = useBusyAction();
 		const [proxyInputs, setProxyInputs] = useState<Record<string, string>>({});
@@ -86,17 +89,21 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		const [editingAliasId, setEditingAliasId] = useState<string | null>(null);
 		const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
 		const [optimisticActiveByFamily, setOptimisticActiveByFamily] = useState<Partial<Record<QuotaFamily, string>>>({});
+		const [activeTab, setActiveTabState] = useState<ConsoleTabId>(() => rememberedConsoleTab);
 
-		useEffect(() => {
-			return acquireOverlaySuspend();
-		}, []);
+		const selectTab = (tab: ConsoleTabId): void => {
+			rememberedConsoleTab = tab;
+			setActiveTabState(tab);
+		};
+
+		useEffect(() => acquireOverlaySuspend(), []);
 
 		// Cooldown expiry and quota countdowns are Date.now()-derived while the
-		// payload itself does NOT change when they lapse — without a wall-clock
-		// tick the "cooldown" banner and the minutes-left froze forever.
+		// payload itself does NOT change when they lapse — tick every 30s.
 		const [, setTimeTick] = useState(0);
 		useEffect(() => {
 			const timer = setInterval(() => setTimeTick((n) => n + 1), 30_000);
+			(timer as unknown as { unref?: () => void })?.unref?.();
 			return () => clearInterval(timer);
 		}, []);
 
@@ -118,20 +125,11 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				.catch(() => showToast(t('config.imageCopyFailed'), 'warn'));
 		};
 
-		const toggleExpand = (accId: string) => {
-			setExpandedModels((prev) => ({ ...prev, [accId]: !prev[accId] }));
-		};
-
+		const toggleExpand = (accId: string) => setExpandedModels((prev) => ({ ...prev, [accId]: !prev[accId] }));
 		const authPhase = status?.auth?.phase ?? 'unknown';
 		const pool = status?.pool;
 		const catalogModels = status?.catalogModels ?? [];
-		const hiddenModelSet = new Set(status?.hiddenModels ?? []);
-		const selectedModelSet = new Set(status?.selectedModels ?? []);
 		const accounts = pool?.accounts ?? [];
-		const isAuthed = authPhase === 'ok' || accounts.length > 0;
-		const isBusy = loadingAction !== null;
-		const isWarmupAllBusy = loadingAction === 'warmup:all' || status?.warmupState?.running === true;
-		const isRefreshAllBusy = loadingAction === 'refresh:all' || (status?.quotaRefreshing?.length ?? 0) > 0;
 
 		if (status === null) {
 			return h('div', { style: { ...S.container!, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
@@ -140,35 +138,30 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 		}
 
 		return h('div', { className: 'agy-console', style: S.container },
-			renderHeader(t, isAuthed, auth.addingAccount, isBusy, isWarmupAllBusy, isRefreshAllBusy, {
-				onAdd: () => auth.setAddingAccount(true),
-				onWarmupAll: () => void accountActions.warmupAccount(),
-				onRefreshAll: () => void accountActions.refreshQuota(),
-			}),
-			h(Toast, { toast, onClose: () => setToast(null), t }),
-			renderAddAccountSection(t, auth, pool, isBusy, loadingAction),
-			h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', padding: '0 2px', gap: '8px', flexWrap: 'wrap' } },
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-					h('span', { style: { fontWeight: 700, fontSize: '12.5px', color: 'var(--agy-text-primary)' } }, t('account.poolHeading', { count: accounts.length })),
-				),
-				h(WarmupStatusBar, { t, warmupState: status.warmupState ?? null, accounts }),
+			renderHeader(t, authPhase === 'ok' || accounts.length > 0, auth.addingAccount, loadingAction !== null,
+				loadingAction === 'warmup:all' || status.warmupState?.running === true,
+				loadingAction === 'refresh:all' || (status.quotaRefreshing?.length ?? 0) > 0,
+				{
+					onAdd: () => { selectTab('accounts'); auth.setAddingAccount(true); },
+					onWarmupAll: () => void accountActions.warmupAccount(),
+					onRefreshAll: () => void accountActions.refreshQuota(),
+				},
 			),
-			h(AccountsPanel, {
-				t, pool, accounts, accountModels: status.accountModels, loadingAction,
-				quotaRefreshing: status.quotaRefreshing ?? [],
-				warmupState: status.warmupState ?? null,
+			h(Toast, { toast, onClose: clearToast, t }),
+			renderConsoleTabContent({
+				t, activeTab, onSelectTab: selectTab, status, pool, accounts,
+				accountModels: status.accountModels, catalogModels,
+				hiddenModelSet: new Set(status.hiddenModels ?? []),
+				selectedModelSet: new Set(status.selectedModels ?? []),
+				loadingAction, effortLabels: effortLabels(t),
+				addAccountSection: renderAddAccountSection(t, auth, pool, loadingAction !== null, loadingAction),
 				proxyInputs, setProxyInputs, editingProxyId, setEditingProxyId,
 				aliasInputs, setAliasInputs, editingAliasId, setEditingAliasId,
 				expandedModels, toggleExpand, optimisticActiveByFamily,
-				handlers: { ...accountActions, beginReauth: auth.handleBeginReauth },
-			}),
-			renderRuntimeConfig(t, status, pool, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, {
-				setCfg: config.setCfg,
-				setMode: config.setMode,
-				setSelectedModels: config.setSelectedModels,
+				accountHandlers: { ...accountActions, beginReauth: auth.handleBeginReauth },
+				setCfg: config.setCfg, setMode: config.setMode, setSelectedModels: config.setSelectedModels,
 				setHiddenModels: (ids: ReadonlyArray<string>) => config.setCfg('hiddenModels', [...ids]),
-				copyImageCommand,
-				showToast,
+				copyImageCommand, showToast,
 			}),
 		);
 	};
@@ -396,142 +389,4 @@ function effortLabels(t: Translator): EffortLabels {
 			return localised === key ? effortLabel(id) : localised;
 		},
 	};
-}
-
-function renderRuntimeConfig(
-	t: Translator,
-	status: NonNullable<ReturnType<typeof useAgyStatus>['status']>,
-	pool: NonNullable<ReturnType<typeof useAgyStatus>['status']>['pool'] | undefined,
-	catalogModels: ReadonlyArray<CatalogModelView>,
-	hiddenModelSet: Set<string>,
-	selectedModelSet: Set<string>,
-	loadingAction: string | null,
-	actions: {
-		setCfg: (key: string, value: unknown) => Promise<void>;
-		setMode: (mode: string) => Promise<void>;
-		setSelectedModels: (ids: ReadonlyArray<string>) => Promise<void>;
-		setHiddenModels: (ids: ReadonlyArray<string>) => Promise<void>;
-		copyImageCommand: () => void;
-		showToast: (text: string, type?: ToastType) => void;
-	},
-): unknown {
-	const { setCfg, setMode, setSelectedModels, setHiddenModels, copyImageCommand, showToast } = actions;
-
-	return h('div', { style: { marginTop: '14px', paddingTop: '10px', borderTop: '1px solid var(--agy-border-divider)' } },
-		h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-			h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
-				h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.runtimeTitle')),
-				h('span', { style: S.mutedLine, title: t('config.runtimeDesc') }, t('config.runtimeDesc')),
-			),
-			h(Row, {
-				left: rowCaption(t('pool.label')),
-				right: segGroup([
-					h(Button, {
-						variant: pool?.mode === 'sequential' || !pool?.mode ? 'segActive' : 'seg',
-						onClick: () => void setMode('sequential'),
-					}, t('pool.sequential')),
-					h(Button, {
-						variant: pool?.mode === 'round-robin' ? 'segActive' : 'seg',
-						onClick: () => void setMode('round-robin'),
-					}, t('pool.roundRobin')),
-				]),
-			}),
-			h(Row, {
-				left: rowCaption(t('config.autoWarmup'), t('config.autoWarmupDesc')),
-				right: segGroup([
-					h(Button, {
-						variant: status.autoWarmup === true ? 'segActive' : 'seg',
-						disabled: loadingAction === 'config:autoWarmup',
-						onClick: () => void setCfg('autoWarmup', true),
-					}, t('config.on')),
-					h(Button, {
-						variant: status.autoWarmup !== true ? 'segActive' : 'seg',
-						disabled: loadingAction === 'config:autoWarmup',
-						onClick: () => void setCfg('autoWarmup', false),
-					}, t('config.off')),
-				]),
-			}),
-			...warmupConfigRows({ t, status, loadingAction, setCfg }),
-			h(Row, {
-				style: { gap: '8px 10px' },
-				left: rowCaption(t('config.autoTranslate'), t('config.autoTranslateDesc')),
-				right: h('div', { style: S.cfgRowRight },
-					segGroup([
-						h(Button, {
-							variant: status.autoTranslate === true ? 'segActive' : 'seg',
-							disabled: loadingAction === 'config:autoTranslate',
-							onClick: () => void setCfg('autoTranslate', true),
-						}, t('config.on')),
-						h(Button, {
-							variant: status.autoTranslate !== true ? 'segActive' : 'seg',
-							disabled: loadingAction === 'config:autoTranslate',
-							onClick: () => void setCfg('autoTranslate', false),
-						}, t('config.off')),
-					]),
-					h(Select, {
-						value: status.translateModel ?? '',
-						ariaLabel: t('config.translateModel'),
-						title: t('config.translateModelDesc'),
-						disabled: loadingAction === 'config:translateModel',
-						onChange: (e: { target?: { value?: string } }) => void setCfg('translateModel', e?.target?.value ?? ''),
-						options: translateModelOptions(status.translateModel ?? '', geminiCatalogModels(catalogModels), t('config.translateModelAuto')),
-					}),
-					h(Select, {
-						value: status.translateEffort ?? '',
-						ariaLabel: t('config.translateEffort'),
-						title: t('config.translateEffortDesc'),
-						style: { minWidth: '78px', maxWidth: '110px' },
-						disabled: loadingAction === 'config:translateEffort',
-						onChange: (e: { target?: { value?: string } }) => void setCfg('translateEffort', e?.target?.value ?? ''),
-						options: translateEffortOptions(status.translateEffort ?? '', effortLabels(t), status.translateModel ?? '', catalogModels),
-					}),
-				),
-			}),
-			renderImageRow(t, status, catalogModels, loadingAction, setCfg, copyImageCommand, effortLabels(t)),
-			...renderVisibilityRows({ t, status, loadingAction, setCfg }),
-			renderPoolWideCatalogRow({ t, status, loadingAction, setCfg }),
-			renderDefaultEffortRow(t, status, catalogModels, loadingAction, setCfg),
-			h(RuntimeControlsSection, { t, status, loadingAction, setCfg }),
-			h(EcosystemPanel, { t, currentAgent: status.agent ?? '', loadingAction, setCfg, showToast }),
-			h(ModelsPanel, { t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels, setHiddenModels }),
-		),
-	);
-}
-
-/**
- * Default thinking effort. The buttons come from the LIVE catalog, not a local
- * low/medium/high list: when agy ships a new level (1.5.7 added `xhigh`) the
- * row gains it with no code change, and it can never offer a level no model
- * supports.
- */
-function renderDefaultEffortRow(
-	t: Translator,
-	status: NonNullable<ReturnType<typeof useAgyStatus>['status']>,
-	catalogModels: ReadonlyArray<CatalogModelView>,
-	loadingAction: string | null,
-	setCfg: (key: string, value: unknown) => Promise<void>,
-): unknown {
-	const value = status.defaultEffort;
-	const labels = effortLabels(t);
-	const levels = catalogEfforts(catalogModels);
-	// A hand-configured level the catalog no longer lists still gets a button,
-	// otherwise the control would silently misreport the stored value.
-	const configured = (value ?? '').trim().toLowerCase();
-	const shown = configured !== '' && !levels.includes(configured) ? [...levels, configured] : levels;
-	return h(Row, {
-		left: rowCaption(t('config.defaultEffort'), t('config.defaultEffortDesc')),
-		right: segGroup([
-			h(Button, {
-				variant: value === '' ? 'segActive' : 'seg',
-				disabled: loadingAction === 'config:defaultEffort',
-				onClick: () => void setCfg('defaultEffort', ''),
-			}, t('effort.auto')),
-			...shown.map((level) => h(Button, {
-				key: level,
-				variant: value === level ? 'segActive' : 'seg',
-				disabled: loadingAction === 'config:defaultEffort',
-				onClick: () => void setCfg('defaultEffort', level),
-			}, labels.level(level))),
-		]),
-	});
 }

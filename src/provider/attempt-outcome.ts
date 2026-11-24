@@ -43,6 +43,7 @@ import {
   buildSpawnArgs,
   createAttemptRecorder,
   createAttemptSlot,
+  resolveEffectiveAgySettings,
   type AttemptDeps,
   type AttemptInput,
   type AttemptRecorder,
@@ -508,7 +509,8 @@ export async function* runAgyAttempt(
   // in-flight marker with the same string the former inline block used.
   const slot = yield* dispatchCredentialSlot(deps, { ...input, prompt: spawn.prompt })
   recorder.setTrackerSession?.(input.sessionKey)
-  if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && !input.agySettings && !input.isAux) {
+  const effectiveAgySettings = resolveEffectiveAgySettings(input)
+  if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && !effectiveAgySettings && !input.isAux) {
     const acpRec = await deps.runAcp(deps, { ...input, prompt: spawn.prompt }, slot).catch(() => null)
     if (acpRec !== null) {
       recorder.stop()
