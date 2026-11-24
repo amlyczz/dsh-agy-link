@@ -243,8 +243,9 @@ agy 启动时从凭证库取 token，该读取只有 10 秒预算。token 已过
 
 - 实测：375 次每小时轮询中 9 次触发交互登录（2.4%），**全部 token 寿命 ≤60 秒**；≥1 分钟的 746 次零触发。
 - 规则：CLI 轮询前要求 token 仍有 `CLI_TOKEN_SAFETY_MS`（2 分钟）寿命；不足则先刷新，仍不足则**跳过本轮 CLI，改用 REST**。跳过一轮无代价，弹浏览器窗口则以用户注意力为代价。
+- **Windows 主账号存储一致（issue #199）**：`cliTokenSource(platform, account)` 对 Windows `systemHome` 主账号返回 `'slot'`（检查凭据管理器 `gemini:antigravity` 而非 `.primary-credential.json` 镜像）；刷新后 `syncSlot`（`syncPrimarySlotFromStore`）**必须**按 `sameCredentialTokenState` / `isSlotAtLeastAsFresh` 校验 `accessToken` 与 `expiryMs`，严禁只凭 `sameCredentialGrant`（仅比对 `refreshToken`）跳过写槽，同时不得用旧镜像覆盖槽内更新的凭据。
 - 不要把"几秒钟的聪明"引入每小时才跑一次的轮询——边际取得足够宽，比精确贴近失效点更重要。
-- 锚点：`test/quota-cli-token.test.ts`（121 行纯函数 + 226 行用例）。
+- 锚点：`test/quota-cli-token.test.ts`（121 行纯函数 + 用例）。
 
 ## ACP 的 `usage_update` 不是用量样本（PR #165 / issue #158）
 

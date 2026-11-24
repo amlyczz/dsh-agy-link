@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccountPoolManager } from '../src/host/pool.ts'
@@ -12,6 +12,8 @@ import {
   tokenRemainingMs,
 } from '../src/features/quota/cli-token.ts'
 import { cliTokenSource, isAccessTokenFresh } from '../src/features/quota/token.ts'
+import { isSlotAtLeastAsFresh, sameCredentialTokenState } from '../src/domain/credentials/docs.ts'
+import { syncPrimarySlotFromStore } from '../src/host/quota-cli-deps.ts'
 
 // The bug these guard: agy gives its keyring read a FIXED 10s budget and runs
 // the token refresh in a separate goroutine. When the stored access token was
@@ -172,7 +174,11 @@ test('the CLI quota read refreshes a dying token before it ever spawns agy', asy
 
   class DyingTokenService extends QuotaService {
     override async readSystemKeychainToken() {
-      return { accessToken: 'ya29.slot', refreshToken: '1//GRANT' }
+      return {
+        accessToken: 'ya29.slot',
+        refreshToken: '1//GRANT',
+        expiryMs: Date.now() + (refreshes > 0 ? 3_600_000 : 5_000),
+      }
     }
     override async getStoredToken() {
       storedReads++
@@ -206,7 +212,7 @@ test('a token that cannot be brought into the window makes the CLI quota read st
 
   class StuckTokenService extends QuotaService {
     override async readSystemKeychainToken() {
-      return { accessToken: 'ya29.slot', refreshToken: '1//GRANT' }
+      return { accessToken: 'ya29.slot', refreshToken: '1//GRANT', expiryMs: Date.now() + 5_000 }
     }
     override async getStoredToken() {
       return { accessToken: 'ya29.slot', refreshToken: '1//GRANT', expiryMs: Date.now() + 5_000 }
@@ -262,4 +268,71 @@ test('issue #199: cliTokenSource picks the slot only for the Windows system-HOME
   assert.equal(cliTokenSource('win32', { systemHome: false, dir: 'C:\\iso' }), 'stored')
   assert.equal(cliTokenSource('darwin', { systemHome: true }), 'stored')
   assert.equal(cliTokenSource('linux', { systemHome: true }), 'stored')
+})
+
+test('issue #199: syncPrimarySlotFromStore updates an expired Windows slot sharing the same refresh_token', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-sync-slot-199-'))
+  try {
+    const expiredRaw = JSON.stringify({
+      token: { access_token: 'ya29.expired', refresh_token: '1//SAME_GRANT', expiry: new Date(Date.now() - 60_000).toISOString() },
+      auth_method: 'consumer',
+    })
+    const freshRaw = JSON.stringify({
+      token: { access_token: 'ya29.fresh', refresh_token: '1//SAME_GRANT', expiry: new Date(Date.now() + 3_600_000).toISOString() },
+      auth_method: 'consumer',
+    })
+    const newerRaw = JSON.stringify({
+      token: { access_token: 'ya29.newer', refresh_token: '1//SAME_GRANT', expiry: new Date(Date.now() + 7_200_000).toISOString() },
+      auth_method: 'consumer',
+    })
+    const externalRaw = JSON.stringify({
+      token: { access_token: 'ya29.ext', refresh_token: '1//OTHER_GRANT', expiry: new Date(Date.now() + 3_600_000).toISOString() },
+      auth_method: 'consumer',
+    })
+
+    assert.equal(sameCredentialTokenState(expiredRaw, freshRaw), false)
+    assert.equal(sameCredentialTokenState(freshRaw, freshRaw), true)
+    assert.equal(isSlotAtLeastAsFresh(expiredRaw, freshRaw), false)
+    assert.equal(isSlotAtLeastAsFresh(newerRaw, freshRaw), true)
+
+    writeFileSync(join(dir, '.primary-credential.json'), JSON.stringify({ raw: freshRaw, savedAt: Date.now() }))
+
+    // 1. Live slot has the SAME refresh_token but an EXPIRED access_token -> MUST write!
+    let slotContent: string | null = expiredRaw
+    let writes = 0
+    const io = {
+      platform: 'win32' as const,
+      readSlot: () => slotContent,
+      writeSlot: (raw: string) => {
+        writes++
+        slotContent = raw
+        return true
+      },
+      identify: async () => undefined,
+    }
+    const ok1 = syncPrimarySlotFromStore(io, dir, { log: () => {} })
+    assert.equal(ok1, true)
+    assert.equal(writes, 1, 'expired slot with matching refresh_token must be overwritten')
+    assert.equal(slotContent, freshRaw)
+
+    // 2. Live slot now matches freshRaw -> no redundant write
+    const ok2 = syncPrimarySlotFromStore(io, dir, { log: () => {} })
+    assert.equal(ok2, true)
+    assert.equal(writes, 1, 'identical token state skips redundant write')
+
+    // 3. Live slot already holds a strictly newer token (e.g. agy refreshed itself) -> keep newer
+    slotContent = newerRaw
+    const ok3 = syncPrimarySlotFromStore(io, dir, { log: () => {} })
+    assert.equal(ok3, true)
+    assert.equal(writes, 1, 'must not downgrade a strictly newer live slot')
+    assert.equal(slotContent, newerRaw)
+
+    // 4. External different grant with respectExternalSignIn=true -> refuse overwrite
+    slotContent = externalRaw
+    const ok4 = syncPrimarySlotFromStore(io, dir, { respectExternalSignIn: true, log: () => {} })
+    assert.equal(ok4, false)
+    assert.equal(writes, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

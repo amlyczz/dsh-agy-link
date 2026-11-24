@@ -145,6 +145,40 @@ export function sameCredentialGrant(
   return docA.refreshToken === docB.refreshToken
 }
 
+/**
+ * True when both blobs belong to the same OAuth grant AND carry identical
+ * live access-token state (`accessToken` + `expiryMs`).
+ */
+export function sameCredentialTokenState(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  if (!sameCredentialGrant(a, b)) return false
+  const docA = parseCredentialDoc(a)
+  const docB = parseCredentialDoc(b)
+  if (!docA?.accessToken || !docB?.accessToken) return false
+  if (docA.accessToken !== docB.accessToken) return false
+  return docA.expiryMs === docB.expiryMs
+}
+
+/**
+ * True when `liveRaw` already holds `targetRaw`'s exact token state OR a
+ * strictly newer expiry for the same OAuth grant, so syncing does not
+ * overwrite a fresher slot with an older mirror (issue #199).
+ */
+export function isSlotAtLeastAsFresh(
+  liveRaw: string | null | undefined,
+  targetRaw: string | null | undefined,
+): boolean {
+  if (sameCredentialTokenState(liveRaw, targetRaw)) return true
+  if (!sameCredentialGrant(liveRaw, targetRaw)) return false
+  const liveDoc = parseCredentialDoc(liveRaw)
+  const targetDoc = parseCredentialDoc(targetRaw)
+  if (!liveDoc?.accessToken || typeof liveDoc.expiryMs !== 'number') return false
+  if (typeof targetDoc?.expiryMs !== 'number') return false
+  return liveDoc.expiryMs > targetDoc.expiryMs
+}
+
 export function readTokenFileRaw(file: string): string | null {
   const raw = readAccountCredential(file)
   return raw && raw.trim() ? raw : null

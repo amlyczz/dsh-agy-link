@@ -1,7 +1,39 @@
 import type { ManagedAccount } from '../common/pool-types.ts'
-import { sameCredentialGrant } from '../domain/credentials/docs.ts'
+import { isSlotAtLeastAsFresh, sameCredentialGrant } from '../domain/credentials/docs.ts'
 import { installSlotTracked, isExternalSlotSignIn } from '../domain/credentials/external-guard.ts'
+import type { CredentialPlatform } from '../domain/credentials/platform.ts'
 import { defaultSlotIo, readPrimaryCredential } from './credential-slot.ts'
+
+export interface SyncPrimarySlotOpts {
+  respectExternalSignIn?: boolean
+  log: (msg: string) => void
+}
+
+/**
+ * Push `.primary-credential.json` into `io`'s Windows Credential Manager slot
+ * whenever the slot is missing, expired/stale, or holds a different grant that
+ * is not a protected external sign-in (issue #199).
+ */
+export function syncPrimarySlotFromStore(
+  io: CredentialPlatform,
+  poolDir: string,
+  opts: SyncPrimarySlotOpts,
+): boolean {
+  const raw = readPrimaryCredential(poolDir)?.raw
+  if (raw === undefined || raw === '') return false
+  const live = io.readSlot()
+  if (isSlotAtLeastAsFresh(live, raw)) return true
+  if (!sameCredentialGrant(live, raw) && opts.respectExternalSignIn === true && isExternalSlotSignIn(live, raw, poolDir)) {
+    opts.log('[agy-link] quota token sync skipped: preserving external standalone AGY sign-in in Windows slot')
+    return false
+  }
+  try {
+    installSlotTracked(io, raw, poolDir, opts.log, 'quota token refresh')
+    return true
+  } catch {
+    return false
+  }
+}
 
 // The CLI quota read has to leave the credential in the safety window before it
 // spawns agy (see src/features/quota/cli-token.ts). On Windows agy authenticates
@@ -36,24 +68,11 @@ export function buildCliQuotaDeps(opts: {
   if (process.platform !== 'win32') return base
   return {
     ...base,
-    syncSlot: () => {
-      const poolDir = opts.poolDir()
-      const raw = readPrimaryCredential(poolDir)?.raw
-      if (raw === undefined || raw === '') return false
-      const io = defaultSlotIo()
-      const live = io.readSlot()
-      if (sameCredentialGrant(live, raw)) return true
-      if (opts.respectExternalSignIn?.() === true && isExternalSlotSignIn(live, raw, poolDir)) {
-        opts.log('[agy-link] quota token sync skipped: preserving external standalone AGY sign-in in Windows slot')
-        return false
-      }
-      try {
-        installSlotTracked(io, raw, poolDir, opts.log, 'quota token refresh')
-        return true
-      } catch {
-        return false
-      }
-    },
+    syncSlot: () =>
+      syncPrimarySlotFromStore(defaultSlotIo(), opts.poolDir(), {
+        respectExternalSignIn: opts.respectExternalSignIn?.() === true,
+        log: opts.log,
+      }),
   }
 }
 
