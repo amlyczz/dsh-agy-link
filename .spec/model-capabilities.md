@@ -29,9 +29,9 @@
 2. 当单账号尚未完成 `agy models` 探测时，`accountHasArgon(acc, pool, catalog)` 按优先级判定：
    - `acc.quotas?.argon !== undefined` → `true`
    - `pool?.hasDedicatedGroup(acc.id, 'argon')` → `true`
-   - `acc.quotas?.google?.models?.some(isArgonModel)` → `true`
+   - `acc.quotas?.google?.models?.some(isArgonModel)` 或 `isArgonModel(acc.quotas?.google?.description)` → `true`
    - 若 `acc.quotas?.google?.models` 已枚举单模型列表且不含 Argon（免费层特征）→ `false`（防止共享 `this.current` 污染免费号）
-   - 否则若 `catalog?.source === 'discovered'`（如无单模型明细的 Ultra 共享池，issue #68）→ 以 `catalog.models` 是否含 Argon 决定
+   - 否则若 `catalog?.source === 'discovered'`（如无单模型明细的共享池，issue #68）→ 以 `catalog.models` 是否含 Argon 决定；`DedicatedGroupSource.catalogForAccount` 通过 `explainIneligibility`、`PoolAdmin` 与 `getPoolData` 透传给选号与可用账号解析。
 3. **`t=0ms` 切号即时 Argon 投影**：当 `this.current` 来自免费号（不含 Argon），而用户刚切到具备 Argon 额度的 Pro/Ultra 账号且后台 `agy models` 尚未返回时，`getModelsForAccount` 在 `t=0ms` 即刻合并已知 Argon 条目。
 
 ## 4. 切换账号 → DSH 会话框模型选择器实时同步闭环
@@ -52,7 +52,8 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
 
 ### 4.3 按模型族作用域与手动切号优先于同族旧会话粘性（`manualPinAtByFamily`）
 - 账号池活跃指针、冷却与预热严格按**模型族**（`google` Gemini / `argon` Argon / `anthropic` Claude / `openai` GPT-OSS）隔离：
-  - `setActiveAccount(id, family)` 与 `/pool/set-active` 仅修改目标模型族指针（并更新 `AccountPoolData.manualPinAtByFamily[family]`），绝不越界覆盖其他模型族的当前账号；`/agy use <id> [family]` 支持指定模型族（默认 `google`）。
+  - `setActiveAccount(id, family)`、`markAccountActive(id, family)`、`advanceAccount`、`selectAccount` 与 `/pool/set-active` 默认严格按模型族作用域隔离，不越界覆写其他模型族的当前账号；`/agy use <id> [family]` 支持指定模型族（默认 `google`）。
+  - **共享组双向联动例外（`argonSharesGoogleGroup(acc)`）**：当 `acc.quotas?.argon` 缺省且 `acc.quotas?.google?.description` 显式列名 Argon（`agy 1.5.15+` 折叠进 `Gemini Models` 组）时，该账号上的 `google` ↔ `argon` 活跃指针、`manualPinAtByFamily`、冷却与 `stickyAccount` 双向同步（除非 `activeAccountIds.argon` 当前指向一个拥有独立 `quotas.argon` 的账号）；拥有独立 `quotas.argon` 的账号仍严格保持按族隔离。
   - `recordFailure()` / `advanceAccount()` / `updateAccountQuotas()` 对主动指针的轮换或自愈均按模型族边界校验（`lastActiveAccountId` 仅服务 `google` 族兜底，绝不跨族劫持 `argon` / `anthropic` / `openai`）。
   - `getPoolData().resolvedActiveAccountIds` 预计算每个模型族当前真正命中的可用账号 ID，UI 将「当前使用」「设为当前」「冷却中」「清除冷却」直接嵌入对应模型族分组内，消除账号级冗余状态标签与横幅。
 - `selectSessionAccount()` 中：

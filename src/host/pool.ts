@@ -10,7 +10,9 @@ import { join } from 'node:path'
 import { stateDir } from '../common/config.ts'
 import {
   accountHasArgon,
+  argonSharesGoogleGroup,
   baseModelSlug,
+  sharedArgonPeerFamily,
   type AccountPlanTier,
   type AccountPoolData,
   type FamilyQuotaInfo,
@@ -60,7 +62,7 @@ export class AccountPoolManager {
    * blip that healed while the process was down.
    */
   private readonly authStrikes = new Map<string, number>()
-  private readonly unsupportedModels = new Map<string, Set<string>>()
+  private readonly unsupportedModels = new Map<string, Map<string, number>>()
   private catalog?: {
     get(accountId?: string): { models?: readonly { id: string }[]; source?: string }
     getAccountCatalog?(accountId?: string): { models?: readonly { id: string }[]; source?: string } | undefined
@@ -94,16 +96,13 @@ export class AccountPoolManager {
       persist: () => this.persist(),
       markKnown: (id) => this.store.markKnown(id),
       ensureIsolatedKeychain,
-      pool: {
-        hasDedicatedGroup: (id, family) => this.hasDedicatedGroup(id, family),
-        isModelSupported: (acc: ManagedAccount, model: string) => this.isModelSupported(acc, model),
-      },
+      pool: this,
       selectAccount: (family, model) => this.selectAccount(family, model),
     })
     this.admin.dropModelScopedCooldowns()
   }
 
-  private catalogForAccount(accountId: string): { models?: readonly { id: string }[]; source?: string } | undefined {
+  catalogForAccount(accountId: string): { models?: readonly { id: string }[]; source?: string } | undefined {
     if (!this.catalog) return undefined
     if (typeof this.catalog.getAccountCatalog === 'function') {
       return this.catalog.getAccountCatalog(accountId)
@@ -117,9 +116,9 @@ export class AccountPoolManager {
   }
 
   markModelUnsupported(accountId: string, model: string): void {
-    const set = this.unsupportedModels.get(accountId) ?? new Set()
-    this.unsupportedModels.set(accountId, set)
-    set.add(baseModelSlug(model))
+    const learned = this.unsupportedModels.get(accountId) ?? new Map<string, number>()
+    this.unsupportedModels.set(accountId, learned)
+    learned.set(baseModelSlug(model), Date.now())
   }
 
   /**
@@ -139,18 +138,8 @@ export class AccountPoolManager {
     const sysProxy = defaultProxy || detectSystemProxy()
     const now = Date.now()
     const resolvedActiveAccountIds: Partial<Record<ModelFamily, string>> = {}
-    const source = {
-      hasDedicatedGroup: (id: string, fam: ModelFamily) => this.hasDedicatedGroup(id, fam),
-      isModelSupported: (acc: ManagedAccount, model: string) => this.isModelSupported(acc, model),
-    }
     for (const fam of QUOTA_FAMILIES) {
-      const resolved = resolveEligibleActiveAccountId(
-        this.data.accounts,
-        this.data.activeAccountIds,
-        fam,
-        source,
-        now,
-      )
+      const resolved = resolveEligibleActiveAccountId(this.data.accounts, this.data.activeAccountIds, fam, this, now)
       if (resolved) resolvedActiveAccountIds[fam] = resolved
     }
     return {
@@ -416,7 +405,7 @@ export class AccountPoolManager {
         // Folded/shared Argon pool rides the Gemini bucket when no dedicated argon row exists.
         const argonPinned = this.data.activeAccountIds?.argon
         const ownsArgon = argonPinned === id || (argonPinned === undefined && this.data.lastActiveAccountId === id)
-        if (!gateCleared && famKey === 'google' && !acc.quotas?.argon && ownsArgon) {
+        if (!gateCleared && famKey === 'google' && argonSharesGoogleGroup(acc) && ownsArgon) {
           this.advanceAccount(id, 'argon')
         }
       }
@@ -515,6 +504,32 @@ export class AccountPoolManager {
     this.admin.clearCooldown(id, family, includeQuotaBench)
   }
 
+  private syncSharedSelect(acc: ManagedAccount, family: ModelFamily, prevId?: string): boolean {
+    const peer = sharedArgonPeerFamily(acc, family)
+    if (!peer) return false
+    const curPeer = this.data.activeAccountIds?.[peer]
+    if (peer === 'argon' && curPeer && this.getAccount(curPeer)?.quotas?.argon) return false
+    let changed = false
+    if ((curPeer === undefined || curPeer === prevId) && this.isAccountEligible(acc, peer)) {
+      this.data.activeAccountIds![peer] = acc.id
+      changed = curPeer !== acc.id
+    }
+    if (peer === 'google' && this.data.activeAccountIds?.google === acc.id && this.data.lastActiveAccountId !== acc.id) {
+      this.data.lastActiveAccountId = acc.id
+      changed = true
+    }
+    return changed
+  }
+
+  private commitSelectedAccount(picked: ManagedAccount, family: ModelFamily, prevId?: string): void {
+    if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
+    this.data.activeAccountIds[family] = picked.id
+    if (family === 'google' || !this.data.lastActiveAccountId) this.data.lastActiveAccountId = picked.id
+    this.syncSharedSelect(picked, family, prevId)
+    this.persist()
+    if (prevId && prevId !== picked.id) this.onAccountSwitch?.(picked.id, family)
+  }
+
   /** Sticky Sequential Drain: keep the active account until it is unusable. */
   selectAccount(family: ModelFamily, model?: string, quotaModel?: string): ManagedAccount | null {
     const now = Date.now()
@@ -530,18 +545,7 @@ export class AccountPoolManager {
       // Pick least recently used candidate
       const sorted = candidates.slice().sort((a, b) => (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0))
       const picked = sorted[0] ?? null
-      if (picked) {
-        const prevId = this.data.activeAccountIds?.[family]
-        if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
-        this.data.activeAccountIds[family] = picked.id
-        if (family === 'google' || !this.data.lastActiveAccountId) {
-          this.data.lastActiveAccountId = picked.id
-        }
-        this.persist()
-        if (prevId && prevId !== picked.id) {
-          this.onAccountSwitch?.(picked.id, family)
-        }
-      }
+      if (picked) this.commitSelectedAccount(picked, family, this.data.activeAccountIds?.[family])
       return picked
     }
 
@@ -551,8 +555,10 @@ export class AccountPoolManager {
     if (activeId) {
       const activeCandidate = candidates.find((a) => a.id === activeId)
       if (activeCandidate) {
-        if ((family === 'google' || !this.data.lastActiveAccountId) && this.data.lastActiveAccountId !== activeCandidate.id) {
-          this.data.lastActiveAccountId = activeCandidate.id
+        const peerMoved = this.syncSharedSelect(activeCandidate, family, activeId)
+        const needLast = (family === 'google' || !this.data.lastActiveAccountId) && this.data.lastActiveAccountId !== activeCandidate.id
+        if (needLast || peerMoved) {
+          if (needLast) this.data.lastActiveAccountId = activeCandidate.id
           this.persist()
         }
         return activeCandidate
@@ -563,16 +569,7 @@ export class AccountPoolManager {
     //    account whose quota expires SOONEST (Priority 1: weekly quota expiry,
     //    Priority 2: 5h quota expiry, Priority 3: pool order).
     const nextAccount: ManagedAccount = this.orderByExpiry(candidates, family, activeId)[0]!
-
-    if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
-    this.data.activeAccountIds[family] = nextAccount.id
-    if (family === 'google' || !this.data.lastActiveAccountId) {
-      this.data.lastActiveAccountId = nextAccount.id
-    }
-    this.persist()
-    if (activeId && activeId !== nextAccount.id) {
-      this.onAccountSwitch?.(nextAccount.id, family)
-    }
+    this.commitSelectedAccount(nextAccount, family, activeId)
     return nextAccount
   }
 

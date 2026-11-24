@@ -2,7 +2,7 @@
 // Reconciles each account's real discovered catalog (`agy models`) or raw REST
 // quota breakdown into a clean, deduplicated list without effort-tier duplicates
 // or internal `-sonar` / `-image` / bare `-tiered` noise.
-import { modelFamilyOf, type ManagedAccount, type ModelFamily, type ModelQuotaInfo } from './pool-types.ts'
+import { argonSharesGoogleGroup, modelFamilyOf, type ManagedAccount, type ModelFamily, type ModelQuotaInfo } from './pool-types.ts'
 import { normalizeEfforts, splitEffortSuffix } from './reasoning.ts'
 
 export interface AccountModelCatalogItem {
@@ -133,10 +133,9 @@ function projectFromAuthoritativeCatalog(
 
     let stats = pickQuotaStats(matched)
     if (stats.remainingFraction === undefined && !stats.resetTime) {
-      // Family-level fallback reads THIS model's own family row only. Argon and
-      // Gemini keep separate books, so an Argon model must never display (or be
-      // gated by) the Gemini pool's remaining fraction.
-      const bucket = acc.quotas?.[family]
+      // Family-level fallback reads this model's own family row, or the shared
+      // Gemini group row when the backend explicitly lists Argon inside it.
+      const bucket = acc.quotas?.[family] ?? (family === 'argon' && argonSharesGoogleGroup(acc) ? acc.quotas?.google : undefined)
       const frac = typeof bucket?.remainingFraction === 'number'
         ? bucket.remainingFraction
         : typeof bucket?.weeklyFraction === 'number'

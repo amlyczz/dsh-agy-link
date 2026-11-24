@@ -9,7 +9,9 @@
 // unchanged.
 import {
   accountHasArgon,
+  argonSharesGoogleGroup,
   baseModelSlug,
+  effectiveFamilyCooldown,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
@@ -35,6 +37,7 @@ export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quo
 export interface DedicatedGroupSource {
   hasDedicatedGroup?: (id: string, family: ModelFamily) => boolean
   isModelSupported?: (acc: ManagedAccount, model: string) => boolean
+  catalogForAccount?: (id: string) => { source?: string; models?: readonly { id: string }[] } | undefined
 }
 
 /**
@@ -53,13 +56,13 @@ export function explainIneligibility(
 ): AccountIneligibilityReason | null {
   if (!acc.enabled) return 'disabled'
   if (isAccountCriticalAuth(acc)) return 'auth'
-  if (family === 'argon' && !accountHasArgon(acc, pool)) return 'unsupported'
+  if (family === 'argon' && !accountHasArgon(acc, pool, pool?.catalogForAccount?.(acc.id))) return 'unsupported'
   // "This model is not in the account's catalog" is NOT the same diagnosis as
   // "the account has no access to this family / plan" (issues #120, #122).
   if (model && pool?.isModelSupported && !pool.isModelSupported(acc, model)) {
     return 'model-unsupported'
   }
-  const cd = acc.cooldowns?.[family]
+  const cd = effectiveFamilyCooldown(acc, family)
   if (cd && cd.cooldownUntil > now) return 'cooldown'
   // A model-scoped cooldown (e.g. the image model's own 429) removes the
   // account only for THAT model — other models in the family stay usable.
@@ -133,11 +136,11 @@ export function isAccountEligible(
 }
 
 function effectiveFamilyQuota(acc: ManagedAccount, family: ModelFamily): FamilyQuotaInfo | undefined {
-  // Argon and Gemini are INDEPENDENT quota books (see
-  // .spec/quota-and-risk-control.md). Never borrow `google`'s numbers for
-  // `argon`: an absent row means "unknown", not "same as Gemini". Borrowing
-  // would either bench a healthy Argon on a drained Gemini pool or mask a
-  // drained Argon behind a full Gemini one.
+  // Argon reads its own quota row when present, and only uses `google` when
+  // `google.description` explicitly names Argon (agy 1.5.15 shared Gemini pool).
+  if (family === 'argon' && argonSharesGoogleGroup(acc)) {
+    return acc.quotas?.google
+  }
   return acc.quotas?.[family]
 }
 
@@ -213,7 +216,7 @@ export function orderByExpiry(
         fiveHourRemaining,
         weeklyKnown: Number.isFinite(weeklyRemaining),
         fiveHourKnown: Number.isFinite(fiveHourRemaining),
-        failures: acc.cooldowns?.[family]?.consecutiveFailures ?? 0,
+        failures: effectiveFamilyCooldown(acc, family)?.consecutiveFailures ?? 0,
         surplus: candidateSurplusScore(q, now),
       }
     })

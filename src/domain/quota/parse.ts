@@ -2,6 +2,7 @@
 // rows. The parse functions here take plain data in and return plain data out;
 // all network I/O, caching and pool mutation stays in features/quota/refresh.ts.
 import {
+  isArgonModel,
   modelFamilyOf,
   type FamilyQuotaInfo,
   type ModelFamily,
@@ -280,15 +281,18 @@ function ingestModelCatalog(params: {
   for (const [modelId, entry] of Object.entries(modelsCatalog)) {
     const quotaFamily = modelFamilyOf(modelId)
     if (quotaFamily === 'unknown') continue
-    // Always file a model under its TRUE family. Argon and Gemini are separate
-    // quota books (.spec/quota-and-risk-control.md): re-homing an Argon model
-    // into `google` both polluted the Gemini model list and silently discarded
-    // the Argon reading, while letting a Gemini row stand in for Argon benched
-    // healthy accounts on a drained Gemini pool. The SUMMARY shape (which
-    // groups the backend happened to return) is not evidence about which pool
-    // an individual model bills against.
-    const fam: ModelFamily = quotaFamily
     const resetTime = entry.quotaInfo?.resetTime
+    // On agy 1.5.15+, Google folded Gemini 4 Argon into `Gemini Models` (the summary
+    // has NO separate Argon group, `google.description` lists Argon, and per-model
+    // quotaInfo carries a 5-hour reset matching Gemini). Do NOT synthesize a bogus
+    // `argon` weekly row out of a 5-hour timestamp; attach the model under `google`.
+    const foldedArgon5h =
+      quotaFamily === 'argon' &&
+      summaryAuthoritative &&
+      !familyQuotas.argon &&
+      isArgonModel(familyQuotas.google?.description) &&
+      !looksLikeWeeklyWindow(resetTime, now)
+    const fam: ModelFamily = foldedArgon5h ? 'google' : quotaFamily
     const remaining = parseBucketFraction(entry.quotaInfo?.remainingFraction, resetTime)
 
     if (remaining === undefined) continue

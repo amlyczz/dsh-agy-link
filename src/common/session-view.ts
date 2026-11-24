@@ -15,6 +15,7 @@
 // `source` keeps prediction distinct from reality: only a sticky session
 // binding or an actual per-family pin may be presented as "in use".
 import {
+  argonSharesGoogleGroup,
   modelFamilyOf,
   type AccountPoolData,
   type ManagedAccount,
@@ -93,7 +94,8 @@ function familyReading(acc: ManagedAccount | undefined, family: QuotaFamily, now
   stale: boolean
   resetAt: string | undefined
 } {
-  const info = acc?.quotas?.[family]
+  const dedicatedArgon = family === 'argon' && acc?.quotas?.argon !== undefined
+  const info = acc?.quotas?.[family] ?? (family === 'argon' && argonSharesGoogleGroup(acc) ? acc?.quotas?.google : undefined)
   if (!info) return { percent: null, window: 'none', stale: false, resetAt: undefined }
   const five = fraction(info.remainingFraction)
   const weekly = fraction(info.weeklyFraction)
@@ -102,7 +104,7 @@ function familyReading(acc: ManagedAccount | undefined, family: QuotaFamily, now
     const at = Date.parse(resetAt)
     return Number.isFinite(at) && at <= now
   }
-  if (family === 'argon') {
+  if (dedicatedArgon) {
     return { percent: weekly, window: weekly !== null ? 'weekly' : 'none', stale: staleOf(info.weeklyResetTime, weekly), resetAt: info.weeklyResetTime }
   }
   if (five !== null) {

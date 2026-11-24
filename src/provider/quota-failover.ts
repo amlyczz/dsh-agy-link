@@ -12,7 +12,7 @@ import {
   type AgyEvent,
 } from '../common/types.ts'
 import { PREFERRED_IMAGE_QUOTA_MODEL } from '../common/model-lineup.ts'
-import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
+import { modelFamilyOf, sharedArgonPeerFamily, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import { unwrapMcpTool } from '../host/mirror-tool.ts'
 import type { SubagentQuotaExhaustedInfo } from '../features/subagent/tracker.ts'
@@ -115,6 +115,8 @@ export function createLiveQuotaController(ctx: LiveQuotaContext): LiveQuotaContr
     let cooledNow = false
     if (ctx.account && ctx.pool && !cooled.has(targetFamily)) {
       cooled.add(targetFamily)
+      const peer = !modelScoped ? sharedArgonPeerFamily(ctx.account, targetFamily) : undefined
+      if (peer) cooled.add(peer)
       if (modelScoped) {
         // One model's own bucket ran out. Record it ONLY on that model and keep
         // the turn on this account: switching the family pointer here is what

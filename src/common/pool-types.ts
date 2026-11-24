@@ -8,25 +8,66 @@ export type AccountPlanTier = 'ultra' | 'pro' | 'free' | 'enterprise' | 'unknown
 /** Check if a model identifier belongs to the Gemini 4 Argon family. */
 export function isArgonModel(modelId?: string): boolean {
   if (!modelId) return false
-  return modelId.trim().toLowerCase().includes('argon')
+  const lower = modelId.trim().toLowerCase()
+  return lower.includes('argon') || lower === 'gemini-pro-orchestrator-g1-pro'
 }
 
 /**
  * Map a model slug to its backend quota counter family.
  *
- * Gemini 4 Argon (Pro/Ultra-only) bills against its OWN weekly quota pool —
- * never the plain Gemini one. Its ids look like `gemini-4-argon-low/-medium`
- * and MUST be detected before the generic `gemini-` prefix below, otherwise
- * argon usage would silently drain/report the Gemini counter.
+ * Gemini 4 Argon (Pro/Ultra-only) bills against Argon's pool (or the shared
+ * Gemini pool when folded by agy 1.5.15+). Its ids look like `gemini-4-argon-*`
+ * or `gemini-pro-orchestrator-argon` / `-g1-pro` and MUST be detected before
+ * the generic `gemini-` prefix below.
  */
 export function modelFamilyOf(modelId?: string): ModelFamily {
   if (!modelId) return 'unknown'
   const id = modelId.toLowerCase()
-  if (id.includes('argon')) return 'argon'
+  if (isArgonModel(id)) return 'argon'
   if (id.startsWith('claude-') || id.includes('claude')) return 'anthropic'
   if (id.startsWith('gemini-') || id.startsWith('gemma-') || id.includes('gemini')) return 'google'
   if (id.startsWith('gpt-') || id.startsWith('openai/') || id.includes('gpt-oss')) return 'openai'
   return 'unknown'
+}
+
+/**
+ * True when an account has no dedicated `quotas.argon` row AND the backend's
+ * shared `Gemini Models` (`quotas.google`) group description explicitly names
+ * Argon as a member (observed on all paid plans since agy 1.5.12/1.5.15).
+ * Kept strict on `google.description` so accounts/tests without that explicit
+ * group membership keep `argon` unknown rather than borrowing `google`.
+ */
+export function argonSharesGoogleGroup(acc?: ManagedAccount | null): boolean {
+  return Boolean(acc && acc.quotas?.argon === undefined && isArgonModel(acc.quotas?.google?.description))
+}
+
+/**
+ * Peer quota family when Argon shares the Gemini Models bucket (`google` <-> `argon`).
+ */
+export function sharedArgonPeerFamily(
+  acc?: ManagedAccount | null,
+  family?: ModelFamily,
+): ModelFamily | undefined {
+  if (!argonSharesGoogleGroup(acc)) return undefined
+  if (family === 'argon') return 'google'
+  if (family === 'google') return 'argon'
+  return undefined
+}
+
+/**
+ * Effective cooldown state for `family`, mirroring the peer bucket's cooldown
+ * when Argon shares the Gemini Models group (`argonSharesGoogleGroup`).
+ */
+export function effectiveFamilyCooldown(
+  acc: ManagedAccount | null | undefined,
+  family: ModelFamily,
+): FamilyCooldownState | undefined {
+  const direct = acc?.cooldowns?.[family]
+  const peerFam = sharedArgonPeerFamily(acc, family)
+  const peer = peerFam ? acc?.cooldowns?.[peerFam] : undefined
+  if (!direct) return peer
+  if (!peer) return direct
+  return peer.cooldownUntil > direct.cooldownUntil ? peer : direct
 }
 
 export interface ModelQuotaInfo {
@@ -236,8 +277,10 @@ export function accountHasArgon(
   // 2. Pool recorded dedicated Argon quota group (PR #54)
   if (pool && typeof pool.hasDedicatedGroup === 'function' && pool.hasDedicatedGroup(acc.id, 'argon')) return true
 
-  // 3. Per-model quotas reported an argon model
+  // 3. Per-model quotas or shared Gemini group description explicitly naming Argon
+  //    (agy 1.5.12/1.5.15 paid plans enumerate Gemini 4 Argon / Orchestrator (Argon) here).
   if (acc.quotas?.google?.models?.some((m) => isArgonModel(m.modelId))) return true
+  if (isArgonModel(acc.quotas?.google?.description)) return true
 
   // 4. Authoritative negative only when the Google group reported a PER-MODEL breakdown
   if (Array.isArray(acc.quotas?.google?.models)) {
@@ -297,7 +340,7 @@ function quotaSupportsModel(
   if (lower === 'gemini-pro-orchestrator-neon') {
     return Array.isArray(familyQuotaModels) && familyQuotaModels.some((m) => modelMatches('gemini-4-neon', m.modelId))
   }
-  if (lower === 'gemini-pro-orchestrator-g1-pro') {
+  if (lower === 'gemini-pro-orchestrator-g1-pro' || lower === 'gemini-pro-orchestrator-argon') {
     return accountHasArgon(acc, pool, catalog)
   }
   return false
@@ -380,7 +423,7 @@ export function shouldPollAccount(account: ManagedAccount): boolean {
     // Only skip polling when EVERY known quota family has an active 429 cooldown:
     // cooling Gemini must not stop healthy Argon/Claude/GPT families from refreshing.
     const allCooling = quotaFamilies.every((fam) => {
-      const cd = account.cooldowns?.[fam]
+      const cd = effectiveFamilyCooldown(account, fam)
       return Boolean(cd && cd.cooldownUntil > now)
     })
     return !allCooling
@@ -455,7 +498,7 @@ export function needsAuthReverify(
 export function getAccountHealth(account: ManagedAccount, family: ModelFamily = 'google'): AccountHealthInfo {
   if (!account.enabled) return { status: 'disabled', message: 'Account disabled' }
   if (account.authRequired) return { status: 'auth_required', message: account.authError || 'Authentication required' }
-  const cd = account.cooldowns?.[family]
+  const cd = effectiveFamilyCooldown(account, family)
   if (cd && cd.cooldownUntil > Date.now()) {
     return {
       status: 'cooldown',

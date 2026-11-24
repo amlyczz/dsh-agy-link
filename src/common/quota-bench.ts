@@ -1,7 +1,16 @@
 // Pure quota-bench, cooldown, and auth-quarantine predicates shared across
 // domain scheduling, host commands, and client UI so every surface derives
 // account availability from a single source of truth.
-import { isTerminalAuthError, modelMatches, type FamilyQuotaInfo, type ManagedAccount, type ModelFamily } from './pool-types.ts'
+import {
+  argonSharesGoogleGroup,
+  effectiveFamilyCooldown,
+  isTerminalAuthError,
+  modelMatches,
+  sharedArgonPeerFamily,
+  type FamilyQuotaInfo,
+  type ManagedAccount,
+  type ModelFamily,
+} from './pool-types.ts'
 import { isAuthoritativeAuthError, looksLikeValidationRequired } from './types.ts'
 
 /** Proactive rotation thresholds: bench accounts at or below these remaining fractions until reset. */
@@ -59,6 +68,16 @@ export function isWeeklyQuotaBenched(
   return isWindowBenched(quota.weeklyFraction, quota.weeklyResetTime, LOW_QUOTA_WEEKLY, now)
 }
 
+/** Effective quota-bench override timestamp, shared across google <-> argon when folded. */
+export function effectiveQuotaGateClearedAt(acc: ManagedAccount, family: ModelFamily): number | undefined {
+  const direct = acc.quotaGateClearedAt?.[family]
+  const peerFam = sharedArgonPeerFamily(acc, family)
+  const peer = peerFam ? acc.quotaGateClearedAt?.[peerFam] : undefined
+  if (direct === undefined) return peer
+  if (peer === undefined) return direct
+  return Math.max(direct, peer)
+}
+
 /**
  * True when a family's cached quota snapshot benches the account.
  *
@@ -67,11 +86,14 @@ export function isWeeklyQuotaBenched(
  * cached row is no newer than that stamp, so a fresh poll always re-arms it.
  */
 export function isQuotaBenched(acc: ManagedAccount, family: ModelFamily, now: number, model?: string): boolean {
-  // Argon has its own quota book; an absent row is "unknown", never a mirror of
-  // the shared-looking Gemini row (.spec/quota-and-risk-control.md).
-  const quota = acc.quotas?.[family]
+  // Argon uses its own quota book when present, and only reads `quotas.google`
+  // when the backend explicitly declared Argon as a member of Gemini Models'
+  // group description (agy 1.5.15 paid plans); an absent row without that proof
+  // remains "unknown" (.spec/quota-and-risk-control.md).
+  const sharedArgon = family === 'argon' && argonSharesGoogleGroup(acc)
+  const quota = acc.quotas?.[family] ?? (sharedArgon ? acc.quotas?.google : undefined)
   if (!quota) return false
-  const clearedAt = acc.quotaGateClearedAt?.[family]
+  const clearedAt = effectiveQuotaGateClearedAt(acc, family)
   if (is5hQuotaBenched(quota, clearedAt, now) || isWeeklyQuotaBenched(quota, clearedAt, now)) return true
   if (!model || model.trim() === '' || !Array.isArray(quota.models)) return false
   if (clearedAt !== undefined && (quota.updatedAt ?? 0) <= clearedAt) return false
@@ -98,7 +120,7 @@ export function accountHasQuotaBench(acc: ManagedAccount, now: number): boolean 
 
 /** True when a family has an active local 429 cooldown timer on this account. */
 export function isFamilyInCooldown(acc: ManagedAccount, family: ModelFamily, now: number): boolean {
-  const cd = acc.cooldowns?.[family]
+  const cd = effectiveFamilyCooldown(acc, family)
   return Boolean(cd && cd.cooldownUntil > now)
 }
 
@@ -115,7 +137,7 @@ export function isFamilyCooling(acc: ManagedAccount, family: ModelFamily, now: n
 export function accountKnownFamilies(acc: ManagedAccount): QuotaFamily[] {
   return QUOTA_FAMILIES.filter((fam) => {
     if (fam === 'argon') {
-      return acc.quotas?.argon !== undefined || acc.cooldowns?.argon !== undefined
+      return acc.quotas?.argon !== undefined || (!argonSharesGoogleGroup(acc) && acc.cooldowns?.argon !== undefined)
     }
     return acc.quotas?.[fam] !== undefined || acc.cooldowns?.[fam] !== undefined
   })

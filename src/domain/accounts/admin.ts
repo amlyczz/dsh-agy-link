@@ -8,7 +8,10 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import {
+  argonSharesGoogleGroup,
+  effectiveFamilyCooldown,
   isTerminalAuthError,
+  sharedArgonPeerFamily,
   type AccountPlanTier,
   type AccountPoolData,
   type ManagedAccount,
@@ -49,6 +52,12 @@ export class PoolAdmin {
 
   private account(id: string): ManagedAccount | undefined {
     return this.deps.getData().accounts.find((a) => a.id === id)
+  }
+
+  private canSyncSharedPeer(data: AccountPoolData, acc: ManagedAccount | undefined, fam: ModelFamily): ModelFamily | undefined {
+    const peer = sharedArgonPeerFamily(acc, fam)
+    if (!peer) return undefined
+    return peer === 'argon' && data.activeAccountIds?.argon && this.account(data.activeAccountIds.argon)?.quotas?.argon ? undefined : peer
   }
 
   /**
@@ -257,18 +266,21 @@ export class PoolAdmin {
   markAccountActive(id: string, family: ModelFamily = 'google'): void {
     const data = this.deps.getData()
     if (!data.activeAccountIds) data.activeAccountIds = {}
+    const peer = this.canSyncSharedPeer(data, this.account(id), family)
+    const updatesGoogle = family === 'google' || peer === 'google'
     const familySame = data.activeAccountIds[family] === id
-    const lastSame = family !== 'google' || data.lastActiveAccountId === id
-    if (familySame && lastSame) return
+    const peerSame = !peer || data.activeAccountIds[peer] === id
+    const lastSame = !updatesGoogle || data.lastActiveAccountId === id
+    if (familySame && peerSame && lastSame) return
     data.activeAccountIds[family] = id
-    if (family === 'google' || !data.lastActiveAccountId) data.lastActiveAccountId = id
+    if (peer) data.activeAccountIds[peer] = id
+    if (updatesGoogle || !data.lastActiveAccountId) data.lastActiveAccountId = id
     this.deps.persist()
   }
 
   /**
    * Manually pin the active slot for one family (console per-family "设为当前").
-   * Strictly family-scoped: pinning one family never mutates or clears another
-   * family's active slot or session stickiness.
+   * Family-scoped except when Argon shares the Gemini Models bucket (links `google` <-> `argon`).
    */
   setActiveAccount(id: string, family: ModelFamily = 'google'): boolean {
     const data = this.deps.getData()
@@ -279,9 +291,12 @@ export class PoolAdmin {
     data.activeAccountIds[family] = id
     if (!data.manualPinAtByFamily) data.manualPinAtByFamily = {}
     data.manualPinAtByFamily[family] = now
-    if (family === 'google' || !data.lastActiveAccountId) {
-      data.lastActiveAccountId = id
+    const peer = this.canSyncSharedPeer(data, acc, family)
+    if (peer && isAccountEligible(acc, peer, now, this.deps.pool)) {
+      data.activeAccountIds[peer] = id
+      data.manualPinAtByFamily[peer] = now
     }
+    if (family === 'google' || peer === 'google' || !data.lastActiveAccountId) data.lastActiveAccountId = id
     this.deps.persist()
     return true
   }
@@ -422,15 +437,23 @@ export class PoolAdmin {
     const targetFamily = family ? (normalizeModelFamily(family) ?? family) : undefined
     const clearOne = (acc: ManagedAccount): void => {
       acc.cooldowns ??= {}
-      if (targetFamily) delete acc.cooldowns[targetFamily]
-      else acc.cooldowns = {}
+      const sharedArgon = argonSharesGoogleGroup(acc)
+      if (targetFamily) {
+        delete acc.cooldowns[targetFamily]
+        if (targetFamily === 'google' && !acc.quotas?.argon) delete acc.cooldowns.argon
+        if (targetFamily === 'argon' && includeQuotaBench && sharedArgon) delete acc.cooldowns.google
+      } else {
+        acc.cooldowns = {}
+      }
       acc.modelCooldowns = {} // same user action: release paused model buckets too
       if (!includeQuotaBench) return
-      const families = targetFamily ? [targetFamily] : (Object.keys(acc.quotas ?? {}) as ModelFamily[])
+      const families: ModelFamily[] = targetFamily
+        ? ((targetFamily === 'google' && !acc.quotas?.argon) || (targetFamily === 'argon' && sharedArgon) ? ['google', 'argon'] : [targetFamily])
+        : [...new Set([...(Object.keys(acc.quotas ?? {}) as ModelFamily[]), ...(sharedArgon ? (['argon'] as ModelFamily[]) : [])])]
       if (families.length === 0) return
       acc.quotaGateClearedAt ??= {}
       for (const fam of families) {
-        const updatedAt = acc.quotas?.[fam]?.updatedAt
+        const updatedAt = acc.quotas?.[fam]?.updatedAt ?? (fam === 'argon' ? acc.quotas?.google?.updatedAt : undefined)
         acc.quotaGateClearedAt[fam] = Math.max(now, updatedAt ?? 0)
       }
     }
@@ -467,22 +490,19 @@ export class PoolAdmin {
     const acc = this.account(id)
     if (!acc) return
     acc.cooldowns ??= {}
-
-    const prev = acc.cooldowns[family]
+    const prev = effectiveFamilyCooldown(acc, family)
     const failures = (prev?.consecutiveFailures ?? 0) + 1
-    const cooldownUntil = cooldownUntilFor(data, failures, reason, serverResetTime)
-
-    acc.cooldowns[family] = {
-      cooldownUntil,
-      reason,
-      consecutiveFailures: failures,
+    const entry = { cooldownUntil: cooldownUntilFor(data, failures, reason, serverResetTime), reason, consecutiveFailures: failures }
+    acc.cooldowns[family] = entry
+    const peer = sharedArgonPeerFamily(acc, family)
+    if (peer) acc.cooldowns[peer] = { ...entry }
+    // Only advance if this account currently owns the family pointer (or fallback lastActiveAccountId).
+    const owns = (fam: ModelFamily): boolean => {
+      const p = data.activeAccountIds?.[fam]
+      return p === id || (p === undefined && (data.lastActiveAccountId === id || data.lastActiveAccountId === undefined))
     }
-    // Only advance if this account currently owns this specific family pointer
-    // (or if this family has no pin yet and it is the fallback lastActiveAccountId).
-    const famPinned = data.activeAccountIds?.[family]
-    if (famPinned === id || (famPinned === undefined && (data.lastActiveAccountId === id || data.lastActiveAccountId === undefined))) {
-      this.advanceAccount(id, family)
-    }
+    if (owns(family)) this.advanceAccount(id, family)
+    if (peer && owns(peer)) this.advanceAccount(id, peer)
     this.deps.persist()
   }
 
@@ -499,9 +519,9 @@ export class PoolAdmin {
       delete acc.authMarkedAt
       delete acc.authReverifyAttempts
     }
-    if (acc.cooldowns?.[family]) {
-      delete acc.cooldowns[family]
-    }
+    if (acc.cooldowns?.[family]) delete acc.cooldowns[family]
+    const peer = sharedArgonPeerFamily(acc, family)
+    if (peer && acc.cooldowns?.[peer]) delete acc.cooldowns[peer]
     // A successful run is positive proof the login is alive: drop any pending
     // auth-confirmation streak so an old blip cannot harden later.
     this.deps.authStrikes.delete(id)
@@ -518,14 +538,16 @@ export class PoolAdmin {
   advanceAccount(fromId: string, family: ModelFamily, model?: string): string | null {
     const data = this.deps.getData()
     const now = Date.now()
-    const candidates = data.accounts.filter(
-      (a) => a.id !== fromId && isAccountEligible(a, family, now, this.deps.pool, model),
-    )
+    const candidates = data.accounts.filter((a) => a.id !== fromId && isAccountEligible(a, family, now, this.deps.pool, model))
     if (candidates.length === 0) return null
-    const next = orderByExpiry(data.accounts, candidates, family, fromId, Date.now())[0]!
+    const next = orderByExpiry(data.accounts, candidates, family, fromId, now)[0]!
     if (!data.activeAccountIds) data.activeAccountIds = {}
     data.activeAccountIds[family] = next.id
-    if (family === 'google' || !data.lastActiveAccountId) {
+    const peer = this.canSyncSharedPeer(data, next, family)
+    if (peer && (data.activeAccountIds[peer] === fromId || data.activeAccountIds[peer] === undefined) && isAccountEligible(next, peer, now, this.deps.pool)) {
+      data.activeAccountIds[peer] = next.id
+    }
+    if (family === 'google' || (peer === 'google' && data.activeAccountIds.google === next.id) || !data.lastActiveAccountId) {
       data.lastActiveAccountId = next.id
     }
     this.deps.persist()

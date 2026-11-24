@@ -176,9 +176,17 @@ export async function refreshAccountQuotaPipeline(
       if (cliFamilies.argon) {
         deps.pool.noteDedicatedGroup(account.id, 'argon')
       } else {
+        const groupSeenBefore = typeof deps.pool.hasDedicatedGroup === 'function' && deps.pool.hasDedicatedGroup(account.id, 'argon')
         deps.pool.clearQuotaFamily(account.id, 'argon')
+        if (shouldReleaseOrphanedCooldown({
+          summaryAuthoritative: true,
+          groupPresent: false,
+          groupSeenBefore,
+          hasCooldown: account.cooldowns?.argon !== undefined,
+        })) {
+          deps.pool.clearCooldown(account.id, 'argon')
+        }
         deps.pool.forgetDedicatedGroup(account.id, 'argon')
-        deps.pool.clearCooldown(account.id, 'argon')
       }
       // The CLI just produced authoritative quotas for this account, so any
       // marker recorded while the REST summary endpoint was down no longer

@@ -1,6 +1,6 @@
 // /agy pool (accounts), account add/enable/disable/remove and quota/cooldown ops.
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
-import type { ModelFamily } from '../../common/pool-types.ts'
+import { effectiveFamilyCooldown, type ModelFamily } from '../../common/pool-types.ts'
 import {
   QUOTA_FAMILIES,
   accountAuthState,
@@ -97,7 +97,7 @@ function renderPool(deps: CommandDeps): CommandResult {
     } else if (coolingFamilies.length > 0) {
       const details = coolingFamilies.map((fam) => {
         const label = FAMILY_LABELS[fam] ?? fam
-        const cd = a.cooldowns[fam]
+        const cd = effectiveFamilyCooldown(a, fam)
         if (cd && cd.cooldownUntil > now) {
           const sec = Math.ceil((cd.cooldownUntil - now) / 1000)
           return `${label} cooling (${sec}s: ${cd.reason})`

@@ -4,7 +4,7 @@
 // (markAccountActive / agyOnAccount).
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { Err, type PluginConfig } from '../common/types.ts'
-import { modelFamilyOf, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
+import { modelFamilyOf, sharedArgonPeerFamily, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import { resolveModelSlug } from '../domain/models/parse.ts'
 import { isModelQuotaClear } from '../domain/accounts/selection.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
@@ -85,10 +85,15 @@ export function stickyAccount(
       deps.store.delete(k)
       continue
     }
-    if (b.model && b.model.trim() !== '' && modelFamilyOf(b.model) !== family) continue
+    const peerFam = sharedArgonPeerFamily(boundAcc, family)
+    if (b.model && b.model.trim() !== '') {
+      const bFam = modelFamilyOf(b.model)
+      if (bFam !== family && bFam !== peerFam) continue
+    }
     // If the user explicitly switched/reordered accounts in the UI or CLI after
     // this binding was written, honor the user's explicit choice immediately.
-    if (familyPinAt > 0 && b.updatedAt < familyPinAt) continue
+    const effectivePinAt = Math.max(familyPinAt, peerFam ? (poolData.manualPinAtByFamily?.[peerFam] ?? 0) : 0)
+    if (effectivePinAt > 0 && b.updatedAt < effectivePinAt) continue
     if (b.updatedAt > latestUpdated) {
       mostRecent = boundAcc
       latestUpdated = b.updatedAt
