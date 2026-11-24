@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.78 (2026-11-24)
+
+### English
+
+- **Feat(btw): add native `/btw` read-only streaming side questions (`BtwService`, `BtwDock`, and HTTP SSE routes).** Submit `/btw <question>` in DSH at any time (even mid-turn) without interrupting the main conversation or polluting its history. Runs via `agy --mode plan --disable-slash-commands` with `<session_context>` + `<live_run_progress>`, streams answers and read-only tool calls into a dismissible `BtwDock` card above the composer (`Esc` to cancel/dismiss, `< 1/N >` history navigation, follow-up input, and `+ New` thread), and exposes configurable `btwModel` (preferring `gemini-4-hydrogen` → `gemini-3.8-flash`) and `btwEffort` (default `medium`) in **Settings → Features & UI**.
+- **Feat(console): reorganize the Antigravity settings console into 4 tabs and add Orchestrator Planner/Executor selectors.** Separates **Accounts & Quota**, **Models & Orchestrator**, **Features & UI**, and **Runtime & Ecosystem**; adds `orchestratorPlannerModel`/`Effort` and `orchestratorExecutorModel`/`Effort` controls, updates the model lineup (`agy 1.5.15`), and wires `todo/write` projection for `update_steps`/`todo_write` while keeping non-error checklist cards silent in the chat stream (surfaces errors if any).
+- **Fix(quota, warmup, credentials, host):** Link shared-group Google/Argon quotas and pointers, auto-rotate accounts when `agy` emits a quota banner with `end_turn` (#183), respect external standalone `agy` sign-in on slot recovery, guard MCP array schemas and prune legacy bridge entries (#188, #192), and avoid unsafe `session.append`.
+
+### 中文
+
+- **特性(btw)：新增与 `agy` 对齐的 `/btw` 旁路只读流式提问（`BtwService`、`BtwDock` 与 HTTP SSE 通道）。** 主回合运行期间也可随时输入 `/btw <问题>`，不打断主对话且不污染主会话历史；底层以 `agy --mode plan --disable-slash-commands` 携 `<session_context>` 与 `<live_run_progress>` 运行，在输入框上方 `BtwDock` 卡片内流式展示答案与只读工具调用（支持 `Esc` 取消/收起、`< 1/N >` 翻页、底部追问与 `+ 新提问`），并在控制台「设置 → 插件 → Antigravity → 功能与界面」提供 `btwModel`（默认优先 `gemini-4-hydrogen` → `gemini-3.8-flash`）与 `btwEffort`（默认 `medium`）配置。
+- **特性(控制台)：将 Antigravity 设置台重构为 4 个标签页并支持编排器模型/思考档配置。** 拆分为**账号与配额**、**模型与编排**、**功能与界面**、**运行与生态**；支持配置 `orchestratorPlannerModel`/`Effort` 与 `orchestratorExecutorModel`/`Effort`，同步更新 `agy 1.5.15` 模型目录，并将 `update_steps`/`todo_write` 静默投影至 DSH 原生任务面板（聊天流不再渲染冗余的正常检查清单卡片，仅报错时提示）。
+- **修复(配额、预热、凭据与宿主)：** 联动共享分组的 Google/Argon 配额与账号指针；`agy` 以 `end_turn` 输出配额横幅时自动换号（#183）；槽位恢复时尊重外部独立 `agy` 登录态；加固 MCP 数组 schema 并清理无 PID 遗留桥接项（#188、#192）；避免不安全的 `session.append` 调用。
+
 ## 0.6.77 (2026-11-24)
 
 ### English
