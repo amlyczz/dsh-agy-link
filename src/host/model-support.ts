@@ -26,10 +26,12 @@ export interface ModelSupportContext {
 /**
  * Whether `acc` can serve `model`.
  *
- * A learned refusal holds until the account's own quota snapshot, refreshed
- * after it, lists the model again: agy also says "not recognized" when it could
+ * A learned refusal is final while the account's own quota snapshot does not
+ * list the model. When it does, agy's "not recognized" may just mean it could
  * not load its model list (a TLS timeout once shut a model out of the whole
- * pool until the host restarted). Otherwise the per-model quota
+ * pool until the host restarted), so the refusal ends with a quota refresh
+ * after it, or after LISTED_REFUSAL_RETRY_MS (the poll runs hourly and goes
+ * through the same network). Otherwise the per-model quota
  * snapshot and the discovered catalog decide. Deliberately ACCOUNT-scoped: this
  * is what `selectAccount` routes on, so a sibling account must never make an
  * account look capable of a model its own evidence denies (that would route an
@@ -38,11 +40,14 @@ export interface ModelSupportContext {
  */
 export function accountCanServeModel(acc: ManagedAccount, model: string, ctx: ModelSupportContext): boolean {
   const learnedAt = ctx.unsupportedModels.get(acc.id)?.get(baseModelSlug(model))
-  if (learnedAt !== undefined && !quotaListsModelSince(acc, model, learnedAt)) return false
+  if (learnedAt !== undefined && !refusalHealed(acc, model, learnedAt)) return false
   return accountSupportsModel(acc, model, ctx.pool as never, ctx.catalogFor(acc.id))
 }
 
-function quotaListsModelSince(acc: ManagedAccount, model: string, since: number): boolean {
+export const LISTED_REFUSAL_RETRY_MS = 2 * 60_000
+
+function refusalHealed(acc: ManagedAccount, model: string, learnedAt: number): boolean {
   const quota = acc.quotas?.[modelFamilyOf(model)]
-  return (quota?.updatedAt ?? 0) > since && (quota?.models ?? []).some((m) => modelMatches(model, m.modelId))
+  if (!(quota?.models ?? []).some((m) => modelMatches(model, m.modelId))) return false
+  return (quota?.updatedAt ?? 0) > learnedAt || Date.now() - learnedAt >= LISTED_REFUSAL_RETRY_MS
 }

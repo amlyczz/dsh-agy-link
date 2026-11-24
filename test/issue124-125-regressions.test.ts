@@ -155,6 +155,20 @@ test('a learned refusal heals once a later quota refresh lists the model again',
   assert.equal(pool.selectAccount('google', model)?.id, account.id)
 })
 
+test('a refusal the account quota contradicts expires without a refresh; one it does not stays final', async () => {
+  const { accountCanServeModel, LISTED_REFUSAL_RETRY_MS } = await import('../src/host/model-support.ts')
+  const model = 'gemini-4-neon-high'
+  const account = (modelId: string) =>
+    ({ id: 'acc_a', quotas: { google: { updatedAt: 1, models: [{ modelId, remainingFraction: 1 }] } } }) as never
+  const ctx = (learnedAt: number) =>
+    ({ unsupportedModels: new Map([['acc_a', new Map([['gemini-4-neon', learnedAt]])]]), catalogFor: () => undefined, pool: null })
+  const stale = Date.now() - LISTED_REFUSAL_RETRY_MS - 1000
+
+  assert.equal(accountCanServeModel(account(model), model, ctx(Date.now())), false)
+  assert.equal(accountCanServeModel(account(model), model, ctx(stale)), true)
+  assert.equal(accountCanServeModel(account('gemini-4-hydrogen-high'), model, ctx(stale)), false)
+})
+
 test('issue #125: an all-model-mismatch failure heals with ONE quota refresh, then retries', async () => {
   const { selectSessionAccount } = await import('../src/provider/account-selection.ts')
   const { defaultConfig } = await import('../src/common/types.ts')
