@@ -63,6 +63,16 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
 - **`run_command` 不得整体豁免**（#119/#124）：它同样用于守护进程（dev server、watcher），回收它们正是 #119 的目的。后台构建靠 agy 自报的 `N > 0` 保护即可——**用协议信号，而不是给工具开后门**。
 - 锚点：`test/issue148-background-wait.test.ts`、`test/issue124-125-regressions.test.ts`、`test/issue144-idle-grace.test.ts`（默认值/配置/环境变量/0 语义/工具挂起/正数不收割/up-to 措辞）、`test/background-task-hang.test.ts`（0 计数仍收割）、`test/idle-grace-empty-result-and-dead-continuation.test.ts`（空结果恢复 + 死续接遗忘）。
 
+## 回合以「正在运行 … 完成后立即 …」收尾 = 未完成回合（`src/common/announcement.ts`, 2026-11-24）
+
+实测 `session-e778203d`（2026-11-23 16:46Z）：agy 的最后一条正文是「正在运行 Windows Vulkan RTX 2080 Ti 实机多场景截帧…，完成后立即审图与精修。」，随后 `finish: stop`。**当时 agy 里没有任何东西在跑**（无未完成工具步骤、无后台任务、无 schedule），于是关掉了所有唤醒路径的资格，回合以 `completed` 结束、会话静默 16 小时，用户只能手动问「好了吗」。
+
+- **承诺不是结果**：`isInProgressAnnouncement(text)` 判定「状态播报」形态（`正在运行/正在截/正在构建`、`完成后立即/随后`、`稍后汇报`、`waiting… once it finishes` 等），长度 ≤320 字符且不是 Markdown 报告形态（标题/列表/代码块）。
+- **一次有界续接**：`BackgroundWakeWatcher.maybeNudgeAnnouncement()` 在该轮**已经执行过工具**、且**确实没有未完成的后台工具/schedule/ACP 调用**时（那些属于后台唤醒路径，重复驱动会双重执行），延迟 `announcementNudgeDelayMs`（默认 6s，等 `finish` 与 `turn/end` 落盘）后通过 `agent.followup()` 注入一条 `plugin:agy-link` notice，要求 agy 立刻执行它自己宣布的动作并给出结果。
+- **不依赖 `backgroundWakeup`**：跨回合唤醒是 opt-in，但「把承诺当结果」在任何配置下都不该静默结束，因此这条修复**不受该开关控制**。
+- **上限**：每轮次代（generation）最多 1 次、每会话最多 3 次（`MAX_ANNOUNCEMENT_NUDGES`）；新回合开始（`onAttemptStart`）、人工发言、失败/被取代的尝试都会取消或跳过。状态面板 `backgroundWakeState.announcementNudges` 计数。
+- 锚点：`test/announcement-nudge.test.ts`。
+
 ## 5. 常驻 `agy acp` 传输通道与 CLI 参数透传
 
 - **传输通道（`transport: 'cli' | 'acp'`，默认 `'acp'`）**：

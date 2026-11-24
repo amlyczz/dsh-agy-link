@@ -55,6 +55,16 @@ export interface SessionWatchState {
   acpIdleTimer: NodeJS.Timeout | null
   /** Transcript seq that report was written at (0 when it went via a wake). */
   acpLastReportSeq: number
+  /**
+   * Announcement-nudge bookkeeping. `announcementTurn` is the generation whose
+   * promise was already answered, so one turn can never be nudged twice;
+   * `announcementPending` holds the nudge text while it waits out the grace
+   * window (a human turn or a new attempt clears it).
+   */
+  announcementTurn: number
+  announcementNudges: number
+  announcementPending: string
+  announcementTimer: NodeJS.Timeout | null
 }
 
 /** A fresh state block for one session. */
@@ -86,5 +96,9 @@ export function createWatchState(sessionKey: string): SessionWatchState {
     acpIdleTimer: null,
     acpLastReport: '',
     acpLastReportSeq: 0,
+    announcementTurn: -1,
+    announcementNudges: 0,
+    announcementPending: '',
+    announcementTimer: null,
   }
 }

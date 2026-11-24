@@ -20,6 +20,25 @@ import {
   type WakeNoticeItem,
 } from './schedule-parse.ts'
 import { createWatchState, type SessionWatchState } from './watch-state.ts'
+import {
+  buildAnnouncementNudgeText,
+  finalAssistantText,
+  hasToolActivity,
+  isInProgressAnnouncement,
+} from '../../common/announcement.ts'
+
+/**
+ * Grace before the announcement nudge is dispatched: the settled attempt is
+ * still streaming its `finish` chunk and DSH has not written `turn/end` yet.
+ */
+const ANNOUNCEMENT_NUDGE_DELAY_MS = 6_000
+
+/**
+ * Lifetime cap per session. A nudge is a repair for a broken turn, not a
+ * standing auto-continue: if the pattern repeats this often, the model — not
+ * the bridge — is the thing to change.
+ */
+const MAX_ANNOUNCEMENT_NUDGES = 3
 
 export interface AgentLike {
   readonly status?: string
@@ -67,6 +86,12 @@ export interface BackgroundWakeWatcherOptions {
    * watch the instant the tool call lands loses that sentence.
    */
   acpReportWindowMs?: number
+  /**
+   * Delay before an announcement nudge is dispatched (default 6 s). Tests shrink
+   * it; production needs the window for the settled attempt's `finish` chunk and
+   * DSH's own `turn/end` to land before a follow-up is accepted.
+   */
+  announcementNudgeDelayMs?: number
 }
 
 export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHost {
@@ -80,8 +105,11 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
   readonly acpReportUsageGraceMs: number
   readonly acpToolGraceMs: number
   readonly acpReportWindowMs: number
+  private readonly announcementNudgeDelayMs: number
   private directPresentations = 0
   private followupWakes = 0
+  /** Total announcement nudges spent in this process (status counter). */
+  private announcementNudges = 0
 
   get log(): (msg: string) => void {
     return (msg: string) => this.opts.log?.(msg)
@@ -114,6 +142,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
     this.acpReportUsageGraceMs = Math.max(50, opts.acpReportUsageGraceMs ?? 350)
     this.acpToolGraceMs = Math.max(0, opts.acpToolGraceMs ?? 2_200)
     this.acpReportWindowMs = Math.max(0, opts.acpReportWindowMs ?? 4_000)
+    this.announcementNudgeDelayMs = Math.max(0, opts.announcementNudgeDelayMs ?? ANNOUNCEMENT_NUDGE_DELAY_MS)
   }
 
   private getOrCreateSession(sessionKey: string): SessionWatchState {
@@ -174,16 +203,33 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
     if (this.disposed || sessionKey === '') return
     const st = this.getOrCreateSession(sessionKey)
     st.activeTurn = true
+    // A new turn owns the session now: an armed announcement nudge would
+    // interrupt work the user (or the model) already started.
+    this.cancelAnnouncementNudge(st)
     if (st.deferTimer !== null) {
       clearTimeout(st.deferTimer)
       st.deferTimer = null
     }
   }
 
+  /** Drop a pending announcement nudge (new turn, human message, disposal). */
+  private cancelAnnouncementNudge(st: SessionWatchState): void {
+    if (st.announcementTimer !== null) {
+      clearTimeout(st.announcementTimer)
+      st.announcementTimer = null
+    }
+    st.announcementPending = ''
+  }
+
   onAttemptSettled(info: BackgroundAttemptSettledInfo): void {
     if (this.disposed || info.sessionKey === '') return
     const st = this.getOrCreateSession(info.sessionKey)
     st.activeTurn = false
+
+    // A turn that ended on "I am still running X, I will report when it
+    // finishes" is not an answer. This runs BEFORE the backgroundWakeup gate:
+    // the promise is broken whether or not cross-turn wakeups are enabled.
+    this.maybeNudgeAnnouncement(st, info)
 
     const cfg = this.opts.getConfig()
     if (!cfg.enabled || !cfg.backgroundWakeup) return
@@ -244,6 +290,51 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
     if (hasPendingTasks && st.brainDir) {
       this.ensurePollLoop()
     }
+  }
+
+  /**
+   * Repair a turn that stopped on an in-progress announcement.
+   *
+   * Observed 2026-11-23 00:46 (`session-e778203d`): agy answered
+   * "正在运行 Windows Vulkan RTX 2080 Ti 实机多场景截帧…，完成后立即审图与精修。"
+   * and finished the turn with `stop`. Nothing was left running — no live tool
+   * step, no background task, no timer — so every existing wake path stayed
+   * silent and the session sat idle for 16 hours. The user's next message was
+   * literally "好了吗".
+   *
+   * Contract: at most one nudge per turn generation, at most three per session,
+   * only when the turn had already executed tools, and only when nothing is
+   * actually outstanding (a real background task belongs to the wake path).
+   */
+  private maybeNudgeAnnouncement(st: SessionWatchState, info: BackgroundAttemptSettledInfo): void {
+    if (this.disposed || this.opts.isArchived?.(info.sessionKey)) return
+    if (info.superseded || info.failure !== null) return
+    if (!this.opts.getConfig().enabled) return
+    if (st.announcementNudges >= MAX_ANNOUNCEMENT_NUDGES) return
+    if (st.announcementTurn === st.generation) return
+
+    const text = finalAssistantText(info.recording)
+    if (!isInProgressAnnouncement(text)) return
+    if (!hasToolActivity(info.recording)) return
+
+    // Something really is still running: the background wake path owns that
+    // turn, and a second continuation here would double-drive the same work.
+    const signals = extractAttemptBackgroundSignals(info.recording)
+    if (signals.backgroundTools.length > 0 || signals.schedules.length > 0) return
+    if (st.acpOutstanding.size > 0) return
+
+    st.announcementTurn = st.generation
+    st.announcementNudges += 1
+    this.announcementNudges += 1
+    st.announcementPending = buildAnnouncementNudgeText(text)
+    if (st.announcementTimer !== null) clearTimeout(st.announcementTimer)
+    const timer = setTimeout(() => {
+      st.announcementTimer = null
+      void this.tryDispatch(st.sessionKey)
+    }, this.announcementNudgeDelayMs)
+    timer.unref?.()
+    st.announcementTimer = timer
+    this.opts.log?.(`[announcement-nudge] session=${info.sessionKey}: turn ended on a status announcement; continuing once`)
   }
 
   private baselineBrainDir(st: SessionWatchState, brainDir: string): boolean {
@@ -368,14 +459,20 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
 
   private async tryDispatch(sessionKey: string): Promise<void> {
     const st = this.sessions.get(sessionKey)
-    if (!st || this.disposed || st.dispatching || st.pendingNotices.length === 0) return
+    if (!st || this.disposed || st.dispatching) return
+    // An announcement nudge is a repair for a turn that never finished its work.
+    // It is allowed even when `backgroundWakeup` is off: otherwise a promise
+    // would end the turn silently, which is the exact failure users report.
+    const nudge = st.announcementPending !== ''
+    if (st.pendingNotices.length === 0 && !nudge) return
     const cfg = this.opts.getConfig()
-    if (!cfg.enabled || !cfg.backgroundWakeup || this.opts.isArchived?.(sessionKey)) {
+    if (!cfg.enabled || (!cfg.backgroundWakeup && !nudge) || this.opts.isArchived?.(sessionKey)) {
       this.clearSessionWatches(st)
       return
     }
+    // `wakesUsed` bounds background wakeups; the nudge carries its own cap.
     const maxWakes = Math.max(1, cfg.backgroundWakeupMaxPerSession)
-    if (st.wakesUsed >= maxWakes) {
+    if (st.pendingNotices.length > 0 && st.wakesUsed >= maxWakes) {
       st.pendingNotices = []
       this.clearSessionWatches(st)
       this.opts.log?.(`[background-wakeup] session=${sessionKey}: reached max wakes (${maxWakes}); pausing until next human turn`)
@@ -392,6 +489,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
       const agent = await this.opts.resolveAgent(sessionKey).catch(() => null)
       if (!agent || typeof agent.followup !== 'function') {
         st.pendingNotices = []
+        this.cancelAnnouncementNudge(st)
         return
       }
       if (agent.status === 'running') {
@@ -411,12 +509,15 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
       }
 
       const items = st.pendingNotices.splice(0, st.pendingNotices.length)
-      const { summary, text } = buildWakeupMessageText(items)
+      const { summary, text } = items.length > 0
+        ? buildWakeupMessageText(items)
+        : { summary: 'turn ended on a status announcement · continuing', text: st.announcementPending }
+      st.announcementPending = ''
       const msg = createUserMessage({
         content: [{ type: 'text', text }],
         source: agyLinkNoticeSource(boundContextSummary(summary)),
       })
-      st.wakesUsed += 1
+      if (items.length > 0) st.wakesUsed += 1
       // Keep the ACP watch while any background tool call is still live. One
       // wake is not the end of the turn's work: an 18s command and a subagent
       // each report separately, and releasing here dropped every report after
@@ -443,6 +544,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
   private clearSessionWatches(st: SessionWatchState): void {
     st.hasActiveTasks = false
     st.expiresAt = 0
+    this.cancelAnnouncementNudge(st)
     st.acpOutstanding.clear()
     st.pendingNotices = []
     st.acpReportText = ''
@@ -479,6 +581,7 @@ export class BackgroundWakeWatcher implements BackgroundTurnObserver, AcpWatchHo
       directPresentations: this.directPresentations,
       followupWakes: this.followupWakes,
       pendingAcpTools,
+      announcementNudges: this.announcementNudges,
     }
   }
 

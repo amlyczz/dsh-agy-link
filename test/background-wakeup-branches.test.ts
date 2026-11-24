@@ -306,6 +306,7 @@ describe('background wakeup watcher: lifecycle edges', () => {
         directPresentations: 0,
         followupWakes: 0,
         pendingAcpTools: 0,
+        announcementNudges: 0,
       })
     } finally {
       watcher.dispose()

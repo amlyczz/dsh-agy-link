@@ -48,4 +48,10 @@ export interface BackgroundWakeStatus {
   readonly followupWakes?: number
   /** Background ACP tool calls still live after the turn (each reports later). */
   readonly pendingAcpTools?: number
+  /**
+   * Turns that ended on a status announcement ("正在运行 …，完成后立即 …") and
+   * were answered with one bounded continuation nudge. Independent of
+   * `backgroundWakeup`: a promise is not a result whether or not wakeups are on.
+   */
+  readonly announcementNudges?: number
 }
