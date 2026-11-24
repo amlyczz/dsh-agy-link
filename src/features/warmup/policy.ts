@@ -162,7 +162,11 @@ function warmupDue(params: {
 }): { shouldWarm: boolean; failureKey: string } {
   const { quota, force, ignoreFailureBackoff, now, historyKey, slidingIdle, isCoolingDown } = params
   let shouldWarm = false
-  const hasRecentWarmup = isCoolingDown(historyKey, SIX_DAYS_MS)
+  // `ignoreFailureBackoff` is only sent by the manual warmup button. A user who
+  // clicks "warm up" on a window that is still idle (100%) must get a probe:
+  // the success cooldown only records that a probe ran, not that the window
+  // started, so it must not swallow the click. Active windows never reach here.
+  const hasRecentWarmup = !ignoreFailureBackoff && isCoolingDown(historyKey, SIX_DAYS_MS)
 
   if (force) {
     shouldWarm = true
@@ -204,7 +208,8 @@ function warmup5hDue(params: {
 }): { shouldWarm: boolean; failureKey: string } {
   const { quota, force, ignoreFailureBackoff, now, historyKey, slidingIdle, isCoolingDown } = params
   let shouldWarm = false
-  const hasRecentWarmup = isCoolingDown(historyKey, FOUR_HOURS_MS)
+  // Manual click: see warmupDue.
+  const hasRecentWarmup = !ignoreFailureBackoff && isCoolingDown(historyKey, FOUR_HOURS_MS)
 
   if (force) {
     shouldWarm = true

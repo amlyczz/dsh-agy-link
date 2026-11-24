@@ -82,3 +82,23 @@ test('a probe that exits 0 but spent 0 tokens is a failure, not a success', asyn
   const real = await runWarmupProbe(ctx, { runCliProbe: async () => ({ code: 0, stdout: line(12), stderr: '', durationMs: 1 }) }, acc, 'gemini-3.8-flash')
   assert.equal(real.ok, true)
 })
+
+test('a manual click warms an idle window even inside the success cooldown, but not an active one', () => {
+  const now = Date.parse('2026-11-23T12:00:00Z')
+  const key = 'a@example.com:google:weekly'
+  const recentlyWarmed = (k: string, ms: number) => k === key && 3600_000 < ms
+  const manual = (acc: ManagedAccount) => planWarmupTargets({
+    account: acc, force: false, ignoreFailureBackoff: true, configuredModels: ['gemini-3.8-flash'], windows: 'weekly', now,
+    isCoolingDown: recentlyWarmed,
+  })
+  assert.equal(manual(idleAccount(now)).kind, 'targets')
+  // The scheduler (no manual flag) still respects the cooldown.
+  assert.equal(planWarmupTargets({
+    account: idleAccount(now), force: false, configuredModels: ['gemini-3.8-flash'], windows: 'weekly', now,
+    isCoolingDown: recentlyWarmed,
+  }).kind, 'skip')
+  // A window already counting down is not probed even on a click.
+  const active = idleAccount(now)
+  active.quotas!.google!.weeklyFraction = 0.97
+  assert.equal(manual(active).kind, 'skip')
+})
