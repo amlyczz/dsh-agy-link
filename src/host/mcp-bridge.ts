@@ -501,7 +501,9 @@ export function writeMcpConfig(file: string, bridge: McpBridge, log?: (message: 
     if (existingKey === key || !existingKey.startsWith(MCP_SERVER_KEY + '-')) continue
     const envObj = (val as { env?: Record<string, unknown> } | null)?.env
     const rawPid = envObj?.DSH_MCP_PID
-    if (typeof rawPid === 'string' && /^\d+$/.test(rawPid) && !isPidAlive(Number(rawPid))) {
+    const legacyWithoutPid = rawPid === undefined
+    const deadPid = typeof rawPid === 'string' && /^\d+$/.test(rawPid) && !isPidAlive(Number(rawPid))
+    if (legacyWithoutPid || deadPid) {
       delete servers[existingKey]
     }
   }

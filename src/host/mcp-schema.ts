@@ -144,10 +144,17 @@ function sanitizeNode(
   delete current.$defs
   delete current.definitions
 
-  // Nullable type array `["string", "null"]` -> `"string"`
+  // Nullable/union type array: preserve `array` when paired with `items`, `object`
+  // when paired with `properties`, otherwise fall back to the first non-null type.
   if (Array.isArray(current.type)) {
     const nonNull = current.type.filter((t): t is string => typeof t === 'string' && t !== 'null')
-    current.type = nonNull[0] ?? 'string'
+    if (current.items !== undefined && nonNull.includes('array')) {
+      current.type = 'array'
+    } else if (current.properties !== undefined && nonNull.includes('object')) {
+      current.type = 'object'
+    } else {
+      current.type = nonNull[0] ?? 'string'
+    }
   }
 
   // `const` -> single-value `enum`
@@ -191,15 +198,17 @@ function sanitizeNode(
     current.properties = nextProps
   }
 
-  // Ensure arrays always define `items`
-  if (current.type === 'array') {
+  // Ensure arrays always define a non-empty `items` schema, and coerce
+  // schema nodes carrying `items` onto `type: "array"` so Gemini never sees
+  // `{"type":"boolean","items":{}}` (issue #192).
+  if (current.type === 'array' || current.items !== undefined) {
+    if (current.type !== 'array') current.type = 'array'
     if (isPlainObj(current.items)) {
-      current.items = sanitizeNode(current.items, rootDefs, seenRefs, depth + 1)
+      const sanitizedItems = sanitizeNode(current.items, rootDefs, seenRefs, depth + 1)
+      current.items = Object.keys(sanitizedItems).length === 0 ? { type: 'string' } : sanitizedItems
     } else {
       current.items = { type: 'string' }
     }
-  } else if (isPlainObj(current.items)) {
-    current.items = sanitizeNode(current.items, rootDefs, seenRefs, depth + 1)
   }
 
   if (isPlainObj(current.additionalProperties)) {
@@ -248,7 +257,12 @@ export function enforceArrayItems<T>(node: T): T {
       return
     }
     const rec = value as Record<string, unknown>
-    if (rec.type === 'array' && rec.items === undefined) rec.items = { type: 'string' }
+    if (rec.items !== undefined) {
+      if (rec.type !== 'array') rec.type = 'array'
+      if (!isPlainObj(rec.items) || Object.keys(rec.items).length === 0) rec.items = { type: 'string' }
+    } else if (rec.type === 'array') {
+      rec.items = { type: 'string' }
+    }
     for (const v of Object.values(rec)) walk(v, depth + 1)
   }
   walk(node, 0)

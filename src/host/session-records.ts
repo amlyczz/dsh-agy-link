@@ -47,25 +47,17 @@ export function createSessionRecords(deps: SessionRecordsDeps): SessionRecords {
     const session = deps.session(sessionId)
     if (session === undefined) return null
     const append = await loadAppendPluginRecord()
-    if (append !== null) {
-      try {
-        const res = append(session, type, data)
-        if (typeof res === 'number') return res
-      } catch (e) {
-        deps.log('failed to ' + what + ' ' + type + ' via appendPluginRecord: ' + String(e))
-      }
+    if (append === null) {
+      // Issue #188: never fall back to session.append(type, data) without
+      // `ignorable: true`, or DSH refuses to reload the entire session log.
+      deps.log('failed to ' + what + ' ' + type + ': appendPluginRecord unavailable')
+      return null
     }
     try {
-      if (typeof session.append === 'function') {
-        const res = session.append(type, data)
-        if (typeof res === 'number') return res
-        if (res !== null && typeof res === 'object' && typeof (res as { seq?: unknown }).seq === 'number') {
-          return (res as { seq: number }).seq
-        }
-        return 0
-      }
+      const res = append(session, type, data)
+      if (typeof res === 'number') return res
     } catch (e) {
-      deps.log('failed to ' + what + ' ' + type + ' via session.append: ' + String(e))
+      deps.log('failed to ' + what + ' ' + type + ' via appendPluginRecord: ' + String(e))
     }
     return null
   }
