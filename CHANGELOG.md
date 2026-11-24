@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.83 (2026-11-24)
+
+### English
+
+- **Fix(mirror): unwrap the always-load bridge tool names (`mcp_dsh-tools-<port>_<tool>`), so `todo_write` / `progress_update` projections work again (fixes half of #200).** 0.6.78 marks bridged tools with `_meta['antigravity/alwaysLoad']`, and agy 1.5.x then registers them as **direct-call** names with a single underscore and a random port. `unwrapMcpTool()` only knew `call_mcp_tool` and the double-underscore `mcp__<server>__<tool>` form, so it returned the full name unchanged: the `todo_write` → DSH task-panel projection missed its `effTool === 'todo_write'` branch, and mirrored step titles leaked `mcp_dsh-tools-53591_todo_write` to the UI. The bridge prefix is now unwrapped (server kept, real tool name restored).
+- **Fix(models): refresh the lineup to agy 1.5.16 — `Gemini 4 Carbon` is back, and the orchestrator slugs were renamed.** 1.5.16 lists `gemini-4-carbon-{low,medium,high}` again, replaces `gemini-pro-orchestrator-g1-pro` with `gemini-pro-orchestrator-argon`, and adds a bare `gemini-pro-orchestrator`. The offline lineup and its fixture now mirror all 27 ids (cross-checked against `agy models` and the ACP `models.availableModels` payload).
+
+### 中文
+
+- **修复(镜像)：拆解急加载桥接工具名（`mcp_dsh-tools-<port>_<tool>`），恢复 `todo_write` / `progress_update` 投影（修复 #200 的一半）。** 0.6.78 给桥接工具加了 `_meta['antigravity/alwaysLoad']`，agy 1.5.x 于是把它们注册为**直调**名：单下划线 + 随机端口。`unwrapMcpTool()` 只认 `call_mcp_tool` 与双下划线 `mcp__<server>__<tool>`，遇到新形态原样返回：`todo_write` → DSH 任务面板投影匹配不到 `effTool === 'todo_write'` 分支，镜像步骤标题也把 `mcp_dsh-tools-53591_todo_write` 暴露到 UI。现在桥接前缀会被拆解（保留 server、还原真实工具名）。
+- **修复(模型)：模型列表刷新到 agy 1.5.16——`Gemini 4 Carbon` 回归，编排器 slug 改名。** 1.5.16 重新列出 `gemini-4-carbon-{low,medium,high}`，用 `gemini-pro-orchestrator-argon` 取代 `gemini-pro-orchestrator-g1-pro`，并新增裸名 `gemini-pro-orchestrator`。离线列表与测试基准已同步到全部 27 个 id（与 `agy models`、ACP 的 `models.availableModels` 双向核对）。
+
 ## 0.6.82 (2026-11-24)
 
 ### English

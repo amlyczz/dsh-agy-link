@@ -530,3 +530,27 @@ test('recorded call_mcp_tool step resolves and executes transparently', async ()
   assert.equal((res as { exitCode?: number } | undefined)?.exitCode, 0)
 })
 
+
+// issue #200: `alwaysLoad` bridged tools arrive as direct-call names with a
+// SINGLE underscore and a random port: mcp_dsh-tools-<port>_<tool>.
+test('unwrapMcpTool unwraps alwaysLoad bridge names (single underscore, issue #200)', () => {
+  const todo = unwrapMcpTool('mcp_dsh-tools-53591_todo_write', { todos: [] })
+  assert.equal(todo.tool, 'todo_write', 'the real tool name must survive so projections match')
+  assert.equal(todo.isMcp, true)
+  assert.equal(todo.server, 'dsh-tools-53591', 'server stays identifiable')
+  assert.deepEqual(todo.input, { todos: [] })
+
+  const progress = unwrapMcpTool('mcp_dsh-tools-53591_progress_update', { pct: 10 })
+  assert.equal(progress.tool, 'progress_update')
+  assert.equal(progress.isMcp, true)
+
+  // A bridge name without a port must work too.
+  const noPort = unwrapMcpTool('mcp_dsh-tools_read_file', { path: 'x' })
+  assert.equal(noPort.tool, 'read_file')
+  assert.equal(noPort.server, 'dsh-tools')
+
+  // Non-bridge single-underscore names are left alone.
+  const other = unwrapMcpTool('some_other_tool', { a: 1 })
+  assert.equal(other.isMcp, false)
+  assert.equal(other.tool, 'some_other_tool')
+})

@@ -57,8 +57,8 @@ test('parseModelsOutput handles dotted current-gen slugs', () => {
   assert.deepEqual(base?.efforts, ['medium'])
 })
 
-// Verbatim `agy models` output (agy 1.5.15, macOS, 2026-11-24).
-const AGY_1515_MODELS = [
+// Verbatim `agy models` output (agy 1.5.16, macOS, 2026-11-24).
+const AGY_1516_MODELS = [
   'gemini-4-neon-high\tGemini 4 Neon (High)',
   'gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)',
   'gemini-4-neon-medium\tGemini 4 Neon (Medium)',
@@ -85,11 +85,11 @@ const AGY_1515_MODELS = [
   'claude-sonnet-5-5-low\tClaude Sonnet 5.5 (Low)',
   'claude-sonnet-5-5-medium\tClaude Sonnet 5.5 (Medium)',
   'claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)',
-  'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
+  'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)'
 ].join('\n')
 
-test('REGRESSION: the DSH catalog is agy 1.5.15 folded — no effort leaks in as a model', () => {
-  const folded = foldEfforts(parseModelsOutput(AGY_1515_MODELS))
+test('REGRESSION: the DSH catalog is agy 1.5.16 folded — no effort leaks in as a model', () => {
+  const folded = foldEfforts(parseModelsOutput(AGY_1516_MODELS))
   assert.deepEqual(
     folded.map((m) => [m.id, m.efforts]),
     [
@@ -116,15 +116,15 @@ test('REGRESSION: the DSH catalog is agy 1.5.15 folded — no effort leaks in as
 test('the offline fallback lineup is the same set the live discovery produces', () => {
   // A fallback that disagrees with discovery is a bug the user only sees when
   // signed out — keep them byte-identical in id and effort set.
-  const discovered = foldEfforts(parseModelsOutput(AGY_1515_MODELS)).map((m) => [m.id, m.efforts])
+  const discovered = foldEfforts(parseModelsOutput(AGY_1516_MODELS)).map((m) => [m.id, m.efforts])
   const fallback = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS).map((m) => [m.id, m.efforts])
   assert.deepEqual(fallback, discovered)
 })
 
-test('fallback catalog mirrors agy 1.5.15 exactly — nothing agy does not list', () => {
+test('fallback catalog mirrors agy 1.5.16 exactly — nothing agy does not list', () => {
   const cat = buildFallbackCatalog(DEFAULT_FALLBACK_MODELS)
   const ids = cat.map((e) => e.id)
-  // Ground truth: `agy models` on 1.5.15, in its own order.
+  // Ground truth: `agy models` on 1.5.16, in its own order.
   assert.deepEqual(ids, [
     'gemini-4-neon',
     'gemini-4-carbon',

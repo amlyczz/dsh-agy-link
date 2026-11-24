@@ -79,6 +79,16 @@ export function unwrapMcpTool(toolName: string, rawArgs: unknown): UnwrappedTool
     }
   }
 
+  // agy 1.5.x registers `alwaysLoad` bridged tools as DIRECT-call names with a
+  // SINGLE underscore: `mcp_dsh-tools-<port>_<tool>` (issue #200). Unwrapped,
+  // the tool keeps its real name (so todo_write / progress_update projections
+  // match) and the server stays identifiable without the random port leaking
+  // into mirrored step titles.
+  const bridge = /^mcp_(dsh-tools(?:-\d+)?)_(.+)$/.exec(toolName)
+  if (bridge !== null) {
+    return { tool: bridge[2]!, input, server: bridge[1]!, isMcp: true }
+  }
+
   if (toolName.startsWith('mcp__')) {
     const parts = toolName.slice(5).split('__')
     if (parts.length >= 2) {
