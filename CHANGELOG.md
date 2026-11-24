@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.79 (2026-11-24)
+
+### English
+
+- **Fix(telemetry): the one-shot and warm-translation spawn paths now honour `disableTelemetry` (merges PR #195, #198).** `buildAgyEnv` only injects `DO_NOT_TRACK` / `DISABLE_TELEMETRY` / `GOOGLE_CLOUD_DISABLE_TELEMETRY` / `ANTIGRAVITY_DISABLE_TELEMETRY` when the caller passes `telemetryFlags`, and otherwise **actively removes** them. Two paths forgot: `runAgyOnce` (ask tool, titles) and `TranslationWorkerPool.ensureWorker`, which hard-coded `telemetryFlags: false`. So with `disableTelemetry` defaulting to `true`, agy's built-in Clearcut client still reported to `play.googleapis.com` from those processes.
+  - Measured on the reporter's host (agy 1.5.5): a long session's telemetry batch is several MB, the client has a hard-coded 30s timeout, and on timeout it **re-sends the same batch every 5s** with no backoff and no drop — 35.08s per wave for hours, ~0.46–0.51 Mbps of steady outbound per process, Send-Q backlog of 2–3 MiB, and RTT to Google rising from 110–140 ms to 500–1890 ms, which slows the real model endpoints.
+  - The warm translation worker is the worst case: it lives across many translation turns, so telemetry accumulates. Both paths now pass `cfg.disableTelemetry` like every other spawn site; `disableTelemetry: false` is unchanged.
+- **Fix(one-shot): tail the agy log when a silent non-zero exit happens** (same PR #195), so a failure with no stdout/stderr still arrives with diagnosable context.
+- **Feat(client): copy an image straight to the clipboard (merges PR #194).** The media lightbox gains a **Copy Image** action and `Cmd/Ctrl+C` support. PNG is written losslessly through `ClipboardItem`; other formats (webp/jpg/svg/gif/avif) are rasterised to PNG first, because Electron's Async Clipboard API only accepts PNG reliably. Failures return `{ok, error}` instead of throwing, and the new copy is localised in all four languages.
+
+### 中文
+
+- **修复(遥测)：一次性调用与常驻翻译 worker 也遵守 `disableTelemetry`（合并 PR #195、#198）。** `buildAgyEnv` 只有在调用方传 `telemetryFlags` 时才注入 `DO_NOT_TRACK` / `DISABLE_TELEMETRY` / `GOOGLE_CLOUD_DISABLE_TELEMETRY` / `ANTIGRAVITY_DISABLE_TELEMETRY`，否则会**主动删除**它们。有两条路径漏了：`runAgyOnce`（ask 工具、标题）与 `TranslationWorkerPool.ensureWorker`（写死 `telemetryFlags: false`）。于是 `disableTelemetry` 虽默认 `true`，这两个进程里 agy 内置的 Clearcut 客户端仍在向 `play.googleapis.com` 上报。
+  - 报告者主机（agy 1.5.5）实测：长会话单批遥测数 MB，客户端硬编码 30 秒超时，超时后**固定每 5 秒重发同一批**、无退避也不丢弃——35.08 秒一波可持续数小时，每进程常驻 ~0.46–0.51 Mbps 出站，Send-Q 积压 2–3 MiB，到 Google 的 RTT 从 110–140ms 升到 500–1890ms，并拖慢真正的模型端点。
+  - 常驻翻译 worker 是最坏形态：它跨多个翻译回合存活，遥测会持续累积。两条路径现在都像其他 spawn 点一样传 `cfg.disableTelemetry`；`disableTelemetry: false` 时行为不变。
+- **修复(一次性调用)：静默非零退出时也会 tail agy 日志**（同一 PR #195），让"没有 stdout/stderr 的失败"也带上可诊断信息。
+- **特性(客户端)：图片可直接复制到剪贴板（合并 PR #194）。** 媒体灯箱新增 **复制图片** 动作并支持 `Cmd/Ctrl+C`。PNG 经 `ClipboardItem` 无损写入；其他格式（webp/jpg/svg/gif/avif）先栅格化为 PNG，因为 Electron 的异步剪贴板 API 只有 PNG 稳定可用。失败时返回 `{ok, error}` 而不抛异常，新增文案四语言齐全。
+
 ## 0.6.78 (2026-11-24)
 
 ### English
