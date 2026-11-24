@@ -204,6 +204,13 @@ export function resolveAccountPlanTier(
   acc: ManagedAccount,
   discoveredModelIds?: readonly string[],
 ): AccountPlanTier | undefined {
+  // A tier the user pinned outranks everything: it is the only source that can
+  // prove Ultra (no quota signal can — see planTierOverride), and it must also
+  // survive a refresh that would otherwise re-infer the conservative default.
+  const pinned = acc.planTierOverride !== undefined && acc.planTierOverride !== 'unknown'
+    ? acc.planTierOverride
+    : undefined
+  if (pinned !== undefined) return pinned
   const evidence = collectPlanTierEvidence({
     quotas: acc.quotas,
     dedicatedGroups: acc.dedicatedGroups,

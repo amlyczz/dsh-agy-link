@@ -80,7 +80,8 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
 - **所有付费账号的 Gemini 组 description 都枚举 `… Gemini 4 Argon …`**，且 `groups` 里没有独立的 Argon 组；所有账号的模型目录也都列出 argon 模型。于是「description 含 argon / 目录含 argon 模型 ⇒ Ultra（折叠共享池）」这条判据对 **Pro 与 Ultra 同样为真**，把 6 个 Pro 账号全部标成了 Ultra（用户报告：「我大多数都是 pro」）。
 - `/usage` 的 JSON 不含任何 tier 字段；本机也没有持久化的用户档位（`jetsy_state.pbtxt` 只有 onboarding 状态）。
 - `loadCodeAssist`（cloudcode-pa）返回的是 **Gemini Code Assist** 的档位，不是 Antigravity 订阅：实测所有账号都是 `currentTier.id = "free-tier"`、`allowedTiers = [free-tier*, standard-tier]`，与「能不能跑 Argon」无关。Antigravity 真实档位在 `google.gca.aicode.v1main.FetchLicensesResponse.userTier`（binary 内含 `G1_PRO_TIER` / `G1_ULTRA_TIER` / `G1_ULTRA_LITE_TIER` / `gcp-ge-ultra-tier` 等），但 `:fetchLicenses` 在 `cloudcode-pa` / `aicode.googleapis.com` 两个主机上都 404（需要 project/parent 上下文），**当前不探测**。
-- 结论：**没有可证的 Ultra 信号时不得声称 Ultra**。付费账号（有 5h 窗口或独立 Argon 桶）一律呈现 **Pro**——既是常见套餐，也是保守答案；`isStalePlanTier('ultra')` 恒为 `true`，持久化的 Ultra 会被重算掉。真要显示 Ultra，必须补一条许可证读取（`userTier`）或用户手动指定的档位，而不是从配额数据猜。
+- 结论：**没有可证的 Ultra 信号时不得声称 Ultra**。付费账号（有 5h 窗口或独立 Argon 桶）一律呈现 **Pro**——既是常见套餐，也是保守答案；`isStalePlanTier('ultra')` 恒为 `true`，持久化的 Ultra 会被重算掉。真要显示 Ultra，必须补一条许可证读取（`userTier`）或用户手动指定档位，而不是从配额数据猜。
+- **用户手动指定档位已落地**（`planTierOverride` + `/agy plan <id|alias> <pro|ultra|free|enterprise|auto>`，`src/host/commands/pool.ts`）：`resolveAccountPlanTier` 先看这个 pin，再用推断；pin 存在 `pool.json` 的账号上，**不受每小时配额刷新影响**（刷新只写 `planTier`，不碰 pin）。`auto` 清除 pin。这是目前唯一诚实的 Ultra 来源，UI 上不额外标注（命令会回报当前状态）。
 - 锚点：`test/plan-tier-and-duplicates.test.ts`（description 枚举形态 → Pro；无证据时 stored Ultra 会被重算）。
 - 锚点：`test/quota-weekly-window-filing.test.ts`。
 

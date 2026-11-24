@@ -169,6 +169,17 @@ export interface ManagedAccount {
   /** Subscription tier (`ultra` | `pro` | `free` | `enterprise`), inferred from quota/model evidence. */
   planTier?: AccountPlanTier
   /**
+   * An explicit tier the user pinned for this account (`/agy plan <id|alias> <tier>`).
+   *
+   * WHY: the quota API cannot tell Pro from Ultra any more — agy 1.5.15 lists
+   * Argon inside the shared Gemini group for every paid plan, exposes no tier
+   * field, and the Antigravity licence service is not reachable from here
+   * (2026-11-24). Inference therefore reports the conservative `pro`; this field
+   * is the only truthful way to show a genuinely different plan, and it outranks
+   * every inferred value in `resolveAccountPlanTier`.
+   */
+  planTierOverride?: AccountPlanTier
+  /**
    * Why the last quota refresh produced no authoritative snapshot, and when it
    * may be probed again.
    *

@@ -26,7 +26,7 @@ export const COMMAND_REGISTRY: readonly CommandEntry[] = [
       'pool', 'accounts',
       'use', 'set-active',
       'enable-account', 'disable-account', 'add-account',
-      'refresh-quota', 'clear-cooldown', 'remove-account',
+      'refresh-quota', 'clear-cooldown', 'remove-account', 'plan',
     ],
     handle: handlePool,
   },
