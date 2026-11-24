@@ -24,7 +24,7 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
 ## 2. 配额采集：CLI 优先 + 按需最小化 REST 降级
 
 1. **主账号 / 槽持有者优先走官方 `agy -p /usage`（零 Node REST 暴露）**：
-   - `agy -p /usage --output-format stream-json` 由官方 Go 二进制发起，具备原生 TLS 指纹与官方 token 续期能力，且能返回 Pro/Ultra 专属 `Gemini 4 Argon` 独立分组。
+   - `agy -p /usage --output-format stream-json` 由官方 Go 二进制发起，具备原生 TLS 指纹与官方 token 续期能力。**注意（2026-11-24 实测 agy 1.5.15）**：它的 `command.data` 只有 `description` + `groups[]`（`name/description/buckets[]`），**没有任何 tier / plan 字段**；`groups` 也不再为付费账号单独列 `Gemini 4 Argon` 分组（只剩 `Gemini Models` 与 `Claude and GPT models`），Argon 只以成员身份出现在 Gemini 组的 description 里。
    - `cliSlotHoldsAccount()` 通过比对系统钥匙串凭据与独立持久化的主凭据/磁盘凭据（`sameCredentialGrant`）严格验证槽归属（拒绝无独立锚点时的同义自证），验证通过即走 `agy -p /usage`。
 2. **端点健康记忆（失败端点置后，绝不跳过探活）**：
    - `AGY_ENDPOINTS` 的固定顺序让**每个账号的每次配额请求**都从同一个端点起步。实测 2026-11-19：`daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` 对本机所有账号稳定 `ECONNRESET`（5.3~8.4s），而 sandbox 端点正常，于是每个账号每轮都要先白等一次超时。
@@ -72,6 +72,16 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
 - **规则**：`ingestModelCatalog` 在「该族没有摘要行」时，若读数按上述判据是周窗口，就只写 `weeklyFraction`/`weeklyResetTime`，5 小时槽位保持「未知」；有真 5 小时读数（<6h）才写 5 小时行。摘要权威时行为不变（按 `sameQuotaWindow` 匹配）。
 - **已落盘的错行必须能自愈**：`undoWeeklyInFiveHourSlot()` 把「5 小时行里装着周窗口、且周行缺失或与该窗口同一时刻」的行搬回周行。否则 `mergeFallbackFamilyQuota` 会用它当「last-known-good」把错误和旧时间戳一起永久冻住（面板上的「数据停留在 …」正是这么来的）。
 - **套餐徽章必须与卡片一致**：`isStalePlanTier('pro', ev, quotaUnavailable)` —— 账号处于 `no_summary_access` 且**没有任何 5h 证据**时，持久化的 `pro` 与证据矛盾，按 Free 呈现。有 5h 读数的付费账号不受瞬时拒绝影响（`has5h` 仍成立）。
+
+### Pro / Ultra 不能从配额数据推断（2026-11-24）
+
+实测结论（agy 1.5.15，7 账号实测）：
+
+- **所有付费账号的 Gemini 组 description 都枚举 `… Gemini 4 Argon …`**，且 `groups` 里没有独立的 Argon 组；所有账号的模型目录也都列出 argon 模型。于是「description 含 argon / 目录含 argon 模型 ⇒ Ultra（折叠共享池）」这条判据对 **Pro 与 Ultra 同样为真**，把 6 个 Pro 账号全部标成了 Ultra（用户报告：「我大多数都是 pro」）。
+- `/usage` 的 JSON 不含任何 tier 字段；本机也没有持久化的用户档位（`jetsy_state.pbtxt` 只有 onboarding 状态）。
+- `loadCodeAssist`（cloudcode-pa）返回的是 **Gemini Code Assist** 的档位，不是 Antigravity 订阅：实测所有账号都是 `currentTier.id = "free-tier"`、`allowedTiers = [free-tier*, standard-tier]`，与「能不能跑 Argon」无关。Antigravity 真实档位在 `google.gca.aicode.v1main.FetchLicensesResponse.userTier`（binary 内含 `G1_PRO_TIER` / `G1_ULTRA_TIER` / `G1_ULTRA_LITE_TIER` / `gcp-ge-ultra-tier` 等），但 `:fetchLicenses` 在 `cloudcode-pa` / `aicode.googleapis.com` 两个主机上都 404（需要 project/parent 上下文），**当前不探测**。
+- 结论：**没有可证的 Ultra 信号时不得声称 Ultra**。付费账号（有 5h 窗口或独立 Argon 桶）一律呈现 **Pro**——既是常见套餐，也是保守答案；`isStalePlanTier('ultra')` 恒为 `true`，持久化的 Ultra 会被重算掉。真要显示 Ultra，必须补一条许可证读取（`userTier`）或用户手动指定的档位，而不是从配额数据猜。
+- 锚点：`test/plan-tier-and-duplicates.test.ts`（description 枚举形态 → Pro；无证据时 stored Ultra 会被重算）。
 - 锚点：`test/quota-weekly-window-filing.test.ts`。
 
 ## 3. Proto3 零值省略与耗尽态解析

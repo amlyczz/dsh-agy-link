@@ -29,7 +29,7 @@ test('SSH_CONNECTION isolation: isolatedHomeEnv injects SSH_CONNECTION and suppo
   assert.equal(supportsSshIsolation(''), false)
 })
 
-test('issue #130 & plan tier: Ultra shared Gemini Models description mentioning Argon stays in google and infers ultra', () => {
+test('issue #130 & plan tier: the shared Gemini description naming Argon stays in google and no longer implies Ultra', () => {
   const groups = [
     {
       name: 'Gemini Models',
@@ -45,7 +45,10 @@ test('issue #130 & plan tier: Ultra shared Gemini Models description mentioning 
   assert.equal(fams.argon, undefined)
   assert.equal(fams.google!.weeklyFraction, 0.9)
   assert.equal(fams.google!.remainingFraction, 0.85)
-  assert.equal(inferAccountPlanTier({ groups, quotas: fams }), 'ultra')
+  // agy 1.5.15 lists Argon inside the shared group for EVERY paid plan (six Pro
+  // accounts were badged Ultra because of this string, 2026-11-24), so the tier
+  // is the paid default — Pro — until a real licence read says otherwise.
+  assert.equal(inferAccountPlanTier({ groups, quotas: fams }), 'pro')
 })
 
 test('plan tier inference distinguishes Pro (dedicated Argon), Free (weekly-only / no_summary_access), and Enterprise', () => {

@@ -59,8 +59,12 @@ test('weekly-only (no 5h window) stays Free', () => {
   assert.equal(resolveAccountPlanTier(acc({ quotas: weeklyOnly, planTier: 'free' })), 'free')
 })
 
-test('Argon folded into the shared Gemini group is Ultra; a dedicated Argon bucket is Pro', () => {
-  assert.equal(inferAccountPlanTier({ quotas: sharedArgon }), 'ultra')
+test('a dedicated Argon bucket is Pro; a member list naming Argon proves nothing', () => {
+  // 2026-11-24: agy 1.5.15 enumerates "… Gemini 4 Argon …" in the shared Gemini
+  // group's description for EVERY paid plan and no longer emits a separate Argon
+  // group, so the description shape below is all a Pro account looks like too.
+  // Six Pro accounts were badged Ultra purely because of this string.
+  assert.equal(inferAccountPlanTier({ quotas: sharedArgon }), 'pro')
   assert.equal(inferAccountPlanTier({ quotas: dedicatedArgon }), 'pro')
   assert.equal(inferAccountPlanTier({ quotas: dedicatedArgon, dedicatedGroups: ['argon'] }), 'pro')
 })
@@ -71,13 +75,13 @@ test('a stale Ultra badge with no Argon evidence at all is corrected to Pro', ()
   assert.equal(resolveAccountPlanTier(acc({ quotas: flashPaid, planTier: 'ultra' })), 'pro')
 })
 
-test('a legitimately detected Ultra survives a weaker quota-only probe', () => {
-  // The CLI /usage groups know Argon shares the Gemini bucket; a later REST-only
-  // snapshot must not downgrade it.
+test('a stored Ultra is always re-derived: no quota signal can prove the fold', () => {
+  // The licence service holds the real tier; until the plugin reads it, an Ultra
+  // badge would be a guess — and the guess that misfired on six accounts is
+  // exactly the one this rule refuses to make.
   const evidence = collectPlanTierEvidence({ quotas: sharedArgon })
-  assert.equal(evidence.argonShared, true)
-  assert.equal(isStalePlanTier('ultra', evidence), false)
-  assert.equal(resolveAccountPlanTier(acc({ quotas: sharedArgon, planTier: 'ultra' })), 'ultra')
+  assert.equal(isStalePlanTier('ultra', evidence), true)
+  assert.equal(resolveAccountPlanTier(acc({ quotas: sharedArgon, planTier: 'ultra' })), 'pro')
 })
 
 test('a Pro/Enterprise badge is never auto-downgraded by weaker evidence', () => {

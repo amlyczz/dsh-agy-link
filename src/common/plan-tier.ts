@@ -75,14 +75,25 @@ function hasWeeklyBucket(g: PlanTierGroupLike): boolean {
 export interface PlanTierEvidence {
   /** Argon has its OWN group/bucket (Pro splits Argon into a separate weekly bucket). */
   argonDedicated: boolean
-  /** Argon is folded into the shared Gemini Models group (Ultra). */
-  argonShared: boolean
   /** A 5-hour rolling window exists. Free accounts are weekly-ONLY. */
   has5h: boolean
   hasWeekly: boolean
 }
 
-/** Collect the tier-defining evidence from groups + quotas. Exported for reconciliation. */
+/**
+ * Collect the tier-defining evidence from groups + quotas. Exported for reconciliation.
+ *
+ * WHY THERE IS NO "Argon is folded into the Gemini pool" EVIDENCE ANY MORE
+ * (2026-11-24): that fold used to be proven by the shared Gemini group's
+ * description listing Argon as a member, or by Argon models appearing in the
+ * catalog. Since agy 1.5.12 the plain `Gemini Models` group enumerates its
+ * members for EVERY paid plan ("… Gemini 4 Argon …", see #130), and every paid
+ * account's model catalog lists the Argon models — so that signal is true for
+ * Pro and Ultra alike. It badged six Pro accounts "Ultra" on the reporting
+ * machine (all of them carried the identical description). A description can
+ * never distinguish the two, so neither can this function: Ultra now requires a
+ * real licence read (see `inferAccountPlanTier`).
+ */
 export function collectPlanTierEvidence(input: {
   groups?: readonly PlanTierGroupLike[]
   quotas?: Partial<Record<ModelFamily, FamilyQuotaInfo>>
@@ -94,7 +105,6 @@ export function collectPlanTierEvidence(input: {
   const groups = input.groups ?? []
   const now = input.now ?? Date.now()
   const quotas = input.quotas ?? {}
-  const modelIds = (input.modelIds ?? []).map((m) => m.toLowerCase())
 
   const argonDedicated =
     groups.some(isDedicatedArgonGroup) ||
@@ -102,12 +112,6 @@ export function collectPlanTierEvidence(input: {
     (input.dedicatedGroups?.includes('argon') === true)
 
   const geminiGroup = groups.find(isGeminiGroup)
-  const sharedDesc = `${geminiGroup ? groupDesc(geminiGroup) : ''} ${(quotas.google?.description ?? '').toLowerCase()}`
-  const argonInSharedDesc =
-    sharedDesc.includes('argon') ||
-    modelIds.some((id) => id.includes('argon')) ||
-    (quotas.google?.models ?? []).some((m) => m.modelId.toLowerCase().includes('argon'))
-  const argonShared = !argonDedicated && argonInSharedDesc
 
   const has5h = geminiGroup
     ? hasFiveHourBucket(geminiGroup)
@@ -120,7 +124,7 @@ export function collectPlanTierEvidence(input: {
       groups.some((g) => hasWeeklyBucket(g)) ||
       Object.values(quotas).some((q) => typeof q?.weeklyFraction === 'number')
 
-  return { argonDedicated, argonShared, has5h, hasWeekly }
+  return { argonDedicated, has5h, hasWeekly }
 }
 
 export function inferAccountPlanTier(input: {
@@ -145,10 +149,17 @@ export function inferAccountPlanTier(input: {
   // A 5-hour window is the paid marker: no free account has one.
   if (input.quotaUnavailable?.reason === 'no_summary_access' && !ev.has5h) return 'free'
 
-  // Pro splits Argon into its own bucket; Ultra folds Argon into the shared
-  // Gemini Models bucket (visible only in that group's description).
+  // A dedicated Argon bucket is Pro's defining marker (Pro splits Argon into its
+  // own weekly pool). There is deliberately NO `ultra` inference here: on agy
+  // 1.5.15 the quota summary carries no separate Argon group for ANY paid
+  // account, `/usage` reports no tier field at all, and the shared Gemini group
+  // enumerates "Gemini 4 Argon" for Pro and Ultra alike — so every price signal
+  // the plugin can read is identical for the two plans. Guessing "Ultra" from it
+  // badged six Pro accounts as Ultra (2026-11-24). The real tier only exists in
+  // the Antigravity licence service (`:fetchLicenses` / `currentTier`), which
+  // this plugin does not probe; a paid account is therefore reported as Pro,
+  // which is both the common plan and the conservative answer.
   if (ev.argonDedicated) return 'pro'
-  if (ev.argonShared) return 'ultra'
 
   // Any paid 5-hour window without Argon evidence is a Pro subscription. Do NOT
   // call a Flash-only Gemini group free: Flash models ship on paid plans too,
@@ -165,7 +176,10 @@ export function inferAccountPlanTier(input: {
  *
  * Each tier has one defining marker, so an absent marker invalidates the tier:
  *  - `free` requires "no 5-hour window" (Free is weekly-only),
- *  - `ultra` requires Argon folded into the shared bucket,
+ *  - `ultra` requires a folded Argon pool. No quota signal can prove that (see
+ *    `collectPlanTierEvidence`), so a stored Ultra is always recomputed —
+ *    showing Ultra without a licence read would be a guess, and the wrong guess
+ *    (six Pro accounts badged Ultra) is what this rule exists to prevent.
  * Pro / Enterprise are never auto-downgraded here: a weaker probe must not erase
  * a tier that a richer probe (CLI `/usage` groups) legitimately detected.
  */
@@ -175,7 +189,7 @@ export function isStalePlanTier(
   quotaUnavailable?: QuotaUnavailableState,
 ): boolean {
   if (tier === 'free') return ev.has5h
-  if (tier === 'ultra') return !ev.argonShared && !ev.argonDedicated
+  if (tier === 'ultra') return true
   // A refused summary on an account with NO 5-hour window is the free-tier
   // shape, so a persisted "pro" contradicts the evidence in front of us. Without
   // this the badge stayed Pro while the same card carried an empty 5h bar,
