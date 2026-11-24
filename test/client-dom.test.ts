@@ -240,6 +240,90 @@ test('lightbox: drag/pan updates the transform', async () => {
 	assert.match(wrap.style.transform, /translate\(/);
 });
 
+test('lightbox: Copy image button and Cmd/Ctrl+C write image/png to clipboard', async () => {
+	const copiedItems: Array<Record<string, Blob>> = [];
+	class FakeClipboardItem {
+		items: Record<string, Blob>;
+		constructor(items: Record<string, Blob>) { this.items = items; }
+	}
+	setGlobal('ClipboardItem', FakeClipboardItem);
+	Object.defineProperty(window.navigator, 'clipboard', {
+		configurable: true,
+		value: {
+			writeText: async (text: string) => { clipboardWrites.push(text); },
+			write: async (items: FakeClipboardItem[]) => {
+				for (const item of items) copiedItems.push(item.items);
+			},
+		},
+	});
+	const pngBlob = new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
+	setGlobal('fetch', async () => ({ ok: true, status: 200, blob: async () => pngBlob }));
+
+	openLightbox('/plugins/agy-link/media?path=%2Ftmp%2Fchart.png', 'Chart', '/tmp/chart.png');
+	const copyImgBtn = document.querySelector('.agy-lightbox-btn[data-agy-action="copy-image"]') as HTMLButtonElement;
+	assert.ok(copyImgBtn, 'copy-image button mounted');
+	await act(async () => { copyImgBtn.click(); await wait(5); });
+	assert.equal(copiedItems.length, 1);
+	assert.equal(copiedItems[0]?.['image/png'], pngBlob);
+	assert.ok(copyImgBtn.textContent?.includes('Copied'));
+	assert.ok((document.querySelector('.agy-toast')?.textContent ?? '').includes('Image copied'));
+
+	// Cmd+C / Ctrl+C triggers the same copy path when no text is selected.
+	await act(async () => {
+		window.dispatchEvent(new (window as any).KeyboardEvent('keydown', { key: 'c', metaKey: true, cancelable: true }));
+		await wait(5);
+	});
+	assert.equal(copiedItems.length, 2);
+
+	// Video lightbox omits the Copy image button.
+	openLightbox('/plugins/agy-link/media?path=%2Ftmp%2Fclip.mp4', 'Clip', '/tmp/clip.mp4');
+	assert.equal(document.querySelector('.agy-lightbox-btn[data-agy-action="copy-image"]'), null);
+});
+
+test('lightbox: Copy image converts non-PNG blobs via canvas and handles errors gracefully', async () => {
+	const copiedItems: Array<Record<string, Blob>> = [];
+	class FakeClipboardItem {
+		items: Record<string, Blob>;
+		constructor(items: Record<string, Blob>) { this.items = items; }
+	}
+	setGlobal('ClipboardItem', FakeClipboardItem);
+	Object.defineProperty(window.navigator, 'clipboard', {
+		configurable: true,
+		value: {
+			writeText: async (text: string) => { clipboardWrites.push(text); },
+			write: async (items: FakeClipboardItem[]) => {
+				for (const item of items) copiedItems.push(item.items);
+			},
+		},
+	});
+	const convertedPng = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+	const origCreateElement = document.createElement.bind(document);
+	let drewImage = false;
+	document.createElement = ((tag: string) => {
+		const el = origCreateElement(tag);
+		if (tag.toLowerCase() === 'canvas') {
+			(el as any).getContext = () => ({ drawImage: () => { drewImage = true; } });
+			(el as any).toBlob = (cb: (b: Blob | null) => void) => cb(convertedPng);
+		}
+		return el;
+	}) as typeof document.createElement;
+	setGlobal('createImageBitmap', async () => ({ width: 32, height: 16, close: () => {} }));
+	const webpBlob = new Blob([new Uint8Array([82, 73, 70, 70])], { type: 'image/webp' });
+	setGlobal('fetch', async () => ({ ok: true, status: 200, blob: async () => webpBlob }));
+
+	openLightbox('/plugins/agy-link/media?path=%2Ftmp%2Fshot.webp', 'Shot', '/tmp/shot.webp');
+	const copyImgBtn = document.querySelector('.agy-lightbox-btn[data-agy-action="copy-image"]') as HTMLButtonElement;
+	await act(async () => { copyImgBtn.click(); await wait(5); });
+	assert.equal(drewImage, true, 'non-PNG blob rasterized onto canvas');
+	assert.equal(copiedItems.length, 1);
+	assert.equal(copiedItems[0]?.['image/png'], convertedPng);
+
+	// Failed HTTP fetch surfaces an error toast instead of throwing.
+	setGlobal('fetch', async () => ({ ok: false, status: 404 }));
+	await act(async () => { copyImgBtn.click(); await wait(5); });
+	assert.ok((document.querySelector('.agy-toast')?.textContent ?? '').includes('HTTP 404'));
+});
+
 // ---------------------------------------------------------------------------
 // 2. images/scanner
 // ---------------------------------------------------------------------------
