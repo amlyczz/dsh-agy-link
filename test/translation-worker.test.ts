@@ -67,12 +67,12 @@ class FakeWorkerChild extends EventEmitter implements WorkerProcessLike {
 }
 
 function makeHarness(onChildLine: (turnInChild: number, line: string, child: FakeWorkerChild) => void) {
-  const spawns: Array<{ bin: string; args: readonly string[]; cwd?: string; child: FakeWorkerChild }> = []
+  const spawns: Array<{ bin: string; args: readonly string[]; cwd?: string; env?: NodeJS.ProcessEnv; child: FakeWorkerChild }> = []
   const spawn: WorkerSpawnFn = (bin, args, opts) => {
     const child = new FakeWorkerChild(10_000 + spawns.length, (line, c) => {
       onChildLine(c.receivedLines.length, line, c)
     })
-    spawns.push({ bin, args, ...(opts.cwd ? { cwd: opts.cwd } : {}), child })
+    spawns.push({ bin, args, ...(opts.cwd ? { cwd: opts.cwd } : {}), ...(opts.env ? { env: opts.env } : {}), child })
     return child
   }
   return { spawns, spawn }
@@ -119,6 +119,39 @@ test('TranslationWorkerPool reuses a warm worker across turns without exit and a
   assert.equal(spawn.child.receivedLines.length, 2)
   assert.equal((JSON.parse(spawn.child.receivedLines[0]!) as { message: { content: string } }).message.content, 'hello 1')
   assert.equal((JSON.parse(spawn.child.receivedLines[1]!) as { message: { content: string } }).message.content, 'hello 2')
+  // The warm worker is long-lived, so it must honour disableTelemetry like every
+  // other spawn path: leaving `telemetryFlags` unset makes buildAgyEnv DELETE
+  // these variables and agy's Clearcut uploader comes back on.
+  assert.equal(spawn.env?.DO_NOT_TRACK, '1', 'telemetry opt-out reaches the warm translation worker')
+  assert.equal(spawn.env?.ANTIGRAVITY_DISABLE_TELEMETRY, '1')
+  assert.equal(spawn.env?.GOOGLE_CLOUD_DISABLE_TELEMETRY, '1')
+})
+
+test('TranslationWorkerPool leaves telemetry flags off when disableTelemetry is false', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-worker-telemetry-off-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('w1')
+  pool.setActiveAccount(acc.id)
+  const h = makeHarness((_turn, _line, child) => {
+    queueMicrotask(() => child.emitResult('ok', { deltas: ['ok'] }))
+  })
+  const workers = new TranslationWorkerPool({
+    cfg: () => ({ ...defaultConfig(), disableTelemetry: false }),
+    bin: () => '/usr/local/bin/agy',
+    pool,
+    log: () => {},
+    platform: 'darwin',
+    spawn: h.spawn,
+  })
+  t.after(() => {
+    workers.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const r = await workers.tryTranslate({ prompt: 'hello', model: 'gemini-3.8-flash', effort: 'low', maxTokens: 512, timeoutMs: 10_000 })
+  assert.equal(r?.ok, true)
+  const spawn = h.spawns[0]!
+  assert.equal(spawn.env?.DO_NOT_TRACK, undefined, 'opting out of the opt-out keeps telemetry on')
+  assert.equal(spawn.env?.ANTIGRAVITY_DISABLE_TELEMETRY, undefined)
 })
 
 test('TranslationWorkerPool recycles worker on maxTurns, key change, and returns null on win32', async (t) => {
