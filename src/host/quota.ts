@@ -55,6 +55,7 @@ import {
 } from '../features/quota/http.ts'
 import {
   getStoredToken as getStoredTokenImpl,
+  cliTokenSource,
   getValidAccessToken as getValidAccessTokenImpl,
   isCurrentAccountGrant as isCurrentAccountGrantImpl,
   persistRefreshedToken as persistRefreshedTokenImpl,
@@ -325,10 +326,24 @@ export class QuotaService {
    * is what agy loads (the on-disk document is only a mirror); `syncSlot` does
    * that and is wired by the host, which owns the mutex we are already holding.
    */
+  /**
+   * The credential agy will load for a CLI quota read. On Windows the
+   * system-HOME primary loads the Credential Manager slot, not the on-disk
+   * mirror; the safety gate must inspect that (issue #199).
+   */
+  private async readCliLoadedToken(account: ManagedAccount): Promise<StoredToken | null> {
+    if (cliTokenSource(process.platform, account) === 'slot') {
+      const slot = await this.readSystemKeychainToken()
+      if (slot && (slot.accessToken || slot.refreshToken)) return slot
+    }
+    return this.getStoredToken(account, true)
+  }
+
   private async prepareCliToken(account: ManagedAccount, withSlotSync = true): Promise<boolean> {
     const syncSlot = withSlotSync ? this.cliDeps.syncSlot : undefined;
     return prepareCliTokenImpl({
-      readStored: () => this.getStoredToken(account, true),
+      // Inspect the credential agy will actually load, not the mirror (issue #199).
+      readStored: () => this.readCliLoadedToken(account),
       // Ask for the SAME window the gate below enforces: the default 60s buffer
       // would hand back a token that the re-read then rejects, wasting a
       // refresh round-trip and skipping the CLI anyway.

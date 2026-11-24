@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.82 (2026-11-24)
+
+### English
+
+- **Fix(quota): the CLI safety gate now inspects the credential agy actually loads (fixes #199).** The #160 gate exists to stop us spawning agy with a token that is about to expire. On Windows it read `getStoredToken()`, whose precedence prefers the durable `.primary-credential.json` mirror **we** write — but agy loads the Credential Manager entry `gemini:antigravity`. So the gate could pass a token agy never sees, agy hit its 10s keyring timeout, and fell back to **interactive OAuth** — exactly the symptom #160 was meant to remove. The gate now resolves its source per platform (`cliTokenSource`): Windows system-HOME primary → the slot; everywhere else → the stored token (which already *is* what agy loads). Measured by the reporter: 7 browser popups in 763 polls (1.5%, down from 7.9% but not zero); this closes the remaining structural path on Windows.
+
+### 中文
+
+- **修复(配额)：CLI 安全守卫现在检查 agy **实际**加载的那个凭证（修复 #199）。** #160 的守卫是为了避免用即将过期的 token 去 spawn agy。在 Windows 上它读的是 `getStoredToken()`，其优先级偏向**我们自己**写的 `.primary-credential.json` 镜像——而 agy 加载的是凭据管理器里的 `gemini:antigravity`。于是守卫可能放行一个 agy 根本看不到的 token，agy 命中 10 秒 keyring 超时后回退到**交互式 OAuth**——正是 #160 想消除的现象。现在守卫按平台解析来源（`cliTokenSource`）：Windows 系统 HOME 主账号 → 槽位；其他平台 → 存储的 token（它本来就等于 agy 会加载的那个）。报告者实测：763 次轮询 7 次弹窗（1.5%，已从 7.9% 降下来但未归零）；本次修复关掉了 Windows 上残留的这条结构性路径。
+
 ## 0.6.81 (2026-11-24)
 
 ### English

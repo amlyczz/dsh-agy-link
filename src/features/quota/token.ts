@@ -191,6 +191,25 @@ export function readSystemKeychainToken(): Promise<StoredToken | null> {
 }
 
 /**
+ * Which credential the CLI quota gate must inspect for this account.
+ *
+ * The gate exists to stop us spawning agy with a token that is about to expire
+ * (issue #160). It must therefore read the credential **agy will actually
+ * load**, which is not always the same as the one the quota panel prefers:
+ *
+ * - Windows system-HOME primary: agy loads the Credential Manager entry
+ *   (`gemini:antigravity`). `.primary-credential.json` is a mirror *we* write.
+ *   Reading the mirror let the gate pass a token agy never sees, so agy still
+ *   hit its 10s keyring timeout and fell back to interactive OAuth (#199).
+ * - Everywhere else the normal stored-token precedence already is "what agy
+ *   loads", so the gate reads the stored token.
+ */
+export function cliTokenSource(platform: string, account: { systemHome?: boolean; dir?: string }): 'slot' | 'stored' {
+  if (platform === 'win32' && (account.systemHome === true || !account.dir)) return 'slot'
+  return 'stored'
+}
+
+/**
  * Path of agy's on-disk token document for one account. The primary account
  * rides the real system HOME (Keychain-backed); only secondary accounts have
  * an isolated dir.

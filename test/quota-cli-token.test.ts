@@ -11,7 +11,7 @@ import {
   prepareCliToken,
   tokenRemainingMs,
 } from '../src/features/quota/cli-token.ts'
-import { isAccessTokenFresh } from '../src/features/quota/token.ts'
+import { cliTokenSource, isAccessTokenFresh } from '../src/features/quota/token.ts'
 
 // The bug these guard: agy gives its keyring read a FIXED 10s budget and runs
 // the token refresh in a separate goroutine. When the stored access token was
@@ -251,4 +251,15 @@ test('prepareIsolatedCliToken refreshes the isolated token file but never writes
   assert.equal(await svc.prepareIsolatedCliToken(isolated), true)
   assert.equal(storedReads, 2, 'read, refresh, re-read')
   assert.equal(slotWrites, 0, 'SSH isolation reads the token file; the Windows slot is not touched')
+})
+
+// issue #199: the CLI safety gate must inspect the credential agy actually
+// loads. On Windows the system-HOME primary runs off the Credential Manager
+// slot; reading the on-disk mirror let the gate pass a token agy never sees.
+test('issue #199: cliTokenSource picks the slot only for the Windows system-HOME primary', () => {
+  assert.equal(cliTokenSource('win32', { systemHome: true, dir: 'C:\\acc' }), 'slot')
+  assert.equal(cliTokenSource('win32', { dir: undefined }), 'slot')
+  assert.equal(cliTokenSource('win32', { systemHome: false, dir: 'C:\\iso' }), 'stored')
+  assert.equal(cliTokenSource('darwin', { systemHome: true }), 'stored')
+  assert.equal(cliTokenSource('linux', { systemHome: true }), 'stored')
 })
