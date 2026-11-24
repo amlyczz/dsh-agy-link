@@ -126,7 +126,7 @@ export const ptBR: AgyDictionary = {
   'effort.label': 'Intensidade de raciocínio:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high', 'effort.xhigh': 'extra', 'effort.max': 'max',
   'pool.label': 'Agendamento do pool de contas:', 'pool.sequential': 'Usar em sequência', 'pool.roundRobin': 'Rodízio',
   'models.label': 'Visibilidade dos modelos ({selected} de {total} selecionados):', 'models.empty': 'Ainda não há modelos no catálogo — envie uma mensagem ou clique em "Atualizar cota" e volte para gerenciá-los',
-  'models.deniedHint': 'Este modelo está bloqueado pela lista hiddenModels; marcá-lo não o adicionará ao seletor.',
+  'models.deniedHint': 'Este modelo está na lista hiddenModels (de uma versão anterior). Clique para removê-lo da lista e mostrá-lo no seletor.',
   'models.hint': 'Clique para marcar os modelos que deseja exibir; sem nenhum marcado, todos aparecem. As sessões em andamento não são afetadas.',
   'header.refreshQuota': 'Atualizar cota', 'header.refreshing': 'Atualizando...',
   'console.close': 'Fechar (Esc)', 'header.badgeTitle': 'Antigravity: {count} contas prontas · clique para abrir o console', 'header.badgeLoading': 'Antigravity · clique para abrir o console', 'header.subagents': '{running}/{total} subagentes',

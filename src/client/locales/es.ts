@@ -126,7 +126,7 @@ export const es: AgyDictionary = {
   'effort.label': 'Intensidad de razonamiento:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high', 'effort.xhigh': 'extra', 'effort.max': 'max',
   'pool.label': 'Programación del pool de cuentas:', 'pool.sequential': 'Usar en secuencia', 'pool.roundRobin': 'Turno rotativo',
   'models.label': 'Visibilidad de modelos ({selected} de {total} seleccionados):', 'models.empty': 'Aún no hay modelos en el catálogo: envía un mensaje o haz clic en "Actualizar cuota" y vuelve para gestionarlos',
-  'models.deniedHint': 'Este modelo está bloqueado por la lista hiddenModels; marcarlo no lo añadirá al selector.',
+  'models.deniedHint': 'Este modelo está en la lista hiddenModels (de una versión anterior). Haz clic para quitarlo de la lista y mostrarlo en el selector.',
   'models.hint': 'Haz clic para marcar los modelos que quieres ver; sin ninguno marcado se muestran todos. Las sesiones en curso no se ven afectadas.',
   'header.refreshQuota': 'Actualizar cuota', 'header.refreshing': 'Actualizando...',
   'console.close': 'Cerrar (Esc)', 'header.badgeTitle': 'Antigravity: {count} cuentas listas · haga clic para abrir la consola', 'header.badgeLoading': 'Antigravity · haga clic para abrir la consola', 'header.subagents': '{running}/{total} subagentes',

@@ -126,7 +126,7 @@ export const zh = {
   'effort.label': '思考强度：', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high', 'effort.xhigh': 'extra', 'effort.max': 'max',
   'pool.label': '号池调度：', 'pool.sequential': '顺次耗尽', 'pool.roundRobin': '轮询均衡',
   'models.label': '模型显示（已选 {selected} / {total}）：', 'models.empty': '模型目录还没有可用模型，发一次对话或点“刷新额度”后再来管理',
-  'models.deniedHint': '该模型被 hiddenModels 黑名单禁用，勾选也不会出现在模型选择器中。',
+  'models.deniedHint': '该模型在 hiddenModels 黑名单中（旧版本写入）。点击即可移出黑名单并在模型选择器中显示。',
   'models.hint': '点击勾选要显示的模型；一个都不勾表示全部显示。进行中的会话不受影响。',
   'header.refreshQuota': '刷新额度', 'header.refreshing': '刷新中',
   'console.close': '关闭（Esc）', 'header.badgeTitle': 'Antigravity：{count} 个账号已就绪 · 点击打开控制台', 'header.badgeLoading': 'Antigravity · 点击打开控制台', 'header.subagents': '{running}/{total} 子代理',

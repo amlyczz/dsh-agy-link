@@ -166,6 +166,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				setCfg: config.setCfg,
 				setMode: config.setMode,
 				setSelectedModels: config.setSelectedModels,
+				setHiddenModels: (ids: ReadonlyArray<string>) => config.setCfg('hiddenModels', [...ids]),
 				copyImageCommand,
 				showToast,
 			}),
@@ -409,11 +410,12 @@ function renderRuntimeConfig(
 		setCfg: (key: string, value: unknown) => Promise<void>;
 		setMode: (mode: string) => Promise<void>;
 		setSelectedModels: (ids: ReadonlyArray<string>) => Promise<void>;
+		setHiddenModels: (ids: ReadonlyArray<string>) => Promise<void>;
 		copyImageCommand: () => void;
 		showToast: (text: string, type?: ToastType) => void;
 	},
 ): unknown {
-	const { setCfg, setMode, setSelectedModels, copyImageCommand, showToast } = actions;
+	const { setCfg, setMode, setSelectedModels, setHiddenModels, copyImageCommand, showToast } = actions;
 	const caption = (text: string, desc?: string): unknown => h('div', { style: { display: 'flex', flexDirection: 'column' } },
 		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, text),
 		desc !== undefined ? h('span', { style: S.mutedLine, title: desc }, desc) : null,
@@ -498,7 +500,7 @@ function renderRuntimeConfig(
 			renderDefaultEffortRow(t, status, catalogModels, loadingAction, setCfg),
 			h(RuntimeControlsSection, { t, status, loadingAction, setCfg }),
 			h(EcosystemPanel, { t, currentAgent: status.agent ?? '', loadingAction, setCfg, showToast }),
-			h(ModelsPanel, { t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels }),
+			h(ModelsPanel, { t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels, setHiddenModels }),
 		),
 	);
 }
