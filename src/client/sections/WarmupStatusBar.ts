@@ -3,6 +3,7 @@
 
 import type { ManagedAccount } from '../../common/pool-types.ts';
 import type { WarmupStatusSnapshot } from '../../common/warmup-types.ts';
+import { accountDisplayAlias } from './account-alias.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import { h } from '../react.ts';
 import { S } from '../styles.ts';
@@ -24,10 +25,13 @@ export function WarmupStatusBar(props: {
 	if (!warmupState) return null;
 
 	if (warmupState.running) {
-		const current = warmupState.currentAccountId
-			? accounts.find((a) => a.id === warmupState.currentAccountId)
-			: undefined;
-		const accountLabel = current?.alias || current?.email || warmupState.currentAccountId || '';
+		const currentIdx = warmupState.currentAccountId
+			? accounts.findIndex((a) => a.id === warmupState.currentAccountId)
+			: -1;
+		const current = currentIdx >= 0 ? accounts[currentIdx] : undefined;
+		const accountLabel = current
+			? accountDisplayAlias(t as never, current, currentIdx)
+			: (warmupState.currentAccountId || '');
 		const label = accountLabel
 			? t('warmup.progressCurrent', {
 				completed: warmupState.completed,
@@ -40,6 +44,7 @@ export function WarmupStatusBar(props: {
 			});
 		return h('span', {
 			key: 'warmup-running-badge',
+			title: label,
 			style: {
 				...S.badgeTag!,
 				fontSize: '11px',
@@ -48,6 +53,10 @@ export function WarmupStatusBar(props: {
 				color: '#f97316',
 				borderColor: 'rgba(249, 115, 22, 0.35)',
 				background: 'rgba(249, 115, 22, 0.08)',
+				maxWidth: '100%',
+				overflow: 'hidden',
+				textOverflow: 'ellipsis',
+				whiteSpace: 'nowrap',
 			},
 		}, Spinner(), label);
 	}
@@ -64,6 +73,9 @@ export function WarmupStatusBar(props: {
 			fontSize: '11px',
 			color: last.failed > 0 ? 'var(--agy-warn-text)' : 'var(--agy-text-tertiary)',
 			fontWeight: 500,
+			maxWidth: '100%',
+			overflow: 'hidden',
+			textOverflow: 'ellipsis',
 			whiteSpace: 'nowrap',
 			cursor: detail ? 'help' : 'default',
 		},

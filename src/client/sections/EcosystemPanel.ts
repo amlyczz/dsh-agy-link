@@ -24,7 +24,7 @@ function summaryBadge(key: string, text: string): unknown {
 
 /** One row shape for every ecosystem group, so lists read as one surface. */
 const listRowStyle = {
-	display: 'flex', alignItems: 'baseline', gap: '8px',
+	display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0,
 	padding: '4px 8px', borderRadius: '6px',
 	background: 'var(--agy-bg-subbox)', border: '1px solid var(--agy-border-subbox)',
 };
@@ -48,7 +48,7 @@ function renderPluginsGroup(
 				style: { ...listRowStyle, alignItems: 'center', justifyContent: 'space-between' },
 			},
 				h('div', { style: { minWidth: 0, flex: '1 1 0' } },
-					h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--agy-text-primary)' } },
+					h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--agy-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: `${p.name} (${p.source})` },
 						`${p.name} (${p.source})`,
 					),
 					p.description
@@ -84,7 +84,7 @@ function renderAgentsGroup(
 				style: { ...listRowStyle, alignItems: 'center', justifyContent: 'space-between' },
 			},
 				h('div', { style: { minWidth: 0, flex: '1 1 0' } },
-					h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--agy-text-primary)' } }, `${a.name} (${a.source})`),
+					h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--agy-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: `${a.name} (${a.source})` }, `${a.name} (${a.source})`),
 					a.description ? h('div', { style: S.mutedLine, title: a.description }, a.description) : null,
 				),
 				h(Button, {
@@ -186,8 +186,8 @@ export function EcosystemPanel(props: EcosystemPanelProps): unknown {
 	] : [];
 
 	return h('div', { style: { ...S.card, marginTop: '4px', marginBottom: 0, display: 'flex', flexDirection: 'column', gap: '8px' } },
-		h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } },
-			h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
+		h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', minWidth: 0 } },
+			h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 180px' } },
 				h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('eco.heading')),
 				h('span', { style: S.mutedLine, title: t('eco.desc') }, t('eco.desc')),
 			),

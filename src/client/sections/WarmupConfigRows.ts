@@ -9,7 +9,7 @@ import { S } from '../styles.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import type { StatusPayload } from '../status.ts';
 import { Button } from '../ui/Button.ts';
-import { Row } from '../ui/Row.ts';
+import { Row, rowCaption } from '../ui/Row.ts';
 import { segGroup } from '../ui/SegGroup.ts';
 
 export interface WarmupConfigProps {
@@ -17,13 +17,6 @@ export interface WarmupConfigProps {
 	status: StatusPayload;
 	loadingAction: string | null;
 	setCfg: (key: string, value: unknown) => Promise<void>;
-}
-
-function caption(title: string, desc: string): unknown {
-	return h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
-		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, title),
-		h('span', { style: S.muted }, desc),
-	);
 }
 
 /** Comma/space separated model list -> string[]; empty string means "family defaults". */
@@ -43,11 +36,10 @@ function modelsRow(props: WarmupConfigProps): unknown {
 	const dirty = parsed.join(',') !== (status.warmupModels ?? []).join(',');
 	const busy = loadingAction === 'config:warmupModels';
 	return h(Row, {
-		style: { gap: '10px', flexWrap: 'wrap' },
-		left: caption(t('config.warmupModelsLabel'), t('config.warmupModelsDesc')),
-		right: h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+		left: rowCaption(t('config.warmupModelsLabel'), t('config.warmupModelsDesc')),
+		right: h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', maxWidth: '100%' } },
 			h('input', {
-				style: { ...S.input, width: '210px', padding: '3px 8px', fontSize: '11.5px' },
+				style: { ...S.input, width: '210px', maxWidth: '100%', padding: '3px 8px', fontSize: '11.5px' },
 				value,
 				placeholder: t('config.warmupModelsPlaceholder'),
 				'aria-label': t('config.warmupModelsLabel'),
@@ -73,9 +65,8 @@ function maxProbesRow(props: WarmupConfigProps): unknown {
 	const valid = Number.isFinite(num) && num >= 0 && num <= 200;
 	const busy = loadingAction === 'config:warmupMaxProbesPerRun';
 	return h(Row, {
-		style: { gap: '10px', flexWrap: 'wrap' },
-		left: caption(t('config.warmupMaxProbes'), t('config.warmupMaxProbesDesc')),
-		right: h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+		left: rowCaption(t('config.warmupMaxProbes'), t('config.warmupMaxProbesDesc')),
+		right: h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', maxWidth: '100%' } },
 			h('input', {
 				style: { ...S.input, width: '72px', padding: '3px 8px', fontSize: '11.5px' },
 				value,
@@ -105,8 +96,7 @@ export function warmupConfigRows(props: WarmupConfigProps): unknown[] {
 	return [
 		h(Row, {
 			key: 'warmup-windows',
-			style: { gap: '10px', flexWrap: 'wrap' },
-			left: caption(t('config.warmupWindows'), t('config.warmupWindowsDesc')),
+			left: rowCaption(t('config.warmupWindows'), t('config.warmupWindowsDesc')),
 			right: segGroup(windows.map((w) => h(Button, {
 				key: w.id,
 				variant: current === w.id ? 'segActive' : 'seg',

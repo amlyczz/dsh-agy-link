@@ -3,7 +3,7 @@
 // so the settings section and the Plugins-page dashboard render IDENTICAL
 // quota visuals from one implementation.
 
-import type { ManagedAccount } from '../../common/pool-types.ts';
+import { effectiveFamilyCooldown, type ManagedAccount } from '../../common/pool-types.ts';
 import { isFamilyCooling, isFamilyInCooldown } from '../../common/quota-bench.ts';
 import { computeQuotaPacing } from '../../common/quota-pacing.ts';
 import type { AgyLocaleKey } from '../locales.ts';
@@ -145,8 +145,8 @@ const renderLine = (
 	// Chromium/Electron scroll flicker across multi-account lists.
 	const isShimmer = isRefreshing;
 	const { pacing, tooltipText, showTimeMarker, markerLeftPct } = describePacing(t, windowDurationMs, resetStr, rawFraction, rawReset);
-	return h('div', { className: 'agy-quota-line', style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '2px 0' } },
-		h('span', { style: { width: '64px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' } }, windowName),
+	return h('div', { className: 'agy-quota-line', style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '2px 0', minWidth: 0 } },
+		h('span', { title: windowName, style: { width: '64px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, windowName),
 		h('div', {
 			className: isShimmer ? 'agy-shimmer-track' : '',
 			style: { ...S.progressBarBg, position: 'relative' },
@@ -201,12 +201,13 @@ const renderLine = (
 				minWidth: '150px',
 				flexShrink: 0,
 				marginLeft: '6px',
+				overflow: 'hidden',
 			},
 		},
 			resetStr
-				? h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '10.5px', fontWeight: 500, whiteSpace: 'nowrap' } }, `↻ ${resetStr}`)
+				? h('span', { title: resetStr, style: { color: 'var(--agy-text-secondary)', fontSize: '10.5px', fontWeight: 500, whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' } }, `↻ ${resetStr}`)
 				: pacing?.status === 'unactivated'
-					? h('span', { style: { color: 'var(--agy-text-tertiary)', fontSize: '10px', fontWeight: 500, whiteSpace: 'nowrap' } }, t('quota.unactivated'))
+					? h('span', { title: t('quota.unactivated'), style: { color: 'var(--agy-text-tertiary)', fontSize: '10px', fontWeight: 500, whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' } }, t('quota.unactivated'))
 					: null,
 		),
 	);
@@ -218,7 +219,7 @@ function formatCooldownTip(
 	acc: ManagedAccount,
 	now: number,
 ): string {
-	const cd = acc.cooldowns[familyKey];
+	const cd = effectiveFamilyCooldown(acc, familyKey);
 	if (cd && cd.cooldownUntil > now) {
 		const mins = Math.max(1, Math.ceil((cd.cooldownUntil - now) / 60_000));
 		const hours = Math.floor(mins / 60);
@@ -381,14 +382,16 @@ export function renderFamilyQuotaBar(
 				display: 'flex',
 				alignItems: 'center',
 				justifyContent: 'space-between',
+				flexWrap: 'wrap',
 				gap: '6px',
+				minWidth: 0,
 				fontWeight: 700,
 				fontSize: '12px',
 				marginBottom: '3px',
 				color: 'var(--agy-text-primary)',
 			},
 		},
-			h('div', { style: { display: 'flex', alignItems: 'center', gap: '5px' } },
+			h('div', { style: { display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 } },
 				brandIcon(FAMILY_BRAND[familyKey], 13),
 				h('span', null, label),
 			),
@@ -415,7 +418,7 @@ function renderModelPauses(t: (key: AgyLocaleKey) => string, acc: ManagedAccount
 	const label = paused
 		.map(([model, cd]) => `${model} → ${new Date(cd.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`)
 		.join(' · ');
-	return h('div', { style: { marginTop: '2px', fontSize: '10px', fontWeight: 600, color: '#f59e0b' } },
+	return h('div', { style: { marginTop: '2px', fontSize: '10px', fontWeight: 600, color: '#f59e0b', wordBreak: 'break-word' } },
 		`${t('quota.modelPaused')}: ${label}`);
 }
 

@@ -16,7 +16,7 @@ import { acquireOverlaySuspend } from '../scroll-guard.ts';
 import { useAgyStatus } from '../status.ts';
 import { S } from '../styles.ts';
 import { Button } from '../ui/Button.ts';
-import { Row } from '../ui/Row.ts';
+import { Row, rowCaption } from '../ui/Row.ts';
 import { segGroup } from '../ui/SegGroup.ts';
 import { Select } from '../ui/Select.ts';
 import { Spinner } from '../ui/Spinner.ts';
@@ -166,6 +166,7 @@ export function createSettingsSection(locale: LocaleLike): (props?: SettingsSect
 				setCfg: config.setCfg,
 				setMode: config.setMode,
 				setSelectedModels: config.setSelectedModels,
+				setHiddenModels: (ids: ReadonlyArray<string>) => config.setCfg('hiddenModels', [...ids]),
 				copyImageCommand,
 				showToast,
 			}),
@@ -188,7 +189,7 @@ function renderHeader(
 			h('span', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--agy-text-primary)' } }, 'Antigravity'),
 			h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
 		),
-		h('div', { className: 'agy-header-actions', style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+		h('div', { className: 'agy-header-actions', style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%' } },
 			!addingAccount ? h(Button, {
 				variant: 'primary', size: 'sm', className: 'agy-btn',
 				style: { gap: '4px', height: '24px', padding: '2px 8px', fontSize: '11.5px' },
@@ -409,15 +410,12 @@ function renderRuntimeConfig(
 		setCfg: (key: string, value: unknown) => Promise<void>;
 		setMode: (mode: string) => Promise<void>;
 		setSelectedModels: (ids: ReadonlyArray<string>) => Promise<void>;
+		setHiddenModels: (ids: ReadonlyArray<string>) => Promise<void>;
 		copyImageCommand: () => void;
 		showToast: (text: string, type?: ToastType) => void;
 	},
 ): unknown {
-	const { setCfg, setMode, setSelectedModels, copyImageCommand, showToast } = actions;
-	const caption = (text: string, desc?: string): unknown => h('div', { style: { display: 'flex', flexDirection: 'column' } },
-		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, text),
-		desc !== undefined ? h('span', { style: S.mutedLine, title: desc }, desc) : null,
-	);
+	const { setCfg, setMode, setSelectedModels, setHiddenModels, copyImageCommand, showToast } = actions;
 
 	return h('div', { style: { marginTop: '14px', paddingTop: '10px', borderTop: '1px solid var(--agy-border-divider)' } },
 		h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
@@ -426,7 +424,7 @@ function renderRuntimeConfig(
 				h('span', { style: S.mutedLine, title: t('config.runtimeDesc') }, t('config.runtimeDesc')),
 			),
 			h(Row, {
-				left: h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('pool.label')),
+				left: rowCaption(t('pool.label')),
 				right: segGroup([
 					h(Button, {
 						variant: pool?.mode === 'sequential' || !pool?.mode ? 'segActive' : 'seg',
@@ -439,7 +437,7 @@ function renderRuntimeConfig(
 				]),
 			}),
 			h(Row, {
-				left: caption(t('config.autoWarmup'), t('config.autoWarmupDesc')),
+				left: rowCaption(t('config.autoWarmup'), t('config.autoWarmupDesc')),
 				right: segGroup([
 					h(Button, {
 						variant: status.autoWarmup === true ? 'segActive' : 'seg',
@@ -455,11 +453,8 @@ function renderRuntimeConfig(
 			}),
 			...warmupConfigRows({ t, status, loadingAction, setCfg }),
 			h(Row, {
-				style: { gap: '10px' },
-				left: h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
-					h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.autoTranslate')),
-					h('span', { style: S.mutedLine, title: t('config.autoTranslateDesc') }, t('config.autoTranslateDesc')),
-				),
+				style: { gap: '8px 10px' },
+				left: rowCaption(t('config.autoTranslate'), t('config.autoTranslateDesc')),
 				right: h('div', { style: S.cfgRowRight },
 					segGroup([
 						h(Button, {
@@ -493,12 +488,12 @@ function renderRuntimeConfig(
 				),
 			}),
 			renderImageRow(t, status, catalogModels, loadingAction, setCfg, copyImageCommand, effortLabels(t)),
-			renderVisibilityRows({ t, status, loadingAction, setCfg }),
+			...renderVisibilityRows({ t, status, loadingAction, setCfg }),
 			renderPoolWideCatalogRow({ t, status, loadingAction, setCfg }),
 			renderDefaultEffortRow(t, status, catalogModels, loadingAction, setCfg),
 			h(RuntimeControlsSection, { t, status, loadingAction, setCfg }),
 			h(EcosystemPanel, { t, currentAgent: status.agent ?? '', loadingAction, setCfg, showToast }),
-			h(ModelsPanel, { t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels }),
+			h(ModelsPanel, { t, catalogModels, hiddenModelSet, selectedModelSet, loadingAction, setSelectedModels, setHiddenModels }),
 		),
 	);
 }
@@ -524,10 +519,7 @@ function renderDefaultEffortRow(
 	const configured = (value ?? '').trim().toLowerCase();
 	const shown = configured !== '' && !levels.includes(configured) ? [...levels, configured] : levels;
 	return h(Row, {
-		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
-			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.defaultEffort')),
-			h('span', { style: S.muted }, t('config.defaultEffortDesc')),
-		),
+		left: rowCaption(t('config.defaultEffort'), t('config.defaultEffortDesc')),
 		right: segGroup([
 			h(Button, {
 				variant: value === '' ? 'segActive' : 'seg',

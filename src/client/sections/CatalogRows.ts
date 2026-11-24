@@ -1,11 +1,10 @@
 // Issue #107: opt-in pool-wide model catalog. Extracted from the runtime
 // settings rows so the panel stays within the file/function size budget.
 import { h } from '../react.ts';
-import { S } from '../styles.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import type { StatusPayload } from '../status.ts';
 import { Button } from '../ui/Button.ts';
-import { Row } from '../ui/Row.ts';
+import { Row, rowCaption } from '../ui/Row.ts';
 import { segGroup } from '../ui/SegGroup.ts';
 
 export function renderPoolWideCatalogRow(args: {
@@ -17,10 +16,7 @@ export function renderPoolWideCatalogRow(args: {
 	const { t, status, loadingAction, setCfg } = args;
 	const on = status.poolWideCatalog === true;
 	return h(Row, {
-		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
-			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.poolWideCatalog')),
-			h('span', { style: S.mutedLine, title: t('config.poolWideCatalogDesc') }, t('config.poolWideCatalogDesc')),
-		),
+		left: rowCaption(t('config.poolWideCatalog'), t('config.poolWideCatalogDesc')),
 		right: segGroup([
 			h(Button, {
 				variant: on ? 'segActive' : 'seg',

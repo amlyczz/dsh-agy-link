@@ -6,6 +6,7 @@ import { h } from '../react.ts';
 import type { CatalogModelView, StatusPayload } from '../status.ts';
 import { S } from '../styles.ts';
 import { Button } from '../ui/Button.ts';
+import { Row, rowCaption } from '../ui/Row.ts';
 import { Select } from '../ui/Select.ts';
 
 export const IMAGE_CLI_SAMPLE = 'dsh-agy-image -p "…" -a 16:9 -o ./image.jpg';
@@ -20,12 +21,10 @@ export function renderImageRow(
 	labels: EffortLabels,
 ): unknown {
 	return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-		h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
-			h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
-				h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('config.image')),
-				h('span', { style: S.mutedLine, title: t('config.imageDesc') }, t('config.imageDesc')),
-			),
-			h('div', { style: S.cfgRowRight },
+		h(Row, {
+			style: { padding: 0, borderBottom: 'none', gap: '8px 10px' },
+			left: rowCaption(t('config.image'), t('config.imageDesc')),
+			right: h('div', { style: S.cfgRowRight },
 				h(Select, {
 					value: status.imageModel ?? '',
 					ariaLabel: t('config.imageModel'),
@@ -44,7 +43,7 @@ export function renderImageRow(
 					options: translateEffortOptions(status.imageEffort ?? '', labels, status.imageModel ?? '', catalogModels),
 				}),
 			),
-		),
+		}),
 		h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
 			h('code', {
 				style: {

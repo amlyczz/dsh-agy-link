@@ -27,6 +27,8 @@ export const S: Record<string, Record<string, unknown>> = {
 		display: 'flex',
 		alignItems: 'center',
 		justifyContent: 'space-between',
+		flexWrap: 'wrap',
+		gap: '8px',
 		padding: '10px 14px',
 		background: 'var(--agy-bg-header)',
 		border: '1px solid var(--agy-border-card)',
@@ -131,6 +133,8 @@ export const S: Record<string, Record<string, unknown>> = {
 		cursor: 'pointer',
 		fontSize: '12px',
 		fontWeight: 600,
+		whiteSpace: 'nowrap',
+		flexShrink: 0,
 	},
 	btnPrimary: {
 		display: 'inline-flex',
@@ -145,6 +149,8 @@ export const S: Record<string, Record<string, unknown>> = {
 		fontSize: '12px',
 		fontWeight: 700,
 		boxShadow: '0 2px 6px rgba(37, 99, 235, 0.35)',
+		whiteSpace: 'nowrap',
+		flexShrink: 0,
 	},
 	btnDanger: {
 		display: 'inline-flex',
@@ -158,6 +164,8 @@ export const S: Record<string, Record<string, unknown>> = {
 		cursor: 'pointer',
 		fontSize: '11px',
 		fontWeight: 600,
+		whiteSpace: 'nowrap',
+		flexShrink: 0,
 	},
 	btnSm: {
 		display: 'inline-flex',
@@ -171,6 +179,8 @@ export const S: Record<string, Record<string, unknown>> = {
 		cursor: 'pointer',
 		fontSize: '11.5px',
 		fontWeight: 600,
+		whiteSpace: 'nowrap',
+		flexShrink: 0,
 	},
 	btnSmPrimary: {
 		display: 'inline-flex',
@@ -184,9 +194,13 @@ export const S: Record<string, Record<string, unknown>> = {
 		cursor: 'pointer',
 		fontSize: '11.5px',
 		fontWeight: 700,
+		whiteSpace: 'nowrap',
+		flexShrink: 0,
 	},
 	segGroup: {
 		display: 'inline-flex',
+		flexWrap: 'wrap',
+		maxWidth: '100%',
 		background: 'var(--agy-seg-group-bg)',
 		borderRadius: '7px',
 		padding: '3px',

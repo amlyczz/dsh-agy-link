@@ -6,7 +6,7 @@ import { S } from '../styles.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import type { StatusPayload } from '../status.ts';
 import { Button } from '../ui/Button.ts';
-import { Row } from '../ui/Row.ts';
+import { Row, rowCaption } from '../ui/Row.ts';
 import { segGroup } from '../ui/SegGroup.ts';
 
 export interface RuntimeControlsProps {
@@ -14,13 +14,6 @@ export interface RuntimeControlsProps {
 	status: StatusPayload;
 	loadingAction: string | null;
 	setCfg: (key: string, value: unknown) => Promise<void>;
-}
-
-function rowCaption(title: string, desc: string): unknown {
-	return h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 0' } },
-		h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, title),
-		h('span', { style: S.mutedLine, title: desc }, desc),
-	);
 }
 
 function boolRow(opts: {
@@ -127,11 +120,10 @@ function renderAgentRow(props: RuntimeControlsProps & {
 	const saved = (status.agent ?? '').trim();
 	const busy = loadingAction === 'config:agent';
 	return h(Row, {
-		style: { gap: '10px', flexWrap: 'wrap' },
 		left: rowCaption(t('config.agent'), t('config.agentDesc')),
-		right: h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+		right: h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', maxWidth: '100%' } },
 			h('input', {
-				style: { ...S.input, width: '165px', padding: '3px 8px', fontSize: '11.5px' },
+				style: { ...S.input, width: '165px', maxWidth: '100%', padding: '3px 8px', fontSize: '11.5px' },
 				value: draft,
 				placeholder: t('config.agentPlaceholder'),
 				'aria-label': t('config.agent'),

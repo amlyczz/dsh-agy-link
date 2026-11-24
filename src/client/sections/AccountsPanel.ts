@@ -6,7 +6,7 @@
 // busy scoping and host-derived progress survive modal close/reopen.
 
 import { buildAccountModelRows, type AccountModelDisplayItem } from '../../common/account-models.ts';
-import type { AccountPlanTier, AccountPoolData, ManagedAccount } from '../../common/pool-types.ts';
+import { argonSharesGoogleGroup, type AccountPlanTier, type AccountPoolData, type ManagedAccount } from '../../common/pool-types.ts';
 import { renderDuplicateBadge } from './duplicate-badge.ts';
 import { resolveFamilyActiveIds, resolveFamilyPinnedIds } from './active-account-ids.ts';
 import { accountDisplayAlias as aliasOf, type AliasTranslator } from './account-alias.ts';
@@ -16,6 +16,7 @@ import {
 	accountAuthState,
 	isAccountFullyCooling,
 	isFamilyCooling,
+	isFamilyInCooldown,
 	type AccountAuthState,
 	type QuotaFamily,
 } from '../../common/quota-bench.ts';
@@ -158,7 +159,7 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			h('div', { key: 'agy-body', style: S.quotaBox },
 				renderQuotaUnavailableNote(t, acc),
 				renderQuotaBar('Gemini', 'google'),
-				acc.quotas.argon ? renderQuotaBar('Argon', 'argon') : null,
+				(acc.quotas.argon || (!argonSharesGoogleGroup(acc) && isFamilyInCooldown(acc, 'argon', now))) ? renderQuotaBar('Argon', 'argon') : null,
 				h(Button, {
 					variant: 'dashed',
 					style: {
@@ -373,6 +374,9 @@ function renderHeaderBadges(t: Translator, acc: ManagedAccount, ctx: CardHeaderC
 				fontSize: '13px',
 				color: 'var(--agy-text-primary)',
 				whiteSpace: 'nowrap',
+				overflow: 'hidden',
+				textOverflow: 'ellipsis',
+				maxWidth: '100%',
 				cursor: 'text',
 				borderRadius: '4px',
 				padding: '0 3px',
@@ -462,7 +466,7 @@ function renderActionButtons(t: Translator, acc: ManagedAccount, ctx: {
 	const effectiveProxy = acc.proxyUrl || pool?.systemProxy;
 	return h('div', {
 		className: 'agy-card-actions',
-		style: { display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 },
+		style: { display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%', flexShrink: 0 },
 	},
 		h(Button, {
 			variant: acc.enabled ? 'default' : 'primary', size: 'sm', className: 'agy-btn',
@@ -531,8 +535,8 @@ function renderChildModels(t: Translator, childModels: readonly AccountModelDisp
 			const pColor = pct === null ? 'var(--agy-text-secondary)' : pct <= 20 ? 'var(--agy-quota-low-text)' : pct <= 50 ? 'var(--agy-quota-med-text)' : 'var(--agy-quota-high-text)';
 			const effortTag = model.efforts.length > 0 ? model.efforts.map(effortLabel).join('/') : '';
 			return h('div', { key: `${model.family}-${model.id}`, className: 'agy-submodel-row' },
-				h('div', { key: 'left', style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' } },
-					h('span', { key: 'label', style: { fontWeight: 500, color: 'var(--agy-text-primary)' } }, `[${model.familyLabel}] ${model.name}`),
+				h('div', { key: 'left', style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap', flex: '1 1 140px' } },
+					h('span', { key: 'label', style: { fontWeight: 500, color: 'var(--agy-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }, title: `[${model.familyLabel}] ${model.name}` }, `[${model.familyLabel}] ${model.name}`),
 					effortTag ? h('span', { key: 'efforts', style: { color: 'var(--agy-text-tertiary)', fontSize: '10px' } }, effortTag) : null,
 				),
 				h('div', { key: 'right', style: { display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 } },
@@ -544,7 +548,6 @@ function renderChildModels(t: Translator, childModels: readonly AccountModelDisp
 	);
 }
 
-/* renderCooldownBanner was retired with the cooldown-banner UI in v0.6.55. */
 function renderAliasEditor(
 	t: Translator,
 	acc: ManagedAccount,

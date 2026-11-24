@@ -399,9 +399,15 @@ html.agy-modal-open body {
 	   it worse (big fixed layer + shadow re-composited per frame). A 640px panel
 	   needs neither hint; plain overflow: hidden already clips it. */
 }
-/* Settings row: the label column may shrink so long descriptions ellipsize
-   instead of pushing the control cluster off-panel (desktop and modal). */
-.agy-row > :first-child { min-width: 0; }
+.agy-console {
+	max-width: 100%;
+	box-sizing: border-box;
+	overflow-x: hidden;
+}
+/* Settings row: label absorbs squeeze with ellipsis; right controls wrap before overflowing. */
+.agy-row { min-width: 0; }
+.agy-row > :first-child { min-width: 0; overflow: hidden; }
+.agy-row > :last-child { max-width: 100%; }
 
 .agy-submodel-row {
 	display: flex;
@@ -561,10 +567,7 @@ body[data-ds-dark-theme] select.agy-select { color-scheme: dark; }
 		min-height: 28px !important;
 	}
 	/* Micro move buttons stay compact on phone */
-	.agy-card-title-cluster .agy-btn {
-		min-height: 18px !important;
-		height: 18px !important;
-	}
+	.agy-card-title-cluster .agy-btn { min-height: 18px !important; height: 18px !important; }
 }
 
 @media (max-width: 420px) {

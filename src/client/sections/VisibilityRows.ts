@@ -3,11 +3,10 @@
 // budget; the switches are pure presentation — the single source of truth is
 // the /status snapshot (see .spec/ui-visibility.md).
 import { h } from '../react.ts';
-import { S } from '../styles.ts';
 import type { Translator } from '../hooks/useTranslation.ts';
 import type { StatusPayload } from '../status.ts';
 import { Button } from '../ui/Button.ts';
-import { Row } from '../ui/Row.ts';
+import { Row, rowCaption } from '../ui/Row.ts';
 import { segGroup } from '../ui/SegGroup.ts';
 
 interface VisibilityRowOptions {
@@ -22,10 +21,8 @@ interface VisibilityRowOptions {
 
 function visibilityRow(o: VisibilityRowOptions): unknown {
 	return h(Row, {
-		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
-			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, o.t(o.label)),
-			h('span', { style: S.mutedLine, title: o.t(o.desc) }, o.t(o.desc)),
-		),
+		key: 'vis-' + o.key,
+		left: rowCaption(o.t(o.label), o.t(o.desc)),
 		right: segGroup([
 			h(Button, {
 				variant: o.visible ? 'segActive' : 'seg',
@@ -50,10 +47,8 @@ function translateDisplayRow(o: {
 }): unknown {
 	const busy = o.loadingAction === 'config:translateDisplay';
 	return h(Row, {
-		left: h('div', { style: { display: 'flex', flexDirection: 'column' } },
-			h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, o.t('config.translateDisplay')),
-			h('span', { style: S.mutedLine, title: o.t('config.translateDisplayDesc') }, o.t('config.translateDisplayDesc')),
-		),
+		key: 'vis-translateDisplay',
+		left: rowCaption(o.t('config.translateDisplay'), o.t('config.translateDisplayDesc')),
 		right: segGroup([
 			h(Button, {
 				variant: o.mode === 'card' ? 'segActive' : 'seg',
