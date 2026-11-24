@@ -26,12 +26,20 @@
 Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the official, unmodified `agy` CLI: streaming, thinking, rich native tool cards, Generative UI embeds, 1M physical context metering, in-GUI OAuth login, per-family multi-account pooling with automatic failover, CLI-first multi-bucket quota tracking (5h rolling + 7d weekly + Argon weekly), in-chat and CLI image generation, and multi-account ecosystem sync.
 
 <p align="center">
-  <img src="./assets/console.png" alt="Antigravity console — multi-account pool and multi-bucket quota bars" width="760" />
+  <img src="./assets/console.png" alt="Antigravity 4-tab console — multi-account pool and multi-bucket quota bars" width="760" />
 </p>
 <p align="center">
-  <img src="./assets/model-picker.png" alt="Antigravity (agy CLI) model group in the DSH model picker" width="240" />
+  <img src="./assets/model-picker.png" alt="Antigravity (agy 1.5.16) model list in the DSH model picker" width="240" />
   &nbsp;&nbsp;
-  <img src="./assets/settings.png" alt="Antigravity runtime settings, ecosystem panel, and model visibility controls" width="520" />
+  <img src="./assets/models-orchestrator.png" alt="Models & Orchestrator Planner/Executor settings tab" width="520" />
+</p>
+<p align="center">
+  <img src="./assets/settings.png" alt="Features & UI tab: /tsl, image generation, /atw side questions, and /a* quick commands" width="380" />
+  &nbsp;&nbsp;
+  <img src="./assets/runtime-ecosystem.png" alt="Runtime & Ecosystem tab: ACP process stats, reverse MCP bridge, and ecosystem sync" width="380" />
+</p>
+<p align="center">
+  <img src="./assets/btw-dock.png" alt="/atw streaming read-only side-question dock card above the composer" width="540" />
 </p>
 <p align="center">
   <img src="./assets/token-usage.png" alt="Native context cache and token usage breakdown" width="330" />
@@ -45,16 +53,16 @@ Bring **Google Antigravity models into DeepSeek Harness (DSH)** through the offi
 
 | | |
 | --- | --- |
-| 🤖 **Antigravity models & catalog filtering** | Merges `agy models` with quota-derived model rows; tick-list allow-list (`selectedModels`) and opt-in `poolWideCatalog`; live effort levels (`low`/`medium`/`high`/`xhigh` (Extra)/`max`) with automatic `--effort` refusal learning. |
-| 🔁 **Per-family multi-account pool** | Independent active pins and cooldowns across `Gemini`, `Argon`, `Claude`, and `GPT-OSS`; sequential drain or round-robin with quota-expiry-first rotation, per-account isolated HOME + proxy, and Windows identity-leased credential slots. |
-| 📊 **CLI-first quota console & warmup** | Prefers `agy -p /usage` (`quotaViaCli: true`) with official summary fallback; tracks 5h rolling, 7d weekly, and Argon weekly buckets with pacing markers, manual/auto warmup, and host-backed `WarmupStatusBar`. |
-| 🛡️ **4 permission modes, sandbox & ACP** | `permissionMode` supports `skip`, `auto` (`--mode auto`), `accept-edits`, and `plan`; supports `--sandbox`, `--agent`/`--settings`/`--json-schema` passthrough, and switchable short-lived `cli` (`-p`) or persistent `agy acp` stdio pool transport (with automatic pre-stream CLI fallback). |
-| 🃏 **Extended tool cards & Generative UI** | Native Terminal/Diff/Read/Search/MCP cards plus dedicated cards for `swarm`, `run_workflow`, `schedule`, `manage_task`, subagent lifecycle, `image-generator`, and browser/DevTools; renders `<agent-embed>` HTML widgets inside strict-CSP sandboxed `<iframe>`s with live theme sync. |
-| 🎬 **Multimodal inputs & inline playback** | Stages images plus PDF, audio, and video attachments (up to `mediaMaxFileBytes` 20 MiB default via `--add-dir`), with fullscreen image lightbox, video preview, inline `<audio>` player, Mermaid diagrams, decision chips, and compaction cards. |
+| 🤖 **Antigravity models, 4-tab console & Orchestrator** | Syncs the `agy 1.5.16` lineup (including `Gemini 4 Carbon` and `Orchestrator` roles), tick-list allow-list (`selectedModels`), `poolWideCatalog` routing, `--effort` refusal learning, and Planner/Executor overrides across the 4-tab console. |
+| 🔁 **Per-family multi-account pool** | Independent active pins and cooldowns across `Gemini`, `Argon`, `Claude`, and `GPT-OSS`; sequential drain or round-robin with quota-expiry-first rotation, per-account isolated HOME + proxy, and Windows identity-leased slots (#199 freshness guard). |
+| 📊 **CLI-first quota console & busy deferral** | Prefers `agy -p /usage` (`quotaViaCli: true`) with official summary fallback; tracks 5h rolling, 7d weekly, and Argon weekly buckets, auto-defers background refreshes while turns are active, and drives host-backed `WarmupStatusBar`. |
+| 🛡️ **4 permission modes, sandbox & ACP default** | `permissionMode` supports `skip`, `auto`, `accept-edits`, and `plan` (`/aplan` enforces one-shot read-only); defaults to persistent `agy acp` stdio pool (reused for `isAux` calls with ephemeral `session/close` and pre-stream `cli` fallback) plus `X-DSH-Proc` MCP bridge routing (#200). |
+| 🃏 **Extended tool cards & Generative UI** | Native Terminal/Diff/Read/Search/MCP cards (unwrapping `alwaysLoad` bridge names) plus dedicated cards for `swarm`, `run_workflow`, `schedule`, `manage_task`, subagent lifecycle, `image-generator`, and DevTools; renders `<agent-embed>` HTML widgets inside strict-CSP sandboxed `<iframe>`s. |
+| 🎬 **Multimodal inputs & inline playback** | Stages images plus PDF, audio, and video attachments (up to `mediaMaxFileBytes` 20 MiB default via `--add-dir`), with fullscreen image lightbox (with Copy Image), video preview, inline `<audio>` player, Mermaid diagrams, decision chips, and compaction cards. |
 | 🔐 **In-GUI OAuth & token import** | Zero-paste browser PKCE OAuth (`127.0.0.1:51121`) with manual code/URL fallback plus direct `refresh_token`/JSON import; jitter-safe `NETWORK` vs `AUTH` classification and `TOS_VIOLATION` circuit breaker. |
-| 🗣 **Plain-language translation (`/tsl`)** | Native DSH Gemini card anchored under each reply and persisted across reloads; 1:1 per-session translation conversation; opt-in auto mode with model/effort dropdowns and per-reply translate button. |
+| 🗣 **`/tsl` translation & `/atw` side questions** | `/tsl` renders native DSH Gemini translation cards under replies; `/atw` (formerly `/agy-btw`, #197) streams read-only side questions, tool calls, and follow-up threads in a dismissible composer dock card without altering main history. |
 | 🎨 **Image generation (`agy_image` / CLI)** | Exposed via the `agy_image` DSH tool (`imageTool: true`), `/agy image` (`/agy img`) slash command, `image-generator` preview cards, and headless `dsh-agy-image` CLI — all sharing `ImageService` and account failover. |
-| 🧩 **Ecosystem sync & slash bridges** | Inspect/toggle `plugins`, view `mcp`/`skills`/`rules`/`agents`, and allowlist-mirror customizations to isolated accounts without touching credentials; bridges DSH `/goal`, `/plan`, and `/agy btw\|fork\|grill\|learn\|compact`. |
+| ⚡ **Full `/a*` slash command suite & ecosystem sync** | Direct conversation commands (`/aplan`, `/agoal`, `/agrill`, `/aboost`, `/aswarm`, `/ateamwork`, `/aschedule`, `/abrowser`, `/acmd` with ACP `available_commands_update` inspection & index-0 slash preservation) plus meta actions (`/acompact`, `/afork`, `/alearn`) and credential-free ecosystem sync. |
 | 🌐 **4-locale UI & visibility toggles** | Full `en`, `zh`, `es`, and `pt-BR` localization, responsive `< 680px` mobile drawer, and opt-out `showHeaderBadge` / `showTranslateAction` controls. |
 
 ## 📋 Requirements
@@ -132,6 +140,8 @@ dsh-agy-image -p "change the background to night" -i ./day.png -n night_scene --
   - Execution & transport: `/agy mode <skip|auto|plan|accept-edits>`, `/agy sandbox [on|off]`, `/agy transport [cli|acp|status]`, `/agy agent [name|off]`, `/agy settings [show|<json-or-path>|clear]`, `/agy effort <low|medium|high|xhigh|max|default>`
   - Ecosystem: `/agy plugins [list|enable <id>|disable <id>]`, `/agy mcp`, `/agy skills`, `/agy agents [list|use <name>|off]`, `/agy sync-ecosystem`
   - Session & workflow bridges: `/agy goal [status|set|edit|pause|resume|complete|clear]`, `/agy session [info|clear]`, `/agy btw <question>`, `/agy fork [list|restore <id>|<prompt>]`, `/agy grill [topic]` (`/agy grill-me`), `/agy learn [--apply] [focus]`, `/agy compact [focus]`, `/agy doctor`
+  - Top-level `a`-prefix commands (direct conversation turns, `images: true`, no confirmation modal): `/aplan [task]` (one-shot read-only `--mode plan`), `/agoal <objective|status|...>`, `/agrill [topic]`, `/aboost [task]`, `/aswarm <task>`, `/ateamwork <task>`, `/aschedule <task>`, `/abrowser <task>`, `/acmd </cmd|list>`
+  - Side-channel & meta commands: `/atw <question>` (streaming read-only dock), `/tsl`, `/acompact [focus]`, `/afork [...]`, `/alearn [--apply] [focus]`
 
 ## 🔌 External credential lease API
 
@@ -167,7 +177,7 @@ Common entry points: `/plugin`, the Antigravity settings panel, `DSH_AGY_*` envi
 
 ## 🧩 How it works
 
-1. **CLI (`-p`) & optional persistent `agy acp` pool**: By default each turn runs `agy -p --output-format stream-json` and parses NDJSON events; switching `transport` to `'acp'` reuses persistent `agy acp` stdio JSON-RPC processes (idle-evicted, with automatic pre-stream CLI fallback).
+1. **Persistent `agy acp` default & CLI (`-p`) fallback**: By default each turn (including `isAux` background calls without `--settings`/`--json-schema`) reuses persistent `agy acp` stdio JSON-RPC processes (ephemeral aux sessions are closed via `session/close` on settlement; pre-stream failures fall back to `agy -p`). Opt back into `cli` per turn via Settings or `/agy transport cli`.
 2. **Per-account sandbox**: The primary account uses the system HOME/keychain; secondary accounts get an isolated HOME with their own `0600` OAuth credentials and `.bak` recovery. On Windows the credential slot is leased by identity (`parallelSameAccount`), so parallel sessions on the same account run concurrently.
 3. **CLI-first quota & pooled failover**: Quotas prefer `agy -p /usage` (`quotaViaCli: true`) with fallback to `v1internal:retrieveUserQuotaSummary`; 429/quota/region/auth failures are classified per model family — cooling down, rotating the pointer, or retrying on another account.
 4. **Aux routes**: Translation, image generation, title generation, and goal derivation ride the same pool through dedicated `purpose` paths without polluting a normal conversation binding.
@@ -182,7 +192,7 @@ Common entry points: `/plugin`, the Antigravity settings panel, `DSH_AGY_*` envi
 ## 📚 Documentation
 
 - [CONFIGURATION.md](./CONFIGURATION.md) — Complete configuration keys, environment variables, and defaults
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Layering, provider pipeline, and the 40 HTTP routes
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — Layering, provider pipeline, and the HTTP route modules
 - [AUTH.md](./AUTH.md) — PKCE OAuth, token import, keychain isolation, and redaction
 - [SECURITY-NOTES.md](./SECURITY-NOTES.md) — Threat model, route confinement, `/embed` CSP, and MCP bridge guardrails
 - [HEADLESS-PERMISSIONS.md](./HEADLESS-PERMISSIONS.md) — Least-privilege setup for `dsh headless`

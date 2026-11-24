@@ -27,12 +27,20 @@
 把 **Google Antigravity 模型接入 DeepSeek Harness（DSH）** —— 支持**按模型族独立路由的多账号智能池化**、**CLI 优先官方多 Bucket 配额监控（5 小时滚动 + 7 天周额度 + Argon 独立周池）**、**短进程 `-p` 与持久化 `agy acp` 双传输模式**、**浏览器免粘贴一键登录**、**对话内生图（`agy_image` / `/agy image` / `dsh-agy-image`）**、**多模态附件与 Generative UI 内嵌渲染**，以及**多账号定制生态白名单同步**。由官方未修改的 `agy` CLI 驱动，完整支持流式输出、思考折叠、原生工具卡片与 1M 物理上下文精确计量。
 
 <p align="center">
-  <img src="./docs/assets/console.png" alt="Antigravity 管理控制台 - 多账号池化与多 Bucket 配额监控" width="760" />
+  <img src="./docs/assets/console.png" alt="Antigravity 4 标签管理控制台 - 账号池与多 Bucket 配额监控" width="760" />
 </p>
 <p align="center">
-  <img src="./docs/assets/model-picker.png" alt="DSH 模型选择器中的 Antigravity (agy CLI) 模型列表" width="240" />
+  <img src="./docs/assets/model-picker.png" alt="DSH 模型选择器中的 Antigravity (agy 1.5.16) 模型列表" width="240" />
   &nbsp;&nbsp;
-  <img src="./docs/assets/settings.png" alt="DSH 设置 → 插件中的 Antigravity 运行配置、定制生态与模型显示面板" width="520" />
+  <img src="./docs/assets/models-orchestrator.png" alt="模型与编排器（Orchestrator Planner/Executor）配置" width="520" />
+</p>
+<p align="center">
+  <img src="./docs/assets/settings.png" alt="功能与界面标签页：/tsl、生图、/atw 旁路提问与 /a* 快捷命令" width="380" />
+  &nbsp;&nbsp;
+  <img src="./docs/assets/runtime-ecosystem.png" alt="运行与生态标签页：ACP 状态、反向 MCP 桥与定制生态同步" width="380" />
+</p>
+<p align="center">
+  <img src="./docs/assets/btw-dock.png" alt="/atw 输入框上方流式只读旁路问答卡片" width="540" />
 </p>
 <p align="center">
   <img src="./docs/assets/token-usage.png" alt="原生上下文缓存与 Token 用量统计" width="330" />
@@ -74,17 +82,17 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 🎨 **官方专属品牌与双入口控制台** | `assets/icon.svg` 矢量微标自适应深浅主题；顶部 `AGY · 别名` 徽标弹窗与「设置 → 插件 → Antigravity」共用同一完整控制台，屏幕宽度 `< 680px` 自动切换全屏抽屉并支持手机端触控重排 |
-| 📋 **按账号真实模型目录与勾选过滤** | 合并 `agy models` 与配额导出模型目录，提供「模型显示」允许清单勾选（`selectedModels`），支持 `poolWideCatalog` 跨号池并集自动路由，动态展示 `low`/`medium`/`high`/`xhigh` (`Extra`)/`max` 思考档并自愈学习模型拒收 `--effort` |
-| 🛡️ **4 档权限模式与 OS 终端沙箱** | 支持 `skip`、`auto`（`--mode auto` 智能审查高危）、`accept-edits`、`plan` 4 档策略，支持 `--sandbox` 终端沙箱隔离敏感目录及 `--agent` / `--settings` / `--json-schema` 参数透传 |
-| ⚡ **CLI (`-p`) / 持久化 `agy acp` 双传输** | 默认每轮短生命周期 `agy -p` 进程；可在设置或 `/agy transport acp` 切换至持久化 `agy acp` stdio JSON-RPC 会话池（空闲自动回收，流前异常自动回退 CLI） |
-| 🃏 **全链路工具卡片与 Generative UI** | 镜像 Terminal / Diff / Read / Search / MCP 卡片，并针对 **`swarm`**、**`run_workflow`**、**`schedule`**、**`manage_task`**、**子代理生命周期**、**`image-generator`** 与**浏览器/DevTools** 提供专属卡片；支持 **`<agent-embed>`** 严格 CSP 沙箱 HTML 微件自适配高度与深浅主题 |
+| 🎨 **官方专属品牌与 4 标签控制台** | `assets/icon.svg` 矢量微标自适应深浅主题；顶部 `AGY · 别名` 徽标弹窗与「设置 → 插件 → Antigravity」共用 **账号与配额 / 模型与编排 / 功能与界面 / 运行与生态** 4 标签控制台，窄屏自动切换全屏抽屉并支持触控重排 |
+| 📋 **按账号真实模型目录与编排器配置** | 同步 `agy 1.5.16`（含 `Gemini 4 Carbon` 与 `Orchestrator`）模型目录，提供允许清单勾选（`selectedModels`）、`poolWideCatalog` 并集路由、动态思考档自愈，以及 Orchestrator 上级 Planner / 下级 Executor 独立模型配置 |
+| 🛡️ **4 档权限模式、OS 沙箱与反向 MCP 桥** | 支持 `skip`、`auto`、`accept-edits`、`plan`（`/aplan` 单次只读守卫）与 `--sandbox`；`mcpBridge` 支持通过 `X-DSH-Proc` 动态会话路由在 ACP 复用进程下安全反向调用 DSH 工具 |
+| ⚡ **默认持久化 `agy acp` / CLI (`-p`) 双传输** | 默认开启持久化 `agy acp` stdio JSON-RPC 会话池（主回合与 `isAux` 辅助请求均复用，临时辅助会话自动 `session/close`，流前异常无缝回退 `cli`）；后台 `/usage` 配额刷新自动避让活跃对话回合 |
+| 🃏 **全链路工具卡片与 Generative UI** | 镜像 Terminal / Diff / Read / Search / MCP（含 `alwaysLoad` 直调拆解）卡片，并为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理与 `image-generator` 提供专属卡片；支持 `<agent-embed>` 严格 CSP 沙箱微件 |
 | 🎬 **多模态附件与内联播放** | 通过 `--add-dir` 安全暂存 **图片、PDF、音频、视频** 附件（非图单文件默认上限 `mediaMaxFileBytes` 20 MiB）；聊天内支持图片全屏灯箱、视频预览、**内联 `<audio>` 播放器**、Mermaid 图表、交互决策芯片与上下文压缩卡 |
 | 📊 **原生上下文缓存与 1M 计量** | 无损映射 `cache_read_tokens`、思考 token 与 1M 物理上下文负载计量；超长上下文自动采用 8:2 掐头去尾并按阈值切为临时 `.md` 分页读取 |
-| 🎨 **对话内生图与命令行生图** | 注册 `agy_image` DSH 工具（`imageTool: true`）、`/agy image` 命令、`image-generator` 卡片与 `dsh-agy-image` CLI；默认优先 `gemini-4-hydrogen`（否则回退 `gemini-3.8-flash`），均衡 `medium` 思考档 |
-| 🗣 **`/tsl` 大白话翻译** | 每会话 1:1 绑定 `<sessionId>#tsl`，原生卡片锚定回复下方持久化存储；支持自动翻译开关（同行可选模型与思考档）及回复快捷按钮「译成人话」 |
+| 🎨 **对话内生图与命令行生图** | 注册 `agy_image` DSH 工具（`imageTool: true`）、`/agy image` 命令、`image-generator` 卡片与 `dsh-agy-image` CLI；优先 `gemini-4-hydrogen`（否则回退 `gemini-3.8-flash`），均衡 `medium` 思考档 |
+| 🗣 **`/tsl` 大白话翻译 & `/atw` 旁路提问** | `/tsl` 每会话 1:1 绑定持久化译文卡片（支持替换原文）；`/atw` 在输入框上方悬浮流式只读问答卡片（SSE 推送 + 只读工具步骤 + 追问线程，不打断主回合、不污染会话历史） |
 | 🧩 **多账号定制生态清点与同步** | 查看/开关主账号 `plugins`，清点 `mcp` / `skills` / `rules` / `agents`，并按白名单镜像同步至隔离账号池（严格排除凭据、私钥与钥匙串） |
-| 🎯 **DSH Goal/Plan 与斜杠桥接** | `/agy goal` 与 DSH `GoalService` 1:1 对齐，支持 `/plan` 审批流转及 `/agy btw` / `fork` / `grill` / `learn` / `compact` |
+| ⚡ **全量 `/a*` 快捷斜杠命令族** | 一级命令 `/aplan`、`/agoal`、`/agrill`、`/aboost`、`/aswarm`、`/ateamwork`、`/aschedule`、`/abrowser`、`/acmd`（支持 ACP `available_commands_update` 清单查验与首行索引 0 保序直发主会话），元操作 `/acompact`、`/afork`、`/alearn`、`/atw` |
 | 🌐 **四语国际化与 UI 开关** | 原生接入 `zh` / `en` / `es` / `pt-BR` 四语言字典；提供 `showHeaderBadge` 与 `showTranslateAction` opt-out 可见性开关 |
 
 ---
@@ -194,6 +202,8 @@ dsh plugin --profile web add dsh-agy-link
 | **运行与安全** | `/agy mode <skip\|auto\|plan\|accept-edits>` · `/agy sandbox [on\|off]` · `/agy transport [cli\|acp\|status]` · `/agy agent [name\|off]` · `/agy settings [show\|<json_or_path>\|clear]` · `/agy effort <low\|medium\|high\|xhigh\|max\|default>` · `/agy workspace [path]` |
 | **生态与目标** | `/agy plugins [list\|enable <id>\|disable <id>]` · `/agy mcp` · `/agy skills` · `/agy agents [list\|use <name>\|off]` · `/agy sync-ecosystem` · `/agy goal [status\|set\|edit\|pause\|resume\|complete\|clear]` · `/agy session [info\|clear]` |
 | **工作流桥接** | `/agy btw <问题>`（只读旁路提问）· `/agy fork [list\|restore <id>\|<提示>]`（分支快照与回溯）· `/agy grill [主题]` / `/agy grill-me`（结构化需求对齐追问）· `/agy learn [--apply] [焦点]`（沉淀 Skill/Rule 到 `.agents/`）· `/agy compact [焦点]`（压缩摘要并重置绑定）· `/agy doctor` |
+| **顶级 `/a*` 快捷命令（直入会话）** | `/aplan [任务]`（单轮只读）· `/agoal <目标\|status\|...>`（立项并开跑）· `/agrill [主题]` · `/aboost [任务]` · `/aswarm <任务>` · `/ateamwork <任务>` · `/aschedule <指令>` · `/abrowser <任务>` · `/acmd </命令\|list>` |
+| **顶级 `/a*` 快捷命令（旁路/元操作）** | `/atw <问题>`（只读旁路问答卡片）· `/tsl`（大白话翻译）· `/acompact [焦点]` · `/afork [...]` · `/alearn [--apply] [焦点]` |
 
 ---
 
@@ -229,7 +239,7 @@ Windows 上所有 `agy.exe` 共用同一个凭据管理器条目 `gemini:antigra
 
 > 分层、依赖方向与各模块职责见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)；开发与重构门禁见 [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)。
 
-1. **CLI (`-p`) 与可选 ACP (`agy acp`) 双传输**：默认每轮启动独立的官方 `agy -p --output-format stream-json` 进程解析 NDJSON 流；开启 `transport: 'acp'` 后复用持久化 `agy acp` stdio JSON-RPC 会话池，并在流前失败时自动平滑回退 CLI。
+1. **ACP (`agy acp`) 与 CLI (`-p`) 双传输**：默认复用持久化 `agy acp` stdio JSON-RPC 会话池（主回合与 `isAux` 辅助请求均可复用，非持久化辅助会话结束后主动 `session/close` 回收），流前异常自动平滑回退 CLI；需要 `--settings` 编排或 `--json-schema` 时自动走 `agy -p`。
 2. **多账号沙箱与凭据租约**：主账号沿用系统 HOME / 钥匙串，备用账号在 `~/.dsh/agy-accounts/<id>` 独立隔离（写 `0600` + `.bak` 自动恢复）。Windows 上通过身份级引用计数租约接管全局 `gemini:antigravity` 凭据槽，实现同账号并发与安全跨号交接。
 3. **CLI 优先多 Bucket 配额汇总**：默认通过 `agy -p /usage`（`quotaViaCli: true`）采集配额，必要时回退官方 `v1internal:retrieveUserQuotaSummary` 消费级端点，精准追踪 5h 滚动额度、7d 周额度与 Argon 独立周池。
 4. **会话级故障转移与自愈**：429、额度耗尽、地区限制与鉴权异常按模型族独立分类与冷却，并基于运行日志区分网络抖动与真实登出。

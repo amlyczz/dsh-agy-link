@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (2026-11-25)
+
+### English
+
+- **Feat(commands): add top-level `/a*` quick slash command suite (#197 companion).** Exposes `/aplan` (one-shot read-only `--mode plan` guard without changing session settings), `/agoal`, `/agrill`, `/aboost`, `/aswarm`, `/ateamwork`, `/aschedule`, `/abrowser`, `/acmd`, `/acompact`, `/afork`, and `/alearn`, plus side-channel `/atw` and `/tsl`, across DSH slash completions, ACP `available_commands_update`, `/agy help`, and a dedicated Quick Slash Commands card in the Features & UI settings tab (4-locale i18n parity).
+- **Feat(acp): route `isAux` background turns through the persistent `agy acp` pool & close ephemeral sessions.** Translation, title, compaction, and `/atw` turns reuse warm `agy acp` processes when `--settings`/`--json-schema` are absent and release temporary ACP sessions via `session/close` on settlement; `AccountQuotaRefresher` also defers background probes while turns are active.
+- **Fix(mcp-bridge): complete dynamic ACP session routing via `X-DSH-Proc` / `DSH_MCP_PROC` (closes #200).** Persistent ACP children register their live DSH session per active turn so bridged tools stay bound to the right conversation even across pooled reuse.
+- **Fix(auth/quota): Windows CLI token freshness gate before spawning secondary accounts & `agy` `--version` Windows slot handling (closes #199).** Brings short-lived tokens into the safety window before spawning CLI quota/run turns so secondary accounts do not fall back to interactive OAuth.
+- **Docs & UI screenshots:** Refreshed privacy-masked console screenshots (`console.png`, `models-orchestrator.png`, `settings.png`, `runtime-ecosystem.png`, `btw-dock.png`, `model-picker.png`) covering the 4-tab console, Orchestrator config, `/atw` dock, and `/a*` commands, and updated README / `CONFIGURATION.md` / `ARCHITECTURE.md` / `KNOWN-GAPS.md`.
+
+### 中文
+
+- **新增(命令)：完整支持顶级 `/a*` 快捷斜杠命令族（#197 联动）。** 在 DSH 输入补全、ACP `available_commands_update`、`/agy help` 与「功能与界面」设置卡片中新增 `/aplan`（单次只读 `--mode plan` 守卫，不改动会话全局权限）、`/agoal`、`/agrill`、`/aboost`、`/aswarm`、`/ateamwork`、`/aschedule`、`/abrowser`、`/acmd`、`/acompact`、`/afork`、`/alearn`，与旁路 `/atw`、`/tsl` 一并覆盖 4 语言词典。
+- **新增(acp)：`isAux` 辅助回合默认复用持久化 `agy acp` 进程池并主动释放临时会话。** 翻译、标题、压缩与 `/atw` 在无需 `--settings`/`--json-schema` 时统一复用常驻 `agy acp` 进程，结束时调用 `session/close` 回收临时会话；后台配额刷新（`AccountQuotaRefresher`）自动避让活跃对话回合。
+- **修复(mcp-bridge)：补齐常驻 ACP 下的 `X-DSH-Proc` / `DSH_MCP_PROC` 动态会话路由（修复 #200）。** 复用中的 `agy acp` 子进程在每次回合绑定当前 DSH 会话，避免跨会话串台或找不到 live session。
+- **修复(auth/quota)：Windows 启动备用账号 CLI 前的令牌新鲜度门控（修复 #199）。** 在安全窗口外自动先行刷新 token，避免次账号 CLI 回退弹出浏览器登录。
+- **文档与截图更新：** 使用脱敏演示数据（昵称与邮箱胶囊高斯模糊打码）重拍 4 标签控制台、Orchestrator 配置、`/atw` 旁路问答卡片、运行与生态页、`agy 1.5.16` 模型选择器及 `/a*` 快捷命令设置面板截图，并同步更新中英文 README、配置、架构与已知限制文档。
+
 ## 0.6.84 (2026-11-24)
 
 ### English

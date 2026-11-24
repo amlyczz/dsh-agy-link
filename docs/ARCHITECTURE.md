@@ -48,9 +48,10 @@ effort-refusal replay. `prepareCall()` binds model metadata for newer hosts.
 
 ## HTTP surface
 
-40 routes are registered by `transport/http/router.ts` from nine modules
-(status, pool, auth, config, translate, media, embed, ecosystem, lease). Route paths,
-methods and JSON shapes are frozen and covered by `test/http-contract.test.ts`.
+HTTP routes are registered by `transport/http/router.ts` from 11 modules
+(`status`, `session-view`, `pool`, `auth`, `config`, `translate`, `media`,
+`embed`, `ecosystem`, `btw`, `lease`). Route paths, methods and JSON shapes
+are covered by `test/http-contract.test.ts`.
 
 ## Client
 

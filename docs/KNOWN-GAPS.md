@@ -140,8 +140,11 @@ reference-counted slot is the strongest isolation the plugin can provide.
   token-guarded HTTP endpoint and registers a zero-dependency stdio MCP
   server in the MCP registry (`~/.gemini/config/mcp_config.json` by default,
   where `agy` 1.4+ actually reads it, merged in and restored on disable).
-  Bridged calls carry caller identity via `DSH_MCP_SESSION` so identity-enforcing
-  tools (such as `agent_teams`) function correctly. Internal loopback-only
+  Bridged calls carry caller identity via `DSH_MCP_SESSION` (or `DSH_MCP_PROC` /
+  `X-DSH-Proc` dynamic per-session routing across persistent ACP processes, #200)
+  so identity-enforcing tools (such as `agent_teams`) reach the live session
+  for that turn, and `unwrapMcpTool` unwraps `mcp_dsh-tools-<port>_<tool>`
+  direct calls back to their real DSH names. Internal loopback-only
   helpers — `run_code`, `agy_ask`, and the activity-mirror `agy_tool` — are
   never bridged (excluded from both `/tools` and `/call`); `mcpToolAllowlist`
   restricts the served set **and is
@@ -206,8 +209,12 @@ reference-counted slot is the strongest isolation the plugin can provide.
 - Gemini effort suffixes fold into one base model with selectable efforts
   (`gemini-3-6-flash` + `--effort`); Claude / GPT-OSS slugs stay verbatim
   (agy rejects `--effort` for them).
-- Compaction / session-title auxiliary calls run as one-shot agy turns in
-  forced `plan` mode, capped at 800K chars of history.
+- Compaction / session-title / `/atw` auxiliary calls reuse the persistent
+  `agy acp` process pool when `transport === 'acp'` (creating ephemeral ACP
+  sessions that are cleaned up with `session/close` on settlement), falling
+  back to one-shot `agy -p` when `--settings` or `--json-schema` is required.
+  Compaction and session-title calls force `plan` mode, capped at 800K chars of
+  history.
 
 ## Upstream behaviors observed
 

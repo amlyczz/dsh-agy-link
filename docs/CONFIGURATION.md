@@ -96,6 +96,11 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `quotaViaCli` | `DSH_AGY_QUOTA_VIA_CLI` | `true` | Prefer the agy CLI path for quota queries. The CLI is only spawned once the account's access token has at least two minutes of life left (refreshed up front when it does not); otherwise that round falls back to the REST quota endpoint |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in weekly-quota warmup |
 | `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | Models used for warmup probes |
+| `warmupWindows` | `DSH_AGY_WARMUP_WINDOWS` | `'weekly'` | Target bucket windows for warmup (`weekly`, `5h`, `both`) |
+| `warmupDailyTime` | `DSH_AGY_WARMUP_DAILY_TIME` | `''` | Optional daily warmup time (`HH:MM`) |
+| `warmupTimezone` | `DSH_AGY_WARMUP_TIMEZONE` | `''` | IANA timezone for scheduled daily warmup |
+| `warmupIntervalHours` | `DSH_AGY_WARMUP_INTERVAL_HOURS` | `0` | Periodic warmup interval in hours (`0` disables, valid `1..168`) |
+| `warmupMaxProbesPerRun` | `DSH_AGY_WARMUP_MAX_PROBES` | `12` | Max probes per warmup pass (`0` = unlimited) |
 | `suppressAgyAutoUpdate` | `DSH_AGY_SUPPRESS_AUTOUPDATE` | `true` on Windows, `false` elsewhere | Refresh agy's update-check timestamp before every spawn to stop the `--bg-updater` console flash chain |
 
 ## Translation (`/tsl`)
@@ -106,6 +111,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `translateModel` | `DSH_AGY_TRANSLATE_MODEL` | `gemini-3.8-flash` | Translate model, with catalog fallback |
 | `translateEffort` | `DSH_AGY_TRANSLATE_EFFORT` | `low` | Reasoning effort for the translate model (`low` faster, `medium` / `high` more rigorous) |
 | `translateTargetLanguage` | `DSH_AGY_TRANSLATE_LANG` | `中文（简体）` | Target language wording in the prompt |
+| `translateDisplay` | `DSH_AGY_TRANSLATE_DISPLAY` | `'card'` | Translation presentation mode (`card` below reply or `replace`) |
 | `translateMaxChars` | `—` | `8000` | Source truncation limit |
 | `translateMaxTokens` | `—` | `4096` | Output token cap |
 | `translateTimeoutMs` | `—` | `120000` | Per-translation timeout |
@@ -144,14 +150,25 @@ classification and the retry-on-effort-refusal all come from the same code path 
 normal turn uses. `--json` returns the validated artifact (`path`, `mime`,
 `width`, `height`, `bytes`, `aspectRatio`, `accountId`) or a stable failure `code`.
 
-## Side questions (`/btw`)
+## Side questions (`/atw`)
 
 | Key | Environment | Default | Description |
 | --- | --- | --- | --- |
-| `btwModel` | `DSH_AGY_BTW_MODEL` | (empty) | Antigravity model for `/btw` read-only side questions; empty → `defaultModel` → Gemini 4 Hydrogen → Gemini Flash |
-| `btwEffort` | `DSH_AGY_BTW_EFFORT` | `medium` | Reasoning effort for `/btw` (`medium` balanced, `low` faster, `high` deeper) |
+| `btwModel` | `DSH_AGY_BTW_MODEL` | (empty) | Antigravity model for `/atw` read-only side questions; empty → `defaultModel` → Gemini 4 Hydrogen → Gemini Flash |
+| `btwEffort` | `DSH_AGY_BTW_EFFORT` | `medium` | Reasoning effort for `/atw` (`medium` balanced, `low` faster, `high` deeper) |
 
-Both are editable in **Settings → Antigravity** (in the `/btw Side Questions` card).
+Both are editable in **Settings → Antigravity** (in the `/atw Side Questions` card).
+
+## Orchestrator & security options
+
+| Key | Environment | Default | Description |
+| --- | --- | --- | --- |
+| `orchestratorPlannerModel` | `DSH_AGY_ORCHESTRATOR_PLANNER_MODEL` | `''` | Planner model override passed via `--settings` when an Orchestrator model is active |
+| `orchestratorPlannerEffort` | `DSH_AGY_ORCHESTRATOR_PLANNER_EFFORT` | `''` | Planner reasoning effort override for Orchestrator turns |
+| `orchestratorExecutorModel` | `DSH_AGY_ORCHESTRATOR_EXECUTOR_MODEL` | `''` | Executor model override passed via `--settings` when an Orchestrator model is active |
+| `orchestratorExecutorEffort` | `DSH_AGY_ORCHESTRATOR_EXECUTOR_EFFORT` | `''` | Executor reasoning effort override for Orchestrator turns |
+| `cloakSystemPrompt` | `DSH_AGY_CLOAK_SYSTEM_PROMPT` | `true` | Replace DSH-specific wording/paths in injected prompts with neutral Antigravity phrasing |
+| `auxNeutralWorkspace` | `DSH_AGY_AUX_NEUTRAL_WORKSPACE` | `true` | Run auxiliary/side-channel turns (`btw`, translation, title, compaction) in a clean neutral cwd instead of leaking the user workspace |
 
 ## Client UI visibility (issue #105)
 
