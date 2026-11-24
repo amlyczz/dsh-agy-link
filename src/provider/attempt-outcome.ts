@@ -6,6 +6,7 @@
 // waits for the child, flushes the parser, classifies the failure and calls
 // finalizeAttempt.
 import { LlmError, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { withRunLogTail } from './failure-log-tail.ts'
 import {
   Err,
   extractAgyQuotaBanner,
@@ -352,7 +353,7 @@ function classifyRun(input: {
   if (failure && liveQuota && failure.code === Err.RATE_LIMIT && parser.stats.lastResultError === undefined && outcome.stderrTail === '') {
     failure.message = 'Google Antigravity quota / rate limit reached (subagent/tool): ' + quotaFailover.errorText
   }
-  return { failure, rawErrText, runLogText, silentTimeout }
+  return { failure: withRunLogTail(failure, runLogText), rawErrText, runLogText, silentTimeout }
 }
 
 function sawAuthFailure(parser: StreamJsonParser, outcome: { stderrTail: string }): boolean {
