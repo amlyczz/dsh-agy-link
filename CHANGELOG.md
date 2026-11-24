@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.80 (2026-11-24)
+
+### English
+
+- **Fix(commands): the side-question command is now `/agy-btw`, so it no longer collides with the community plugin `@michengai/dsh-btw` (fixes #197).** 0.6.78 registered a **bare** `/btw` command. DSH's command table de-duplicates by name within a scope and the later registrant throws, so anyone who also had `@michengai/dsh-btw` installed lost that plugin entirely (`command "btw" is already registered`). The command and its copy now live in this plugin's own namespace — `/agy-btw <question>`, `/agy-btw copy|clear|help`, `--model` / `--effort` all unchanged. **This is a command rename:** `/btw` becomes `/agy-btw`.
+  - A bare command name can never be safe here: the community plugin has used `btw` since long before 0.6.78, and DSH offers no conflict negotiation. Everything in this plugin's own namespace (`/agy …`, `/tsl …`) is prefixed for exactly this reason.
+
+### 中文
+
+- **修复(命令)：旁路问答命令改为 `/agy-btw`，不再与社区插件 `@michengai/dsh-btw` 撞名（修复 #197）。** 0.6.78 注册了**裸名** `/btw`。DSH 的命令表在同一 scope 内按名字去重，后注册者直接抛错，于是同时装了 `@michengai/dsh-btw` 的用户会让那个插件整体失效（`command "btw" is already registered`）。命令与其文案现在都收进本插件自己的命名空间——`/agy-btw <问题>`、`/agy-btw copy|clear|help`，`--model` / `--effort` 全部不变。**这是一次命令改名：`/btw` → `/agy-btw`。**
+  - 裸名在这里永远不可能安全：社区插件远在 0.6.78 之前就在用 `btw`，而 DSH 没有冲突协商机制。本插件自有命名空间（`/agy …`、`/tsl …`）加前缀正是这个原因。
+
 ## 0.6.79 (2026-11-24)
 
 ### English

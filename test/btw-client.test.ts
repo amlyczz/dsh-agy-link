@@ -240,7 +240,7 @@ test('BtwDock renders streaming tools/markdown, suppresses chat command noise, h
   assert.ok(bodyChildren.some((n) => n.id === 'dsh-agy-link-btw-css-v1'))
 
   // Trigger command/executed wake + fetch
-  listeners.get('command/executed')?.('sess-ui', 'btw')
+  listeners.get('command/executed')?.('sess-ui', 'agy-btw')
   await new Promise((r) => setTimeout(r, 15))
 
   const tree = renderTree({ type: dockSlot.comp, props: { sessionId: 'sess-ui' }, children: [] })

@@ -183,7 +183,7 @@ test('parseBtwArgs and top-level /btw command handle GUI non-blocking mode, --wa
     btw: () => btw,
     isWebActive: () => webActive,
   })
-  assert.equal(def.name, 'btw')
+  assert.equal(def.name, 'agy-btw')
   assert.ok(def.input?.hint)
 
   const inv = (rawInput: string): CommandInvocation => ({

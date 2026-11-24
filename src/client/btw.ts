@@ -266,7 +266,7 @@ export function installBtwUi(ctx: ClientContextLike, localeNs: string): () => vo
     const on = (ctx as { on?: (ev: string, fn: (sid: unknown, name: unknown) => void) => (() => void) | undefined }).on
     if (typeof on === 'function') {
       const off = on.call(ctx, 'command/executed', (sid: unknown, cmdName: unknown) => {
-        if (cmdName === 'btw' && typeof sid === 'string' && sid !== '') {
+        if (cmdName === 'agy-btw' && typeof sid === 'string' && sid !== '') {
           void wakeBtwSession(sid)
         }
       })

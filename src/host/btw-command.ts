@@ -95,8 +95,8 @@ function sessionIdOf(invocation?: CommandInvocation): string {
 
 export function btwCommandDefinition(deps: BtwCommandDeps): CommandDefinition {
   return {
-    name: 'btw',
-    description: '旁路提问：不打断主回合、不污染会话历史的只读即时问答（/btw <问题>）',
+    name: 'agy-btw',
+    description: '旁路提问：不打断主回合、不污染会话历史的只读即时问答（/agy-btw <问题>）',
     input: { hint: '<side question> | copy | clear | help' },
     handler: async (invocation) => handleBtwCommand(deps, invocation),
   }
