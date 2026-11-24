@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.84 (2026-11-24)
+
+### English
+
+- **Refactor(mapper): extract the running-tool fallback formatter.** `event-mapper.ts` sat at the 600-line budget (599), where every new behaviour meant deleting a comment to fit. `formatRunningToolFallback` is a pure function of (tool name, args) with no mapper state, so it now lives in `running-tool-fallback.ts`; the mapper is back to 575 lines. Behaviour is unchanged — the existing suite is the regression net.
+- **Docs: record the critical-module backlog** in `.spec/refactor-backlog.md`. Eight more modules sit at 595–599 lines (`translation/service`, `subagent/tracker`, `background/watcher`, `acp/pool`, `acp/client`, `AccountsPanel`, `host/adapter`, `credentials/slot`). Sitting that close to the cap is a signal of too many responsibilities, not of "a few lines short", so the backlog names the extractable part of each and the order to take them (pure functions → stateless branches → stateful collaborators), one concept per change.
+
+### 中文
+
+- **重构(mapper)：抽出运行中工具的兜底文案生成器。** `event-mapper.ts` 一直贴着 600 行上限（599），每次新增行为都要靠删注释腾位置。`formatRunningToolFallback` 是只依赖（工具名, 参数）、不碰 mapper 状态的纯函数，现移入 `running-tool-fallback.ts`，主文件回到 575 行。行为不变——既有测试就是回归网。
+- **文档：记录临界模块待办**（`.spec/refactor-backlog.md`）。另有 8 个模块在 595–599 行之间（`translation/service`、`subagent/tracker`、`background/watcher`、`acp/pool`、`acp/client`、`AccountsPanel`、`host/adapter`、`credentials/slot`）。贴着上限是"职责过多"的信号，而不是"只差几行"，所以清单为每个模块点名可抽出的部分与推进顺序（纯函数 → 无状态分支 → 有状态协作），一次只动一个概念。
+
 ## 0.6.83 (2026-11-24)
 
 ### English
