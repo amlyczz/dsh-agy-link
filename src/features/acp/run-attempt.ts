@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises'
 import type { ManagedAccount, ModelFamily } from '../../common/pool-types.ts'
 import {
   Err,
+  extractAgyQuotaBanner,
   isNonConsumableResultError,
   isTransportFailure,
   looksLikeAuthFailure,
@@ -40,10 +41,13 @@ import { rebuildAcpSession } from './rebuild.ts'
 import {
   finishAcpAttempt,
   identityFailureKind,
+  isAgyFailureBanner,
   settleEarlyAbort,
   settleIdentityFailure,
+  shouldSelfHealAcpResult,
   type AcpPromptOutcome,
 } from './settle.ts'
+export { isAgyFailureBanner, shouldSelfHealAcpResult } from './settle.ts'
 import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
 import { reportAcpCacheTurn } from './cache-turn.ts'
 
@@ -55,47 +59,9 @@ import { reportAcpCacheTurn } from './cache-turn.ts'
  */
 const FIRST_OUTPUT_GATE_MS = 20_000
 
-const INVALID_OUTPUT_RE = /model produced invalid output/i
-
 function firstLine(text: string): string {
   const line = text.split('\n').find((l) => l.trim() !== '')
   return (line ?? text).trim().slice(0, 240)
-}
-
-/**
- * True when an ACP prompt ended with either an empty thinking-only turn (no
- * visible text and no tool calls) or agy's transient `⚠ Model produced invalid
- * output.` error, making a single same-session warm nudge worthwhile while
- * preserving Google's prompt cache.
- */
-export function shouldSelfHealAcpResult(
-  resEv: ReturnType<typeof acpPromptResultToAgyEvent>,
-  flags: { sawText: boolean; sawThinking: boolean; sawTools: boolean },
-): boolean {
-  if (resEv.kind !== 'result') return false
-  if (flags.sawTools) return false
-  if (INVALID_OUTPUT_RE.test(resEv.error ?? '') || INVALID_OUTPUT_RE.test(resEv.response)) return true
-  return resEv.ok && !flags.sawText && flags.sawThinking && resEv.response.trim() === ''
-}
-
-/**
- * agy prints its own infrastructure failures into the message stream and then
- * closes the turn normally, so an unreachable upstream arrives as a perfectly
- * successful end_turn whose only text is this banner. Recognise it as "no model
- * output" instead of showing the user a fake answer.
- */
-const AGY_INFRA_BANNER =
-  /(failed to construct executor|plan model not specified|failed to fetch user info|proxyconnect|failed to construct (?:the )?executor)/i
-
-export function isAgyFailureBanner(text: string): boolean {
-  const body = text.trim()
-  if (body === '') return false
-  // Only agy's OWN infrastructure lines, and only when they are the whole
-  // message. The old rule ("starts with ⚠ and is at most two lines") also ate
-  // legitimate one-line answers such as "⚠ 端口 8080 已被占用，请先停掉旧服务。"
-  // and turned a good reply into a discarded process plus a CLI re-run.
-  const lines = body.split('\n').filter((l) => l.trim() !== '')
-  return lines.length <= 2 && AGY_INFRA_BANNER.test(body)
 }
 
 /** Drive one prompt and classify what happened. Never settles, never cleans up. */
@@ -171,7 +137,10 @@ async function runAcpPrompt(opts: {
 
   try {
     subTracker?.start()
-    const idleMs = cfg.timeoutMs
+    // Align ACP's generation idle floor with the CLI watchdog (15m minimum when
+    // configured timeout >= 60s) so large tool-argument generation never trips a
+    // premature 600s idle timeout (#183).
+    const idleMs = !input.isAux && cfg.timeoutMs >= 60_000 ? Math.max(cfg.timeoutMs, 15 * 60_000) : cfg.timeoutMs
     const longToolIdleMs = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes * 60_000 : 0
     const maxTurnMs = cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : 0
     const inlineImages: Array<{ data: string; mimeType: string }> = []
@@ -203,7 +172,12 @@ async function runAcpPrompt(opts: {
             flushTranscriptUsage()
           }
           for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
-            if (!sawRealOutput && ev.kind !== 'init' && !isAgyFailureBanner(streamState.accumulatedText)) {
+            if (
+              !sawRealOutput &&
+              ev.kind !== 'init' &&
+              !isAgyFailureBanner(streamState.accumulatedText) &&
+              extractAgyQuotaBanner(streamState.accumulatedText) === undefined
+            ) {
               sawRealOutput = true
               onFirstOutput?.()
             }
@@ -254,8 +228,6 @@ async function runAcpPrompt(opts: {
       }
       resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText, streamState.lastContextUsed)
     }
-    recorder.rec.append(resEv)
-    input.agyOnEvent?.(resEv)
     if (!input.isAux) {
       reportAcpCacheTurn({
         deps,
@@ -266,9 +238,17 @@ async function runAcpPrompt(opts: {
         selfHealed,
       })
     }
+    const quotaBanner = resEv.kind === 'result'
+      ? (extractAgyQuotaBanner(resEv.response) ?? extractAgyQuotaBanner(resEv.error))
+      : undefined
+    if (quotaBanner !== undefined) {
+      throw new Error(quotaBanner)
+    }
     if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
       throw new Error(resEv.error ?? 'ACP prompt returned error without response')
     }
+    recorder.rec.append(resEv)
+    input.agyOnEvent?.(resEv)
     // An "end_turn" with no event and no text is NOT a successful empty answer:
     // a broken proxy produces exactly that, with the real cause only in the
     // agy log. Look there before believing the stopReason.
@@ -374,6 +354,8 @@ async function runAcpPrompt(opts: {
       runLogText: logText,
       silentTimeout: timedOut && !emittedAny,
       outcomeOverride: outcome,
+      quotaFailover: liveQf,
+      cooledInLiveFamilies: quotaCtrl.cooledFamilies(),
       empty: !sawRealOutput,
       keyringJitter: looksLikeAuthVerificationJitter(`${errText} ${logText}`),
     }
@@ -562,9 +544,11 @@ export async function runAcpAttempt(
       result.empty &&
       failure.kind !== 'aborted' &&
       failure.code !== Err.TIMEOUT &&
-      // AUTH failures are not transport-specific: the CLI fallback would use the
-      // same wrong/expired credential and burn another retry budget.
+      // AUTH / RATE_LIMIT / ELIGIBILITY are account-scoped: CLI fallback runs the
+      // same account without settling cooldown/rotation, so let finishAcpAttempt handle it.
       failure.code !== Err.AUTH &&
+      failure.code !== Err.RATE_LIMIT &&
+      failure.code !== Err.ELIGIBILITY &&
       // A keyring blip would simply repeat on the other transport, and the retry
       // would pay a second credential hand-off for nothing.
       result.keyringJitter !== true &&

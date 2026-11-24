@@ -12,6 +12,34 @@ import type { AttemptFailure } from '../../provider/failure.ts'
 import { finalizeAttempt } from '../../provider/finalize.ts'
 import type { LiveQuotaFailoverState } from '../../provider/quota-failover.ts'
 import type { AcpProcess } from './client.ts'
+import type { acpPromptResultToAgyEvent } from './protocol.ts'
+
+const INVALID_OUTPUT_RE = /model produced invalid output/i
+const AGY_INFRA_BANNER =
+  /(failed to construct executor|plan model not specified|failed to fetch user info|proxyconnect|failed to construct (?:the )?executor)/i
+
+/**
+ * True when an ACP prompt ended with either an empty thinking-only turn (no
+ * visible text and no tool calls) or agy's transient `⚠ Model produced invalid
+ * output.` error, making a single same-session warm nudge worthwhile.
+ */
+export function shouldSelfHealAcpResult(
+  resEv: ReturnType<typeof acpPromptResultToAgyEvent>,
+  flags: { sawText: boolean; sawThinking: boolean; sawTools: boolean },
+): boolean {
+  if (resEv.kind !== 'result') return false
+  if (flags.sawTools) return false
+  if (INVALID_OUTPUT_RE.test(resEv.error ?? '') || INVALID_OUTPUT_RE.test(resEv.response)) return true
+  return resEv.ok && !flags.sawText && flags.sawThinking && resEv.response.trim() === ''
+}
+
+/** Recognise agy's own 1-2 line infrastructure banners sent as end_turn text. */
+export function isAgyFailureBanner(text: string): boolean {
+  const body = text.trim()
+  if (body === '') return false
+  const lines = body.split('\n').filter((l) => l.trim() !== '')
+  return lines.length <= 2 && AGY_INFRA_BANNER.test(body)
+}
 
 export interface AcpPromptOutcome {
   failure: AttemptFailure | null
@@ -124,6 +152,8 @@ export async function finishAcpAttempt(opts: {
       rawErrText: result.rawErrText,
       runLogText: result.runLogText,
       silentTimeout: result.silentTimeout,
+      ...(result.quotaFailover === undefined ? {} : { quotaFailover: result.quotaFailover }),
+      ...(result.cooledInLiveFamilies === undefined ? {} : { cooledInLiveFamilies: result.cooledInLiveFamilies }),
       ...(result.outcomeOverride === undefined ? {} : { outcomeOverride: result.outcomeOverride }),
     })
   } finally {

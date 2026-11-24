@@ -7,7 +7,9 @@ import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm
 import {
   defaultConfig,
   Err,
+  extractAgyQuotaBanner,
   extractQuotaErrorModel,
+  isAgyQuotaBannerLine,
   isHardQuotaResultError,
   isNonConsumableResultError,
   isTransientBurstRateLimit,
@@ -25,6 +27,7 @@ import { RunRecording, RunRegistry } from '../src/host/recording.ts'
 import { SessionStore } from '../src/host/sessions.ts'
 import { runAgyOnce } from '../src/host/oneshot.ts'
 import { EventMapper } from '../src/provider/mapper/event-mapper.ts'
+import { driveSpan } from '../src/provider/span.ts'
 import { SubagentTracker } from '../src/features/subagent/tracker.ts'
 import { ImageService } from '../src/features/image/service.ts'
 import { TranslationService } from '../src/features/translation/service.ts'
@@ -641,6 +644,164 @@ rl.on('close', () => process.exit(0));
       assert.equal(rec.failureInfo?.code, Err.RATE_LIMIT)
       assert.ok((primary.cooldowns.google?.cooldownUntil ?? 0) > Date.now() + 3600_000)
       assert.equal(pool.getPoolData().lastActiveAccountId, second.id)
+    } finally {
+      await Promise.all(spawned.map((p) => new Promise<void>((r) => { p.once('exit', () => r()); p.close(); setTimeout(r, 200) })))
+      acpPool.dispose()
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+    }
+  })
+
+  test('11. standalone agy ⚠ quota banners with ok=true classify as hard quota without false positives on prose', () => {
+    const banner = '⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h25m47s.'
+    const credits = '⚠ Your AI credits balance is too low to continue.'
+    assert.equal(isAgyQuotaBannerLine(banner), true)
+    assert.equal(isAgyQuotaBannerLine(credits), true)
+    assert.equal(extractAgyQuotaBanner(banner), banner)
+    assert.equal(isHardQuotaResultError(true, undefined, banner), true)
+    assert.equal(isNonConsumableResultError(true, undefined, banner), true)
+    assert.equal(isHardQuotaResultError(true, undefined, credits), true)
+
+    // Prose quoting or non-quota ⚠ answers must remain normal consumable replies.
+    assert.equal(isAgyQuotaBannerLine('⚠ 端口 8080 已被占用，请先停掉旧服务。'), false)
+    assert.equal(isAgyQuotaBannerLine('Fixed Individual quota reached in diagnostics.ts'), false)
+    assert.equal(extractAgyQuotaBanner(`${banner}\nDone checking logs.`), undefined)
+    assert.equal(isHardQuotaResultError(true, undefined, 'Fixed Individual quota reached handling.'), false)
+    assert.equal(isNonConsumableResultError(true, undefined, '⚠ 端口 8080 已被占用，请先停掉旧服务。'), false)
+  })
+
+  test('12. EventMapper suppresses fragmented ⚠ quota banners while preserving legitimate ⚠ warnings', () => {
+    const mapperQuota = new EventMapper({ runId: 'r-q', cutOnTool: false })
+    const c1 = [...mapperQuota.map({ kind: 'step', stepKey: 's1', stepKind: 'text', fragment: true, text: '⚠ Individual quota ' }, 0)]
+    const c2 = [...mapperQuota.map({ kind: 'step', stepKey: 's1', stepKind: 'text', fragment: true, text: 'reached. Please upgrade your subscription to increase your limits. Resets in 4h25m47s.' }, 1)]
+    const c3 = [...mapperQuota.map({ kind: 'result', conversationId: 'c1', ok: true, response: '⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h25m47s.', usage: {}, raw: {} }, 2)]
+    const c4 = [...mapperQuota.emitFailure('error', Err.RATE_LIMIT, 'quota reached')]
+    const leaked = [...c1, ...c2, ...c3, ...c4].filter((c) => c.type === 'text-delta')
+    assert.equal(leaked.length, 0, 'quota banner must never leak as assistant text-delta')
+    assert.equal(mapperQuota.isFinished, true)
+
+    const mapperWarn = new EventMapper({ runId: 'r-w', cutOnTool: false })
+    const w1 = [...mapperWarn.map({ kind: 'step', stepKey: 's1', stepKind: 'text', fragment: true, text: '⚠ 端口 8080 ' }, 0)]
+    const w2 = [...mapperWarn.map({ kind: 'step', stepKey: 's1', stepKind: 'text', fragment: true, text: '已被占用。' }, 1)]
+    const w3 = [...mapperWarn.map({ kind: 'result', conversationId: 'c1', ok: true, response: '⚠ 端口 8080 已被占用。', usage: {}, raw: {} }, 2)]
+    const textOut = [...w1, ...w2, ...w3].filter((c) => c.type === 'text-delta').map((c) => (c as { text: string }).text).join('')
+    assert.equal(textOut, '⚠ 端口 8080 已被占用。')
+  })
+
+  test('13. runAcpAttempt cools & rotates when agy emits ⚠ Individual quota reached with end_turn (both post-tool and empty turn)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agy-acp-banner-quota-'))
+    const pool = new AccountPoolManager(join(dir, 'pool'))
+    const second = pool.createAccountSlot('Second')
+    const primary = pool.getAccounts()[0]!
+    const scriptPath = join(dir, 'mock-acp-banner.mjs')
+    writeFileSync(scriptPath, `
+import { createInterface } from 'node:readline';
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+function send(obj) { process.stdout.write(JSON.stringify(obj) + '\\n'); }
+let promptCount = 0;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') return send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } });
+  if (msg.method === 'session/new') return send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'acp-b-1' } });
+  if (msg.method === 'session/set_mode' || msg.method === 'session/set_config_option') return send({ jsonrpc: '2.0', id: msg.id, result: { ok: true } });
+  if (msg.method === 'session/prompt') {
+    promptCount++;
+    if (promptCount === 1) {
+      // Simulate a tool call followed by agy emitting ⚠ Individual quota reached... and ending with end_turn.
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: msg.params.sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'tc-1', name: 'edit_file', status: 'in_progress', rawInput: { path: 'a.ts' } } } });
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: msg.params.sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'tc-1', name: 'edit_file', status: 'completed', rawOutput: 'ok' } } });
+      setTimeout(() => {
+        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: msg.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h25m47s.' } } } });
+        send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } });
+      }, 20);
+    } else {
+      // Immediate banner on an empty turn (no tools)
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: msg.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h25m47s.' } } } });
+      send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } });
+    }
+  }
+});
+rl.on('close', () => process.exit(0));
+`, 'utf8')
+    const cfg: PluginConfig = { ...defaultConfig(), timeoutMs: 10_000, transport: 'acp' }
+    const store = new SessionStore(join(dir, 'sessions.json'))
+    const runs = new RunRegistry()
+    const spawned: AcpProcess[] = []
+    const acpPool = new AcpSessionPool({
+      bin: () => scriptPath,
+      cfg: () => cfg,
+      createProcess: (o) => {
+        const p = new AcpProcess({ ...o, preemptAutoUpdate: false })
+        spawned.push(p)
+        return p
+      },
+    })
+    const deps: AttemptDeps = {
+      acquire: () => Promise.resolve(() => {}),
+      pool,
+      runs,
+      store,
+      clearInFlightPrompt: () => {},
+      registerActiveRun: () => {},
+      unregisterActiveRun: () => {},
+      isSuperseded: () => false,
+      noteNetworkFailure: () => 1,
+      clearNetworkStreak: () => {},
+      dropFailoverBudget: () => {},
+      clearRateLimitFailover: () => {},
+      sharesSingleEgress: () => true,
+      lastAccountSpawnTime: new Map(),
+      minSpawnIntervalMs: 0,
+    }
+    const baseInput = (sessionKey: string): AttemptInput => ({
+      cfg,
+      bin: scriptPath,
+      permissionMode: 'auto',
+      sessionKey,
+      workspaceRoot: dir,
+      isAux: false,
+      account: primary,
+      prompt: 'continue',
+      model: 'gemini-3.8-flash',
+      activeModel: 'gemini-3.8-flash',
+      effort: 'medium',
+      addDirs: [],
+      persistBinding: false,
+      binding: undefined,
+      messages: [msg('user', 'continue')],
+      newlySentImageIds: [],
+      sessionAccountKey: sessionKey,
+      family: 'google',
+      signal: undefined,
+      agyOnEvent: undefined,
+      sandbox: false,
+      agent: '',
+    })
+    const slot: AttemptSlot = { releaseOnce: () => {}, armHandoff: () => null }
+    try {
+      // 1) Post-tool turn: span 0 cuts on tool; continuation span 1 must surface RATE_LIMIT with zero leaked banner text
+      const rec1 = await runAcpAttempt(acpPool, deps, baseInput('sess-b-1'), slot)
+      assert.ok(rec1)
+      const span0: StreamChunk[] = []
+      for await (const ch of driveSpan({ runs }, rec1, 0, true, false, undefined, undefined, undefined, undefined, undefined, true, 'sess-b-1')) span0.push(ch)
+      const finish0 = span0[span0.length - 1] as { type: string; reason: { kind: string } }
+      assert.equal(finish0.reason.kind, 'tool-calls')
+
+      const span1: StreamChunk[] = []
+      for await (const ch of driveSpan({ runs }, rec1, 3, true, false, undefined, undefined, undefined, undefined, undefined, true, 'sess-b-1')) span1.push(ch)
+      const finish1 = span1[span1.length - 1] as { type: string; reason: { kind: string; failure?: { code: string } } }
+      assert.equal(finish1.reason.kind, 'error')
+      assert.equal(finish1.reason.failure?.code, Err.RATE_LIMIT)
+      assert.equal(span1.some((c) => c.type === 'text-delta'), false, 'must not leak quota banner text before rotating')
+      assert.ok((pool.getAccount(primary.id)?.cooldowns.google?.cooldownUntil ?? 0) > Date.now() + 4 * 3600_000)
+      assert.equal(pool.getPoolData().lastActiveAccountId, second.id)
+
+      // 2) Immediate empty turn: must NOT return null (CLI fallback on same account), must settle RATE_LIMIT
+      delete primary.cooldowns.google
+      const rec2 = await runAcpAttempt(acpPool, deps, baseInput('sess-b-2'), slot)
+      assert.ok(rec2, 'must return settled recording instead of falling back to CLI on the same exhausted account')
+      for await (const _ of rec2.eventsFrom(0)) { /* drain */ }
+      assert.equal(rec2.failureInfo?.code, Err.RATE_LIMIT)
+      assert.ok((pool.getAccount(primary.id)?.cooldowns.google?.cooldownUntil ?? 0) > Date.now() + 4 * 3600_000)
     } finally {
       await Promise.all(spawned.map((p) => new Promise<void>((r) => { p.once('exit', () => r()); p.close(); setTimeout(r, 200) })))
       acpPool.dispose()

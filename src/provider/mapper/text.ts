@@ -1,4 +1,5 @@
 // Text streaming helpers: suffix-delta accumulation and local-image URL rewrite.
+import { isAgyQuotaBannerLine } from '../../common/types.ts'
 
 /** Suffix-delta: emit only what grew; fall back to a newline + full text. */
 export function suffixDelta(prev: string, next: string): string {
@@ -111,6 +112,31 @@ export function stripAgyInternalNoise(text: string): string {
   out = out.replace(/(?:^|\r?\n)[ \t]*Retries remaining:[ \t]*\d+[ \t]*(?=\r?\n|$)/gi, '')
   if (out !== text) {
     out = out.replace(/^\r?\n+/, '').replace(/\n{3,}/g, '\n\n')
+  }
+  return out
+}
+
+/** Hold back an incomplete trailing `⚠` line across streaming chunk boundaries. */
+export function splitPendingWarn(text: string): { ready: string; pending: string } {
+  if (text === '' || text.endsWith('\n')) return { ready: text, pending: '' }
+  const nl = text.lastIndexOf('\n')
+  const tail = nl >= 0 ? text.slice(nl + 1) : text
+  if (/^\s*⚠/.test(tail) && tail.length <= 320) {
+    return { ready: nl >= 0 ? text.slice(0, nl + 1) : '', pending: tail }
+  }
+  return { ready: text, pending: '' }
+}
+
+/** Strip standalone `⚠ <hard quota>` lines emitted by agy inside assistant text. */
+export function stripQuotaBannerLines(text: string): string {
+  if (!text.includes('⚠')) return text
+  const parts = text.split(/(\r?\n)/)
+  let out = ''
+  for (let i = 0; i < parts.length; i += 2) {
+    const line = parts[i] ?? ''
+    const sep = parts[i + 1] ?? ''
+    if (isAgyQuotaBannerLine(line)) continue
+    out += line + sep
   }
   return out
 }

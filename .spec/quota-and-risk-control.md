@@ -141,7 +141,13 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 
 语义后果（有意为之，不是退化）：
 
-- **缺失 argon 行 = 未知**：`isQuotaBenched()` 返回 `false`（不因 gemini 见底而误判 argon 让路），`nextQuotaResetAt()` 返回 `NaN`，`orderByExpiry()` 把未知重置排在有已知重置的账号之后。
+- **独立账本与显式共享组边界（2026-11-24 对齐 agy 1.5.15+）**：
+  - 凡账号拥有独立 `quotas.argon` 行，或 `quotas.google.description` 未显式列名 Argon，仍严格执行「独立账本、绝不借用」：`isQuotaBenched()` 只读自身行，`nextQuotaResetAt()` 返回 `NaN`，`orderByExpiry()` 把未知重置排在有已知重置之后。
+  - 当且仅当 **`argonSharesGoogleGroup(acc)` 为真**（`acc.quotas?.argon === undefined && isArgonModel(acc.quotas?.google?.description)`，即 `agy 1.5.15+` 付费号把 Argon / Orchestrator (Argon) 折叠进 `Gemini Models` 共享组）时，`argon` 与 `google` 物理同桶：
+    - 配额门控与排序：`effectiveFamilyQuota()`、`isQuotaBenched()`（含 `effectiveQuotaGateClearedAt()`）共享 `quotas.google` 读数；
+    - 冷却、失败与接管：`effectiveFamilyCooldown()`、`earliestResetCountdown()` / `earliestAvailableCountdown()`、`recordFailure()` / `recordSuccess()` / `clearCooldown(..., includeQuotaBench)` / `createLiveQuotaController()` / `advanceAccount()` 在 `google` ↔ `argon` 间双向联动，防止 Orchestrator (Argon) 在子代理/执行模型触发 `google` 429 后重试回同一冷却账号；
+    - CLI `/usage` 刷新（`refreshAccountQuotaPipeline`）与 REST summary 一致，使用 `shouldReleaseOrphanedCooldown()`（以 `hasDedicatedGroup(id, 'argon')` 为前提）守卫 `clearCooldown(id, 'argon')`，避免稳态共享组账号刷新配额时误删仍在生效的 429 冷却；
+    - 展示收口：`accountKnownFamilies()` 与 `AccountsPanel` 在共享组账号上不额外渲染幽灵 `Argon` 卡片行或重复冷却标签，`QuotaPanel` 与 `/agy pool` 通过 `effectiveFamilyCooldown()` 读取有效冷却。
 - **argon 行唯一的替代数据源是 argon 自己的模型行**（2026-11-23 决策）：后端不发 `argon` 组但模型列表里有 `gemini-4-argon-*` 时，用这些模型行自己的周额度读数建 `argon` 行，绝不读 `google` 的聚合值。
   - 已知取舍：若某个 agy 版本（如 1.5.5）把 argon 折叠进共享 Gemini 桶，argon 模型行的读数就是该桶的镜像，此时 `argon` 行会呈现镜像值。这是「绝不跨族借用」换来的代价，优于把健康 argon 判死或把见底 argon 放过。
   - 反向也不允许：`google` 的模型列表里不再出现 argon 行，避免 Gemini 面板被 argon 污染。
@@ -213,9 +219,9 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 
 所有请求入口（主会话 `AgyAdapter`、内嵌子代理、辅助路由 `isAux`、`runAgyOnce`/`agy_ask`、`ImageService`/`agy_image`、`TranslationService` 与 `runAcpAttempt`）必须遵守同一套「硬配额耗尽即冷却并切向下一个健康账号」契约，同时严格保留 `TOS_VIOLATION` 终态防连坐熔断：
 
-1. **带部分输出（partial response）的硬配额失败绝不可吞成成功**：
-   - 当 `agy`（CLI `-p` 或 `acp`）在输出过部分文本/工具后返回 `status: ERROR` 且 `error`/`response` 匹配 `isHardQuotaResultError`（如 `RESOURCE_EXHAUSTED (code 429): Individual quota reached`），`EventMapper`、`RunRecording`（`hasConsumableResult` / `hasFinishableEventFrom`）、`classifyRun()` 与 `driveAcpPrompt()` 必须判定为**不可消费失败**并映射为 `Err.RATE_LIMIT`，冷却当前账号（优先解析精确重置时长）并切号重试，严禁调用 `recordSuccess()` 或以 `stop` 结束。
-   - 非配额类的工具报错但带有效答复（如 `Find command timed out.`）保持既有软收尾（`stop` + `[agy finished with error]`）。
+1. **带部分输出（partial response）或 `end_turn` `⚠` 横幅的硬配额失败绝不可吞成成功**：
+   - 当 `agy`（CLI `-p` 或 `acp`）在输出过部分文本/工具后返回 `status: ERROR` 且 `error`/`response` 匹配 `isHardQuotaResultError`（如 `RESOURCE_EXHAUSTED (code 429): Individual quota reached`），**或者** `agy` 将硬配额拒绝包装成末尾独立的 `⚠` 警告行（如 `⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h25m47s.` / `⚠ Your AI credits balance is too low...`，判定函数 `isAgyQuotaBannerLine` / `extractAgyQuotaBanner`）并以 `end_turn` / `ok: true` 结束回合时：`EventMapper`（跨分片暂存并剥离 `⚠` 配额横幅，避免向用户泄露或污染重试流）、`RunRecording`、`classifyRun()` 与 `runAcpPrompt()` 必须判定为**不可消费失败**并映射为 `Err.RATE_LIMIT`，冷却当前账号（优先解析精确重置时长）并切号重试，严禁调用 `recordSuccess()`、以 `stop` 结束或在未冷却切号时回落到同账号 CLI `-p`。
+   - 非配额类的工具报错但带有效答复（如 `Find command timed out.`）或非配额 `⚠` 正文警告（如 `⚠ 端口 8080 已被占用`）保持既有收尾语义，绝不误判为配额冷却。
 - **`agy` 内部子代理、主对话 429 死循环与图像/委派工具实时配额熔断切号（`SubagentTracker` + `ParentQuotaMonitor` + `src/provider/quota-failover.ts`）**：
    - 严禁从普通终端命令输出（如 `Command exited with code 1`）或未核验正文中误判 429；仅当满足可信来源约束（父对话 `transcript.jsonl` 来自 `SYSTEM` 的 `The subagent ... encountered an error` 通知、父对话 `transcript_full.jsonl` 中来自 `SYSTEM` 的 `ERROR_MESSAGE` 429 重试环与 `Stop hook blocked termination`、子代理 `transcript.jsonl` 终态 `ERROR`/`FAILED` 中包含权威 Google Cloud Code / `image failed to generate` / `agent executor error` 配额信号，或 `generate_image`/`invoke_subagent` 工具调用错误）且排除 ≤30s 瞬时 QPS 突发（`isTransientBurstRateLimit`，如 `RATE_LIMIT_EXCEEDED` `1s`）与 `TOS_VIOLATION` 时，才判定为硬配额耗尽。
    - 主对话 429 重试熔断器（`ParentQuotaMonitor`）增量尾随 `transcript_full.jsonl`（尚未生成时回退 `transcript.jsonl` 并在出现后平滑切换）：收到健康 `PLANNER_RESPONSE`（非 ERROR）或 `GENERIC` (`status === 'DONE'`) 时清零计数；连续出现 2 次权威 `QUOTA_EXHAUSTED` / `Individual quota reached` / `reset > 30s`，或连续 3 次通用 `RESOURCE_EXHAUSTED (code 429)`，或在本轮已出现过 429 计数后紧随 `Stop hook blocked termination` 时，立即发射 `source: 'parent-retry-loop'`。

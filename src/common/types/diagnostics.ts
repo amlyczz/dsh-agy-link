@@ -227,11 +227,39 @@ export function extractQuotaErrorModel(text?: string): string | undefined {
 }
 
 /**
- * True when a failed result envelope carries a hard quota refusal (meaning the
+ * Standalone `⚠ ...` error banner that `agy` itself injects into assistant
+ * text and closes normally (`end_turn` / `status: DONE`) when an internal LLM
+ * call hits hard quota or AI-credits exhaustion. Requiring the `⚠` prefix on
+ * its own line prevents normal model prose mentioning "rate limit" or "quota"
+ * from ever triggering a false cooldown or account rotation.
+ */
+export function isAgyQuotaBannerLine(line: string): boolean {
+  const trimmed = line.trim()
+  if (!/^⚠\uFE0F?\s+/.test(trimmed)) return false
+  const body = trimmed.replace(/^⚠\uFE0F?\s+/, '')
+  return looksLikeHardRateLimit(body) && !isTransientBurstRateLimit(body)
+}
+
+/**
+ * Extract a trailing standalone `⚠ <hard quota>` banner from assistant text.
+ * Checking only the last non-empty line avoids false positives when prose
+ * quotes a warning earlier in a legitimate response.
+ */
+export function extractAgyQuotaBanner(text?: string): string | undefined {
+  if (!text) return undefined
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) return undefined
+  const last = lines[lines.length - 1]!
+  return isAgyQuotaBannerLine(last) ? last : undefined
+}
+
+/**
+ * True when a result envelope carries a hard quota refusal (meaning the
  * attempt must rotate accounts rather than soft-finish on any partial text).
+ * Includes `ok: true` envelopes whose trailing text is agy's own `⚠` quota banner.
  */
 export function isHardQuotaResultError(ok: boolean, error?: string, response?: string): boolean {
-  if (ok) return false
+  if (ok) return Boolean(extractAgyQuotaBanner(response))
   if (error && error.trim() !== '') {
     return looksLikeHardRateLimit(error) && !isTransientBurstRateLimit(error)
   }
@@ -239,12 +267,13 @@ export function isHardQuotaResultError(ok: boolean, error?: string, response?: s
 }
 
 /**
- * True when a failed result envelope represents a non-consumable account/policy
- * failure even when partial response text was already buffered before the error.
+ * True when a result envelope represents a non-consumable account/policy
+ * failure even when partial response text was already buffered or agy closed
+ * the turn normally after emitting a `⚠` quota banner.
  */
 export function isNonConsumableResultError(ok: boolean, error?: string, response?: string): boolean {
-  if (ok) return false
   if (isHardQuotaResultError(ok, error, response)) return true
+  if (ok) return false
   if (looksLikeTosViolation(error) || looksLikeTosViolation(response)) return true
   if (looksLikeValidationRequired(error) || looksLikeValidationRequired(response)) return true
   if (error && (looksLikeEligibilityFailure(error) || looksLikeAuthFailure(error))) return true

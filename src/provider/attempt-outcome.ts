@@ -8,6 +8,7 @@
 import { LlmError, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
   Err,
+  extractAgyQuotaBanner,
   isHardQuotaResultError,
   isTransportFailure,
   looksLikeAuthFailure,
@@ -316,7 +317,9 @@ function classifyRun(input: {
   const rawErrText = [
     outcome.stderrTail,
     parser.stats.lastResultError,
-    !consumable && r && (!r.ok || zeroUsageTos) ? (r.error ?? r.response) : '',
+    !consumable && r && (!r.ok || zeroUsageTos || errorResponseHardQuota)
+      ? (r.error ?? (errorResponseHardQuota ? (extractAgyQuotaBanner(r.response) ?? r.response) : r.response))
+      : '',
     liveQuota ? quotaFailover.rawErrorText : '',
     logQuotaHint,
   ]
