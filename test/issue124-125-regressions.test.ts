@@ -129,9 +129,30 @@ test('issue #125: model support stays ACCOUNT-scoped so routing picks the right 
   // that cannot serve them. Pool-wide healing happens before the error instead.
   assert.equal(pool.isModelSupported(pool.getAccount(a!.id)!, model), false)
   assert.equal(pool.isModelSupported(pool.getAccount(b!.id)!, model), true)
-  // A learned refusal stays final.
+  // A learned refusal outranks the quota snapshot taken before it.
   pool.markModelUnsupported(b!.id, model)
   assert.equal(pool.isModelSupported(pool.getAccount(b!.id)!, model), false)
+})
+
+test('a learned refusal heals once a later quota refresh lists the model again', async () => {
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { AccountPoolManager } = await import('../src/host/pool.ts')
+
+  // agy also says "not recognized" when it could not load its model list (a TLS
+  // timeout), which used to shut the model out of the pool until a restart.
+  const pool = new AccountPoolManager(mkdtempSync(join(tmpdir(), 'agy-refusal-heal-')))
+  const account = pool.getAccounts()[0]!
+  const model = 'gemini-4-neon-high'
+  const listing = (updatedAt: number, modelId: string) =>
+    ({ google: { updatedAt, remainingFraction: 1, models: [{ modelId, remainingFraction: 1 }] } }) as never
+  pool.updateAccountQuotas(account.id, listing(Date.now() - 1000, model))
+  pool.markModelUnsupported(account.id, model)
+  assert.equal(pool.selectAccount('google', model), null)
+
+  pool.updateAccountQuotas(account.id, listing(Date.now() + 1000, model))
+  assert.equal(pool.selectAccount('google', model)?.id, account.id)
 })
 
 test('issue #125: an all-model-mismatch failure heals with ONE quota refresh, then retries', async () => {

@@ -60,7 +60,7 @@ export class AccountPoolManager {
    * blip that healed while the process was down.
    */
   private readonly authStrikes = new Map<string, number>()
-  private readonly unsupportedModels = new Map<string, Set<string>>()
+  private readonly unsupportedModels = new Map<string, Map<string, number>>()
   private catalog?: {
     get(accountId?: string): { models?: readonly { id: string }[]; source?: string }
     getAccountCatalog?(accountId?: string): { models?: readonly { id: string }[]; source?: string } | undefined
@@ -117,9 +117,9 @@ export class AccountPoolManager {
   }
 
   markModelUnsupported(accountId: string, model: string): void {
-    const set = this.unsupportedModels.get(accountId) ?? new Set()
-    this.unsupportedModels.set(accountId, set)
-    set.add(baseModelSlug(model))
+    const learned = this.unsupportedModels.get(accountId) ?? new Map<string, number>()
+    this.unsupportedModels.set(accountId, learned)
+    learned.set(baseModelSlug(model), Date.now())
   }
 
   /**
