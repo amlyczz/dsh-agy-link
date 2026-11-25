@@ -63,12 +63,13 @@ html.agy-modal-open body {
 }
 .agy-modal-body { scrollbar-gutter: stable; }
 /* While a scroll gesture is in flight (scroll-guard toggles html.agy-scrolling),
-   freeze every decorative effect inside the console body. Continuous animation
+   freeze every decorative effect inside the console PANEL - header spinner and
+   status chips included, they share the layer the scroller moves in. Continuous animation
    under a moving scroller keeps Chromium re-painting that subtree each frame and,
    with the panel's rounded clip + shadow, shows up as the recurring "scrolling
    the console flashes" symptom (2026-11-25). Paused effects resume when the
    gesture settles, so nothing looks permanently frozen. */
-html.agy-scrolling :is(.agy-modal-body, .agy-modal-body *) {
+html.agy-scrolling :is(.agy-modal-panel, .agy-modal-panel *) {
 	animation-play-state: paused !important;
 	transition: none !important;
 }

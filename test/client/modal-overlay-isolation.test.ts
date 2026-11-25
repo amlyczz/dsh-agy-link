@@ -200,7 +200,9 @@ test('REGRESSION: modal pins top edge, lets bottom adapt to tab height, and refr
 // The contract: while a scroll gesture is active, decorative animation inside
 // the overlay is PAUSED — nothing repaints under the moving scroller.
 test('REGRESSION: decorative animation inside the console pauses while scrolling', () => {
-	const scrollingRule = cssRule('html.agy-scrolling :is(.agy-modal-body, .agy-modal-body *)')
+	// The whole panel, not just its scroller: the header carries the spinner and
+	// status chips, and those repaint the same layer the scroller moves in.
+	const scrollingRule = cssRule('html.agy-scrolling :is(.agy-modal-panel, .agy-modal-panel *)')
 	assert.match(
 		scrollingRule,
 		/animation-play-state\s*:\s*paused/,

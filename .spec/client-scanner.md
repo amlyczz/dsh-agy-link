@@ -26,7 +26,7 @@
 2. **壳层与会话双滚动锁**：`agyModalStore.setOpen(true/false)` 同步切换 `html.agy-modal-open`（锁定 `html, body` 与 `[data-conversation-scroll]` 的 `overflow: hidden !important`），`.agy-modal-backdrop` 与 `.agy-modal-body` 设置 `overscroll-behavior: contain` 及 `min-height: 0`。
 3. **非 passive 滚轮隔离**：在 `document` 捕获阶段挂载非 passive `wheel` / `touchmove` 监听，拦截遮罩与非滚动区事件，仅放行 `.agy-modal-body` 内部原生滚动。
 4. **全局扫描器停摆与补偿**：`isInteractionLocked = 滚动中 || 浮层打开`（含控制台弹层与图片 Lightbox）；浮层打开时挂起所有会话 DOM 扫描器，关闭时触发一次 `settle` 回调做补偿扫描；插件卸载（`dispose`）时强制复位 `agy-modal-open`、关闭活跃 Lightbox 并执行 `setOverlaySuspended(false)`。
-6. **滚动期间零装饰性重绘**：`scroll-guard` 在滚动手势进行时切换 `html.agy-scrolling`；`global-css` 用 `html.agy-scrolling :is(.agy-modal-body, .agy-modal-body *)` 把控制台滚动区内的 `animation` 暂停（`animation-play-state: paused`）并关闭 `transition`。滚动子树里持续运行的动画会让合成器每帧重绘该子树，叠加面板圆角裁切 + 阴影就是「滚动控制台闪屏」的可复现来源（2026-11-25 第六次报告）。手势结束后自动恢复，不做常驻降级。
+6. **滚动期间零装饰性重绘**：`scroll-guard` 在滚动手势进行时切换 `html.agy-scrolling`；`modal-css.ts` 用 `html.agy-scrolling :is(.agy-modal-panel, .agy-modal-panel *)` 把**整个面板**（滚动区 + 头部 spinner / 状态胶囊）的 `animation` 暂停（`animation-play-state: paused`）并关闭 `transition`。滚动子树里持续运行的动画会让合成器每帧重绘该子树，叠加面板圆角裁切 + 阴影就是「滚动控制台闪屏」的成因（2026-11-25 第六次报告；报告者复现症状为**面板内容**闪烁，改后消失 → 归因成立）。手势结束后自动恢复，不做常驻降级。
 7. **轮询不在滚动中触发渲染**：`status.ts` 的 3s 轮询仍在滚动中更新快照（状态保持真实），但**推迟 listener 通知**，用 `onScrollSettle()` 在滚动停止后一次性 flush 最新 payload；避免 3s 轮询把整棵控制台树在滚动中途整体重渲。
 5. **流式扫描复杂度与零 React 警告**：`compaction` 与 `mermaid` 扫描器对普通段落和非 Mermaid 代码块标记/快速跳过，避免流式输出期间每 100ms 全量提取 `textContent`；所有 React 组件子节点遵循 variadic 或显式稳定 `key`，确保零 missing-`key` 警告。
 
