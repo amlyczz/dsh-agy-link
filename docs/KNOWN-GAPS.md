@@ -140,17 +140,11 @@ reference-counted slot is the strongest isolation the plugin can provide.
   token-guarded HTTP endpoint and registers a zero-dependency stdio MCP
   server in the MCP registry (`~/.gemini/config/mcp_config.json` by default,
   where `agy` 1.4+ actually reads it, merged in and restored on disable).
-  Bridged calls carry caller identity via `DSH_MCP_SESSION` (or `DSH_MCP_PROC` /
-  `X-DSH-Proc` dynamic per-session routing across persistent ACP processes, #200)
-  so identity-enforcing tools (such as `agent_teams`) reach the live session
-  for that turn, and `unwrapMcpTool` unwraps `mcp_dsh-tools-<port>_<tool>`
-  direct calls back to their real DSH names. Internal loopback-only
-  helpers — `run_code`, `agy_ask`, and the activity-mirror `agy_tool` — are
-  never bridged (excluded from both `/tools` and `/call`); `mcpToolAllowlist`
-  restricts the served set **and is
-  enforced at execution time** — a `/call` for a tool outside the allowlist is
-  refused (403) even when the caller holds the bridge token, so a prompt-injected
-  agy child cannot silently reach tools the operator did not expose. The
+  Bridged calls carry an opaque per-session route. DSH supplies the current
+  model schemas and the admitted tool set for that step. Its PTC executor
+  can call the admitted inner tools. The configured allowlist applies to
+  both layers and recursive AGY helpers are excluded. Account or session
+  changes can require a separate ACP process, increasing memory use. The
   loopback endpoint also caps request bodies (8 MiB → HTTP 413) and compares the
   bearer token in constant time, so a token-holding but prompt-injected child
   cannot OOM the host with an unbounded body or probe the token via timing.

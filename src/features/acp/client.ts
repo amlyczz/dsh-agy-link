@@ -7,7 +7,6 @@ import { killTree } from '../../runtime/agy/process.ts'
 import { consoleOutputEncoding, makeLineDecoder } from '../../runtime/agy/console.ts'
 import { withAgyQuietEnv } from '../../runtime/agy/env.ts'
 import { awaitAuthEvidence, classifyIdentity, readAuthEmailFromLog, type AuthEvidence } from './identity.ts'
-import { clearProcSessions, nextMcpProcId } from './mcp-session.ts'
 import { extractAvailableCommands, pickPermissionOption, type AvailableCommand, type JsonRpcResponse } from './protocol.ts'
 import { runAcpTurn, type AcpPromptOptions } from './turn.ts'
 import { collectAdvertisedModelIds } from './session-models.ts'
@@ -101,7 +100,6 @@ export class AcpProcess extends EventEmitter {
   private readonly rebuiltSessions = new Set<string>()
   private availableCommands: AvailableCommand[] = []
   private initPromise: Promise<Record<string, unknown>> | null = null
-  readonly mcpProcId = nextMcpProcId()
   lastUsedAt = Date.now()
 
   constructor(private readonly opts: AcpProcessOptions) {
@@ -193,7 +191,6 @@ export class AcpProcess extends EventEmitter {
   private ensureStarted(): void {
     if (this.child !== null) return
     const env = withAgyQuietEnv(this.opts.env ?? process.env)
-    env.DSH_MCP_PROC = this.mcpProcId
     if (this.opts.preemptAutoUpdate !== false) preemptAgyAutoUpdate(env)
     const args = buildAcpSpawnArgs(this.opts, this.resolveLogFile())
 
@@ -220,7 +217,6 @@ export class AcpProcess extends EventEmitter {
       this.openSessions.clear()
       this.sessionConfigs.clear()
       this.sessionModels.clear()
-      clearProcSessions(this.mcpProcId)
       this.emit('exit', code, sig)
     })
     child.on('error', (err) => {
@@ -575,7 +571,6 @@ export class AcpProcess extends EventEmitter {
 
   close(): void {
     this.alive = false
-    clearProcSessions(this.mcpProcId)
     const c = this.child
     this.child = null
     this.initPromise = null

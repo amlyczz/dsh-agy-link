@@ -2,8 +2,7 @@
 // dsh-agy-link MCP bridge script: a minimal stdio MCP server with zero
 // dependencies. agy launches it from its MCP registry; it forwards
 // tools/list and tools/call to the plugin loopback endpoint whose URL and
-// token arrive via env. DSH_MCP_SESSION carries the spawning DSH session so
-// the host can resolve the calling agent (issue #55).
+// token arrive via env. DSH_MCP_ROUTE binds requests to a live DSH model step.
 // Protocol: newline-delimited JSON-RPC 2.0.
 import { request as httpRequest } from 'node:http'
 import process from 'node:process'
@@ -12,7 +11,7 @@ import { createInterface } from 'node:readline'
 const URL_BASE = process.env.DSH_MCP_URL || ''
 const TOKEN = process.env.DSH_MCP_TOKEN || ''
 const SESSION = process.env.DSH_MCP_SESSION || ''
-const PROC_ID = process.env.DSH_MCP_PROC || ''
+const ROUTE = process.env.DSH_MCP_ROUTE || ''
 const PROTOCOL = '2024-11-05'
 
 function post(path, body) {
@@ -33,7 +32,7 @@ function post(path, body) {
         'Content-Length': Buffer.byteLength(data),
         Authorization: 'Bearer ' + TOKEN,
         ...(SESSION === '' ? {} : { 'X-DSH-Session': SESSION }),
-        ...(PROC_ID === '' ? {} : { 'X-DSH-Proc': PROC_ID }),
+        ...(ROUTE === '' ? {} : { 'X-DSH-Route': ROUTE }),
       },
       timeout: 600000,
     });
@@ -54,20 +53,16 @@ function post(path, body) {
   })
 }
 
-let toolCache = null;
-
-async function listTools(refresh = false) {
-  if (toolCache && !refresh) return toolCache;
+async function listTools() {
   const res = await post('/tools', {})
   if (res.status !== 200) throw new Error('bridge /tools failed: ' + JSON.stringify(res.body))
-  toolCache = (res.body.tools || []).map((t) => ({
+  return (res.body.tools || []).map((t) => ({
     name: t.name,
     description: t.description || t.dshName,
     inputSchema: t.inputSchema || { type: 'object' },
     _meta: t._meta || { 'antigravity/alwaysLoad': true },
     _dshName: t.dshName,
   }))
-  return toolCache;
 }
 
 function send(msg) {
@@ -81,19 +76,15 @@ async function handle(id, method, params) {
   }
   if (method.startsWith('notifications/')) return;
   if (method === 'tools/list') {
-    const tools = await listTools(true)
+    const tools = await listTools()
     send({ jsonrpc: '2.0', id, result: { tools: tools.map(({ _dshName, ...t }) => t) } })
     return;
   }
   if (method === 'tools/call') {
     const name = params && params.name
     const args = (params && params.arguments) || {}
-    let tools = await listTools(false)
-    let hit = tools.find((t) => t.name === name)
-    if (!hit) {
-      tools = await listTools(true)
-      hit = tools.find((t) => t.name === name)
-    }
+    const tools = await listTools()
+    const hit = tools.find(t => t.name === name)
     if (!hit) {
       send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool: ' + name } })
       return;

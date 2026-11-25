@@ -14,8 +14,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { createInterface } from 'node:readline'
 import { agyMcpConfigPath, mcpServerKey, startMcpBridge, writeMcpConfig } from '../src/host/mcp-bridge.ts'
-import { beginProcSessionTurn, clearProcSessions, resolveProcSession } from '../src/features/acp/mcp-session.ts'
+import { BridgeSteps } from '../src/host/bridge-steps.ts'
 
 const BRIDGE_SCRIPT = '/nonexistent/bridge.mjs'
 
@@ -437,95 +439,73 @@ test('issue #150: /tools lists preset-scoped tools for the spawning session', as
   }
 })
 
-test('issue #200: shared ACP process X-DSH-Proc overrides stale DSH_MCP_SESSION across session reuse', async () => {
-  const procId = 'acp-proc-reuse-1'
-  const calledAgents: string[] = []
-  const tools = {
-    schemas: (agent?: unknown) => {
-      const sid = (agent as { session?: string } | undefined)?.session
-      if (sid === 'session-B') {
-        return [{ name: 'progress_update', description: 'B tool', parameters: { type: 'object', properties: {} } }]
-      }
-      return [{ name: 'echo', description: 'root/A tool', parameters: { type: 'object', properties: {} } }]
-    },
-    execute: async (input: { calls?: Array<{ name: string }>; agent?: unknown; signal: AbortSignal }) => {
-      const aid = (input.agent as { id?: string } | undefined)?.id ?? 'none'
-      calledAgents.push(aid)
-      return { content: [{ type: 'text', text: 'ran:' + aid }] }
-    },
-  }
+test('four concurrent stdio callers execute only their own live step and report host failures', async () => {
+  const steps = new BridgeSteps()
   const bridge = await startMcpBridge({
-    bridgeScript: BRIDGE_SCRIPT,
-    tools: () => tools,
-    allowlist: () => '',
-    resolveAgent: (sid) => (sid === 'session-A' || sid === 'session-B' ? { id: 'agent-' + sid, session: sid } : undefined),
-    resolveProcSession: (pid) => resolveProcSession(pid),
+    bridgeScript: BRIDGE_SCRIPT, allowlist: () => '', resolveStep: key => steps.resolve(key),
+    tools: () => ({
+      schemas: () => { throw new Error('unexpected unscoped lookup') },
+      execute: async ({ agent, calls, toolSet }) => {
+        const id = (agent as { session: { id: string } }).session.id
+        assert.equal(toolSet?.view(agent).get('team_task_list'), id)
+        const call = calls[0]!
+        return { results: [{ callId: call.id, result: { isError: call.arguments === '{"deny":true}', content: [{ type: 'text', text: id }] } }] }
+      },
+    }),
   })
-  const realBridge = resolve('src/host/bridge.mjs')
-  const child = spawn(process.execPath, [realBridge], {
-    env: {
-      ...process.env,
-      DSH_MCP_URL: bridge.url,
-      DSH_MCP_TOKEN: bridge.token,
-      // Frozen to the spawning session (A), just like a reused `agy acp` process
-      DSH_MCP_SESSION: 'session-A',
-      DSH_MCP_PROC: procId,
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-
-  const lines: string[] = []
-  let buf = ''
-  const waiters: Array<(msg: Record<string, unknown>) => void> = []
-  child.stdout.on('data', (chunk: Buffer) => {
-    buf += chunk.toString('utf8')
-    let idx: number
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, idx).trim()
-      buf = buf.slice(idx + 1)
-      if (!line) continue
-      lines.push(line)
-      const parsed = JSON.parse(line) as Record<string, unknown>
-      const w = waiters.shift()
-      if (w) w(parsed)
-    }
-  })
-  const rpc = (id: number, method: string, params?: Record<string, unknown>) =>
-    new Promise<Record<string, unknown>>((resolveRpc) => {
-      waiters.push(resolveRpc)
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
-    })
-
   try {
-    await rpc(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {} })
+    await Promise.all(Array.from({ length: 4 }, async (_, n) => {
+      const id = 'fixture-' + n
+      const agent = { session: { id } }
+      const signal = new AbortController().signal
+      steps.capture({ agent, signal, toolSet: { view: () => new Map([['team_task_list', id]]) } })
+      const route = steps.enter(agent, { signal, sessionId: id, tools: [{ name: 'run_code', description: '', parameters: {} }] })!
+      const token = route.bind('fixture-account')
+      const child = spawn(process.execPath, [resolve('src/host/bridge.mjs')], {
+        env: { DSH_MCP_URL: bridge.url, DSH_MCP_TOKEN: bridge.token, DSH_MCP_ROUTE: token, DSH_MCP_SESSION: 'wrong-owner' },
+      })
+      const closed = once(child, 'exit')
+      const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]()
+      const rpc = async (method: string, params: unknown) => {
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) + '\n')
+        return JSON.parse((await lines.next()).value!)
+      }
+      try {
+        assert.deepEqual((await rpc('tools/list', {})).result.tools.map((x: { name: string }) => x.name), ['run_code'])
+        const call = (deny: boolean) => rpc('tools/call', { name: 'run_code', arguments: { deny } })
+        assert.equal((await call(false)).result.content[0].text, id)
+        assert.equal((await call(true)).result.isError, true)
+        route.close()
+        assert.match((await call(false)).error.message, /unknown tool/)
+      } finally {
+        route.close()
+        child.stdin.end()
+        await closed
+      }
+    }))
+  } finally { await bridge.close() }
+})
 
-    // Turn 1 on session-A
-    const endA = beginProcSessionTurn(procId, 'session-A')
-    const listA = await rpc(2, 'tools/list', {})
-    assert.deepEqual(((listA.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name), ['echo'])
-    const callA = await rpc(3, 'tools/call', { name: 'echo', arguments: {} })
-    assert.equal(((callA.result as { content: Array<{ text: string }> }).content[0]?.text), 'ran:agent-session-A')
-    endA()
-
-    // Turn 2 on session-B reuses the SAME bridge.mjs / ACP process (whose env still has DSH_MCP_SESSION=session-A!)
-    const endB = beginProcSessionTurn(procId, 'session-B')
-    const listB = await rpc(4, 'tools/list', {})
-    assert.deepEqual(((listB.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name), ['progress_update'])
-    const callB = await rpc(5, 'tools/call', { name: 'progress_update', arguments: {} })
-    assert.equal(((callB.result as { content: Array<{ text: string }> }).content[0]?.text), 'ran:agent-session-B')
-    endB()
-
-    // Post-turn trailing window before process exits still routes to session-B (last active session on procId)
-    const callTrailing = await rpc(6, 'tools/call', { name: 'progress_update', arguments: {} })
-    assert.equal(((callTrailing.result as { content: Array<{ text: string }> }).content[0]?.text), 'ran:agent-session-B')
-
-    // Once process exits and mapping clears, falls back to X-DSH-Session (session-A)
-    clearProcSessions(procId)
-    assert.equal(resolveProcSession(procId), undefined)
-    assert.deepEqual(calledAgents, ['agent-session-A', 'agent-session-B', 'agent-session-B'])
-  } finally {
-    clearProcSessions(procId)
-    child.kill()
-    await bridge.close()
-  }
+test('empty steps, session changes and account switches cannot reuse a previous capability', () => {
+  const steps = new BridgeSteps()
+  const signal = new AbortController().signal
+  const agent = { session: { id: 'owner' } }
+  const options = { sessionId: agent.session.id, signal, tools: [] }
+  steps.capture({ agent, signal, toolSet: { view: () => new Map() } })
+  assert.equal(steps.enter(agent, { ...options, sessionId: 'other' }), undefined)
+  assert.equal(steps.enter(agent, { ...options, signal: new AbortController().signal }), undefined)
+  const first = steps.enter(agent, options)!
+  const previous = first.bind('account-a')
+  const original = steps.resolve(previous)!
+  assert.deepEqual(original.schemas, [])
+  const second = steps.enter(agent, options)!
+  const current = second.bind('account-b')
+  assert.notEqual(current, previous)
+  assert.equal(original.signal.aborted, true)
+  assert.equal(steps.resolve(previous), undefined)
+  assert.throws(() => first.bind('account-a'))
+  first.close()
+  assert.equal(steps.resolve(current)?.agent, agent)
+  second.close()
+  assert.equal(steps.resolve(current), undefined)
 })

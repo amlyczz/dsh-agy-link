@@ -25,7 +25,7 @@ import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv } from './host/runner
 import { agyNotInstalledMessage } from './provider/call-context.ts'
 import { sweepDir } from './host/media.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, startMcpBridge, teardownBridgeState, type ToolsServiceLike } from './host/mcp-bridge.ts'
-import { resolveProcSession } from './features/acp/index.ts'
+import { observeBridgeAssemblies } from './host/bridge-steps.ts'
 import type { GoalServiceLike } from './host/commands/shared.ts'
 import { runBootHygiene } from './host/boot-hygiene.ts'
 import { scheduleBootMaintenance } from './host/boot-maintenance.ts'
@@ -45,6 +45,8 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     adapter, acpPool, ecosystem, imageService, translation, btw, setOverride, notifyPicker, readEffortUnsupported, rememberEffortUnsupported,
     sessionsSvc, sessionAuto, mediaDir, bridgeState, webServerPort,
   } = services
+
+  observeBridgeAssemblies(ctx, services.bridgeSteps)
 
   // Boot-time pool/store hygiene: stale staging logs, keychains, credential slot.
   runBootHygiene(services)
@@ -506,18 +508,11 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
           // (URL.pathname would yield /C:/... there and break the spawn).
           const script = fileURLToPath(new URL('./bridge.mjs', import.meta.url))
           const toolsSvc = ctx.get('tools') as ToolsServiceLike | undefined
-          const agents = (): { get(id: unknown): unknown } | undefined => {
-            const svc = ctx.get('agents') as { get(id: unknown): unknown } | undefined
-            return svc ?? (ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents
-          }
           const bridge = await startMcpBridge({
             bridgeScript: script,
             tools: () => (ctx.get('tools') as ToolsServiceLike | undefined),
             allowlist: () => getConfig().mcpToolAllowlist,
-            // Bridged calls run on behalf of the session that spawned agy
-            // (issue #55): resolve its agent so tools that require a caller work.
-            resolveAgent: (sessionId) => agents()?.get(sessionId),
-            resolveProcSession: (procId) => resolveProcSession(procId),
+            resolveStep: token => services.bridgeSteps.resolve(token),
             log,
           })
           // A scope can be disposed before asynchronous listener startup ends.

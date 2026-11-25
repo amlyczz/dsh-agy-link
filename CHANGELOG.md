@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Bind reverse MCP discovery and execution to the active DSH model step and session, including PTC. Refresh opted-in system instructions on warm turns and keep pending messages and current images separate from recovery history.
+- 反向 MCP 桥按会话和当前步骤列出并执行工具，支持 PTC。启用系统提示词转发后，热会话也能收到更新；恢复历史时保留本轮待处理消息与图片的边界。
+
 ## 0.6.92 (2026-11-25)
 
 ### English

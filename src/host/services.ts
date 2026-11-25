@@ -1,14 +1,11 @@
 // Shared host services for dsh-agy-link.
-//
-// Constructs config/log/bin/version, session store, pool, quota, warmup, model
-// catalog, adapter, translation, override writer and live boot status. Session
-// & translation runtime helpers live in ./service-helpers.ts.
 import type { Context } from '@deepseek-ai/cordis'
 import { join } from 'node:path'
 import { writeFileAtomicSync } from '../common/atomic-write.ts'
 import { dshHome, overridesPath, readOverrides, resolveConfig, stateDir } from '../common/config.ts'
 import { PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import type { ManagedAccount } from '../common/pool-types.ts'
+import { BridgeSteps, enterHostStep } from './bridge-steps.ts'
 import { AgyAdapter } from './adapter.ts'
 import { AuthHelper } from './auth.ts'
 import { TranslationService, TRANSLATION_RECORD_TYPE, type TranslationRecord } from './translate.ts'
@@ -34,7 +31,7 @@ import { AcpSessionPool, runAcpAttempt } from '../features/acp/index.ts'
 import { createPoolQuotaHooks } from '../provider/quota-failover.ts'
 import { PREFERRED_IMAGE_QUOTA_MODEL } from '../common/model-lineup.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
-import { agyMcpConfigPath, registerBridgeMcpConfig, type BridgeRegistryState } from './mcp-bridge.ts'
+import { agyMcpConfigPath, mcpServerKey, registerBridgeMcpConfig, type BridgeRegistryState } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
 import { acquireCredentialSlot, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
 import { buildCliQuotaDeps } from './quota-cli-deps.ts'
@@ -306,6 +303,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     void catalog.forceRefreshAndNotify(newActiveId).catch(() => undefined)
   }
 
+  const bridgeSteps = new BridgeSteps()
   const bridgeState: BridgeRegistryState = { bridge: null, restores: [], log }
   const ecosystem = new EcosystemService({ pool, getConfig, log })
   const auth = new AuthHelper(bin, () => getConfig().suppressAgyAutoUpdate)
@@ -438,6 +436,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
   let mirrorToolCheck: ((sessionId?: string) => boolean) | undefined = undefined
 
   adapter = new AgyAdapter({
+    enterBridgeStep: options => bridgeState.bridge ? enterHostStep(ctx, bridgeSteps, options, mcpServerKey(bridgeState.bridge.port)) : undefined,
     getConfig,
     catalog,
     store,
@@ -588,7 +587,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     sessionsSvc, sessionAuto,
     get lastRun() { return lastRun },
     get lastParser() { return lastParser },
-    mediaDir, bridgeState, webServerPort, activeCwds,
+    mediaDir, bridgeState, bridgeSteps, webServerPort, activeCwds,
     hostDir: '',
     setMirrorToolCheck: (fn: (sessionId?: string) => boolean): void => { mirrorToolCheck = fn },
     onConfigWritten: (_key: string, _value: unknown): void => undefined,

@@ -3,6 +3,7 @@
 // Moved verbatim out of src/host/adapter.ts so the adapter file stays a thin
 // orchestrator. The adapter re-exports this type, so `import type {
 // AgyAdapterDeps } from '.../adapter.ts'` keeps working for hosts and tests.
+import type { AgyGenerateOptions, BridgeLease } from '../common/protocol.ts'
 import type { BackgroundTurnObserver } from '../common/background-types.ts'
 import type { ManagedAccount } from '../common/pool-types.ts'
 import type { PluginConfig } from '../common/types.ts'
@@ -16,6 +17,7 @@ import type { ImageRefLike } from '../host/media.ts'
 import type { AcpSessionNotice, AttemptDeps, AttemptInput, AttemptSlot } from './attempt.ts'
 
 export interface AgyAdapterDeps {
+  enterBridgeStep?: (options: AgyGenerateOptions) => BridgeLease | undefined
   getConfig: () => PluginConfig
   catalog: ModelCatalog
   store: SessionStore
