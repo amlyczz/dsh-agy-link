@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.92 (2026-11-25)
+
+### English
+
+- **Fix(provider): recognise `working-context` and DSH snapshot/catalog sources as harness context, so they no longer break a tool continuation (PR #206 by @hyh48).** `detectContinuation()` decides what it may skip by `isSyntheticHarnessMessage()`, whose source-kind list lagged DSH 0.2.2: a `[Working Context: …]` message (bare, preset-prefixed, or a custom `*-working-context`), a custom `form: 'snapshot' | 'catalog'` producer, or the built-in `working-directory` / `ptc-mode` / `repeat-tool-reminder` / `user-approval` kinds stopped the backward scan at a `role: 'user'` context message, so the tool result underneath looked like a new turn — the same preemption/abort loop as #205. The kinds are now a Set, custom presets are suffix-matched, and an arbitrary `[Working Context:` producer without a recognised kind is caught by a text fallback; actionable sources (`goal`, `schedule`, `webhook`, `subagent-settled`, `dsh-mnemon`, plugin notices) stay non-synthetic. Merged together with its regression suite (working-context hops, custom snapshot/catalog, actionable-source boundaries, live-run continuity).
+
+### 中文
+
+- **修复(provider)：把 `working-context` 与 DSH 的 snapshot/catalog 来源识别为 harness 上下文，不再打断工具续跑（PR #206，作者 @hyh48）。** `detectContinuation()` 依赖 `isSyntheticHarnessMessage()` 决定可跳过哪些消息，而后者的 source kind 列表落后于 DSH 0.2.2：`[Working Context: …]`（裸 kind、preset 前缀或自定义 `*-working-context`）、自定义 `form: 'snapshot' | 'catalog'` 生产者、以及内置 `working-directory` / `ptc-mode` / `repeat-tool-reminder` / `user-approval` 都会让反向扫描停在这条 `role: 'user'` 上下文消息上，底下的工具结果被当成新回合——与 #205 相同的抢占/取消循环。现在 kind 收敛为 Set，自定义 preset 用后缀匹配，无法识别 kind 但以 `[Working Context:` 开头的生产者由文本兜底识别；可执行来源（`goal`、`schedule`、`webhook`、`subagent-settled`、`dsh-mnemon`、插件通知）仍保持非 synthetic。连同其回归套件一起合并（working-context 续跑、自定义 snapshot/catalog、可执行来源边界、live run 连续性）。
+
 ## 0.6.91 (2026-11-25)
 
 ### English
