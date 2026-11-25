@@ -7,7 +7,7 @@ import type { AccountPoolData } from '../common/pool-types.ts';
 import type { WarmupStatusSnapshot } from '../common/warmup-types.ts';
 import { base, win, timedSignal, STATUS_TIMEOUT_MS } from './api.ts';
 import { useEffect, useState } from './react.ts';
-import { isScrollActive, onScrollSettle } from './scroll-guard.ts';
+import { isScrollActive, onScrollIdle } from './scroll-guard.ts';
 
 /** One model row, shared by the picker, the visibility chips and the dropdowns. */
 export interface CatalogModelView {
@@ -231,7 +231,7 @@ function flushPendingPublish(): void {
 function bindSettleFlush(): void {
 	if (settleFlushBound) return;
 	settleFlushBound = true;
-	onScrollSettle(flushPendingPublish);
+	onScrollIdle(flushPendingPublish);
 }
 
 /** Single writer for the shared status snapshot (poll loop, refresh, tests). */

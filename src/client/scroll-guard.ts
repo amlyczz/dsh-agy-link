@@ -15,6 +15,13 @@ let isScrolling = false;
 let scrollTimer: ReturnType<typeof setTimeout> | null = null;
 let listenerAttached = false;
 const settleListeners = new Set<() => void>();
+/**
+ * Listeners that must hear "the gesture ended" even while an overlay owns the
+ * screen. Scanners must NOT run then (they would mutate the conversation behind
+ * the overlay), but in-overlay work - e.g. delivering a status snapshot the poll
+ * deferred during the scroll - is exactly what should resume.
+ */
+const idleListeners = new Set<() => void>();
 
 // An overlay (the Antigravity console) can own the screen without the page
 // scrolling. While it is open we must ALSO stop the overlay scanners from
@@ -50,6 +57,9 @@ function onScrollActivity(): void {
 		isScrolling = false;
 		scrollTimer = null;
 		syncScrollClass(false);
+		for (const fn of idleListeners) {
+			try { fn(); } catch { /* ignore listener errors */ }
+		}
 		if (overlaySuspended || overlaySuspendRefs > 0) return;
 		for (const fn of settleListeners) {
 			try { fn(); } catch { /* ignore listener errors */ }
@@ -124,6 +134,31 @@ export function onScrollSettle(fn: () => void): () => void {
 	};
 }
 
+/**
+ * Register a callback for "the scroll gesture has ended", fired regardless of
+ * whether an overlay is open. Use this for work that belongs to the OVERLAY
+ * itself; use `onScrollSettle` for conversation-DOM scanners.
+ */
+/** Run the end-of-gesture callbacks (test seam for the 150ms settle timer). */
+export function settleScrollForTest(): void {
+	syncScrollClass(false);
+	for (const fn of idleListeners) {
+		try { fn(); } catch { /* ignore listener errors */ }
+	}
+	if (overlaySuspended || overlaySuspendRefs > 0) return;
+	for (const fn of settleListeners) {
+		try { fn(); } catch { /* ignore listener errors */ }
+	}
+}
+
+export function onScrollIdle(fn: () => void): () => void {
+	ensureScrollListener();
+	idleListeners.add(fn);
+	return () => {
+		idleListeners.delete(fn);
+	};
+}
+
 export function ensureScrollListener(): void {
 	if (typeof window === 'undefined' || typeof window.addEventListener !== 'function' || listenerAttached) return;
 	listenerAttached = true;
@@ -141,6 +176,7 @@ export function disposeScrollListener(): void {
 		scrollTimer = null;
 	}
 	settleListeners.clear();
+	idleListeners.clear();
 	isScrolling = false;
 	syncScrollClass(false);
 	overlaySuspended = false;

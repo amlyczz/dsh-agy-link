@@ -225,7 +225,7 @@ test('REGRESSION: the status poll never re-renders the UI mid-scroll', async () 
 	)
 	assert.match(
 		statusSrc,
-		/onScrollSettle\(/,
-		'the deferred snapshot must be flushed once scrolling settles',
+		/onScrollIdle\(/,
+		'the deferred snapshot must be flushed when the gesture ends — including while the console itself owns the screen',
 	)
 })

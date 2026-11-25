@@ -4,6 +4,8 @@ import {
 	isScrollActive,
 	setScrollActiveForTest,
 	onScrollSettle,
+	onScrollIdle,
+	settleScrollForTest,
 	ensureScrollListener,
 	disposeScrollListener,
 	setOverlaySuspended,
@@ -98,5 +100,33 @@ test('scroll activity toggles the html.agy-scrolling class for CSS-side pausing'
 	} finally {
 		globals.document = previous as unknown
 		disposeScrollListener()
+	}
+});
+
+test('overlay-safe idle callbacks fire during a scroll inside the console; scanners stay parked', () => {
+	disposeScrollListener();
+	setScrollActiveForTest(false);
+	setOverlaySuspended(false);
+	let idle = 0;
+	let settle = 0;
+	const unbindIdle = onScrollIdle(() => { idle++; });
+	const unbindSettle = onScrollSettle(() => { settle++; });
+	try {
+		// Console open: the gesture happens inside the overlay's own scroller.
+		setOverlaySuspended(true);
+		settleScrollForTest();
+		assert.equal(idle, 1, 'the overlay must receive its deferred update when the gesture ends')
+		assert.equal(settle, 0, 'conversation scanners must stay parked while an overlay owns the screen')
+
+		// Closing the overlay itself fires one catch-up settle pass; count from there.
+		setOverlaySuspended(false);
+		const settleAfterClose = settle;
+		settleScrollForTest();
+		assert.equal(idle, 2);
+		assert.equal(settle, settleAfterClose + 1, 'with no overlay, a settled scroll wakes the scanners again')
+	} finally {
+		unbindIdle();
+		unbindSettle();
+		disposeScrollListener();
 	}
 });
