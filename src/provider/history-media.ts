@@ -36,6 +36,7 @@ export async function stageHistoricalAttachments(
   const { cfg, sessionKey, messages, alreadySentIds, readImage } = input
   const sent = new Set(alreadySentIds)
   const seen = new Set<string>()
+  const historicalImages = new Set<string>()
   const refs: MediaRefLike[] = []
   const ownerById = new Map<string, Message[]>()
 
@@ -46,6 +47,10 @@ export async function stageHistoricalAttachments(
     for (const r of msgRefs) {
       const id = r.attachmentId
       if (typeof id !== 'string' || id === '' || sent.has(id)) continue
+      if (r.mediaType.startsWith('image/')) {
+        historicalImages.add(id)
+        continue
+      }
       const owners = ownerById.get(id)
       if (owners === undefined) ownerById.set(id, [m])
       else if (!owners.includes(m)) owners.push(m)
@@ -57,9 +62,9 @@ export async function stageHistoricalAttachments(
   }
 
   const attachmentsByMessage = new Map<Message, string[]>()
-  if (refs.length === 0) return { attachmentsByMessage, stagedDir: null, stagedIds: [] }
+  if (refs.length === 0) return { attachmentsByMessage, stagedDir: null, stagedIds: [...historicalImages] }
   if (!readImage && refs.every((r) => r.data === undefined && r.path === undefined)) {
-    return { attachmentsByMessage, stagedDir: null, stagedIds: [] }
+    return { attachmentsByMessage, stagedDir: null, stagedIds: [...historicalImages] }
   }
 
   const dir = cfg.mediaDir !== '' ? cfg.mediaDir : defaultMediaDir(stateDir())
@@ -76,9 +81,7 @@ export async function stageHistoricalAttachments(
 
   for (const item of res.staged) {
     const kind = item.kind ?? 'image'
-    const line = kind === 'image'
-      ? `[earlier image attachment: "${item.name}" — staged at ${item.path} (${item.width}x${item.height}, ${item.bytes} bytes). Inspect with view_file if needed.]`
-      : `[earlier ${kind} attachment: "${item.name}" (${item.mediaType ?? kind}, ${item.bytes} bytes) — staged at ${item.path}. Inspect with read_file if needed.]`
+    const line = `[earlier ${kind} attachment: "${item.name}" (${item.mediaType ?? kind}, ${item.bytes} bytes) — staged at ${item.path}. Inspect with read_file if needed.]`
     for (const owner of ownerById.get(item.attachmentId) ?? []) {
       const list = attachmentsByMessage.get(owner)
       if (list === undefined) attachmentsByMessage.set(owner, [line])
@@ -89,7 +92,7 @@ export async function stageHistoricalAttachments(
   return {
     attachmentsByMessage,
     stagedDir: res.staged.length > 0 ? dir : null,
-    stagedIds: res.stagedIds,
+    stagedIds: [...historicalImages, ...res.stagedIds],
   }
 }
 
@@ -121,14 +124,12 @@ export interface StageLiveMediaResult {
  * are not re-presented as brand-new current-turn attachments.
  */
 export async function stageLivePromptMedia(input: StageLiveMediaInput): Promise<StageLiveMediaResult> {
-  const { cfg, sessionKey, messages, trailingUser, lastAssistantIdx, binding, coveredHistory, extraSentIds, readImage } = input
+  const { cfg, sessionKey, messages, trailingUser, lastAssistantIdx, binding, extraSentIds, readImage } = input
   let prompt = input.prompt
   const sentIds = extraSentIds.length > 0
     ? [...(binding?.sentImageIds ?? []), ...extraSentIds]
     : (binding?.sentImageIds ?? [])
-  const fromIdx = coveredHistory
-    ? Math.max(binding?.lastMessageCount ?? 0, lastAssistantIdx + 1)
-    : (binding !== undefined ? binding.lastMessageCount : 0)
+  const fromIdx = Math.max(binding?.lastMessageCount ?? 0, lastAssistantIdx + 1)
   const mediaRefs = collectUnsentMediaRefs(messages, trailingUser, fromIdx, sentIds)
   if (mediaRefs.length === 0) return { prompt, stagedDir: null, stagedIds: [], stagedImages: [] }
   if (!readImage && mediaRefs.every((r) => r.data === undefined && r.path === undefined)) {

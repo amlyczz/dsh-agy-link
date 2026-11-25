@@ -107,3 +107,26 @@ test('issue #204: the orchestrator settings tag is part of the ACP process key',
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('four bridged sessions keep their own live ACP peer across a pool capacity of one', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'agy-bridge-pool-'))
+  const pool = new AcpSessionPool({ bin: () => FIXTURE, cfg: defaultConfig, maxProcesses: 1, strays: null })
+  const requests = Array.from({ length: 4 }, (_, i) => ({
+    mode: 'auto' as const, sandbox: false, agent: '', cwd, bin: FIXTURE,
+    env: { ...process.env, MOCK_ACP_MODE: 'chat', DSH_MCP_ROUTE: 'fixture-owner-' + i },
+  }))
+  const peers = requests.map(req => pool.acquireProcess(req))
+  const exits = peers.map(peer => once(peer, 'exit'))
+  try {
+    const opened = await Promise.all(peers.map(peer => peer.openSession({ cwd })))
+    assert.equal(new Set(peers).size, 4)
+    await Promise.all(peers.map(async (peer, i) => {
+      assert.equal(pool.acquireProcess(requests[i]!), peer)
+      assert.equal((await peer.openSession({ cwd, resumeId: opened[i]!.sessionId })).status, 'cached')
+    }))
+  } finally {
+    pool.dispose()
+    await Promise.all(exits)
+    await rm(cwd, { recursive: true, force: true })
+  }
+})
