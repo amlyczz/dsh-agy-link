@@ -2907,3 +2907,206 @@ test('plan approval continues execution via agy (drops --mode plan) while dismis
     delete process.env.FAKE_AGY_ARGS_FILE
   }
 })
+
+test('working-context, DSH 0.2.2 snapshot/catalog forms, and built-in harness kinds do not break detectContinuation', () => {
+  const userToolResult = (callId: string): Message =>
+    ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
+  const toolRoleResult = (callId: string): Message =>
+    ({ role: 'tool', toolCallId: callId, content: [{ type: 'text', text: 'ok' }] }) as never
+  const expected = { runId: 'run-1', eventIndex: 7 }
+  const humanTask = { role: 'user', content: [{ type: 'text', text: 'fix the bridge' }], source: { kind: 'user' } } as unknown as Message
+
+  const workingCtxBare = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Working Context: in progress: Clone repo]' }],
+    source: { kind: 'working-context' },
+  } as unknown as Message
+  const workingCtxPrefixed = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Working Context: plan mode: on | in progress: Edit file]' }],
+    source: { kind: 'preset-working-context' },
+  } as unknown as Message
+  const customWorkingCtx = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Working Context: in progress: Step A]' }],
+    source: { kind: 'team-working-context' },
+  } as unknown as Message
+  const customToolCatalog = {
+    role: 'user',
+    content: [{ type: 'text', text: 'Available tools' }],
+    source: { kind: 'team-tool-catalog' },
+  } as unknown as Message
+  const workingCtxArbitraryNonUser = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Working Context: in progress: Step B]' }],
+    source: { kind: 'custom-preset-context' },
+  } as unknown as Message
+  const workingCtxNoSource = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Working Context: in progress: Step C]' }],
+  } as unknown as Message
+  const tmuxSnapshot = {
+    role: 'user',
+    content: [{ type: 'text', text: 'tmux pane status' }],
+    source: { kind: 'tmux-context', form: 'snapshot', sections: [] },
+  } as unknown as Message
+  const customSnapshot = {
+    role: 'user',
+    content: [{ type: 'text', text: 'snapshot state' }],
+    source: { kind: 'custom-state-producer', form: 'snapshot', sections: [] },
+  } as unknown as Message
+  const customCatalog = {
+    role: 'user',
+    content: [{ type: 'text', text: 'catalog listing' }],
+    source: { kind: 'custom-catalog-producer', form: 'catalog' },
+  } as unknown as Message
+  const builtinKinds = ['working-directory', 'ptc-mode', 'repeat-tool-reminder', 'user-approval'].map((kind) => ({
+    role: 'user',
+    content: [{ type: 'text', text: `notice from ${kind}` }],
+    source: { kind },
+  }) as unknown as Message)
+
+  for (const m of [
+    workingCtxBare,
+    workingCtxPrefixed,
+    customWorkingCtx,
+    customToolCatalog,
+    workingCtxArbitraryNonUser,
+    workingCtxNoSource,
+    tmuxSnapshot,
+    customSnapshot,
+    customCatalog,
+    ...builtinKinds,
+  ]) {
+    assert.equal(isSyntheticHarnessMessage(m), true, `expected synthetic for ${JSON.stringify((m as { source?: unknown }).source)}`)
+    assert.deepEqual(detectContinuation([humanTask, userToolResult('agytc-run-1-7'), m]), expected)
+    assert.deepEqual(detectContinuation([humanTask, toolRoleResult('agytc-run-1-7'), m]), expected)
+    assert.equal(latestUserTaskText([humanTask, m]), 'fix the bridge')
+  }
+
+  // An explicit human message starting with "[Working Context:" must NOT be treated as synthetic.
+  const humanQuotingWorkingContext = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Working Context: in progress: quoted by user]' }],
+    source: { kind: 'user' },
+  } as unknown as Message
+  assert.equal(isSyntheticHarnessMessage(humanQuotingWorkingContext), false)
+  assert.equal(detectContinuation([humanTask, toolRoleResult('agytc-run-1-7'), humanQuotingWorkingContext]), null)
+
+  // Actionable non-user sources must remain non-synthetic and still end continuation scans.
+  const actionableSources: Message[] = [
+    { role: 'user', content: [{ type: 'text', text: '<goal_round>...</goal_round>' }], source: { kind: 'goal' } } as unknown as Message,
+    { role: 'user', content: [{ type: 'text', text: 'timer fired' }], source: { kind: 'schedule' } } as unknown as Message,
+    { role: 'user', content: [{ type: 'text', text: 'webhook payload' }], source: { kind: 'webhook', form: 'notice', summary: 'wh' } } as unknown as Message,
+    { role: 'user', content: [{ type: 'text', text: 'subagent done' }], source: { kind: 'subagent-settled', form: 'notice', summary: 'done' } } as unknown as Message,
+    { role: 'user', content: [{ type: 'text', text: 'wake up' }], source: { kind: 'plugin:agy-link', form: 'notice', summary: 'wake' } } as unknown as Message,
+    { role: 'user', content: [{ type: 'text', text: 'Recalled memory snapshot' }], source: { kind: 'dsh-mnemon' } } as unknown as Message,
+  ]
+  for (const m of actionableSources) {
+    assert.equal(isSyntheticHarnessMessage(m), false, `must not treat ${(m as { source?: { kind?: string } }).source?.kind} as synthetic`)
+    assert.equal(detectContinuation([humanTask, toolRoleResult('agytc-run-1-7'), m]), null)
+  }
+})
+
+test('live run continues without abort or replacement when working-context follows a mirrored tool result', async () => {
+  let acpSpawns = 0
+  let aborted = false
+  const prompts: string[] = []
+  let activeRec: ReturnType<RunRegistry['create']> | undefined
+  let releaseSlot: (() => void) | undefined
+  let unregisterRun: (() => void) | undefined
+  let clearPrompt: (() => void) | undefined
+
+  const { adapter } = makeAdapter(
+    { transport: 'acp' },
+    {
+      runAcp: async (deps, input, slot) => {
+        acpSpawns += 1
+        prompts.push(input.prompt)
+        const rec = deps.runs.create()
+        activeRec = rec
+        rec.requestAbort = () => {
+          aborted = true
+          slot.releaseOnce()
+          deps.unregisterActiveRun(input.sessionKey, rec)
+          deps.clearInFlightPrompt(input.sessionKey, input.prompt)
+          rec.settle({ kind: 'aborted', code: 'ABORTED', message: 'aborted' })
+        }
+        deps.registerActiveRun(input.sessionKey, rec)
+        releaseSlot = () => slot.releaseOnce()
+        unregisterRun = () => deps.unregisterActiveRun(input.sessionKey, rec)
+        clearPrompt = () => deps.clearInFlightPrompt(input.sessionKey, input.prompt)
+        rec.append({ kind: 'init', conversationId: 'conv-wc-live-1', raw: {} })
+        rec.append({
+          kind: 'step',
+          stepKey: '1',
+          stepKind: 'tool',
+          state: 'DONE',
+          text: '',
+          tool: {
+            name: 'update_steps',
+            args: { steps: [{ title: 'Clone repo', status: 'in_progress' }] },
+            output: 'OK',
+          },
+        })
+        return rec
+      },
+    },
+  )
+
+  const sessionId = 'sess-wc-live-cont' as never
+  const userMsg = { role: 'user', content: [{ type: 'text', text: 'Implement fix' }], source: { kind: 'user' } } as unknown as Message
+  const hop1Chunks = await collect(adapter.stream(opts([userMsg], { sessionId })))
+  const hop1Finish = hop1Chunks[hop1Chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(hop1Finish.reason.kind, 'tool-calls')
+
+  const toolEnd = hop1Chunks.find(
+    (c) => c.type === 'block-end' && (c as { block?: { type?: string } }).block?.type === 'tool-call',
+  ) as unknown as { block: { id: string; type: 'tool-call'; name: string; arguments: string } }
+  assert.ok(toolEnd, 'hop 1 must emit a mirrored tool-call block')
+  assert.equal(activeRec?.isSettled, false, 'run must stay live across the mirrored tool-call')
+
+  const assistantToolCall = { role: 'assistant', content: [toolEnd.block] } as unknown as Message
+  const toolResult = {
+    role: 'tool',
+    toolCallId: toolEnd.block.id,
+    content: [{ type: 'text', text: 'OK' }],
+  } as unknown as Message
+  const workingContext = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Working Context: in progress: Clone repo]' }],
+    source: { kind: 'preset-working-context' },
+  } as unknown as Message
+
+  const hop2Promise = collect(
+    adapter.stream(opts([userMsg, assistantToolCall, toolResult, workingContext], { sessionId })),
+  )
+  await new Promise((r) => setTimeout(r, 25))
+  activeRec!.append({ kind: 'step', stepKey: '2', stepKind: 'text', state: 'DONE', text: 'Continued cleanly' })
+  activeRec!.append({
+    kind: 'result',
+    conversationId: 'conv-wc-live-1',
+    ok: true,
+    response: 'Continued cleanly',
+    usage: { input_tokens: 10, output_tokens: 5 },
+    raw: {},
+  })
+  releaseSlot?.()
+  unregisterRun?.()
+  clearPrompt?.()
+  activeRec!.settle(null)
+
+  const hop2Chunks = await hop2Promise
+  const hop2Finish = hop2Chunks[hop2Chunks.length - 1] as { type: string; reason: { kind: string } }
+  const replyText = hop2Chunks
+    .filter((c) => c.type === 'text-delta')
+    .map((c) => (c as unknown as { text: string }).text)
+    .join('')
+
+  assert.equal(acpSpawns, 1, 'must continue existing live run without spawning a replacement')
+  assert.equal(aborted, false, 'must NOT abort the live run when working-context arrives')
+  assert.equal(prompts.length, 1)
+  assert.equal(prompts.some((p) => p.includes('the previous turn was interrupted')), false)
+  assert.equal(hop2Finish.reason.kind, 'stop')
+  assert.match(replyText, /Continued cleanly/)
+})
