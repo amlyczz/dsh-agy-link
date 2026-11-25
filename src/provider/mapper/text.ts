@@ -73,6 +73,29 @@ export function splitPendingEmbedFragment(text: string): { ready: string; pendin
 }
 
 /** Normalize Markdown file links: strip file:/// prefix so DSH's native markdown compiler treats them as local files and opens them in the native right sidebar. */
+/**
+ * Hold an unterminated Markdown link across stream chunks (issue #202).
+ *
+ * DSH refuses the `file:` scheme, so `normalizeFileLinks()` rewrites
+ * `[label](file:///p)` to `[label](/p)` before it reaches the renderer. That
+ * rewrite needs the WHOLE link: when a chunk boundary falls inside
+ * `[label](file:///...`, the fragment is not a link yet, the rewrite misses it,
+ * and the reply shows plain text instead of a blue file link. Hold the tail
+ * until the closing `)` arrives.
+ *
+ * Bounded on purpose: a lone `[` far from the tail is emitted rather than
+ * buffered for ever (a reply may legitimately contain `[` without a link).
+ */
+export function splitPendingMarkdownLink(text: string): { ready: string; pending: string } {
+  const open = text.lastIndexOf('](')
+  if (open < 0) return { ready: text, pending: '' }
+  if (text.indexOf(')', open + 2) >= 0) return { ready: text, pending: '' }
+  const labelStart = text.lastIndexOf('[', open)
+  if (labelStart < 0) return { ready: text, pending: '' }
+  if (text.length - labelStart > 4096) return { ready: text, pending: '' }
+  return { ready: text.slice(0, labelStart), pending: text.slice(labelStart) }
+}
+
 export function normalizeFileLinks(text: string): string {
   if (!text) return text
   return text.replace(

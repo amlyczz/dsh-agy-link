@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.90 (2026-11-25)
+
+### English
+
+- **Fix(stream): hold an unterminated `[label](file:///…)` link across stream chunks, so file links render blue (fixes #202).** DSH refuses the `file:` scheme, so `normalizeFileLinks()` rewrites `[label](file:///p)` to `[label](/p)` before the renderer sees it. That rewrite needs the **whole** link: when a chunk boundary fell inside `[label](file:///…`, the fragment was not yet a link, the rewrite missed it, and the reply showed plain black text instead of a clickable file link. Short links only worked when they happened to fit inside one chunk.
+  - The streaming path now holds the unterminated tail in `pendingLinkFrag` (bounded: a lone `[` far from the tail is emitted rather than buffered for ever) and flushes it if the stream ends before the `)` arrives. Complements the two existing cross-chunk buffers (quota banners, `<agent-embed>` tags).
+
+### 中文
+
+- **修复(流式)：跨 chunk 暂存未闭合的 `[label](file:///…)` 链接，让文件链接正常显示为蓝色（修复 #202）。** DSH 拒绝 `file:` 协议，所以 `normalizeFileLinks()` 会在渲染前把 `[label](file:///p)` 改写成 `[label](/p)`。这个改写需要**完整**的链接：当 chunk 边界恰好落在 `[label](file:///…` 中间时，该片段还不是链接、改写没有命中，回复便显示成不可点击的黑色文字；只有短链接碰巧落在同一个 chunk 里才正常。
+  - 流式路径现在用 `pendingLinkFrag` 暂存未闭合的尾部（**有界**：远离尾部的孤立 `[` 直接输出，不会无限缓存），并在流结束时把暂存内容 flush 出来。这与既有的两层跨 chunk 缓冲（配额横幅、`<agent-embed>` 标签）互补。
+
 ## 0.6.89 (2026-11-25)
 
 ### English

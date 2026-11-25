@@ -25,6 +25,7 @@ import {
   rewriteAgentEmbeds,
   rewriteImageMarkdown,
   splitPendingEmbedFragment,
+  splitPendingMarkdownLink,
   splitPendingWarn,
   stripAgyInternalNoise,
   stripQuotaBannerLines,
@@ -120,6 +121,9 @@ export class EventMapper {
   private finished = false
   private totalTextOutput = ''
   private pendingEmbedFrag = ''
+  // Issue #202: an unterminated `[label](file:///…)` tail, held so the
+  // file:// → / rewrite sees a complete link instead of half of one.
+  private pendingLinkFrag = ''
   private pendingWarnFrag = ''
   private readonly toolCallStates = new Map<string, ToolCallState>()
   private emittedCompactionNotice = false
@@ -159,6 +163,14 @@ export class EventMapper {
 
   private *flushPendingEmbed(): Generator<StreamChunk> {
     yield* this.flushPendingWarn(true)
+    if (this.pendingLinkFrag !== '') {
+      // No more chunks are coming: emit the held link tail so nothing is lost.
+      const tail = this.pendingLinkFrag
+      this.pendingLinkFrag = ''
+      yield* this.ensureBlock('text')
+      const d = this.appendDelta(this.formatAssistantText(tail))
+      if (d) yield d
+    }
     if (this.pendingEmbedFrag === '') return
     const raw = this.pendingEmbedFrag
     this.pendingEmbedFrag = ''
@@ -322,10 +334,12 @@ export class EventMapper {
           if (stripped !== '' || this.pendingEmbedFrag !== '') {
             const embedSplit = splitPendingEmbedFragment(this.pendingEmbedFrag + stripped)
             this.pendingEmbedFrag = embedSplit.pending
-            if (embedSplit.ready !== '') {
+            const linkSplit = splitPendingMarkdownLink(this.pendingLinkFrag + embedSplit.ready)
+            this.pendingLinkFrag = linkSplit.pending
+            if (linkSplit.ready !== '') {
               this.sawTextStep = true
               yield* this.ensureBlock('text')
-              const processedText = this.formatAssistantText(embedSplit.ready)
+              const processedText = this.formatAssistantText(linkSplit.ready)
               const acc = (this.emittedByKey.get(ev.stepKey) ?? '') + processedText
               this.emittedByKey.set(ev.stepKey, acc)
               d = this.appendDelta(processedText)
