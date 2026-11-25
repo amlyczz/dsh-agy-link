@@ -74,3 +74,29 @@ test('resuming from suspension notifies settle listeners (catch-up scan)', () =>
 	disposeScrollListener();
 	setOverlaySuspended(false);
 });
+
+test('scroll activity toggles the html.agy-scrolling class for CSS-side pausing', () => {
+	const classes = new Set<string>()
+	const fakeDocument = {
+		documentElement: {
+			classList: {
+				toggle: (name: string, on?: boolean) => {
+					if (on === true) classes.add(name)
+					else if (on === false) classes.delete(name)
+				},
+			},
+		},
+	}
+	const globals = globalThis as { document?: unknown }
+	const previous = globals.document
+	globals.document = fakeDocument
+	try {
+		setScrollActiveForTest(true)
+		assert.equal(classes.has('agy-scrolling'), true, 'a scroll gesture must pause decorative animation via CSS')
+		setScrollActiveForTest(false)
+		assert.equal(classes.has('agy-scrolling'), false, 'settling must resume the paused effects')
+	} finally {
+		globals.document = previous as unknown
+		disposeScrollListener()
+	}
+});

@@ -30,7 +30,12 @@ import { fileURLToPath } from 'node:url'
 
 import { REPO_ROOT } from '../helpers/paths.ts'
 const root = REPO_ROOT
-const cssSrc = readFileSync(join(root, 'src/client/global-css.ts'), 'utf8').replace(/\r\n/g, '\n')
+// The stylesheet is composed from two modules: the shared tokens/rules in
+// global-css.ts plus the overlay block extracted into modal-css.ts.
+const cssSrc = [
+	readFileSync(join(root, 'src/client/modal-css.ts'), 'utf8'),
+	readFileSync(join(root, 'src/client/global-css.ts'), 'utf8'),
+].join('\n').replace(/\r\n/g, '\n')
 const modalSrc = readFileSync(join(root, 'src/client/ui/Modal.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Extract the body of a CSS rule by its selector from the GLOBAL_CSS literal. */
@@ -186,4 +191,41 @@ test('REGRESSION: modal pins top edge, lets bottom adapt to tab height, and refr
 
 	const stylesSrc = readFileSync(join(root, 'src/client/styles.ts'), 'utf8')
 	assert.match(stylesSrc, /existing\.textContent\s*!==\s*GLOBAL_CSS/, 'hot-reloading the plugin must refresh the existing style node')
+})
+
+// Incident (2026-11-25, sixth report of the same symptom): scrolling the console
+// still flashes. Everything that animates INSIDE a scrolling subtree keeps the
+// compositor re-painting that subtree on every frame; combined with the panel's
+// rounded clip + shadow that is a well-known Electron/Chromium flicker source.
+// The contract: while a scroll gesture is active, decorative animation inside
+// the overlay is PAUSED — nothing repaints under the moving scroller.
+test('REGRESSION: decorative animation inside the console pauses while scrolling', () => {
+	const scrollingRule = cssRule('html.agy-scrolling :is(.agy-modal-body, .agy-modal-body *)')
+	assert.match(
+		scrollingRule,
+		/animation-play-state\s*:\s*paused/,
+		'animations inside the scrolling console body must be paused while a scroll gesture is active',
+	)
+	assert.match(
+		scrollingRule,
+		/transition\s*:\s*none/,
+		'transitions inside the scrolling console body must not run mid-scroll',
+	)
+	// The toggle must come from the scroll guard, not from a component effect.
+	const guardSrc = readFileSync(join(root, 'src/client/scroll-guard.ts'), 'utf8')
+	assert.match(guardSrc, /agy-scrolling/, 'scroll-guard owns the agy-scrolling class toggle')
+})
+
+test('REGRESSION: the status poll never re-renders the UI mid-scroll', async () => {
+	const statusSrc = readFileSync(join(root, 'src/client/status.ts'), 'utf8')
+	assert.match(
+		statusSrc,
+		/isScrollActive\(\)/,
+		'status.ts must defer listener notification while a scroll gesture is active',
+	)
+	assert.match(
+		statusSrc,
+		/onScrollSettle\(/,
+		'the deferred snapshot must be flushed once scrolling settles',
+	)
 })

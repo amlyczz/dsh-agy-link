@@ -7,6 +7,7 @@ import type { AccountPoolData } from '../common/pool-types.ts';
 import type { WarmupStatusSnapshot } from '../common/warmup-types.ts';
 import { base, win, timedSignal, STATUS_TIMEOUT_MS } from './api.ts';
 import { useEffect, useState } from './react.ts';
+import { isScrollActive, onScrollSettle } from './scroll-guard.ts';
 
 /** One model row, shared by the picker, the visibility chips and the dropdowns. */
 export interface CatalogModelView {
@@ -205,6 +206,34 @@ export function isUiVisible(
 	return status?.[key] !== false
 }
 
+/**
+ * A poll that lands mid-scroll used to re-render the whole console (every panel,
+ * every quota bar) while the compositor was already repainting a moving
+ * scroller - a visible hitch or flash during the gesture. The snapshot is still
+ * stored immediately (state stays truthful); only the LISTENER notification is
+ * deferred until the scroll settles, then flushed once with the newest payload.
+ */
+let pendingPublish: StatusPayload | null = null;
+let settleFlushBound = false;
+
+function notifyListeners(st: StatusPayload): void {
+	for (const fn of [...statusListeners]) {
+		try { fn(st); } catch { /* a dead consumer must not kill the loop */ }
+	}
+}
+
+function flushPendingPublish(): void {
+	const pending = pendingPublish;
+	pendingPublish = null;
+	if (pending !== null) notifyListeners(pending);
+}
+
+function bindSettleFlush(): void {
+	if (settleFlushBound) return;
+	settleFlushBound = true;
+	onScrollSettle(flushPendingPublish);
+}
+
 /** Single writer for the shared status snapshot (poll loop, refresh, tests). */
 function publishStatus(st: StatusPayload): void {
 	statusCache = st;
@@ -213,9 +242,12 @@ function publishStatus(st: StatusPayload): void {
 	} catch {
 		// Ignore storage quota / parsing errors
 	}
-	for (const fn of [...statusListeners]) {
-		try { fn(st); } catch { /* a dead consumer must not kill the loop */ }
+	if (isScrollActive()) {
+		pendingPublish = st;
+		bindSettleFlush();
+		return;
 	}
+	notifyListeners(st);
 }
 
 /** Publish an externally obtained snapshot to every mounted consumer. */
@@ -291,6 +323,7 @@ export function disposeStatusPolling(): void {
 	visibilityCleanup = null;
 	lastEtag = null;
 	inFlightStatus = null;
+	pendingPublish = null;
 }
 
 /**
