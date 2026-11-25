@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.88 (2026-11-25)
+
+### English
+
+- **Feat(context-transfer): inline-first up to 150 KB + hybrid tail-inline / head-archive delivery.** Raises `contextTransferFileAboveBytes` from 55 KB to 150,000 B (keeping 95%+ of real long sessions directly inlined without triggering `read_file`'s 46 KB truncation), deducts `liveRequestBytes` to guarantee safety under `agy`'s 192 KB single-message cap (also verified on ACP `embeddedContext` blocks in `agy 1.5.15`), and splits oversized histories cleanly at turn boundaries so the newest turns stay inlined (`[RECENT CONVERSATION]`) while only older overflow spills to a `.md` archive with zero duplication.
+- **Fix(context-transfer,acp): unify `A→B→A` foreign catch-up with first-contact delivery & pre-mount `--add-dir` on ACP spawn.** Removes the 8,000-char ceiling on returning `foreign` digests so switching back to an earlier account catches up with the same 660K / 150 KB inline-first / hybrid-archive pipeline; persistent `agy acp` children now pre-mount `<state>/context-transfer` and `<state>/media` (plus custom `mediaDir`) via `--add-dir` so resumed/loaded sessions in non-`skip` modes match CLI read permissions.
+- **Fix(media): chronological in-place historical attachments on account switches.** When building `first` or `foreign` digests, unseen attachments from earlier user turns are staged to `media/` and annotated in-place under their owning historical `User:` turn rather than being re-attached as current-turn ACP `inlineImages`; only current-turn `trailingUser` attachments travel live.
+- **Fix(sessions): preserve watermark on unconsumed failures & add `[watermark-drop]` diagnostics.** `persistFailureBinding` no longer advances `lastMessageCount` on non-interrupted failures (`RATE_LIMIT`, `NETWORK`, `OVERLOADED`, `PROCESS_EXIT`), preventing retries or `A→B→A` returns from skipping foreign catch-up digests; `writeSuccessBinding` and `persistBindingOnResult` log `[watermark-drop]` metadata if a binding drops from `>= 5` to `<= 2`.
+
+### 中文
+
+- **新增(上下文交接)：150 KB 全量内联优先 + 超限「尾内联 / 头落盘」零重复切分。** 将 `contextTransferFileAboveBytes` 默认值从 55 KB 提升至 150,000 B（绝大多数长会话切号后直接全量进入新号首轮上下文，不再受 `read_file` 46 KB 单次截断影响）；严格扣除 `liveRequestBytes` 以守住 `agy` 192 KB 单消息上限（已实测 `agy 1.5.15` 下 ACP `embeddedContext` 同样在 192 KB 截断）；超长历史按回合边界零重复切分，近期回合保留在 `[RECENT CONVERSATION]` 内联区，仅更早溢出段落落盘 `.md`。
+- **修复(上下文交接,acp)：统一 `A→B→A` 切回增量与首次切号通道，并对齐 ACP `--add-dir` 预挂载。** 移除切回旧号时 `foreign` 摘要的 8,000 字符硬限，与首次切号共用 660K / 150 KB 内联优先与混合落盘通道；常驻 `agy acp` 进程启动时同步通过 `--add-dir` 预挂 `<state>/context-transfer` 与 `<state>/media`（含自定义 `mediaDir`），消除非 `skip` 模式下续跑读盘权限差异。
+- **修复(多模态附件)：切号历史附件按时间线原位还原，与本轮附件隔离。** 生成 `first` / `foreign` 摘要时，历史用户回合的未发送附件落盘 `media/` 后以客观路径注释原位写入对应历史 `User:` 行，不再作为本轮 ACP `inlineImages` 塞给模型；仅当前轮 `trailingUser` 新附图片/文件走本轮直传。
+- **修复(会话水位)：未实质消费失败不再误推水位，并补充 `[watermark-drop]` 诊断日志。** `persistFailureBinding` 在 `RATE_LIMIT` / `NETWORK` / `OVERLOADED` / `PROCESS_EXIT` 等非中途中断失败时保持原 `lastMessageCount`（无旧绑定时保持 `0`），避免重试或切回漏发增量摘要；`writeSuccessBinding` 与 `persistBindingOnResult` 观测到水位从 `>= 5` 突降至 `<= 2` 时输出脱敏 `[watermark-drop]` 诊断日志。
+
 ## 0.6.87 (2026-11-25)
 
 ### English
