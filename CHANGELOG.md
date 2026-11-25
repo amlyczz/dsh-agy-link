@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.93 (2026-11-25)
+
+### English
+
+- **Fix(mcp): bind reverse-MCP discovery and execution to the model step that started the call (merges PR #208).** Two failures showed up when team sessions ran concurrently:
+  - the host projects its model-facing catalog into `GenerateOptions.tools`; rebuilding that catalog from the global registry could hide PTC's `run_code` or advertise tools the model could not execute, so dispatch without the step's `toolSet` answered "unknown tool" for an admitted team tool;
+  - associating an ACP process with its most recent session made overlapping calls ambiguous — the same class of problem as #200's `DSH_MCP_SESSION` staleness.
+  The bridge now uses the **projected schemas** for discovery and the **originating agent, admitted tool set and cancellation signal** for execution. The process-level association (`acp/mcp-session.ts`) is deleted rather than repaired, which removes the ambiguity instead of narrowing it.
+  - Also covered: pending teammate reports leaking into the history digest and the live request, a warm session retaining outdated system instructions, and a previous turn's screenshot being staged again.
+
+### 中文
+
+- **修复(mcp)：把反向 MCP 的发现与执行绑定到**发起调用的那个 model step**（合并 PR #208）。** 团队会话并发时暴露了两类失败：
+  - 宿主会把面向模型的目录投影进 `GenerateOptions.tools`；若改从全局注册表重建，可能藏掉 PTC 的 `run_code`，或列出模型无法执行的工具——于是在没有该 step 的 `toolSet` 时派发，会对本已准入的团队工具回"unknown tool"；
+  - 把 ACP 进程与"最近一次会话"关联，会让重叠调用变得歧义——这与 #200 的 `DSH_MCP_SESSION` 陈旧是同一类问题。
+  现在桥接用**投影后的 schema** 做发现，用**发起方 agent、准入工具集与取消信号**做执行。进程级关联（`acp/mcp-session.ts`）被**删除**而不是修补，从根上消除歧义，而不是收窄它。
+  - 一并覆盖：待处理的同侪报告泄漏进历史摘要与实时请求、热会话保留过期的系统指令、上一轮的截图被再次 staging。
+
 ## Unreleased
 
 - Bind reverse MCP discovery and execution to the active DSH model step and session, including PTC. Refresh opted-in system instructions on warm turns and keep pending messages and current images separate from recovery history.
