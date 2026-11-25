@@ -369,6 +369,9 @@ export function renderFamilyQuotaBar(
 			: 'var(--agy-border-box)';
 
 	return h('div', {
+		// Stable hook: tests and diagnostics need to count rendered buckets without
+		// matching localized label text.
+		'data-family': familyKey,
 		style: {
 			margin: '4px 0',
 			padding: '5px 8px',

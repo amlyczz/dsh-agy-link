@@ -92,11 +92,10 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 		const isFullyCooling = isAccountFullyCooling(acc, now);
 		const isSyncing = loadingAction === `refresh:${acc.id}` || loadingAction === 'refresh:all' || quotaRefreshing.includes(acc.id);
 		const isWarming = loadingAction === `warmup:${acc.id}` || (warmupState?.running === true && warmupState.activeAccountIds.includes(acc.id));
-		// A real pin is "in use" (blue); a mere eligibility RESOLUTION is a
-		// prediction with a quieter accent. Only always-visible families count.
+		// A real pin is "in use" (blue); an eligibility prediction uses a quieter accent.
 		const frameFamilies = QUOTA_FAMILIES.filter((fam) =>
 			(fam === 'google' || fam === 'argon') &&
-			(fam !== 'argon' || acc.quotas.argon !== undefined) &&
+			(fam !== 'argon' || (!argonSharesGoogleGroup(acc) && acc.quotas.argon !== undefined)) &&
 			acc.enabled && !isAuthRequired && !isFamilyCooling(acc, fam, now) &&
 			activeIds[fam] === acc.id,
 		);
@@ -159,7 +158,8 @@ export function AccountsPanel(props: AccountsPanelProps): unknown {
 			h('div', { key: 'agy-body', style: S.quotaBox },
 				renderQuotaUnavailableNote(t, acc),
 				renderQuotaBar('Gemini', 'google'),
-				(acc.quotas.argon || (!argonSharesGoogleGroup(acc) && isFamilyInCooldown(acc, 'argon', now))) ? renderQuotaBar('Argon', 'argon') : null,
+				// Merged group: an extra argon row is not a second ledger (2026-11-25).
+				(!argonSharesGoogleGroup(acc) && (acc.quotas.argon !== undefined || isFamilyInCooldown(acc, 'argon', now))) ? renderQuotaBar('Argon', 'argon') : null,
 				h(Button, {
 					variant: 'dashed',
 					style: {

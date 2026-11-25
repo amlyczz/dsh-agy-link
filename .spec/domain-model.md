@@ -17,7 +17,7 @@
 
 | 概念 | 定义 | 代码锚点 |
 | --- | --- | --- |
-| **Model Family（配额族）** | 账号级配额组：`google` / `argon` / `anthropic` / `openai`。存在独立 `quotas.argon` 或 `google.description` 未列名 Argon 时二者账本独立（缺行=未知，绝不借用 Gemini 数字）；当且仅当 `argonSharesGoogleGroup(acc)` 为真（无 `quotas.argon` 且 `quotas.google.description` 显式列名 Argon，如 `agy 1.5.15+` 付费共享组）时，`google` ↔ `argon` 共享同一物理配额桶、冷却与同账号指针。 | `ModelFamily`、`effectiveFamilyQuota()`、`argonSharesGoogleGroup()` |
+| **Model Family（配额族）** | 账号级配额组：`google` / `argon` / `anthropic` / `openai`。**`quotas.google.description` 是否显式列名 Argon 是唯一判据**：列名 ⇒ `argonSharesGoogleGroup(acc)` 为真（`agy 1.5.15+` 付费共享组），`google` ↔ `argon` 共享同一物理配额桶、冷却、倒计时与同账号指针，UI 只渲染**一个**配额桶；未列名 ⇒ 二者账本独立。`quotas.argon` 行单独存在**不构成**独立证据——上游会把合并组同时写在两个 key 下（argon 那份通常只带同一个 weekly 窗口、没有自己的 5h 行），据此判独立会让账号卡片长出第二个幽灵「Argon 0%」桶（2026-11-25）。 | `ModelFamily`、`effectiveFamilyQuota()`、`argonSharesGoogleGroup()` |
 | **Model Bucket（模型桶）** | 族内的 per-model 配额桶，例如图片模型 `gemini-3.1-flash-image`。Google 本来就按 model 计量，family 只是聚合。 | `FamilyQuotaInfo.models[]` |
 | **Quota Snapshot（配额快照）** | 某族某时刻的 `remainingFraction` / `weeklyFraction` / reset / `models[]` / `updatedAt`。 | `FamilyQuotaInfo` |
 | **Family Cooldown（族级冷却）** | 账号级硬拒绝（如 `Individual quota reached`）导致**整个族**暂不可用。 | `cooldowns[family]` |
@@ -35,7 +35,7 @@
 
 1. **族冷却 ⇒ 全族不可用；模型冷却 ⇒ 仅该模型不可用。** 模型级 429 禁止写族冷却。
 2. **生图不得移动粘性指针**：图片桶耗尽只影响图片，不能打断并行的聊天回合。
-3. **Argon 与 Gemini 账本规则**：当账号存在独立 `quotas.argon` 或 `google.description` 未列名 Argon 时，二者账本/冷却/指针完全独立（缺行是「未知」，绝不借用）；当且仅当 `argonSharesGoogleGroup(acc)` 为真（`agy 1.5.15+` 折叠共享组）时，`google` ↔ `argon` 双向共享配额门控、冷却（`effectiveFamilyCooldown`）、倒计时、活跃指针与会话粘性（`sharedArgonPeerFamily`），确保 Orchestrator (Argon) 规划、执行与内部子代理同账号运行并在任一侧 429/切号时同步切换。
+3. **Argon 与 Gemini 账本规则**：`google.description` 未列名 Argon 时，二者账本/冷却/指针完全独立（缺行是「未知」，绝不借用）；当且仅当 `argonSharesGoogleGroup(acc)` 为真（`agy 1.5.15+` 折叠共享组，判据只看 `description`，`quotas.argon` 行的存在不改变结论）时，`google` ↔ `argon` 双向共享配额门控、冷却（`effectiveFamilyCooldown`）、倒计时、活跃指针与会话粘性（`sharedArgonPeerFamily`），确保 Orchestrator (Argon) 规划、执行与内部子代理同账号运行并在任一侧 429/切号时同步切换。
 4. **`TOS_VIOLATION` 永不跨账号重试**，避免连坐封号。
 5. **无可用账号时必须显式报错**，严禁 `account = undefined` 回落系统主账号。
 6. **启动迁移**清掉历史遗留的「模型级 429 写出的族冷却」。

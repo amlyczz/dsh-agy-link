@@ -7,7 +7,7 @@ import { join } from 'node:path'
 
 import { defaultConfig } from '../../src/common/types.ts'
 import { accountCoolingFamilies, isQuotaBenched } from '../../src/common/quota-bench.ts'
-import type { ManagedAccount } from '../../src/common/pool-types.ts'
+import { argonSharesGoogleGroup, sharedArgonPeerFamily, type ManagedAccount } from '../../src/common/pool-types.ts'
 import { AccountPoolManager } from '../../src/host/pool.ts'
 import { SessionStore } from '../../src/host/sessions.ts'
 import { selectSessionAccount, stickyAccount } from '../../src/provider/account-selection.ts'
@@ -385,4 +385,98 @@ test('Dedicated Argon isolation remains intact when quotas.argon exists', async 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// Incident (2026-11-25): the primary account card showed TWO buckets — "Gemini
+// 5h 63% / weekly 0%" and a second "Argon weekly 0%" row with the SAME reset
+// instant. Upstream (agy 1.5.15+) reports the merged Gemini group under both
+// keys: `quotas.google.description` enumerates "Gemini 4 Argon" as a member, and
+// the extra `quotas.argon` row is the same physical bucket broken out per model.
+// Presence of the argon row alone must not flip the account back to "independent
+// ledgers" — the group's own membership list is the authoritative signal.
+test('REGRESSION: a per-model argon row does not un-merge the shared Gemini group', () => {
+  const now = Date.now()
+  const weeklyReset = new Date(now + 6 * 86_400_000).toISOString()
+  const merged = {
+    id: 'acc_merged',
+    alias: 'Merged',
+    dir: '/tmp/merged',
+    enabled: true,
+    createdAt: now,
+    lastUsedAt: now,
+    quotas: {
+      google: {
+        remainingFraction: 0.63,
+        resetTime: new Date(now + 3 * 3_600_000).toISOString(),
+        weeklyFraction: 0,
+        weeklyResetTime: weeklyReset,
+        description: SHARED_GEMINI_DESC,
+        updatedAt: now,
+      },
+      // Same bucket, reported again under the argon key (no 5h row of its own).
+      argon: {
+        weeklyFraction: 0,
+        weeklyResetTime: weeklyReset,
+        description: SHARED_GEMINI_DESC,
+        updatedAt: now,
+      },
+    },
+  } as unknown as ManagedAccount
+
+  assert.equal(
+    argonSharesGoogleGroup(merged),
+    true,
+    'google.description naming Argon proves one shared pool; the extra argon row is a per-model view of it',
+  )
+  assert.equal(sharedArgonPeerFamily(merged, 'google'), 'argon')
+  assert.equal(sharedArgonPeerFamily(merged, 'argon'), 'google')
+
+  // An account whose Gemini group does NOT name Argon keeps independent ledgers.
+  const independent = {
+    ...merged,
+    quotas: {
+      google: { remainingFraction: 0.63, weeklyFraction: 0.4, weeklyResetTime: weeklyReset, description: FLASH_ONLY_DESC, updatedAt: now },
+      argon: { weeklyFraction: 0.9, weeklyResetTime: weeklyReset, updatedAt: now },
+    },
+  } as unknown as ManagedAccount
+  assert.equal(argonSharesGoogleGroup(independent), false, 'a group that does not list Argon stays a separate ledger')
+
+  // The card must show ONE bucket for the merged account…
+  const renderCard = (acc: ManagedAccount): string => JSON.stringify(AccountsPanel({
+    t: ((k: string) => k) as never,
+    pool: undefined,
+    accounts: [acc],
+    loadingAction: null,
+    proxyInputs: {},
+    setProxyInputs: () => {},
+    editingProxyId: null,
+    setEditingProxyId: () => {},
+    aliasInputs: {},
+    setAliasInputs: () => {},
+    editingAliasId: null,
+    setEditingAliasId: () => {},
+    expandedModels: {},
+    toggleExpand: () => {},
+    optimisticActiveByFamily: {},
+    warmupState: null,
+    handlers: noopHandlers,
+  }))
+  const mergedTree = renderCard(merged)
+  assert.equal(
+    (mergedTree.match(/"data-family":"google"/g) ?? []).length,
+    1,
+    'the merged account must render exactly one Gemini bucket',
+  )
+  assert.equal(
+    (mergedTree.match(/"data-family":"argon"/g) ?? []).length,
+    0,
+    'no phantom Argon bucket when the Gemini group already contains Argon',
+  )
+  const independentTree = renderCard(independent)
+  assert.equal(
+    (independentTree.match(/"data-family":"argon"/g) ?? []).length,
+    1,
+    'an independent Argon ledger must keep its own bucket row',
+  )
+
 })
