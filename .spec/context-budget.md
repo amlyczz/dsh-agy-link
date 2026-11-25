@@ -51,7 +51,7 @@
 
 ## 4. 测试锚点
 
-`test/provider/adapter.test.ts` / `test/client/extended-ui-and-embed.test.ts` / `test/provider/context-transfer-handover.test.ts`：`buildDigest` 的字节上限与"最新回合优先"、live task 不被工具输出挤掉（issue #35）、`elideMiddle` 的字节上限与 CJK 不切断码点、工具行默认省略而散文不省略、`trimToUtf8Bytes` 不产生非法码点、PDF/音频/视频落盘与 `mediaMaxFileBytes` 截断、150 KB 全量内联 / 尾内联+头落盘零重复切分、`A→B→A` 外来增量统一通道、历史附件原位还原与本轮附件隔离、ACP `--add-dir` 预挂载、失败水位保护与 `[watermark-drop]` 诊断日志。
+`test/provider/adapter-*.test.ts` / `test/client/extended-ui-and-embed.test.ts` / `test/provider/context-transfer-handover.test.ts`：`buildDigest` 的字节上限与"最新回合优先"、live task 不被工具输出挤掉（issue #35）、`elideMiddle` 的字节上限与 CJK 不切断码点、工具行默认省略而散文不省略、`trimToUtf8Bytes` 不产生非法码点、PDF/音频/视频落盘与 `mediaMaxFileBytes` 截断、150 KB 全量内联 / 尾内联+头落盘零重复切分、`A→B→A` 外来增量统一通道、历史附件原位还原与本轮附件隔离、ACP `--add-dir` 预挂载、失败水位保护与 `[watermark-drop]` 诊断日志。
 
 ## 5. 已知取舍
 

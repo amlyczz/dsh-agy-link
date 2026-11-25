@@ -8,6 +8,7 @@
  */
 import { execSync, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
+import { globSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -15,13 +16,13 @@ const TEST_DIR = join(ROOT, 'test')
 
 const COMPONENT_TEST_MAP = {
   'src/index.ts': ['test/integration/lifecycle.test.ts', 'test/host/services.test.ts'],
-  'src/host/services.ts': ['test/host/services.test.ts', 'test/transport/http-contract.test.ts'],
-  'src/host/adapter.ts': ['test/provider/adapter.test.ts'],
+  'src/host/services.ts': ['test/host/services.test.ts', 'test/transport/http-contract-*.test.ts'],
+  'src/host/adapter.ts': ['test/provider/adapter-*.test.ts'],
   'src/host/models.ts': ['test/host/models.test.ts', 'test/domain/model-support-ineligibility.test.ts'],
-  'src/host/quota.ts': ['test/features/quota/quota.test.ts', 'test/domain/domain-quota.test.ts'],
+  'src/host/quota.ts': ['test/features/quota/quota-*.test.ts', 'test/domain/domain-quota.test.ts'],
   'src/host/pool.ts': ['test/domain/pool.test.ts', 'test/host/pool-auth.test.ts'],
-  'src/host/pool-auth.ts': ['test/host/pool-auth.test.ts', 'test/transport/http-contract.test.ts'],
-  'src/host/oauth.ts': ['test/host/pool-auth.test.ts', 'test/features/quota/quota.test.ts'],
+  'src/host/pool-auth.ts': ['test/host/pool-auth.test.ts', 'test/transport/http-contract-*.test.ts'],
+  'src/host/oauth.ts': ['test/host/pool-auth.test.ts', 'test/features/quota/quota-*.test.ts'],
   'src/host/sessions.ts': ['test/host/sessions.test.ts'],
   'src/host/runner.ts': ['test/runtime/cross-platform.test.ts', 'test/runtime/proxy-keychain.test.ts'],
   'src/host/boot-hygiene.ts': ['test/runtime/boot-hygiene.test.ts'],
@@ -31,7 +32,7 @@ const COMPONENT_TEST_MAP = {
   'src/host/parser.ts': ['test/host/parser.test.ts', 'test/provider/mapper.test.ts'],
   'src/host/mcp-bridge.ts': ['test/host/mcp-bridge-registry-and-agent.test.ts', 'test/host/mcp-ready-disposal.test.ts'],
   'src/host/media-route.ts': ['test/transport/media-route.test.ts'],
-  'src/host/recording.ts': ['test/provider/adapter.test.ts'],
+  'src/host/recording.ts': ['test/provider/adapter-*.test.ts'],
   'src/host/oneshot.ts': ['test/integration/v02.test.ts', 'test/features/quota/quota-failover-alignment.test.ts', 'test/features/image/slash-bridge-and-image-tool.test.ts', 'test/features/btw/btw.test.ts'],
   'src/host/btw-command.ts': ['test/features/btw/btw.test.ts'],
   'src/client/btw.ts': ['test/client/btw-client.test.ts'],
@@ -45,21 +46,21 @@ const PREFIX_TEST_MAP = [
   ['src/common/types/', ['test/provider/failure-classifier.test.ts', 'test/common/rate-limit-classify.test.ts', 'test/common/network-backoff.test.ts']],
   ['src/domain/accounts/', ['test/domain/pool.test.ts', 'test/domain/model-support-ineligibility.test.ts']],
   ['src/domain/credentials/', ['test/host/credential-slot.test.ts', 'test/host/credential-backup.test.ts', 'test/provider/issue101-slot-failover.test.ts']],
-  ['src/domain/quota/', ['test/domain/domain-quota.test.ts', 'test/features/quota/quota.test.ts', 'test/transport/status-argon-filter.test.ts']],
-  ['src/features/quota/', ['test/features/quota/quota.test.ts', 'test/domain/domain-quota.test.ts']],
-  ['src/features/warmup/', ['test/features/warmup/warmup.test.ts', 'test/transport/http-contract.test.ts']],
+  ['src/domain/quota/', ['test/domain/domain-quota.test.ts', 'test/features/quota/quota-*.test.ts', 'test/transport/status-argon-filter.test.ts']],
+  ['src/features/quota/', ['test/features/quota/quota-*.test.ts', 'test/domain/domain-quota.test.ts']],
+  ['src/features/warmup/', ['test/features/warmup/warmup.test.ts', 'test/transport/http-contract-*.test.ts']],
   ['src/features/translation/', ['test/features/translation/translate.test.ts']],
   ['src/features/btw/', ['test/features/btw/btw.test.ts']],
   ['src/features/image/', ['test/features/image/image.test.ts', 'test/features/image/image-cli.test.ts']],
-  ['src/features/ecosystem/', ['test/features/ecosystem/ecosystem.test.ts', 'test/transport/http-contract.test.ts']],
+  ['src/features/ecosystem/', ['test/features/ecosystem/ecosystem.test.ts', 'test/transport/http-contract-*.test.ts']],
   ['src/features/subagent/', ['test/features/subagent/subagent-tracker.test.ts']],
   ['src/provider/mapper/', ['test/provider/mapper.test.ts']],
   ['src/provider/mirror/', ['test/provider/mirror-tool.test.ts', 'test/client/run-code-view.test.ts']],
-  ['src/provider/', ['test/provider/adapter.test.ts', 'test/provider/failure-classifier.test.ts', 'test/host/models.test.ts', 'test/host/host-branches.test.ts']],
+  ['src/provider/', ['test/provider/adapter-*.test.ts', 'test/provider/failure-classifier.test.ts', 'test/host/models.test.ts', 'test/host/host-branches.test.ts']],
   ['src/runtime/agy/db/', ['test/runtime/agy-db.test.ts', 'test/runtime/agy-db-extract.test.ts']],
   ['src/runtime/agy/', ['test/runtime/cross-platform.test.ts', 'test/runtime/proxy-keychain.test.ts', 'test/features/background/background-task-hang.test.ts', 'test/runtime/updater-preempt.test.ts']],
   ['src/runtime/net/', ['test/runtime/account-env.test.ts']],
-  ['src/transport/http/', ['test/transport/http-contract.test.ts', 'test/transport/route-guard.test.ts', 'test/transport/media-route.test.ts']],
+  ['src/transport/http/', ['test/transport/http-contract-*.test.ts', 'test/transport/route-guard.test.ts', 'test/transport/media-route.test.ts']],
   ['src/host/commands/', ['test/integration/commands.test.ts', 'test/features/translation/tsl-command.test.ts', 'test/features/image/slash-bridge-and-image-tool.test.ts', 'test/features/ecosystem/ecosystem.test.ts']],
   ['src/client/images/', ['test/client/client-dom.test.ts', 'test/transport/media-route.test.ts']],
   ['src/client/toolview/', ['test/client/toolview.test.ts', 'test/client/run-code-view.test.ts']],
@@ -97,6 +98,21 @@ function listAllTests(dir = TEST_DIR, prefix = 'test') {
   return out
 }
 
+/**
+ * Expand mapping entries: they may name one file or a glob
+ * (`test/provider/adapter-*.test.ts`), because a suite is allowed to be split
+ * across several files in its domain directory.
+ */
+function expandTargets(entries, out) {
+  for (const entry of entries) {
+    if (!entry.includes('*')) {
+      if (existsSync(join(ROOT, entry))) out.add(entry)
+      continue
+    }
+    for (const hit of globSync(entry, { cwd: ROOT })) out.add(hit)
+  }
+}
+
 /** Locate a test by bare basename anywhere under test/ (domain-agnostic). */
 function findByBasename(allTests, name) {
   const base = basename(name)
@@ -127,13 +143,9 @@ function resolveTargetTests(args) {
       targets.add(file)
       continue
     }
-    if (COMPONENT_TEST_MAP[file]) {
-      for (const t of COMPONENT_TEST_MAP[file]) if (existsSync(join(ROOT, t))) targets.add(t)
-    }
+    if (COMPONENT_TEST_MAP[file]) expandTargets(COMPONENT_TEST_MAP[file], targets)
     for (const [prefix, mapped] of PREFIX_TEST_MAP) {
-      if (file.startsWith(prefix)) {
-        for (const t of mapped) if (existsSync(join(ROOT, t))) targets.add(t)
-      }
+      if (file.startsWith(prefix)) expandTargets(mapped, targets)
     }
     if (file.startsWith('src/')) {
       const base = basename(file).replace(/\.tsx?$/, '')

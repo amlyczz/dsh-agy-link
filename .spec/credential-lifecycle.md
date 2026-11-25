@@ -71,7 +71,7 @@
 - 用户手动改名必须走 `setAccountAlias()`——它同时 `trim()` 并置 `defaultAlias = false`，否则输入的名字永远不会被显示（界面仍在渲染生成标签）。
 - 路由 `POST /plugins/agy-link/pool/alias` 是唯一写入口：非空、长度上界、未知 id → 404。空名会让卡片无标签，因此服务端直接拒绝而不是静默接受。
 - **主账号换号自动重置旧别名（issue #152 第二部分）**：当 `systemHome` 主账号通过 `/agy auth` 重新登录为**不同 Google 邮箱**时，`resetAccountIdentity(id, email, true)` 同步重置自定义旧别名并恢复 `defaultAlias = true`，防止卡片仍展示上一个账号的名称。
-- 锚点：`test/integration/issue152-alias-edit.test.ts`、`test/integration/slice3-ssh-tier-143-145-152.test.ts`、`test/transport/http-contract.test.ts`（路由表面登记）。
+- 锚点：`test/integration/issue152-alias-edit.test.ts`、`test/integration/slice3-ssh-tier-143-145-152.test.ts`、`test/transport/http-contract-*.test.ts`（路由表面登记）。
 
 ## 6. 三端免全局钥匙串隔离（`SSH_CONNECTION`）与外部独立登录保护（issue #145）
 

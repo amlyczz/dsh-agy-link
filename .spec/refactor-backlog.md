@@ -23,6 +23,16 @@
 
 **为什么记下来而不是一次全抽**：这几处分别属于 ACP、凭证、宿主调度三条高风险链路；一次性大改会让回归范围失控。按上表逐个推进，每次只动一个概念。
 
+## 2026-11-25 测试树与样式表
+
+| 动作 | 结果 |
+| --- | --- |
+| 测试按领域分层 | 162 个平铺文件 → `test/<layer>/` + `test/features/<sub>/`（镜像 `src/` 分层），路径计算收敛到 `test/helpers/paths.ts`（此前 `../..` 手数层数，移动文件即炸 85 个用例） |
+| 大测试文件切分 | `adapter` 2910→7 文件、`http-contract` 2060→10 文件、`quota` 1951→7 文件；共享夹具各自收敛到一个 helper，用例数与断言逐字节保留 |
+| `global-css.ts` 拆出浮层样式 | 603 → 546 行：`.agy-modal-*` / `html.agy-modal-open` / `html.agy-scrolling` 迁到 `src/client/modal-css.ts`，以 `${MODAL_CSS}` 组合在 `GLOBAL_CSS` 开头（保证手机端 media 覆盖仍在后面生效） |
+
+**仍在临界线上**：`src/client/sections/AccountsPanel.ts` 599 行（预算 600）。下次动它之前先抽 `dotColor` / 卡片头部渲染，不要再靠删注释腾空间。
+
 ## 重复实现（比体积更该处理）
 
 - **`delay(ms[, signal])` 在 13 个文件里各写一遍**（`host/models`、`host/services`、`quota/freshness`、`acp/pool`、`acp/run-attempt`、`warmup/schedule`、`provider/mapper/event-mapper`、`provider/retry-policy`、`provider/failover-budget`、`common/pool-types`、`domain/quota/identity`、`client/mermaid-render`、`translation/service`）。多数是 `new Promise(r => setTimeout(r, ms))`，但**并非全部等价**（部分带 `AbortSignal` 且 abort 后 resolve 而非 reject）。

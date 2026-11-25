@@ -48,7 +48,7 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
 2. **收口于 `pool.onAccountSwitch`**：
    - `setActiveAccount`、`setPrimaryAccount`、`reorderAccounts`、`advanceAccount`、`PoolAdmin.recordFailure`（429 自动切号）、`selectAccount`（含首次从 `undefined` 选定活跃号）、`deleteAccount`、`setAccountEnabled`、`clearCooldown` 凡引起有效活跃账号变化，统一触发一次 `onAccountSwitch`（立即 `notifyPicker()` 切换已有缓存视图 + 异步 `forceRefreshAndNotify(newId)` 补齐最新目录），HTTP 路由层不再重复调用第二次 `forceRefreshAndNotify`。
    - **OAuth 登录 / 重登 / 导入必刷新**：`PoolAuthFlow.finishWithCode`（全部三个分支：新账号、重认证、主账号）与 `importRefreshToken` 完成后均触发目录刷新与 `notifyPicker()`。
-   - **配置与 CLI 命令同步**：`/config` 修改影响可见模型集合的键（`hiddenModels`、`poolWideCatalog`、`enabled`，其中 `enabled` 通过 `AdapterRegistrationHandle.replace()` 动态挂载/卸载路由）以及 `/agy` 账号管理子命令（含 `/agy use <id>`、`/agy effort`）均同步调用 `notifyPicker()`；不影响 `listModels()` 列表集合的键（如 `defaultEffort`、`translateModel`）保持静默（遵循 `test/transport/http-contract.test.ts` 与 `test/integration/lifecycle.test.ts` 契约）。
+   - **配置与 CLI 命令同步**：`/config` 修改影响可见模型集合的键（`hiddenModels`、`poolWideCatalog`、`enabled`，其中 `enabled` 通过 `AdapterRegistrationHandle.replace()` 动态挂载/卸载路由）以及 `/agy` 账号管理子命令（含 `/agy use <id>`、`/agy effort`）均同步调用 `notifyPicker()`；不影响 `listModels()` 列表集合的键（如 `defaultEffort`、`translateModel`）保持静默（遵循 `test/transport/http-contract-*.test.ts` 与 `test/integration/lifecycle.test.ts` 契约）。
 
 ### 4.3 按模型族作用域与手动切号优先于同族旧会话粘性（`manualPinAtByFamily`）
 - 账号池活跃指针、冷却与预热严格按**模型族**（`google` Gemini / `argon` Argon / `anthropic` Claude / `openai` GPT-OSS）隔离：
@@ -76,7 +76,7 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
 ## 7. 测试锚点
 
 - `test/host/models.test.ts`：折叠规则、按账号独立 single-flight 并发刷新、`name`/`efforts` 变更广播、`agy models` 未登录兜底输出不误标 `discovered`、`accountHasArgon` 目录优先于折叠 REST 列表。
-- `test/domain/pool.test.ts` / `test/host/pool-auth.test.ts` / `test/transport/http-contract.test.ts`：切号单次触发不双倍 spawn、429 自动切号广播、OAuth `finishWithCode` 广播、`manualPinAt` 优先于旧会话 `stickyAccount`、`/config` 修改 `defaultEffort`/`enabled` 同步刷新选择器。
+- `test/domain/pool.test.ts` / `test/host/pool-auth.test.ts` / `test/transport/http-contract-*.test.ts`：切号单次触发不双倍 spawn、429 自动切号广播、OAuth `finishWithCode` 广播、`manualPinAt` 优先于旧会话 `stickyAccount`、`/config` 修改 `defaultEffort`/`enabled` 同步刷新选择器。
 
 ## 模型可见性是允许清单 + 拒绝清单两层（PR #149 / #131）
 

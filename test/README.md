@@ -23,7 +23,7 @@
 | `features/btw/` | `/atw` 旁路问答 | `src/features/btw/` |
 | `features/ecosystem/` | 生态面板与同步 | `src/features/ecosystem/` |
 | `integration/` | 跨层回归：issue 编号套件、阶段快照、端到端组合（`lifecycle`、`v02`、`phase2-*`、`orchestrator-settings`） | 多个层 |
-| `helpers/` | 测试基建：`client-render.ts`（React SSR shim）、`sandbox-env.ts`（隔离 HOME/env） | — |
+| `helpers/` | 测试基建：`client-render.ts`（React SSR shim）、`sandbox-env.ts`（隔离 HOME/env）、`paths.ts`（目录常量，唯一的路径计算入口）、`adapter-fixtures.ts`（adapter 套件共享夹具） | — |
 | `fixtures/` | 录制/回放数据 | — |
 
 ## 约定

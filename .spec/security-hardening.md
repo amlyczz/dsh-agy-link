@@ -23,7 +23,7 @@ Each invariant below is enforced in code AND covered by a regression test.
   with `0600` owner-only permissions and prunes stale `dsh-tools-<deadPort>` entries left
   behind by crashed processes; `syncMcpBridge()` serializes concurrent starts;
   `registerBridgeMcpConfig()` de-duplicates `(bridge, file)` registrations idempotently
-  and `teardownBridgeState()` runs/clears all registered restores once. (test: `test/transport/http-contract.test.ts`)
+  and `teardownBridgeState()` runs/clears all registered restores once. (test: `test/transport/http-contract-*.test.ts`)
 - **4x Schema & Budget Hardening (`src/host/mcp-schema.ts`, `src/host/bridge.mjs`)**:
   - Every exported tool carries `_meta: { 'antigravity/alwaysLoad': true }` so `agy` never hides large MCP tools behind on-demand discovery.
   - Tool definitions are budgeted under `AGY_MCP_SAFE_TOKEN_BUDGET` (18,000 tokens, safely below `agy`'s 20,000-token hard drop ceiling) by stripping metadata and progressively trimming verbose descriptions without dropping any tool.
@@ -131,7 +131,7 @@ so they are gated more strictly than the console routes:
 
 - `effectivePermissionMode(configured, dshPlanMode, isAux)` forces `plan` (`--mode plan`)
   whenever `dshPlanMode && !isAux`, preventing `--dangerously-skip-permissions` from
-  writing files during a read-only planning turn. (tests: `test/common/call-context.test.ts`, `test/provider/adapter.test.ts`)
+  writing files during a read-only planning turn. (tests: `test/common/call-context.test.ts`, `test/provider/adapter-*.test.ts`)
 - **Authoritative current-turn signals**: `isPlanMode(messages, systemPrompt?, livePlanMode?)`
   checks `livePlanMode` (from `ctx.planMode` / `plan/change` / `plan/enter|exit`), trailing
   approved/rejected `exit_plan_mode` tool results, `options.system` (`plan:policy`), and only
@@ -141,7 +141,7 @@ so they are gated more strictly than the console routes:
   keep-planning feedback (`'continue'`), `buildChatPromptText()` preserves `agytc-bridge-*`
   tool-result text even on bound conversations so `agy` executes or revises the plan cleanly.
   `buildPlanExitToolCallBlock()` ensures a leading `# ` heading and uses monotonic
-  `agytc-bridge-plan-<seq>` IDs excluded from `parseMirrorCallId()`. (tests: `test/integration/dsh-goal.test.ts`, `test/provider/adapter.test.ts`)
+  `agytc-bridge-plan-<seq>` IDs excluded from `parseMirrorCallId()`. (tests: `test/integration/dsh-goal.test.ts`, `test/provider/adapter-*.test.ts`)
 - **`/agy goal` 1:1 DSH GoalService parity**: `handleGoal` delegates to `ctx.goals`
   (`GoalService`: `set`, `edit`, `pause`, `resume`, `complete`, `clear`) so `activation`
   (`armed`/`disarmed`), `goal/changed` effects, and `roundsStarted` stay exact, makes
@@ -205,7 +205,7 @@ so they are gated more strictly than the console routes:
 
 - 仅允许 `.html` / `.htm` 正规文件，大小上限 **2 MiB**（超限返回 `413`），跨站 `Origin` 拦截与工作区/staging 根目录限制（`isCrossOriginBlocked` / `isConfinementAllowed`）与 `/media` 完全对齐。
 - 响应强制 `Cache-Control: private, no-store`、`X-Content-Type-Options: nosniff` 及严格 CSP（`default-src 'none'; connect-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; script-src 'unsafe-inline' https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js`）。
-- 注入的 `postMessage` 桥接脚本对 `id` 参数做 `[a-zA-Z0-9_-]{1,64}` 清洗，前端渲染于 `<iframe sandbox="allow-scripts">` 且校验证 `ev.source === frame.contentWindow`。（测试：`test/transport/http-contract.test.ts`, `test/client/extended-ui-and-embed.test.ts`）
+- 注入的 `postMessage` 桥接脚本对 `id` 参数做 `[a-zA-Z0-9_-]{1,64}` 清洗，前端渲染于 `<iframe sandbox="allow-scripts">` 且校验证 `ev.source === frame.contentWindow`。（测试：`test/transport/http-contract-*.test.ts`, `test/client/extended-ui-and-embed.test.ts`）
 
 ## 多账号定制生态白名单同步（`src/features/ecosystem/sync.ts`, `inventory.ts`）
 

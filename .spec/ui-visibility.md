@@ -53,7 +53,7 @@
 - `test/client/client-dom.test.ts`：jsdom 挂载真实 `TranslateAction`，关闭时无按钮、
   重新开启后原地恢复。
 - `test/common/config-precedence.test.ts`：默认值、overrides/entry/env 各层与非法值回退。
-- `test/transport/http-contract.test.ts`：状态字段直出（含显式 `false`）、配置白名单放行。
+- `test/transport/http-contract-*.test.ts`：状态字段直出（含显式 `false`）、配置白名单放行。
 - `test/client/client-plugin-meta.test.ts` + `test/client/client-i18n.test.ts`：四语言字典
   键与占位符对齐。
 

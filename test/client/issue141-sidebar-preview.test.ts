@@ -38,5 +38,5 @@ test('issue #141: an encoded href normalizes to the same path the session cwd us
   // An encoded question mark belongs to the NAME, so it survives the split.
   assert.equal(normalizeLocalPath('C:\\a%3Fb\\x.md'), 'C:/a?b/x.md')
   // Query/hash suffixes are still dropped, and ./ prefixes trimmed.
-  assert.equal(normalizeLocalPath('../docs/x.md?v=1'), 'docs/x.md')
+  assert.equal(normalizeLocalPath('./docs/x.md?v=1'), 'docs/x.md')
 })

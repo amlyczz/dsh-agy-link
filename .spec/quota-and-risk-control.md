@@ -106,13 +106,13 @@ Google Cloud Code PA 使用 Proto3 JSON 序列化：当配额耗尽（`remaining
 
 ## 5. 验证锚点
 
-- `test/features/quota/quota.test.ts` / `test/domain/domain-quota.test.ts`：CLI `/usage` 主账号放行、REST 按需降级、Proto3 零值省略解析为 `0%`、消费级单一端点。
+- `test/features/quota/quota-*.test.ts` / `test/domain/domain-quota.test.ts`：CLI `/usage` 主账号放行、REST 按需降级、Proto3 零值省略解析为 `0%`、消费级单一端点。
 - `test/features/warmup/warmup.test.ts`：CLI 探针执行（零 `undici` 推理请求、零 `anthropic-beta` 伪造头）、`TOS_VIOLATION` 终态隔离与 `appeal_url` 保留、非终态错误不误标 `authRequired`。
 - `test/features/warmup/warmup-effort-throttle.test.ts`：claude/gpt 探针不带 `--effort`、学习列表前置生效、被拒后去 effort 重试一次并回写、账号间隔 30–120s、单轮探针上限与 `0` 关闭语义。
 - `test/features/warmup/warmup-auto-schedule.test.ts`：调度 tick 不与运行中的预热叠加、日锚点抖动 0–20 分钟且同日稳定、上游下架模型停车 24 小时（force 可越权）、锚点跨重载持久化、间隔下限 3h。
 - `test/provider/failure-classifier.test.ts` / `test/common/rate-limit-classify.test.ts`：CLI 文本 `TOS_VIOLATION` 识别与停止跨号连坐重试。
 - `test/features/quota/quota-availability.test.ts`：端点健康 TTL 与置后不丢弃、403 license 分类为 `no_license`、`quotaUnavailable` 写入/清除、`no_license` 后台摘要短路与手动强制探测、同出口有界并发 + 起点抖动、`refreshingAccounts()` 进度暴露。
-- `test/transport/http-contract.test.ts`：`/pool/refresh-quota` 的 `alreadyRunning` 重复点击回报、`/status` 的 `quotaRefreshing` 透出。
+- `test/transport/http-contract-*.test.ts`：`/pool/refresh-quota` 的 `alreadyRunning` 重复点击回报、`/status` 的 `quotaRefreshing` 透出。
 
 ## 独立 Argon 池的判据：组名或 bucket，绝不用 description（issue #130）
 
@@ -155,7 +155,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - **`accountHasArgon()` 仍保留 `google.models` 里出现 argon 模型的判据**：这不是 fallback，而是为了兼容旧版本已把 argon 模型行落盘进 `google.models` 的历史数据（以及 `agy` 把 argon 成员列进共享组 catalog 的形态）。
 - **argon 模型行只出现在 `argon` 族**：gemini 模型面板不再混入 argon 行。
 - `refresh.ts` 的 dedicated-group 记账**不变**：只有组名/bucket 名才是「独立池」证据；无组时清除 argon 行与冷却，因此「无组 + 有未读数」不会残留成假 argon 行。
-- 锚点：`test/domain/argon-independence.test.ts`；同时更新 `test/domain/account-models.test.ts`、`test/integration/phase2-backend.test.ts`、`test/features/quota/quota.test.ts` 中守着旧折叠行为的断言。
+- 锚点：`test/domain/argon-independence.test.ts`；同时更新 `test/domain/account-models.test.ts`、`test/integration/phase2-backend.test.ts`、`test/features/quota/quota-*.test.ts` 中守着旧折叠行为的断言。
 
 ## 额度汇总被拒绝的两类终态（issue #137）
 
