@@ -129,25 +129,18 @@ export function isAcpReportMessage(m: Message): boolean {
   return kind === ACP_REPORT_SOURCE_KIND
 }
 
+const SYNTHETIC_SOURCE_KINDS = new Set([
+  'time-context', 'skill-catalog', 'runtime-context', 'model-selection', 'system-reminder',
+  'dsh-session-title-llm', 'tool-goal', 'plan-mode', 'agent-instructions', 'synthetic',
+  'tmux-context', 'working-directory', 'ptc-mode', 'repeat-tool-reminder', 'user-approval',
+  'working-context', 'tool-catalog',
+])
+
 export function isSyntheticHarnessMessage(m: Message): boolean {
   if (isToolResultMessage(m)) return false
   const src = (m as unknown as ForeignSource).source
   const kind = src?.kind
   if (kind !== undefined && kind !== '' && kind !== 'user') {
-    if (
-      kind === 'time-context' ||
-      kind === 'skill-catalog' ||
-      kind === 'runtime-context' ||
-      kind === 'model-selection' ||
-      kind === 'system-reminder' ||
-      kind === 'dsh-session-title-llm' ||
-      kind === 'tool-goal' ||
-      kind === 'plan-mode' ||
-      kind === 'agent-instructions' ||
-      kind === 'synthetic'
-    ) {
-      return true
-    }
     // An ACP report is the agent's own narration of background work that
     // finished after the turn; dropping it would hide the outcome from a later
     // context rebuild (session reset / CLI fallback).
@@ -155,12 +148,15 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
     // dsh-agy-link's own background wake carries instruction text the model must
     // act on, so it is never stripped as context noise.
     if (kind === AGY_LINK_NOTICE_KIND) return false
+    // Memory recall snapshots must ride along without being stripped as noise (#158).
+    if (kind === MEMORY_SNAPSHOT_SOURCE_KIND) return false
+    if (SYNTHETIC_SOURCE_KINDS.has(kind)) return true
+    if (kind.endsWith('-working-context') || kind.endsWith('-tool-catalog')) return true
     // Each DSH context producer names its own kind (`plugin:memory`,
     // `plugin:recall`, …) — dsh-llm has no shared catch-all `plugin` kind.
     if (kind.startsWith('plugin:')) return true
-    if (kind === 'plugin' && (src as { form?: string }).form === 'snapshot') {
-      return true
-    }
+    const form = (src as { form?: string }).form
+    if (form === 'snapshot' || form === 'catalog') return true
   }
   const text = textOf(m).trim()
   if (
@@ -171,7 +167,8 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
     text.startsWith('[conversation so far]') ||
     text.startsWith('<goal_complete>') ||
     text.startsWith('<goal_blocked>') ||
-    text.startsWith('A skill is a reusable set of task-specific instructions')
+    text.startsWith('A skill is a reusable set of task-specific instructions') ||
+    (kind !== 'user' && text.startsWith('[Working Context:'))
   ) {
     return true
   }
