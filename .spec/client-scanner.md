@@ -30,6 +30,6 @@
 
 ## 4. 测试锚点
 
-- `test/client-dom.test.ts`：单趟幂等标记与流式文本增长后本地图片卡片恢复。
-- `test/modal-overlay-isolation.test.ts` / `test/scroll-guard.test.ts`：禁用 `backdrop-filter`/`contain`/`will-change`、滚动锁、非 passive 滚轮拦截、扫描器门控与卸载清理。
-- `test/issue153-client-locale.test.ts` / `test/extended-ui-and-embed.test.ts`：所有新增 DOM 增强器（`embed.ts`、`audio.ts`、`extended-cards.ts`、`image-card.ts`）通过 `i18n-bridge.ts` 遵循宿主语言且无硬编码中文，且 `installAgentEmbedRenderer()` 在缺省 `window.addEventListener` 环境下安全无操作退化。
+- `test/client/client-dom.test.ts`：单趟幂等标记与流式文本增长后本地图片卡片恢复。
+- `test/client/modal-overlay-isolation.test.ts` / `test/client/scroll-guard.test.ts`：禁用 `backdrop-filter`/`contain`/`will-change`、滚动锁、非 passive 滚轮拦截、扫描器门控与卸载清理。
+- `test/client/issue153-client-locale.test.ts` / `test/client/extended-ui-and-embed.test.ts`：所有新增 DOM 增强器（`embed.ts`、`audio.ts`、`extended-cards.ts`、`image-card.ts`）通过 `i18n-bridge.ts` 遵循宿主语言且无硬编码中文，且 `installAgentEmbedRenderer()` 在缺省 `window.addEventListener` 环境下安全无操作退化。

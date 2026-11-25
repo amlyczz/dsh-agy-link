@@ -60,10 +60,10 @@
 
 ## 5. 测试锚点
 
-- `test/failure-classifier.test.ts` / `test/auth-jitter.test.ts`：`disabled` 日志不误判权威鉴权失败、同秒日志偏移读取、MCP 错误不误判、HTTP/2 `GOAWAY` 与代理 `502/504` 归类为 `NETWORK`。
-- `test/auth-flag-heal.test.ts`：更新的配额快照证伪标记（零网络）、旧快照不算证据、无 `authMarkedAt` 的历史标记可被证伪、TOS/验证不被配额自愈、2m→30m 退避与「只复核过期标记」。
-- `test/credential-slot.test.ts` / `test/issue101-slot-failover.test.ts`：主槽网络超时不连坐隔离辅账号、带 `expiry` 唯一写入。
-- `test/pool-auth.test.ts`：主账号 OAuth 登录与导入清除 `authRequired` 并触发选择器同步。
+- `test/provider/failure-classifier.test.ts` / `test/host/auth-jitter.test.ts`：`disabled` 日志不误判权威鉴权失败、同秒日志偏移读取、MCP 错误不误判、HTTP/2 `GOAWAY` 与代理 `502/504` 归类为 `NETWORK`。
+- `test/host/auth-flag-heal.test.ts`：更新的配额快照证伪标记（零网络）、旧快照不算证据、无 `authMarkedAt` 的历史标记可被证伪、TOS/验证不被配额自愈、2m→30m 退避与「只复核过期标记」。
+- `test/host/credential-slot.test.ts` / `test/provider/issue101-slot-failover.test.ts`：主槽网络超时不连坐隔离辅账号、带 `expiry` 唯一写入。
+- `test/host/pool-auth.test.ts`：主账号 OAuth 登录与导入清除 `authRequired` 并触发选择器同步。
 
 ## 账号显示名（alias）与 `defaultAlias`（issue #152）
 
@@ -71,12 +71,12 @@
 - 用户手动改名必须走 `setAccountAlias()`——它同时 `trim()` 并置 `defaultAlias = false`，否则输入的名字永远不会被显示（界面仍在渲染生成标签）。
 - 路由 `POST /plugins/agy-link/pool/alias` 是唯一写入口：非空、长度上界、未知 id → 404。空名会让卡片无标签，因此服务端直接拒绝而不是静默接受。
 - **主账号换号自动重置旧别名（issue #152 第二部分）**：当 `systemHome` 主账号通过 `/agy auth` 重新登录为**不同 Google 邮箱**时，`resetAccountIdentity(id, email, true)` 同步重置自定义旧别名并恢复 `defaultAlias = true`，防止卡片仍展示上一个账号的名称。
-- 锚点：`test/issue152-alias-edit.test.ts`、`test/slice3-ssh-tier-143-145-152.test.ts`、`test/http-contract.test.ts`（路由表面登记）。
+- 锚点：`test/integration/issue152-alias-edit.test.ts`、`test/integration/slice3-ssh-tier-143-145-152.test.ts`、`test/transport/http-contract.test.ts`（路由表面登记）。
 
 ## 6. 三端免全局钥匙串隔离（`SSH_CONNECTION`）与外部独立登录保护（issue #145）
 
 - **`SSH_CONNECTION` 隔离（`agy >= 1.5`）**：`isolatedHomeEnv()` 为所有带独立 `dir` 的隔离池账号注入 `SSH_CONNECTION="127.0.0.1 0 127.0.0.1 0"`，`agy 1.5+` 将其识别为远程 SSH 会话并直接读写各自 `dir/.gemini/antigravity-cli/antigravity-oauth-token`，三端（含 Windows）绕开全局共享钥匙串/凭据管理器。Windows 下当 `supportsSshIsolation(agyVersion)` 成立时，隔离辅账号免除全局凭据槽排队与 ACP 切号驱逐，且 `QuotaService.readCliUsageFamilies` 可直接为隔离账号（含免费账号，issue #143）执行官方 `agy -p /usage`。
-- **外部独立登录保护（issue #145，`respectExternalSignIn`）**：`src/domain/credentials/external-guard.ts` 追踪插件上次写入 Windows 凭据槽的指纹（`.last-installed-slot.json`）；当配置 `respectExternalSignIn: true` 且检测到用户在独立 `agy` 终端中重新登录了未识别的外部账号时，租约获取前拒绝覆盖并在租约释放后保留外部登录。锚点：`test/slice3-ssh-tier-143-145-152.test.ts`。
+- **外部独立登录保护（issue #145，`respectExternalSignIn`）**：`src/domain/credentials/external-guard.ts` 追踪插件上次写入 Windows 凭据槽的指纹（`.last-installed-slot.json`）；当配置 `respectExternalSignIn: true` 且检测到用户在独立 `agy` 终端中重新登录了未识别的外部账号时，租约获取前拒绝覆盖并在租约释放后保留外部登录。锚点：`test/integration/slice3-ssh-tier-143-145-152.test.ts`。
 
 ## 隔离账号不得回落到机器级 keyring（2026-11-23）
 
@@ -94,7 +94,7 @@
    - 判定函数与探针分离：`classifyIdentity(evidence, expected, expectedIsolated)` 返回 `ok | unknown | unproven | mismatch`，`unknown`（日志没点名）永远是「不可判定」，不得当成 mismatch。
   3. **失败可诊断**：`classifyExitOrFallback()` 在 stderr/结果为空时用 `rawErrText` 兜底，`agy exited with code 1` 会附带 ACP 的真实原因（如 `ACP prompt returned an empty turn: ...`），不再丢失。
   4. **AUTH 不回退 CLI**：`retryOnCli` 排除 `Err.AUTH`；身份不匹配直接 `settleEarlyFailure(..., Err.AUTH)`。CLI 回退只对「transport 本身死掉」有意义，对凭据/身份问题只会重复烧同一份坏凭据。
-- 锚点：`test/acp-identity.test.ts`（含 `unproven` 分支）、`test/auth-flag-heal.test.ts`（活证据自愈 + 退避节奏）、`test/auth-flag.test.ts`（`accountAuthState` 四态）、`test/failure-classifier.test.ts`（PROCESS_EXIT 保留 rawErrText）。
+- 锚点：`test/features/acp/acp-identity.test.ts`（含 `unproven` 分支）、`test/host/auth-flag-heal.test.ts`（活证据自愈 + 退避节奏）、`test/host/auth-flag.test.ts`（`accountAuthState` 四态）、`test/provider/failure-classifier.test.ts`（PROCESS_EXIT 保留 rawErrText）。
 
 ## 7. 外部进程凭据租约（External credential lease）
 
@@ -111,4 +111,4 @@
 - **鉴权**：`token` 为每次插件启动的 256 位随机值（`newLeaseToken()`），只写在发现文件里。所有 `/lease*` 路由先用 `hasLeaseBearer()`（`timingSafeEqual`）校验 `Authorization: Bearer <token>`，不符即 `401 unauthorized`，再做来源与方法检查。理由：租约交出账号的 env（令牌目录）并预支其配额，回环地址只说明同机、不说明可信。没有端口就没有发现文件，也就没有人能租号。
 - **并发刷新**：同一账号的多个租约（以及插件自己的 ACP/CLI 运行）经 `prepareIsolatedCliToken` → `getValidAccessToken` 共用一个按账号的在途 Promise（`tokenRefreshInFlight`），同一时刻只有一次读取/刷新；刷新结果经 `writeFileAtomicSync` 原子改名写盘，不会写坏令牌文件。
 - **非 Windows**：取槽为空操作（`undefined` 租约），选号、TTL 与结算照常。测试运行（`NODE_TEST_CONTEXT`）下默认取槽同样为空操作，永不触碰真实凭据管理器。
-- 锚点：`test/external-lease.test.ts`、`test/lease-routes.test.ts`、`test/run-settlement.test.ts`。
+- 锚点：`test/host/external-lease.test.ts`、`test/transport/lease-routes.test.ts`、`test/provider/run-settlement.test.ts`。

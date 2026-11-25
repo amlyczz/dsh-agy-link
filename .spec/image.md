@@ -125,9 +125,9 @@ agy 1.5.4 把生成图写到：
 
 ## 10. 测试锚点
 
-- `test/image.test.ts`：比例解析、文件名规整、提示词参数与回执契约、`IMAGE_PATH/IMAGE_ERROR` 解析、文本路径提取（不误抓 URL）、PNG/JPEG/GIF/WebP 头解析、比例容差、brain 目录发现、显式路径优先、`--out` 复制、地区错误→重试→`IMAGE_REGION_UNSUPPORTED`、比例不符、非图片产物、缺产物、参数先校验不 spawn、`--effort` 被拒后降级、CLI argv、`resolveImageTarget` 默认优先 `gemini-4-hydrogen` + `medium`。
-- `test/slash-bridge-and-image-tool.test.ts`：`agy_image` 工具执行与校验失败抛出、`/agy image` 命令引号/参数分词与错误提示。
-- `test/adapter.test.ts`：`purpose:'image'` 的 prompt 原样、权限模式不被强制 plan、`agyOnEvent/agyOnAccount` 回调。
+- `test/features/image/image.test.ts`：比例解析、文件名规整、提示词参数与回执契约、`IMAGE_PATH/IMAGE_ERROR` 解析、文本路径提取（不误抓 URL）、PNG/JPEG/GIF/WebP 头解析、比例容差、brain 目录发现、显式路径优先、`--out` 复制、地区错误→重试→`IMAGE_REGION_UNSUPPORTED`、比例不符、非图片产物、缺产物、参数先校验不 spawn、`--effort` 被拒后降级、CLI argv、`resolveImageTarget` 默认优先 `gemini-4-hydrogen` + `medium`。
+- `test/features/image/slash-bridge-and-image-tool.test.ts`：`agy_image` 工具执行与校验失败抛出、`/agy image` 命令引号/参数分词与错误提示。
+- `test/provider/adapter.test.ts`：`purpose:'image'` 的 prompt 原样、权限模式不被强制 plan、`agyOnEvent/agyOnAccount` 回调。
 - 真机：`node dist/cli-image.mjs -p … -a 16:9 -o /tmp/x.jpg`（会花额度）。
 
 ## 11. 已知取舍

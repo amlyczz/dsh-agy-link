@@ -36,6 +36,6 @@
 
 ## 3. 测试锚点
 
-- `test/route-guard.test.ts`：`runRoute` 异常 → 500、挂起 → 504、单次响应写头保护、常量顺序与 `timedSignal` 触发。
-- `test/http-contract.test.ts`：`refresh-quota` 秒回、连点去重与 `catalog.warmAccounts` 非阻塞解耦；`/pool/warmup` 异步秒回、`warmupInFlight` 去重与 `/status.warmupState` 透出；长耗时 `/translate` 正常返回 200。
-- `test/client-api.test.ts`：所有客户端请求均带 `AbortSignal`。
+- `test/transport/route-guard.test.ts`：`runRoute` 异常 → 500、挂起 → 504、单次响应写头保护、常量顺序与 `timedSignal` 触发。
+- `test/transport/http-contract.test.ts`：`refresh-quota` 秒回、连点去重与 `catalog.warmAccounts` 非阻塞解耦；`/pool/warmup` 异步秒回、`warmupInFlight` 去重与 `/status.warmupState` 透出；长耗时 `/translate` 正常返回 200。
+- `test/client/client-api.test.ts`：所有客户端请求均带 `AbortSignal`。

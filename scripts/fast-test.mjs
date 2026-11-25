@@ -14,58 +14,58 @@ const ROOT = resolve(import.meta.dirname, '..')
 const TEST_DIR = join(ROOT, 'test')
 
 const COMPONENT_TEST_MAP = {
-  'src/index.ts': ['test/lifecycle.test.ts', 'test/services.test.ts'],
-  'src/host/services.ts': ['test/services.test.ts', 'test/http-contract.test.ts'],
-  'src/host/adapter.ts': ['test/adapter.test.ts'],
-  'src/host/models.ts': ['test/models.test.ts', 'test/model-support-ineligibility.test.ts'],
-  'src/host/quota.ts': ['test/quota.test.ts', 'test/domain-quota.test.ts'],
-  'src/host/pool.ts': ['test/pool.test.ts', 'test/pool-auth.test.ts'],
-  'src/host/pool-auth.ts': ['test/pool-auth.test.ts', 'test/http-contract.test.ts'],
-  'src/host/oauth.ts': ['test/pool-auth.test.ts', 'test/quota.test.ts'],
-  'src/host/sessions.ts': ['test/sessions.test.ts'],
-  'src/host/runner.ts': ['test/cross-platform.test.ts', 'test/proxy-keychain.test.ts'],
-  'src/host/boot-hygiene.ts': ['test/boot-hygiene.test.ts'],
-  'src/host/credential-slot.ts': ['test/credential-slot.test.ts', 'test/issue101-slot-failover.test.ts'],
-  'src/host/agy-log.ts': ['test/auth-jitter.test.ts', 'test/failure-classifier.test.ts'],
-  'src/host/agy-usage.ts': ['test/agy-usage.test.ts'],
-  'src/host/parser.ts': ['test/parser.test.ts', 'test/mapper.test.ts'],
-  'src/host/mcp-bridge.ts': ['test/mcp-bridge-registry-and-agent.test.ts', 'test/mcp-ready-disposal.test.ts'],
-  'src/host/media-route.ts': ['test/media-route.test.ts'],
-  'src/host/recording.ts': ['test/adapter.test.ts'],
-  'src/host/oneshot.ts': ['test/v02.test.ts', 'test/quota-failover-alignment.test.ts', 'test/slash-bridge-and-image-tool.test.ts', 'test/btw.test.ts'],
-  'src/host/btw-command.ts': ['test/btw.test.ts'],
-  'src/client/btw.ts': ['test/btw-client.test.ts'],
-  'src/client/btw-card.ts': ['test/btw-client.test.ts'],
-  'src/common/config.ts': ['test/config-precedence.test.ts'],
-  'src/common/pool-types.ts': ['test/models.test.ts', 'test/model-support-ineligibility.test.ts', 'test/pool.test.ts'],
-  'src/common/timeouts.ts': ['test/route-guard.test.ts', 'test/client-api.test.ts'],
+  'src/index.ts': ['test/integration/lifecycle.test.ts', 'test/host/services.test.ts'],
+  'src/host/services.ts': ['test/host/services.test.ts', 'test/transport/http-contract.test.ts'],
+  'src/host/adapter.ts': ['test/provider/adapter.test.ts'],
+  'src/host/models.ts': ['test/host/models.test.ts', 'test/domain/model-support-ineligibility.test.ts'],
+  'src/host/quota.ts': ['test/features/quota/quota.test.ts', 'test/domain/domain-quota.test.ts'],
+  'src/host/pool.ts': ['test/domain/pool.test.ts', 'test/host/pool-auth.test.ts'],
+  'src/host/pool-auth.ts': ['test/host/pool-auth.test.ts', 'test/transport/http-contract.test.ts'],
+  'src/host/oauth.ts': ['test/host/pool-auth.test.ts', 'test/features/quota/quota.test.ts'],
+  'src/host/sessions.ts': ['test/host/sessions.test.ts'],
+  'src/host/runner.ts': ['test/runtime/cross-platform.test.ts', 'test/runtime/proxy-keychain.test.ts'],
+  'src/host/boot-hygiene.ts': ['test/runtime/boot-hygiene.test.ts'],
+  'src/host/credential-slot.ts': ['test/host/credential-slot.test.ts', 'test/provider/issue101-slot-failover.test.ts'],
+  'src/host/agy-log.ts': ['test/host/auth-jitter.test.ts', 'test/provider/failure-classifier.test.ts'],
+  'src/host/agy-usage.ts': ['test/host/agy-usage.test.ts'],
+  'src/host/parser.ts': ['test/host/parser.test.ts', 'test/provider/mapper.test.ts'],
+  'src/host/mcp-bridge.ts': ['test/host/mcp-bridge-registry-and-agent.test.ts', 'test/host/mcp-ready-disposal.test.ts'],
+  'src/host/media-route.ts': ['test/transport/media-route.test.ts'],
+  'src/host/recording.ts': ['test/provider/adapter.test.ts'],
+  'src/host/oneshot.ts': ['test/integration/v02.test.ts', 'test/features/quota/quota-failover-alignment.test.ts', 'test/features/image/slash-bridge-and-image-tool.test.ts', 'test/features/btw/btw.test.ts'],
+  'src/host/btw-command.ts': ['test/features/btw/btw.test.ts'],
+  'src/client/btw.ts': ['test/client/btw-client.test.ts'],
+  'src/client/btw-card.ts': ['test/client/btw-client.test.ts'],
+  'src/common/config.ts': ['test/common/config-precedence.test.ts'],
+  'src/common/pool-types.ts': ['test/host/models.test.ts', 'test/domain/model-support-ineligibility.test.ts', 'test/domain/pool.test.ts'],
+  'src/common/timeouts.ts': ['test/transport/route-guard.test.ts', 'test/client/client-api.test.ts'],
 }
 
 const PREFIX_TEST_MAP = [
-  ['src/common/types/', ['test/failure-classifier.test.ts', 'test/rate-limit-classify.test.ts', 'test/network-backoff.test.ts']],
-  ['src/domain/accounts/', ['test/pool.test.ts', 'test/model-support-ineligibility.test.ts']],
-  ['src/domain/credentials/', ['test/credential-slot.test.ts', 'test/credential-backup.test.ts', 'test/issue101-slot-failover.test.ts']],
-  ['src/domain/quota/', ['test/domain-quota.test.ts', 'test/quota.test.ts', 'test/status-argon-filter.test.ts']],
-  ['src/features/quota/', ['test/quota.test.ts', 'test/domain-quota.test.ts']],
-  ['src/features/warmup/', ['test/warmup.test.ts', 'test/http-contract.test.ts']],
-  ['src/features/translation/', ['test/translate.test.ts']],
-  ['src/features/btw/', ['test/btw.test.ts']],
-  ['src/features/image/', ['test/image.test.ts', 'test/image-cli.test.ts']],
-  ['src/features/ecosystem/', ['test/ecosystem.test.ts', 'test/http-contract.test.ts']],
-  ['src/features/subagent/', ['test/subagent-tracker.test.ts']],
-  ['src/provider/mapper/', ['test/mapper.test.ts']],
-  ['src/provider/mirror/', ['test/mirror-tool.test.ts', 'test/run-code-view.test.ts']],
-  ['src/provider/', ['test/adapter.test.ts', 'test/failure-classifier.test.ts', 'test/models.test.ts', 'test/host-branches.test.ts']],
-  ['src/runtime/agy/db/', ['test/agy-db.test.ts', 'test/agy-db-extract.test.ts']],
-  ['src/runtime/agy/', ['test/cross-platform.test.ts', 'test/proxy-keychain.test.ts', 'test/background-task-hang.test.ts', 'test/updater-preempt.test.ts']],
-  ['src/runtime/net/', ['test/account-env.test.ts']],
-  ['src/transport/http/', ['test/http-contract.test.ts', 'test/route-guard.test.ts', 'test/media-route.test.ts']],
-  ['src/host/commands/', ['test/commands.test.ts', 'test/tsl-command.test.ts', 'test/slash-bridge-and-image-tool.test.ts', 'test/ecosystem.test.ts']],
-  ['src/client/images/', ['test/client-dom.test.ts', 'test/media-route.test.ts']],
-  ['src/client/toolview/', ['test/toolview.test.ts', 'test/run-code-view.test.ts']],
-  ['src/client/sections/', ['test/client-render.test.ts', 'test/client-account-card-style.test.ts', 'test/catalog-rows.test.ts']],
-  ['src/client/hooks/', ['test/client-api.test.ts', 'test/client-render.test.ts']],
-  ['src/client/ui/', ['test/modal-overlay-isolation.test.ts', 'test/client-render.test.ts']],
+  ['src/common/types/', ['test/provider/failure-classifier.test.ts', 'test/common/rate-limit-classify.test.ts', 'test/common/network-backoff.test.ts']],
+  ['src/domain/accounts/', ['test/domain/pool.test.ts', 'test/domain/model-support-ineligibility.test.ts']],
+  ['src/domain/credentials/', ['test/host/credential-slot.test.ts', 'test/host/credential-backup.test.ts', 'test/provider/issue101-slot-failover.test.ts']],
+  ['src/domain/quota/', ['test/domain/domain-quota.test.ts', 'test/features/quota/quota.test.ts', 'test/transport/status-argon-filter.test.ts']],
+  ['src/features/quota/', ['test/features/quota/quota.test.ts', 'test/domain/domain-quota.test.ts']],
+  ['src/features/warmup/', ['test/features/warmup/warmup.test.ts', 'test/transport/http-contract.test.ts']],
+  ['src/features/translation/', ['test/features/translation/translate.test.ts']],
+  ['src/features/btw/', ['test/features/btw/btw.test.ts']],
+  ['src/features/image/', ['test/features/image/image.test.ts', 'test/features/image/image-cli.test.ts']],
+  ['src/features/ecosystem/', ['test/features/ecosystem/ecosystem.test.ts', 'test/transport/http-contract.test.ts']],
+  ['src/features/subagent/', ['test/features/subagent/subagent-tracker.test.ts']],
+  ['src/provider/mapper/', ['test/provider/mapper.test.ts']],
+  ['src/provider/mirror/', ['test/provider/mirror-tool.test.ts', 'test/client/run-code-view.test.ts']],
+  ['src/provider/', ['test/provider/adapter.test.ts', 'test/provider/failure-classifier.test.ts', 'test/host/models.test.ts', 'test/host/host-branches.test.ts']],
+  ['src/runtime/agy/db/', ['test/runtime/agy-db.test.ts', 'test/runtime/agy-db-extract.test.ts']],
+  ['src/runtime/agy/', ['test/runtime/cross-platform.test.ts', 'test/runtime/proxy-keychain.test.ts', 'test/features/background/background-task-hang.test.ts', 'test/runtime/updater-preempt.test.ts']],
+  ['src/runtime/net/', ['test/runtime/account-env.test.ts']],
+  ['src/transport/http/', ['test/transport/http-contract.test.ts', 'test/transport/route-guard.test.ts', 'test/transport/media-route.test.ts']],
+  ['src/host/commands/', ['test/integration/commands.test.ts', 'test/features/translation/tsl-command.test.ts', 'test/features/image/slash-bridge-and-image-tool.test.ts', 'test/features/ecosystem/ecosystem.test.ts']],
+  ['src/client/images/', ['test/client/client-dom.test.ts', 'test/transport/media-route.test.ts']],
+  ['src/client/toolview/', ['test/client/toolview.test.ts', 'test/client/run-code-view.test.ts']],
+  ['src/client/sections/', ['test/client/client-render.test.ts', 'test/client/client-account-card-style.test.ts', 'test/client/catalog-rows.test.ts']],
+  ['src/client/hooks/', ['test/client/client-api.test.ts', 'test/client/client-render.test.ts']],
+  ['src/client/ui/', ['test/client/modal-overlay-isolation.test.ts', 'test/client/client-render.test.ts']],
 ]
 
 function getGitChangedFiles() {
@@ -85,8 +85,26 @@ function getGitChangedFiles() {
   return Array.from(files)
 }
 
+// Tests live in domain subdirectories (test/<domain>/<name>.test.ts), mirroring
+// the source layering. Walk the tree instead of reading one flat directory.
+function listAllTests(dir = TEST_DIR, prefix = 'test') {
+  const out = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = `${prefix}/${entry.name}`
+    if (entry.isDirectory()) out.push(...listAllTests(join(dir, entry.name), rel))
+    else if (entry.name.endsWith('.test.ts')) out.push(rel)
+  }
+  return out
+}
+
+/** Locate a test by bare basename anywhere under test/ (domain-agnostic). */
+function findByBasename(allTests, name) {
+  const base = basename(name)
+  return allTests.find((t) => t.endsWith(`/${base}`)) ?? null
+}
+
 function resolveTargetTests(args) {
-  const allTests = readdirSync(TEST_DIR).filter((f) => f.endsWith('.test.ts')).map((f) => `test/${f}`)
+  const allTests = listAllTests()
   const targets = new Set()
 
   if (args.length > 0) {
@@ -119,8 +137,8 @@ function resolveTargetTests(args) {
     }
     if (file.startsWith('src/')) {
       const base = basename(file).replace(/\.tsx?$/, '')
-      const guess = `test/${base}.test.ts`
-      if (existsSync(join(ROOT, guess))) targets.add(guess)
+      const guess = findByBasename(allTests, `${base}.test.ts`)
+      if (guess !== null) targets.add(guess)
     }
   }
 

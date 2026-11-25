@@ -19,3 +19,4 @@
 | [subagent-activity.md](subagent-activity.md) | 子代理活动镜像：`transcript.jsonl` 增量 tail、去重与看门狗保活 | 修改 `SubagentTracker` 或子代理思考流展示时 |
 | [client-scanner.md](client-scanner.md) | 客户端 DOM 扫描预算、流式指纹可恢复性与全屏控制台浮层防闪屏契约 | 修改前端 DOM 扫描器、图片增强、样式或控制台弹层时 |
 | [ui-visibility.md](ui-visibility.md) | UI 可见性开关：会话头徽标与单条翻译按钮的 opt-out 语义及窄屏降级 | 修改顶栏状态胶囊或设置页界面开关时 |
+| [testing.md](testing.md) | **测试策略**：两级双环节奏、领域目录划分规则、单文件预算与门禁命令 | 改测试结构、加目录、调 CI 门禁或改 `test:fast` 映射时 |

@@ -48,13 +48,13 @@
 
 ## 验证
 
-- `test/ui-visibility.test.ts`：`isUiVisible` 的 opt-out 边界、SSR 渲染
+- `test/client/ui-visibility.test.ts`：`isUiVisible` 的 opt-out 边界、SSR 渲染
   真实 `createSessionStatus` 在开/关/恢复三种状态下的输出。
-- `test/client-dom.test.ts`：jsdom 挂载真实 `TranslateAction`，关闭时无按钮、
+- `test/client/client-dom.test.ts`：jsdom 挂载真实 `TranslateAction`，关闭时无按钮、
   重新开启后原地恢复。
-- `test/config-precedence.test.ts`：默认值、overrides/entry/env 各层与非法值回退。
-- `test/http-contract.test.ts`：状态字段直出（含显式 `false`）、配置白名单放行。
-- `test/client-plugin-meta.test.ts` + `test/client-i18n.test.ts`：四语言字典
+- `test/common/config-precedence.test.ts`：默认值、overrides/entry/env 各层与非法值回退。
+- `test/transport/http-contract.test.ts`：状态字段直出（含显式 `false`）、配置白名单放行。
+- `test/client/client-plugin-meta.test.ts` + `test/client/client-i18n.test.ts`：四语言字典
   键与占位符对齐。
 
 ## 文件链接必须在右侧边栏预览而不是系统程序（issue #141）
@@ -65,7 +65,7 @@
 - 正确顺序：先在 `entries()` 里按 `id` 查；没有 `entries()` 时回退 `get('text')`，**并核对其返回的 `id`**，避免把别的 text 标签当成预览。
 - `normalizeLocalPath()` 必须**先**拆掉 `?#` 后缀再 `decodeURIComponent`（否则名字里的 `%3F` 会被当作查询串），解码失败保留原值；随后统一 `\` → `/`。否则被编码的 href 与会话 cwd 对不上，地址还会被二次编码。
 - 客户端测试的 mock 必须模拟真实契约（`get(kind)` + `entries()` 带 id）。用 id 键 mock `get()` 会让这段 bug 通过 CI。
-- 锚点：`test/issue141-sidebar-preview.test.ts`、`test/client-dom.test.ts`。
+- 锚点：`test/client/issue141-sidebar-preview.test.ts`、`test/client/client-dom.test.ts`。
 
 ## 客户端文案必须走 locale，注入文本尤其（issue #153）
 
@@ -78,7 +78,7 @@
 - **统一入口**：`src/client/i18n-bridge.ts` 的 `translateOr(key, englishFallback, params)`。客户端 DOM 增强器（图片 chip、灯箱、mermaid、压缩卡片、问题卡片、决策芯片）不是 React 组件，多数没有自己的 `ctx`，全部读 `index.ts` 里一次性 `bindTranslator(ctx)` 建立的绑定；没有绑定（SSR/测试）时输出英文兜底，**绝不输出裸 key**。
 - **不要翻译用于「识别」的文本**：例如 mermaid 里 `代码块` 是 DSH 的占位 banner 文案，用来判断 banner 是否携带真实语言标签；翻译它等于破坏检测逻辑。
 - **不要用 `document.documentElement.lang` 代替 locale 绑定**：那是 DSH 页面语言，与插件 locale 可能不一致。
-- 锚点：`test/issue153-decision-locale.test.ts`、`test/issue153-client-locale.test.ts`（源码无中文字面量 + 四语言键齐全 + 兜底语义）、`test/client-dom.test.ts`（插入 payload 已本地化）。
+- 锚点：`test/client/issue153-decision-locale.test.ts`、`test/client/issue153-client-locale.test.ts`（源码无中文字面量 + 四语言键齐全 + 兜底语义）、`test/client/client-dom.test.ts`（插入 payload 已本地化）。
 
 ## 子代理可见性：顶栏下拉，复用 job 面板的「外观」而非 job 账本（2026-11-23）
 
@@ -90,4 +90,4 @@ agy 的协同专员（`Builder N`、`Concept Artist` 等）此前只能作为滚
   2. 每个 owned job 结算会向「该会话的 agent」发 `background job <id> (<kind>: <label>) finished …` —— 这里 agent 就是 agy，会给它注入一条它没发起过的通知，并按 `user/message` 记进会话。
   3. 换成 unowned 虽无通知，但所有会话共享可见、任何会话可停止，反而更糟。
 - **结论**：复用 DSH 的**视觉与交互**（计数控件 + 分区 + 耗时），不复用 job 注册通道 → 零通知、零聊天气泡、无 10 个上限、按会话精确。
-- 锚点：`test/subagent-panel.test.ts`（分组、耗时格式、分区/折叠/空态渲染）、`test/subagent-live.test.ts`（按会话注册与聚合）。
+- 锚点：`test/client/subagent-panel.test.ts`（分组、耗时格式、分区/折叠/空态渲染）、`test/features/subagent/subagent-live.test.ts`（按会话注册与聚合）。

@@ -82,8 +82,8 @@ Google Cloud Code / Antigravity 风控网关会联合校验 TLS 指纹（Go `cry
 - `loadCodeAssist`（cloudcode-pa）返回的是 **Gemini Code Assist** 的档位，不是 Antigravity 订阅：实测所有账号都是 `currentTier.id = "free-tier"`、`allowedTiers = [free-tier*, standard-tier]`，与「能不能跑 Argon」无关。Antigravity 真实档位在 `google.gca.aicode.v1main.FetchLicensesResponse.userTier`（binary 内含 `G1_PRO_TIER` / `G1_ULTRA_TIER` / `G1_ULTRA_LITE_TIER` / `gcp-ge-ultra-tier` 等），但 `:fetchLicenses` 在 `cloudcode-pa` / `aicode.googleapis.com` 两个主机上都 404（需要 project/parent 上下文），**当前不探测**。
 - 结论：**没有可证的 Ultra 信号时不得声称 Ultra**。付费账号（有 5h 窗口或独立 Argon 桶）一律呈现 **Pro**——既是常见套餐，也是保守答案；`isStalePlanTier('ultra')` 恒为 `true`，持久化的 Ultra 会被重算掉。真要显示 Ultra，必须补一条许可证读取（`userTier`）或用户手动指定档位，而不是从配额数据猜。
 - **用户手动指定档位已落地**（`planTierOverride` + `/agy plan <id|alias> <pro|ultra|free|enterprise|auto>`，`src/host/commands/pool.ts`）：`resolveAccountPlanTier` 先看这个 pin，再用推断；pin 存在 `pool.json` 的账号上，**不受每小时配额刷新影响**（刷新只写 `planTier`，不碰 pin）。`auto` 清除 pin。这是目前唯一诚实的 Ultra 来源，UI 上不额外标注（命令会回报当前状态）。
-- 锚点：`test/plan-tier-and-duplicates.test.ts`（description 枚举形态 → Pro；无证据时 stored Ultra 会被重算）。
-- 锚点：`test/quota-weekly-window-filing.test.ts`。
+- 锚点：`test/domain/plan-tier-and-duplicates.test.ts`（description 枚举形态 → Pro；无证据时 stored Ultra 会被重算）。
+- 锚点：`test/features/quota/quota-weekly-window-filing.test.ts`。
 
 ## 3. Proto3 零值省略与耗尽态解析
 
@@ -106,13 +106,13 @@ Google Cloud Code PA 使用 Proto3 JSON 序列化：当配额耗尽（`remaining
 
 ## 5. 验证锚点
 
-- `test/quota.test.ts` / `test/domain-quota.test.ts`：CLI `/usage` 主账号放行、REST 按需降级、Proto3 零值省略解析为 `0%`、消费级单一端点。
-- `test/warmup.test.ts`：CLI 探针执行（零 `undici` 推理请求、零 `anthropic-beta` 伪造头）、`TOS_VIOLATION` 终态隔离与 `appeal_url` 保留、非终态错误不误标 `authRequired`。
-- `test/warmup-effort-throttle.test.ts`：claude/gpt 探针不带 `--effort`、学习列表前置生效、被拒后去 effort 重试一次并回写、账号间隔 30–120s、单轮探针上限与 `0` 关闭语义。
-- `test/warmup-auto-schedule.test.ts`：调度 tick 不与运行中的预热叠加、日锚点抖动 0–20 分钟且同日稳定、上游下架模型停车 24 小时（force 可越权）、锚点跨重载持久化、间隔下限 3h。
-- `test/failure-classifier.test.ts` / `test/rate-limit-classify.test.ts`：CLI 文本 `TOS_VIOLATION` 识别与停止跨号连坐重试。
-- `test/quota-availability.test.ts`：端点健康 TTL 与置后不丢弃、403 license 分类为 `no_license`、`quotaUnavailable` 写入/清除、`no_license` 后台摘要短路与手动强制探测、同出口有界并发 + 起点抖动、`refreshingAccounts()` 进度暴露。
-- `test/http-contract.test.ts`：`/pool/refresh-quota` 的 `alreadyRunning` 重复点击回报、`/status` 的 `quotaRefreshing` 透出。
+- `test/features/quota/quota.test.ts` / `test/domain/domain-quota.test.ts`：CLI `/usage` 主账号放行、REST 按需降级、Proto3 零值省略解析为 `0%`、消费级单一端点。
+- `test/features/warmup/warmup.test.ts`：CLI 探针执行（零 `undici` 推理请求、零 `anthropic-beta` 伪造头）、`TOS_VIOLATION` 终态隔离与 `appeal_url` 保留、非终态错误不误标 `authRequired`。
+- `test/features/warmup/warmup-effort-throttle.test.ts`：claude/gpt 探针不带 `--effort`、学习列表前置生效、被拒后去 effort 重试一次并回写、账号间隔 30–120s、单轮探针上限与 `0` 关闭语义。
+- `test/features/warmup/warmup-auto-schedule.test.ts`：调度 tick 不与运行中的预热叠加、日锚点抖动 0–20 分钟且同日稳定、上游下架模型停车 24 小时（force 可越权）、锚点跨重载持久化、间隔下限 3h。
+- `test/provider/failure-classifier.test.ts` / `test/common/rate-limit-classify.test.ts`：CLI 文本 `TOS_VIOLATION` 识别与停止跨号连坐重试。
+- `test/features/quota/quota-availability.test.ts`：端点健康 TTL 与置后不丢弃、403 license 分类为 `no_license`、`quotaUnavailable` 写入/清除、`no_license` 后台摘要短路与手动强制探测、同出口有界并发 + 起点抖动、`refreshingAccounts()` 进度暴露。
+- `test/transport/http-contract.test.ts`：`/pool/refresh-quota` 的 `alreadyRunning` 重复点击回报、`/status` 的 `quotaRefreshing` 透出。
 
 ## 独立 Argon 池的判据：组名或 bucket，绝不用 description（issue #130）
 
@@ -123,7 +123,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - 判据只有两个：**组 `displayName` 含 argon**，或 **bucket 的 `bucketId`/`displayName` 含 argon**（如 `argon-weekly`）。`summaryHasArgonGroup()` 与 `ingestSummaryGroups()` 的 `isArgon` 都遵守此规则。
 - `description` 仍可参与**正向**家族归类（含 gemini → google），但不得用于判定「独立池」。
 - 「Argon 组不存在」**不再**意味着它与 Gemini 共用一池；见下一节，缺失即未知，绝不继承。
-- 测试：`test/domain-quota.test.ts`（description 枚举形态必须归 google 且保留 weekly；`Gemini 4 Argon` 组名 与 `argon-weekly` bucket 仍识别）。
+- 测试：`test/domain/domain-quota.test.ts`（description 枚举形态必须归 google 且保留 weekly；`Gemini 4 Argon` 组名 与 `argon-weekly` bucket 仍识别）。
 
 ## Argon 与 Gemini 是两本独立配额账（禁止任何跨族 fallback）
 
@@ -155,7 +155,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - **`accountHasArgon()` 仍保留 `google.models` 里出现 argon 模型的判据**：这不是 fallback，而是为了兼容旧版本已把 argon 模型行落盘进 `google.models` 的历史数据（以及 `agy` 把 argon 成员列进共享组 catalog 的形态）。
 - **argon 模型行只出现在 `argon` 族**：gemini 模型面板不再混入 argon 行。
 - `refresh.ts` 的 dedicated-group 记账**不变**：只有组名/bucket 名才是「独立池」证据；无组时清除 argon 行与冷却，因此「无组 + 有未读数」不会残留成假 argon 行。
-- 锚点：`test/argon-independence.test.ts`；同时更新 `test/account-models.test.ts`、`test/phase2-backend.test.ts`、`test/quota.test.ts` 中守着旧折叠行为的断言。
+- 锚点：`test/domain/argon-independence.test.ts`；同时更新 `test/domain/account-models.test.ts`、`test/integration/phase2-backend.test.ts`、`test/features/quota/quota.test.ts` 中守着旧折叠行为的断言。
 
 ## 额度汇总被拒绝的两类终态（issue #137）
 
@@ -177,7 +177,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
   - 无 5h 证据 → 「免费账号 · 仅限周配额（汇总接口被拒绝）」。
   - **有 5h 证据 → 绝不能写「免费账号」**：该账号同一张卡片上还挂着 Pro 徽章和 5 小时额度条，文案与事实互相打脸（2026-11-23 实测 4/7 账号出现）。改用中性的「汇总接口被拒绝（403 PERMISSION_DENIED）· 5 小时/周汇总未更新」。
   - 判定依据必须与 `resolveAccountPlanTier` 一致（`!ev.has5h`），不得另起一套。
-- 锚点：`test/issue137-free-tier-summary.test.ts`（分类、两类压制边界、轮询不变式、周期常量）。
+- 锚点：`test/integration/issue137-free-tier-summary.test.ts`（分类、两类压制边界、轮询不变式、周期常量）。
 
 ## 额度新鲜度：用完即刷 + 可调全量扫描（2026-11-23）
 
@@ -190,7 +190,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 3. **绝不阻塞回合**：`trigger()` 是 fire-and-forget，刷新抛错被吞掉——额度是咨询性数据，不能因此让一回合成功/失败。
 4. **边界**：这是最终一致性，不是实时。面板仍逐族显示 `updatedAt`，过期窗口按上一节标注"数据停留在 X"。
 5. **未采纳**：阻塞式"切号前预检"（在 `selectSessionAccount` 里 await 刷新）—— 会与即将 spawn 的 agy 抢凭据槽并引入秒级延迟；改用"切号即刷新新号"（上面的失败切换分支）。
-6. 锚点：`test/quota-freshness.test.ts`（节流、吞错、stale 判定、recordSuccess 触发）。
+6. 锚点：`test/features/quota/quota-freshness.test.ts`（节流、吞错、stale 判定、recordSuccess 触发）。
 
 ## 卡片一致性：同一张卡不得自相矛盾（2026-11-23）
 
@@ -200,13 +200,13 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 2. **重置时间已过期的窗口不得裸奔**：`resetTime` 已过 = 窗口已滚动，缓存的 `remainingFraction` 描述的是**上一个**窗口。
    - `>= 100%` → 「已重置 · 可用」（既有行为）。
    - `< 100%` → **必须**标「窗口已重置 · 数据停留在 {该族 updatedAt}」，绝不能只渲染一个不带任何时间标记的百分比（实测：91% 且采用 33 小时前的边界，看起来像实时数据）。
-   - 锚点：`test/quota-panel-consistency.test.ts`。
+   - 锚点：`test/client/quota-panel-consistency.test.ts`。
 3. **按族合并写入意味着单卡多时间戳是合法的**：`updateAccountQuotas()` 逐族合并，某族刷新失败不会清掉其它族。`mergeFallbackFamilyQuota` 在摘要非权威时**保留上一份完整值及其 `updatedAt`**，因此「argon 刚刷新、google 停在两天前」是预期状态——正因为它是预期状态，UI 才必须逐族标出新鲜度，而不能让整卡看起来同一时刻。
 4. **不要用「按最新时间戳渲染」抹平差异**：把整卡的 `updatedAt` 取最大值会让旧族伪装成新数据，属于伪造新鲜度。
 5. **「当前使用」必须是事实，不能是预测**（2026-11-23 实测：Orchestrator/Argon 会话实跑 `ele`，面板 Argon 行却标主账号为「当前使用」）：
    - `markAccountActive(id, family)` **按族**记录真实使用的账号：写 `activeAccountIds[family]`，只有 `google` 才动全局 `lastActiveAccountId`，且**不**写 `manualPinAtByFamily`（运行使用不是用户手动钉选）。
    - 无真实钉选的族由 `resolveEligibleActiveAccountId` 回退算出的是**预测**，UI 必须标「预计使用」（`account.predictedInUse`，弱化配色），不得标「当前使用」。
-   - 锚点：`test/active-account-scope.test.ts`。
+   - 锚点：`test/domain/active-account-scope.test.ts`。
 
 ## 刷新成功后必须清除 unavailable 标记（issue #151）
 
@@ -214,7 +214,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 
 - CLI 优先路径拿到 families 后**提前 return**，早于拥有 `clearQuotaUnavailable` 的汇总分支——于是接口故障期间写入的 `unreachable` 会一直残留，面板持续显示旧时间戳，而存储额度其实在推进。
 - 规则：**谁证明数据是新鲜的，谁负责清标记**。CLI 成功 → clear；汇总权威 → clear；只有「什么都拿不到」才保留/写入。
-- 锚点：`test/issue137-free-tier-summary.test.ts`（CLI 成功后清除；CLI 无数据时不动标记）。
+- 锚点：`test/integration/issue137-free-tier-summary.test.ts`（CLI 成功后清除；CLI 无数据时不动标记）。
 
 ## 6. 全路径额度耗尽统一自动切号对齐（主代理 / 子代理 / 辅助路由 / 工具）
 
@@ -235,7 +235,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
    - `runAgyOnce()`（`agy_ask` / `/agy ask`）、`ImageService`（`agy_image` 含工具级 429 `QUOTA_EXHAUSTED` 检测与独立 `quotaHops` 预算）与 `TranslationService`（按 `poolQuotaHops` 放开 `RATE_LIMIT`/`QUOTA` 重试上限，非配额错误仍受 `translateRetries` 约束）均接入统一冷却与切号循环；全池无可用账号时明确报错，**严禁**回退到 `account = undefined` 悄悄消耗系统主账号。
 4. **单模型粒度主动让路（`isQuotaBenched`）**：
    - 当某族缓存配额的 `models` 列表包含匹配请求模型（`modelMatches`）的条目且**所有匹配条目**的剩馀比例均 `<= LOW_QUOTA_WEEKLY`（0.05）且处于有效重置窗口内时，即使该族宏观均值仍高于 `0.10`，预选阶段也直接判定该账号对该模型进入配额让路（`quotaGateClearedAt` 覆盖规则不变）。
-- **验证锚点**：`test/quota-failover-alignment.test.ts`。
+- **验证锚点**：`test/features/quota/quota-failover-alignment.test.ts`。
 
 ## CLI 配额轮询不得使用即将失效的 token（PR #160）
 
@@ -245,7 +245,7 @@ agy 启动时从凭证库取 token，该读取只有 10 秒预算。token 已过
 - 规则：CLI 轮询前要求 token 仍有 `CLI_TOKEN_SAFETY_MS`（2 分钟）寿命；不足则先刷新，仍不足则**跳过本轮 CLI，改用 REST**。跳过一轮无代价，弹浏览器窗口则以用户注意力为代价。
 - **Windows 主账号存储一致（issue #199）**：`cliTokenSource(platform, account)` 对 Windows `systemHome` 主账号返回 `'slot'`（检查凭据管理器 `gemini:antigravity` 而非 `.primary-credential.json` 镜像）；刷新后 `syncSlot`（`syncPrimarySlotFromStore`）**必须**按 `sameCredentialTokenState` / `isSlotAtLeastAsFresh` 校验 `accessToken` 与 `expiryMs`，严禁只凭 `sameCredentialGrant`（仅比对 `refreshToken`）跳过写槽，同时不得用旧镜像覆盖槽内更新的凭据。
 - 不要把"几秒钟的聪明"引入每小时才跑一次的轮询——边际取得足够宽，比精确贴近失效点更重要。
-- 锚点：`test/quota-cli-token.test.ts`（121 行纯函数 + 用例）。
+- 锚点：`test/features/quota/quota-cli-token.test.ts`（121 行纯函数 + 用例）。
 
 ## ACP 的 `usage_update` 不是用量样本（PR #165 / issue #158）
 
@@ -254,7 +254,7 @@ agy 1.5.x 的 `session/update`（`usage_update`）**只带 `{ used, size }`**—
 - **不得**把 `used` 写入 `input_tokens`：那会让该轮最终 usage 变成 `{ inputTokens: used, outputTokens: 0 }`，导致缓存命中率 0%、输出速度 0 tok/s、未缓存输入虚高。真实数字只在 `PromptResponse.usage` 里。
 - `used` 仅作诊断记录（`lastContextUsed`）。只有当更新真的携带 `cachedReadTokens` / `outputTokens` 时才可作为用量样本。
 - 通用原则：**「上下文占用」与「计费用量」是两个量，永不互相替代。**
-- 锚点：`test/usage-acp.test.ts`（178 行）。
+- 锚点：`test/integration/usage-acp.test.ts`（178 行）。
 
 ## 模型级 429 不得冷却整个模型族（2026-11-23）
 
@@ -270,11 +270,11 @@ agy 1.5.x 的 `session/update`（`usage_update`）**只带 `{ used, size }`**—
   - **UI**：族条保持健康（76% 仍是 76%），卡片下补一行 `单模型暂停: gemini-3.1-flash-image → 20:46`。
   - **迁移**：`PoolAdmin.dropModelScopedCooldowns()` 在池初始化时清掉历史遗留的模型级族冷却（reasons 命中模型级签名者）；用户的「清除冷却」同时清空该账号全部模型桶。
 - 只有 `Individual quota reached` / 纯 `RESOURCE_EXHAUSTED` 这类**账号级**拒绝才允许族级冷却。
-- 锚点：`test/model-cooldown.test.ts`（族不被冷却、跨重启持久化、按 image 桶预筛、ImageService 局部轮换且指针不动）、`test/model-scoped-quota.test.ts`、`test/quota-failover-alignment.test.ts` 第 5/8 题。
+- 锚点：`test/domain/model-cooldown.test.ts`（族不被冷却、跨重启持久化、按 image 桶预筛、ImageService 局部轮换且指针不动）、`test/features/quota/model-scoped-quota.test.ts`、`test/features/quota/quota-failover-alignment.test.ts` 第 5/8 题。
 
 ## CLI `/usage` 超时后的负缓存（同步慢的根因）
 
 - 实测 2026-11-23：单个账号点「同步」耗时 **19.1s**。日志显示 `agy -p /usage --output-format stream-json` 在 `loadCodeAssist` 上花了 ~13s，随后 `Language server shutdown timed out`，撞满 20s 预算后 REST 兜底只用 ~1s。
 - 契约：每个账号维护 `cliUsageSkipUntil`；`readAgyUsage` 返回 `null`（超时/失败）后，**10 分钟内**跳过 CLI 直接走 REST（`CLI_USAGE_TIMEOUT_RETRY_MS`）。一次超时之后，后续同步 ~1-2s。
 - 不要把超时预算调大来「修」慢：探针没有返回，加大预算只会让每次点击更慢；CLI 是防封首选，但连续超时的探针必须暂时让位给 REST。
-- 锚点：`test/model-scoped-quota.test.ts` 的「CLI usage negative cache」用例。
+- 锚点：`test/features/quota/model-scoped-quota.test.ts` 的「CLI usage negative cache」用例。

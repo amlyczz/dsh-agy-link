@@ -22,6 +22,6 @@ npm test
 
 ## Where things live
 - New provider stage: `src/provider/` (see ADR-002).
-- New HTTP route: `src/transport/http/routes/` and add it to `test/http-contract.test.ts`.
+- New HTTP route: `src/transport/http/routes/` and add it to `test/transport/http-contract.test.ts`.
 - New UI row: `src/client/sections/`, using `src/client/ui/` primitives (ADR-004).
 - New pure rule: `src/domain/`; never import node I/O there.

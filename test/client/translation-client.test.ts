@@ -1,0 +1,548 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import test from 'node:test'
+import vm from 'node:vm'
+
+const source = fs.readFileSync(new URL('../../dist/client.js', import.meta.url), 'utf8')
+
+interface ElementLike {
+  type: unknown
+  props: Record<string, unknown> | null
+  children: unknown[]
+}
+
+function isElement(value: unknown): value is ElementLike {
+  return typeof value === 'object' && value !== null && 'type' in value && 'props' in value
+}
+
+function collectText(node: unknown, out: string[] = []): string[] {
+  if (node === null || node === undefined) return out
+  if (typeof node === 'string') {
+    out.push(node)
+    return out
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) collectText(child, out)
+    return out
+  }
+  if (isElement(node)) {
+    collectText(node.children, out)
+  }
+  return out
+}
+
+function loadPlugin(fetchImpl?: (url: string, init?: unknown) => Promise<unknown>): {
+  plugin: { apply: (ctx: unknown) => void; inject: string[] }
+  dom: { bodyChildren: Array<Record<string, unknown>> }
+  stateLog: Array<{ calls: unknown[] }>
+} {
+  let loaded: { factory: (require: (id: string) => unknown) => unknown } | undefined
+  // Minimal DOM: the tooltip placement is real code, so the test drives it with a
+  // fake document/window instead of asserting on a source regex.
+  interface NodeLike {
+    id?: string
+    textContent?: string
+    isConnected?: boolean
+    style: { cssText?: string; display?: string; left?: string; top?: string }
+    attrs: Record<string, string>
+    setAttribute(k: string, v: string): void
+    getBoundingClientRect(): { left: number; top: number; bottom: number; width: number; height: number }
+    remove(): void
+  }
+  type NodeAny = NodeLike & { dataset: Record<string, string>; className: string }
+  const bodyChildren: NodeLike[] = []
+  const stateLog: Array<{ calls: unknown[] }> = []
+  const tipSize = { width: 200, height: 26 }
+  const fakeDocument = {
+    body: { appendChild: (n: NodeLike) => { bodyChildren.push(n) } },
+    createElement: (): NodeLike => {
+      const node: NodeLike = {
+        style: {},
+        attrs: {},
+        dataset: {},
+        className: '',
+        children: [],
+        classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
+        setAttribute(this: NodeAny, k: string, v: string) { this.attrs[k] = v; if (k === 'id') this.id = v },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        appendChild: (child: unknown) => { (node as unknown as { children: unknown[] }).children.push(child) },
+        append: () => {},
+        getBoundingClientRect: () => ({ left: 0, top: 0, bottom: tipSize.height, width: tipSize.width, height: tipSize.height }),
+        remove() { const at = bodyChildren.indexOf(node); if (at >= 0) bodyChildren.splice(at, 1); node.isConnected = false },
+        isConnected: true,
+      } as unknown as NodeLike
+      return node
+    },
+    getElementById: (id: string) => bodyChildren.find((n) => n.id === id) ?? null,
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    head: { appendChild: () => {} },
+    documentElement: { appendChild: () => {} },
+  }
+  vm.runInNewContext(
+    source,
+    {
+      window: {
+        __ModuleLoader__: { load(value: typeof loaded) { loaded = value } },
+        document: fakeDocument,
+        innerWidth: 1200,
+        innerHeight: 800,
+        ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
+      },
+      document: fakeDocument,
+      ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
+      MutationObserver: class { observe(): void {} disconnect(): void {} takeRecords(): unknown[] { return [] } },
+      requestAnimationFrame: (cb: (t: number) => void) => { cb(0); return 0 },
+      cancelAnimationFrame: () => {},
+      // NOTE: no `globalThis` key — the plugin's `win` IS globalThis, and injecting
+      // an empty object here shadowed it, hiding the fake document/window from it.
+      // Viewport metrics therefore belong on the sandbox itself, exactly as
+      // window.innerWidth is visible through globalThis in a real browser.
+      innerWidth: 1200,
+      innerHeight: 800,
+      setInterval: () => 0,
+      clearInterval: () => {},
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    },
+    { filename: 'client.js' },
+  )
+  assert.ok(loaded)
+  const react = {
+    createElement(type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): ElementLike {
+      return { type, props, children }
+    },
+    useState<S>(initial: S | (() => S)): [S, (next: S | ((prev: S) => S)) => void] {
+      const value = typeof initial === 'function' ? (initial as () => S)() : initial
+      const record = { current: value as unknown, calls: [] as unknown[] }
+      stateLog.push({ calls: record.calls })
+      const setter = (next: S | ((prev: S) => S)): void => {
+        const resolved = typeof next === 'function' ? (next as (prev: S) => S)(record.current as S) : next
+        record.current = resolved as unknown
+        record.calls.push(resolved)
+      }
+      return [value, setter]
+    },
+    // Effects run once per render for this stub; a remount is modelled by calling
+    // the component again, so subscriptions accumulate exactly like React's would
+    // until the (ignored) cleanup.
+    useEffect(setup: () => (() => void) | void): void {
+      try {
+        setup()
+      } catch {
+        // a failing effect must not break the render under test
+      }
+    },
+    useRef<S>(initial: S): { current: S } {
+      return { current: initial }
+    },
+    useMemo<T>(factory: () => T): T {
+      return factory()
+    },
+  }
+  const plugin = loaded.factory((id) => {
+    if (id === 'react') return react
+    if (id === 'react-dom') return {}
+    throw new Error('unexpected browser dependency: ' + id)
+  }) as { apply: (ctx: unknown) => void; inject: string[] }
+  return { plugin, dom: { bodyChildren: bodyChildren as unknown as Array<Record<string, unknown>> }, stateLog }
+}
+
+interface Definition {
+  kind: string
+  match: (event: unknown) => unknown
+  start: (context: unknown, match: unknown) => Record<string, unknown>
+  update: (context: { state?: unknown }, match: unknown) => unknown
+  buildViewNode: (context: {
+    key: string
+    id: string
+    state?: Record<string, unknown>
+    start?: { location?: unknown }
+  }) => { anchorSeq?: number; kind?: string; location?: unknown; data?: Record<string, unknown> } | null
+}
+
+function mount(fetchImpl?: (url: string, init?: unknown) => Promise<unknown>) {
+  const definitions: Definition[] = []
+  const slots: Array<{ options: Record<string, unknown>; component: (props?: Record<string, unknown>) => unknown }> = []
+  const cleanup: Array<() => void> = []
+  const ctx = {
+    locale: {
+      register: () => () => undefined,
+      bind: () => (key: string) => key,
+      addLanguage: () => () => undefined,
+      subscribe: () => () => undefined,
+    },
+    get(name: string) {
+      if (name === 'uiConversation') {
+        return { events: { register: (definition: Definition) => { definitions.push(definition); return () => undefined } } }
+      }
+      return undefined
+    },
+    effect(callback: () => (() => void) | void) {
+      const dispose = callback()
+      if (typeof dispose === 'function') cleanup.push(dispose)
+    },
+    slots: {
+      inject(_name: string, callback: () => () => void) {
+        const dispose = callback()
+        if (typeof dispose === 'function') cleanup.push(dispose)
+      },
+      register(options: Record<string, unknown>, component: (props?: Record<string, unknown>) => unknown) {
+        slots.push({ options, component })
+        return () => undefined
+      },
+    },
+  }
+  const { plugin, dom, stateLog } = loadPlugin(fetchImpl)
+  plugin.apply(ctx)
+  return { definitions, slots, dom, stateLog }
+}
+
+test('client registers the translation conversation definition', () => {
+  const { definitions } = mount()
+  const definition = definitions.find((d) => d.kind === 'agy-translation')
+  assert.ok(definition, 'agy-translation definition must be registered')
+  const matched = definition.match({ type: 'plugin:agy-link/translation', seq: 7 }) as { id?: string; role?: string } | null
+  assert.equal(matched?.id, '7')
+  assert.equal(matched?.role, 'start')
+  assert.equal(definition.match({ type: 'assistant/message', seq: 7 }), null)
+})
+
+test('a re-translation of the same reply replaces its card instead of stacking a second one', () => {
+  const { definitions } = mount()
+  const definition = definitions.find((d) => d.kind === 'agy-translation')!
+  const rec = (seq: number, text: string) => ({ type: 'plugin:agy-link/translation', seq, data: { messageId: 'm1', anchorSeq: 42, text } })
+  const first = definition.match(rec(60, '口语版')) as { id: string }
+  const again = definition.match(rec(70, '结构版')) as { id: string }
+  assert.equal(first.id, again.id, 'both records of one reply map to one node')
+  assert.notEqual((definition.match({ ...rec(80, 'x'), data: { messageId: 'm2', text: 'x' } }) as { id: string }).id, first.id)
+  const state = definition.start({}, { event: rec(60, '口语版') })
+  const updated = definition.update({ state }, { event: rec(70, '结构版') }) as Record<string, unknown>
+  assert.equal(updated.text, '结构版')
+  assert.equal(updated.anchorSeq, 42)
+  assert.equal(definition.update({ state: updated }, { event: rec(90, '  ') }), updated, 'an empty record keeps the last good text')
+})
+
+test('definitions register once uiConversation is provided after the client applied', () => {
+  // The client boot entry only waits for slots/locale, so the host can apply this
+  // plugin before dsh-client-ui-conversation provides its service. Registration
+  // must follow the service instead of looking it up once.
+  const registered: string[] = []
+  const unregistered: string[] = []
+  // Shaped like the host's ConversationEventRegistry: `register` reads `this`,
+  // so a detached call (`const r = events.register; r(def)`) fails here too.
+  class Registry {
+    add(definition: Definition) {
+      registered.push(definition.kind)
+      return () => void unregistered.push(definition.kind)
+    }
+    register(definition: Definition) {
+      return this.add(definition)
+    }
+  }
+  const conversation = { events: new Registry() }
+  let provided = false
+  const pending: Array<(scope: unknown) => unknown> = []
+  const scopeEffects: Array<() => void> = []
+  const scope = {
+    get: (name: string) => (name === 'uiConversation' && provided ? conversation : undefined),
+    effect(setup: () => () => void) {
+      scopeEffects.push(setup())
+    },
+  }
+  const ctx = {
+    locale: { register: () => () => undefined, bind: () => (key: string) => key, addLanguage: () => () => undefined, subscribe: () => () => undefined },
+    get: scope.get,
+    inject(deps: string[], apply: (scope: unknown) => unknown) {
+      // The bundle runs in a vm context: copy its array into this realm before a strict compare.
+      assert.deepEqual([...deps], ['uiConversation'])
+      pending.push(apply)
+      return { dispose: () => undefined }
+    },
+    effect(callback: () => (() => void) | void) {
+      callback()
+    },
+    slots: { inject: (_name: string, callback: () => () => void) => void callback(), register: () => () => undefined },
+  }
+  loadPlugin().plugin.apply(ctx)
+  assert.deepEqual(registered, [], 'nothing can register before the service exists')
+  assert.equal(pending.length, 2, 'translation and ACP definitions both wait for uiConversation')
+
+  provided = true
+  for (const apply of pending) apply(scope)
+  assert.deepEqual(registered.sort(), ['agy-acp-notice', 'agy-acp-report', 'agy-translation'])
+
+  // The service going away disposes the scope effects, which must unregister.
+  for (const dispose of scopeEffects) dispose()
+  assert.deepEqual(unregistered.sort(), ['agy-acp-notice', 'agy-acp-report', 'agy-translation'])
+})
+
+test('definition projects the record into a node anchored at the reply', () => {
+  const { definitions } = mount()
+  const definition = definitions.find((d) => d.kind === 'agy-translation')!
+  const state = definition.start({}, {
+    event: { type: 'plugin:agy-link/translation', seq: 60, data: { turn: 3, anchorSeq: 42, text: '人话版', model: 'gemini-3.8-flash', effort: 'high' } },
+  })
+  assert.equal(state.turn, 3)
+  assert.equal(state.anchorSeq, 42)
+  const node = definition.buildViewNode({ key: 'k1', id: '60', state, start: { location: { kind: 'turn' } } })
+  assert.ok(node)
+  assert.equal(node!.kind, 'agy-translation')
+  assert.equal(node!.anchorSeq, 42.1, 'card must sit just under the translated message')
+  assert.equal((node!.data as Record<string, unknown>).text, '人话版')
+  // An empty translation never materializes a node.
+  assert.equal(definition.buildViewNode({ key: 'k1', id: '60', state: { ...state, text: '  ' } }), null)
+})
+
+test('card is a native DSH surface: banner header, one Gemini label, no brand gradient', () => {
+  const { slots } = mount()
+  const card = slots.find((s) => s.options.key === 'agy-translation')
+  assert.ok(card, 'conversation.chat.node key agy-translation must be registered')
+  const element = card!.component({
+    node: { data: { text: '**结论**：已修复。\n\n- `a.ts` 改了', model: 'gemini-3.8-flash', effort: 'high', original: 'raw' } },
+    t: (key: string) => key,
+  }) as ElementLike
+  assert.ok(isElement(element))
+  assert.equal(element.props?.['data-agy-translation'], 'gemini')
+  // Head + body only: the old attribution footer (and the extra "show original"
+  // row) are gone, so the card cannot grow a second stacked banner.
+  // (React keeps conditional `null` children in the array — count real nodes.)
+  const rendered = element.children.filter((child) => child !== null && child !== undefined)
+  assert.equal(rendered.length, 2, 'card is header + body; no footer row')
+
+  const head = rendered[0] as ElementLike
+  assert.equal(head.props?.['className'], 'agy-tsl-head')
+  const badge = head.children[0] as ElementLike
+  assert.equal(badge.props?.['className'], 'agy-tsl-badge')
+  // Gemini identity is ONE monochrome spark — no per-render gradient defs, no
+  // gradient wordmark, no pill tag. The spark inherits the DSH accent token.
+  const mark = badge.children[0] as ElementLike
+  assert.equal(mark.type, 'svg')
+  assert.equal(mark.props?.['className'], 'agy-tsl-mark')
+  assert.equal(mark.children.length, 1, 'no <defs>/<linearGradient> inside the mark')
+  const path = mark.children[0] as ElementLike
+  assert.equal(path.type, 'path')
+  assert.equal(path.props?.fill, 'currentColor')
+  const label = badge.children[1] as ElementLike
+  assert.equal(label.props?.['className'], 'agy-tsl-label')
+  assert.equal(collectText(label).join(''), 'Gemini translation')
+
+  // Model/effort/account ride the header as caption meta, not as a second line.
+  const meta = head.children[1] as ElementLike
+  assert.equal(meta.props?.['className'], 'agy-tsl-meta')
+  assert.equal(collectText(meta).join(''), 'gemini-3.8-flash · high')
+
+  // One flat action group in the header: original toggle, copy, collapse. The
+  // group is a single flex unit, so a narrow panel truncates the meta instead of
+  // splitting the buttons across lines.
+  const actions = head.children[2] as ElementLike
+  assert.equal(actions.props?.['className'], 'agy-tsl-actions')
+  const buttons = (actions.children as ElementLike[]).filter((child) => child?.props?.['className'] === 'agy-tsl-btn')
+  assert.deepEqual(buttons.map((b) => collectText(b).join('')), ['Show original', 'Copy', 'Collapse'])
+  assert.equal((buttons[0]!.props as Record<string, unknown>)['data-active'], 'false')
+
+  const body = element.children[1] as ElementLike
+  assert.equal(body.props?.['className'], 'agy-tsl-body')
+  const text = collectText(body).join(' ')
+  assert.match(text, /结论/)
+  assert.match(text, /a\.ts/)
+
+  // The stylesheet is DSH-token driven and carries no brand gradient at all.
+  // (Slice the card region: the console sheet legitimately uses gradients for
+  // quota bars, so the whole bundle is the wrong scope.)
+  const cardCss = source.slice(source.indexOf('.agy-tsl-card {'), source.indexOf('.agy-tsl-icon {'))
+  assert.ok(cardCss.length > 0, 'card sheet found in the bundle')
+  assert.equal(/linear-gradient|radial-gradient/.test(cardCss), false, 'no brand gradient in the card sheet')
+  assert.equal(source.includes('agy-tsl-brand'), false, 'the gradient wordmark class is gone')
+  assert.equal(source.includes('agy-tsl-foot'), false, 'the attribution footer is gone')
+  assert.match(cardCss, /\.agy-tsl-card \{[^}]*var\(--dsw-alias-markdown-code-block/)
+  assert.match(cardCss, /\.agy-tsl-body \{[^}]*--dsw-font-markdown-base-font-size/)
+  assert.match(cardCss, /body\[data-ds-dark-theme\] \.agy-tsl-card/)
+  assert.match(cardCss, /\.agy-tsl-actions \{[^}]*margin-left: auto/)
+})
+
+test('per-reply action is an icon-only Gemini button in the action strip', () => {
+  const { slots } = mount()
+  const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
+  assert.ok(action, 'conversation.chat.assistant-actions must be registered')
+  const element = action!.component({ messageId: 'm1', sessionId: 's1', t: (key: string) => key }) as ElementLike
+  assert.ok(isElement(element))
+  // The button is wrapped in a span that carries our own tooltip; the native
+  // `title` bubble does not show inside the desktop shell.
+  assert.equal(element.type, 'span')
+  assert.equal(element.props?.className, 'agy-tsl-wrap')
+  const button = element.children[0] as ElementLike
+  assert.equal(button.type, 'button')
+  // Icon-only: a single <svg> glyph, no text label (the label is the tooltip).
+  assert.equal(button.children.length, 1)
+  const glyph = button.children[0] as ElementLike
+  assert.equal(glyph.type, 'svg')
+  assert.equal(collectText(button).join('').trim(), '')
+  assert.equal(button.props?.title, undefined, 'no native title; the CSS hint owns the label')
+  assert.equal(typeof button.props?.['aria-label'], 'string')
+  // The label lives in a body-level node shown on hover — never in this row, so a
+  // missing stylesheet cannot leak it into the action strip as inline text (that
+  // is what the old pseudo-element/`data-tip` design did when a stale sheet
+  // suppressed the new rules).
+  assert.equal(element.children.length, 1, 'the wrapper carries only the button')
+  assert.equal(collectText(element).join('').trim(), '', 'no hint text inside the row')
+  for (const handler of ['onMouseEnter', 'onFocus', 'onMouseLeave', 'onBlur']) {
+    assert.equal(typeof element.props?.[handler], 'function', handler + ' must be wired')
+  }
+  assert.match(source, /\.agy-tsl-tip \{/)
+  assert.match(source, /position: fixed/)
+  assert.equal(source.includes('content: attr(data-tip)'), false, 'the pseudo-element hint is gone')
+  // The wrapper also decides which side the bubble goes on (see below).
+  assert.equal(typeof element.props?.onMouseEnter, 'function')
+  assert.equal(typeof element.props?.onFocus, 'function')
+  // No session → no button (the slot's inject face is required).
+  assert.equal(action!.component({ messageId: 'm1', t: (k: string) => k }), null)
+})
+
+test('the hint is ONE body-level node, placed below the anchor, clamped, then hidden', () => {
+  // DSH's own tooltip is a portal: it is never below-in-the-scroller, so the
+  // composer cannot cover it. Ours is a body-level fixed node for exactly that
+  // reason — and it must stay "below", like every other hint in the strip.
+  const { slots, dom } = mount()
+  const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
+  // A real translator so the assertion below proves the LOCALIZED label rides the
+  // node (the fallback is deliberately used when a key comes back unchanged).
+  const wrapper = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => 'T:' + k }) as ElementLike
+  const show = wrapper.props?.onMouseEnter as (e: unknown) => void
+  const hide = wrapper.props?.onMouseLeave as () => void
+  const box = (left: number, top: number, width = 24, bottom = top + 24) => ({
+    currentTarget: { getBoundingClientRect: () => ({ left, top, width, bottom }) },
+  })
+
+  show(box(600, 100, 24, 124))
+  assert.equal(dom.bodyChildren.length, 1, 'hovering creates the shared node once')
+  const node = dom.bodyChildren[0]! as { style: Record<string, string>; textContent?: string; attrs: Record<string, string> }
+  assert.equal(node.attrs.role, 'tooltip')
+  // The bubble styling (background/padding/13px/radius) lives on `.agy-tsl-tip`.
+  // Regression: the node was created without that class, so the CSS never applied
+  // and the label rendered as bare body text under the action strip.
+  assert.equal(node.attrs.class, 'agy-tsl-tip')
+  assert.equal(node.style.position, 'fixed', 'fixed positioning is re-asserted on every show')
+  assert.equal(node.style.display, 'inline-flex', 'shown on hover')
+  assert.equal(node.textContent, 'T:tsl.actionTip', 'the localized label rides the node, not the row')
+  // BELOW the anchor: bottom(124) + 6px gap; horizontally centred (600+12-100).
+  assert.equal(node.style.top, '130px')
+  assert.equal(node.style.left, '512px')
+
+  // A second hover reuses the same node instead of stacking hints.
+  show(box(300, 200))
+  assert.equal(dom.bodyChildren.length, 1, 'singleton')
+  assert.equal(node.style.top, '230px')
+
+  // Left edge: clamped to the 8px margin instead of overflowing the viewport.
+  show(box(0, 200))
+  assert.equal(node.style.left, '8px')
+
+  // Viewport bottom: flipping above is the only case that does — a row low on
+  // the screen with a composer under it still shows the hint below (over the
+  // composer), exactly like the DSH portal does.
+  show(box(600, 700, 24, 724))
+  assert.equal(Number(String(node.style.top).replace('px', '')), 730, 'a row low in the transcript keeps the hint BELOW, over the composer')
+  show(box(600, 780, 24, 804))
+  const flipped = Number(String(node.style.top).replace('px', ''))
+  assert.ok(flipped < 780, 'only the viewport edge flips it above (got ' + flipped + ')')
+
+  // Never throws on a partial event, and always hides on leave.
+  assert.doesNotThrow(() => show(undefined))
+  assert.doesNotThrow(() => show({ currentTarget: undefined }))
+  hide()
+  assert.equal(node.style.display, 'none')
+
+  // The stylesheet carries the DSH tokens for the node.
+  assert.match(source, /\.agy-tsl-tip \{/)
+  assert.match(source, /background: var\(--dsw-alias-tooltip-bg/)
+  assert.match(source, /color: var\(--dsw-static-neutral-bluish-00/)
+  assert.match(source, /border-radius: var\(--dsw-radius-sm/)
+  assert.match(source, /position: fixed/)
+})
+
+test('the style sheet refreshes itself when a reload left a stale tag behind', () => {
+  // Regression: the guard returned early whenever the id already existed, so the
+  // rules of an already-installed (older) sheet were never replaced and newly
+  // added rules — like the hover hint — silently never applied.
+  assert.match(source, /const existing = doc\.getElementById\(STYLE_ID\)/)
+  // The ACP card sheet now sits in the same bundle, so tsdown suffixes the two
+  // module-level stylesheet constants (CSS / CSS$1) — match the guard loosely.
+  assert.match(source, /if \(existing\.textContent !== CSS\$?\d*\) existing\.textContent = CSS\$?\d*/)
+  assert.match(source, /STYLE_ID = ["']dsh-agy-link-tsl-css-v2["']/)
+})
+
+test('action state survives a remount and re-derives from the session record', () => {
+  // Regression: the chat timeline re-creates the panel on window focus, so a
+  // component-local state reset the button to idle mid-flight. State now lives
+  // in a module map and is re-read from GET /translate/state on mount.
+  assert.match(source, /ACTION_STATE = /)
+  assert.match(source, /ACTION_INFLIGHT = /)
+  assert.match(source, /agy-link\/translate\/state/)
+  assert.match(source, /state === ["']ready["']\)\s*\{?\s*setActionState\(key, ["']done["']\)/)
+  // A busy answer keeps probing until the record lands (behaviour: client-dom.test.ts).
+  assert.match(source, /setTimeout\(probe, BUSY_POLL_MS\)/)
+})
+
+test('a panel remount mid-flight still settles to done (no forever spinner)', async () => {
+  // Regression: persisting the card inserts a node, DSH re-creates the panel, and
+  // the instance that owned the in-flight POST unmounts — its setState is a no-op,
+  // so the freshly mounted instance kept its inherited `working` state forever.
+  // Publishing to every mounted instance is what settles the survivor.
+  let release: ((value: unknown) => void) | undefined
+  const pending = new Promise((resolve) => {
+    release = resolve
+  })
+  const { slots, stateLog } = mount(() => pending)
+  const action = slots.find((s) => s.options.name === 'conversation.chat.assistant-actions')
+  assert.ok(action)
+  const first = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => k }) as ElementLike
+  const firstButton = first.children[0] as ElementLike
+  const onClick = firstButton.props?.['onClick'] as (e: unknown) => void
+  onClick({ stopPropagation() {}, preventDefault() {} })
+
+  // The card lands → the panel remounts while the request is still open.
+  const before = stateLog.length
+  const second = action!.component({ messageId: 'm1', sessionId: 's1', t: (k: string) => k }) as ElementLike
+  const secondButton = second.children[0] as ElementLike
+  assert.equal(secondButton.props?.['data-state'], 'working', 'the remount inherits the in-flight state')
+  const survivors = stateLog.slice(before)
+
+  release!({ ok: true, status: 200, json: async () => ({ ok: true }) })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  const settled = survivors.flatMap((entry) => entry.calls)
+  assert.ok(
+    settled.includes('done'),
+    'the surviving instance must settle to done, got ' + JSON.stringify(settled),
+  )
+})
+
+test('every list-slot registration carries a row id (id is the row identity)', () => {
+  const { slots } = mount()
+  const listSlots = slots.filter((s) => s.options.key === undefined)
+  assert.ok(listSlots.length >= 1)
+  for (const slot of listSlots) {
+    assert.ok(
+      typeof slot.options.id === 'string' && slot.options.id !== '',
+      'list slot ' + String(slot.options.name) + ' needs a non-empty id',
+    )
+  }
+})
+
+test('the turn-tail chip is gone (the action lives in the icon strip only)', () => {
+  const { slots } = mount()
+  assert.equal(slots.some((s) => s.options.name === 'conversation.chat.turnTail'), false)
+})
+
+test('enable/disable toggles use native segGroup segmented buttons', () => {
+  // Matches the pool scheduling segmented group ([ 顺序耗尽 | 轮询均衡 ]):
+  // both On and Off states have explicit segmented buttons within a container.
+  assert.match(source, /config\.autoWarmup/)
+  assert.match(source, /config\.autoTranslate/)
+  assert.match(source, /config\.on/)
+  assert.match(source, /config\.off/)
+})

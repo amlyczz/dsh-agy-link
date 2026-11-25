@@ -134,11 +134,11 @@ GET  /plugins/agy-link/translate/state?session=<id>&message=<id>  # 该条回复
 
 ## 9. 测试锚点
 
-- `test/translate.test.ts`：提示词（**无格式指令、要求按实际内容量讲全**）、人格块（会话 id/工作目录/日志路径/摘要）、`sessionDigest`、分块、turn 抽取、模型回退、缓存/去重、**按被点消息翻译**、**消息级去重（同回合 A/B 各自独立）**、**旧记录兼容**、**配额失败→换号重试**、**空回答重试**、`existingMessage`（按钮状态来源）、record 字段。
-- `test/tsl-command.test.ts`：参数解析、`/tsl auto`、错误文案、`--text` / `--print`。
-- 客户端：`test/client-i18n.test.ts` 覆盖四语言键（含 `config.defaultEffort`）；`test/translation-client.test.ts` 覆盖 Definition 投影/锚点、卡片渲染、图标按钮、body 级 `position: fixed` 单例提示气泡（卸载时清理）、样式表自愈、状态跨重挂载；`test/client-plugin-meta.test.ts` 覆盖设置面板必须保留默认思考强度行。
-- 翻译会话 1:1：`test/adapter.test.ts` 断言首次 = 人格+请求行且无 `--conversation`、第二次复用同一 `conversationId` 且**只发请求行**（不含人格）、plan 模式；轮次会话的绑定不受影响。
-- 上下文预算：`test/adapter.test.ts` 覆盖 `elideMiddle` 的字节上限与 CJK 不切断、`buildDigest` 工具行默认掐头去尾且**永不省略散文**、以及 live task 不被工具输出挤掉。
+- `test/features/translation/translate.test.ts`：提示词（**无格式指令、要求按实际内容量讲全**）、人格块（会话 id/工作目录/日志路径/摘要）、`sessionDigest`、分块、turn 抽取、模型回退、缓存/去重、**按被点消息翻译**、**消息级去重（同回合 A/B 各自独立）**、**旧记录兼容**、**配额失败→换号重试**、**空回答重试**、`existingMessage`（按钮状态来源）、record 字段。
+- `test/features/translation/tsl-command.test.ts`：参数解析、`/tsl auto`、错误文案、`--text` / `--print`。
+- 客户端：`test/client/client-i18n.test.ts` 覆盖四语言键（含 `config.defaultEffort`）；`test/client/translation-client.test.ts` 覆盖 Definition 投影/锚点、卡片渲染、图标按钮、body 级 `position: fixed` 单例提示气泡（卸载时清理）、样式表自愈、状态跨重挂载；`test/client/client-plugin-meta.test.ts` 覆盖设置面板必须保留默认思考强度行。
+- 翻译会话 1:1：`test/provider/adapter.test.ts` 断言首次 = 人格+请求行且无 `--conversation`、第二次复用同一 `conversationId` 且**只发请求行**（不含人格）、plan 模式；轮次会话的绑定不受影响。
+- 上下文预算：`test/provider/adapter.test.ts` 覆盖 `elideMiddle` 的字节上限与 CJK 不切断、`buildDigest` 工具行默认掐头去尾且**永不省略散文**、以及 live task 不被工具输出挤掉。
 - 真机联调（人工、会花少量额度）：`node --experimental-transform-types scripts/smoke-translate.ts [文本 | --file <path>]` 用真实 `agy` + 真实账号池跑一次 `purpose:'translation'`（验证模型/档位/plan 模式与提示词；`--file` 可直接喂一条真实回复）。
 
 ## 10. 已知取舍

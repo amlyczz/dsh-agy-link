@@ -49,6 +49,6 @@
 
 ## 5. 测试锚点
 
-- `test/btw.test.ts`：`BtwService` 生命周期（流式文本拼接、工具步骤追踪、追问复用 `conversationId`、新线程重置 `conversationId`、中止取消、历史翻页/上限裁剪、账号重试清状态）、`/atw` 顶级命令解析与 GUI 非阻塞 / `--wait` 同步双路径、`/plugins/agy-link/btw/*` HTTP 路由契约（含 SSE 流与 400/405/404 校验）。
-- `test/btw-client.test.ts`：`BtwDock` 组件渲染（流式状态、工具折叠/计数、长文滚动容器、历史翻页、追问提交、停止/关闭/复制、Locale 翻译键与英文兜底）、`conversation.chat.commandview` 的 `atw` 抑制、`installBtwUi` 注册与卸载清理。
-- `test/client-i18n.test.ts`：四语言（`zh`/`en`/`es`/`ptBR`）新增 `btw.*` 键对齐。
+- `test/features/btw/btw.test.ts`：`BtwService` 生命周期（流式文本拼接、工具步骤追踪、追问复用 `conversationId`、新线程重置 `conversationId`、中止取消、历史翻页/上限裁剪、账号重试清状态）、`/atw` 顶级命令解析与 GUI 非阻塞 / `--wait` 同步双路径、`/plugins/agy-link/btw/*` HTTP 路由契约（含 SSE 流与 400/405/404 校验）。
+- `test/client/btw-client.test.ts`：`BtwDock` 组件渲染（流式状态、工具折叠/计数、长文滚动容器、历史翻页、追问提交、停止/关闭/复制、Locale 翻译键与英文兜底）、`conversation.chat.commandview` 的 `atw` 抑制、`installBtwUi` 注册与卸载清理。
+- `test/client/client-i18n.test.ts`：四语言（`zh`/`en`/`es`/`ptBR`）新增 `btw.*` 键对齐。

@@ -25,7 +25,8 @@
 1. **内环（TDD 极速环，0.3 ~ 2 秒，日常开发必用）**：
    - 自动基于 Git 变更精准执行关联测试：`npm run test:fast`（或 `node scripts/fast-test.mjs`）
    - 指定模块关键字秒级直跑：`npm run test:fast -- <name>`（例如 `node scripts/fast-test.mjs models`、`node scripts/fast-test.mjs warmup`）
-   - 单文件直跑：`node --experimental-transform-types --test test/xxx.test.ts`
+   - 单文件直跑：`node --experimental-transform-types --test test/<domain>/xxx.test.ts`
+   - 测试按领域分子目录（镜像 `src/` 分层）：新测试放进被测代码所属层，见 [test/README.md](test/README.md) 与 [.spec/testing.md](.spec/testing.md)
 2. **外环（全量回归门禁，仅提 PR 或发版打 Tag 前）**：
    - 全量回归测试：`npm test`（或带覆盖率门禁的 `npm run test:coverage`）
 

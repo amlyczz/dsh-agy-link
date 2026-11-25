@@ -1,0 +1,156 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { StreamJsonParser, MAX_STREAM_LINE_BYTES } from '../../src/host/parser.ts'
+import type { AgyEvent } from '../../src/common/types.ts'
+
+const OK_NDJSON = [
+  '{"event":"init","conversation_id":"c1","model":"gemini-3-6-flash"}',
+  '{"event":"step_update","idx":1,"step_type":"thinking","text":"Think"}',
+  '{"event":"step_update","idx":3,"step_type":"text","text":"Hi"}',
+  '{"event":"result","result":{"conversation_id":"c1","status":"DONE","response":"Hi","usage":{"input_tokens":3,"output_tokens":2}}}',
+].join('\n')
+
+function asStep(e: AgyEvent | undefined) {
+  assert.ok(e !== undefined && e.kind === 'step')
+  return e
+}
+function asResult(e: AgyEvent | undefined) {
+  assert.ok(e !== undefined && e.kind === 'result')
+  return e
+}
+
+test('parses a full ok run', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed(OK_NDJSON + '\n')
+  assert.equal(evs.length, 4)
+  assert.equal(evs[0]?.kind, 'init')
+  assert.equal(asStep(evs[1]).stepKind, 'thinking')
+  assert.equal(asStep(evs[2]).stepKind, 'text')
+  const res = asResult(evs[3])
+  assert.equal(res.ok, true)
+  assert.equal(res.usage.input_tokens, 3)
+  assert.equal(p.stats.garbage, 0)
+})
+
+test('bounds an over-long line without a newline (no unbounded buffer growth)', () => {
+  const p = new StreamJsonParser()
+  const huge = 'x'.repeat(MAX_STREAM_LINE_BYTES + 4096)
+  const evs = p.feed(huge)
+  assert.ok(evs.length >= 1 && evs[0]?.kind === 'garbage', 'oversized partial line reported as garbage')
+  // The oversized buffer must have been dropped, so a later valid line parses.
+  const ok = p.feed('{"event":"init","conversation_id":"c-ok"}\n')
+  assert.equal(ok[0]?.kind, 'init')
+})
+
+test('parses a large single chunk with many lines in one feed', () => {
+  const p = new StreamJsonParser()
+  const lines = Array.from({ length: 2000 }, (_, i) => '{"event":"init","conversation_id":"c' + i + '"}')
+  const evs = p.feed(lines.join('\n') + '\n')
+  assert.equal(evs.length, 2000)
+  assert.ok(evs.every((e) => e.kind === 'init'))
+  // Remainder is empty; a later torn chunk still buffers + completes correctly.
+  assert.equal(p.feed('{"event":"init","conversation_id":"last"}').length, 0)
+  const done = p.feed('\n')
+  assert.equal(done.length, 1)
+  assert.equal(done[0]?.kind, 'init')
+})
+
+test('buffers torn chunks across feeds', () => {
+  const p = new StreamJsonParser()
+  const out: AgyEvent[] = []
+  for (let i = 0; i < OK_NDJSON.length; i += 7) {
+    out.push(...p.feed(OK_NDJSON.slice(i, i + 7)))
+  }
+  out.push(...p.flush())
+  assert.equal(out.length, 4)
+  assert.equal(out.filter((e) => e.kind === 'garbage').length, 0)
+})
+
+test('counts garbage and captures auth failures', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed('\u26a0 noise line\n{"event":"result","result":{"status":"ERROR","error":"authentication failed or timed out"}}\n')
+  assert.equal(evs[0]?.kind, 'garbage')
+  assert.equal(asResult(evs[1]).ok, false)
+  assert.equal(p.stats.garbage, 1)
+  assert.equal(p.stats.sawAuthFailure, true)
+})
+
+test('conversational JSON steps containing auth phrases never trigger sawAuthFailure', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed('{"event":"step","step":{"type":"PLANNER_RESPONSE","content":"The user is not signed in and authentication failed."}}\n')
+  assert.equal(evs.length, 1)
+  assert.equal(p.stats.sawAuthFailure, false)
+})
+
+test('captures the OAuth URL from raw lines', () => {
+  const p = new StreamJsonParser()
+  p.feed('visit https://accounts.google.com/o/oauth2/auth?code=4/AbC now\n')
+  assert.ok(p.stats.authUrl?.startsWith('https://accounts.google.com/'))
+})
+
+test('flush emits a trailing line without newline', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed('{"event":"init","conversation_id":"c9"}')
+  assert.equal(evs.length, 0)
+  const tail = p.flush()
+  assert.equal(tail.length, 1)
+  assert.equal(tail[0]?.kind, 'init')
+})
+
+test('infers shapes without an event discriminator', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed('{"step_type":"text","text":"hi"}\n{"status":"DONE","response":"done","usage":{"total_tokens":9}}\n')
+  assert.equal(asStep(evs[0]).stepKind, 'text')
+  assert.equal(asResult(evs[1]).ok, true)
+})
+
+test('agy 1.1.15 nested step_update envelopes classify correctly', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed([
+    '{"event":"init","conversation_id":"c15","init":{"model":"gemini-3-7-flash","cwd":"/tmp"}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":0,"state":"DONE","step_type":"user_input"}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":2,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":500,"thinking_tokens":80}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"ls"}}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":4,"state":"ERROR","step_type":"tool","tool_name":"find_by_name","tool_info":{"name":"find_by_name","parameters":{"Pattern":"x"},"error":{"type":"TOOL_ERROR","message":"timed out"}}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"c15","step_index":5,"state":"ACTIVE","step_type":"agent_response","text_delta":"There are "}}',
+  ].join('\n') + '\n')
+  assert.equal(evs[0]?.kind, 'init')
+  assert.ok(evs[0] !== undefined && evs[0].kind === 'init' && evs[0].model === 'gemini-3-7-flash')
+  const user = asStep(evs[1])
+  assert.equal(user.stepKind, 'user-input')
+  const think = asStep(evs[2])
+  assert.equal(think.stepKind, 'text')
+  assert.equal(think.usage?.thinking_tokens, 80)
+  const tool = asStep(evs[3])
+  assert.equal(tool.stepKind, 'tool')
+  assert.equal(tool.tool?.name, 'run_command')
+  assert.deepEqual(tool.tool?.args, { CommandLine: 'ls' })
+  assert.equal(tool.state, 'ACTIVE')
+  const toolErr = asStep(evs[4])
+  assert.equal(toolErr.tool?.error, 'timed out')
+  const frag = asStep(evs[5])
+  assert.equal(frag.stepKind, 'text')
+  assert.equal(frag.fragment, true)
+  assert.equal(frag.text, 'There are ')
+  assert.equal(p.stats.garbage, 0)
+})
+
+test('agy 1.1.15 result envelope keeps ERROR-with-response usable', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed('{"event":"result","result":{"conversation_id":"c15","status":"ERROR","response":"partial answer","error":"find timed out","usage":{"input_tokens":9,"output_tokens":8,"thinking_tokens":4}}}' + '\n')
+  const res = asResult(evs[0])
+  assert.equal(res.ok, false)
+  assert.equal(res.response, 'partial answer')
+  assert.equal(res.error, 'find timed out')
+  assert.equal(res.usage.thinking_tokens, 4)
+})
+
+test('numeric step_type map (14=thinking, 15=text, 5=tool)', () => {
+  const p = new StreamJsonParser()
+  const evs = p.feed('{"event":"step_update","idx":1,"step_type":14,"text":"deep"}\n{"event":"step_update","idx":2,"step_type":15,"text":"out"}\n{"event":"step_update","idx":3,"step_type":5,"tool_info":{"name":"bash","parameters":{"cmd":"ls"}}}\n')
+  assert.equal(asStep(evs[0]).stepKind, 'thinking')
+  assert.equal(asStep(evs[1]).stepKind, 'text')
+  const tool = asStep(evs[2])
+  assert.equal(tool.stepKind, 'tool')
+  assert.equal(tool.tool?.name, 'bash')
+})
