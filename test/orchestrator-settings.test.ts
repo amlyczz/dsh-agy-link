@@ -224,7 +224,7 @@ test('runAgyAttempt bypasses ACP for CLI --settings only when orchestrator overr
   const dir = mkdtempSync(join(tmpdir(), 'agy-orch-attempt-'))
   try {
     const argvLog = join(dir, 'argv.json')
-    const fakeBin = join(dir, 'agy')
+    const fakeBin = join(dir, 'agy.cjs')
     writeFileSync(
       fakeBin,
       `#!/usr/bin/env node
@@ -345,7 +345,7 @@ test('runAgyOnce passes --settings {orchestrator} only on Orchestrator models', 
   const dir = mkdtempSync(join(tmpdir(), 'agy-orch-oneshot-'))
   try {
     const argvLog = join(dir, 'oneshot-argv.json')
-    const fakeBin = join(dir, 'agy')
+    const fakeBin = join(dir, 'agy.cjs')
     writeFileSync(
       fakeBin,
       `#!/usr/bin/env node

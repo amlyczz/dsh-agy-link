@@ -6,8 +6,12 @@
 // servers, task shells) with a single group signal. See ./strays.ts for the
 // reconciliation that catches anything that still slips through.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { stateDir } from '../../common/config.ts'
+import type { PermissionMode } from '../../common/types.ts'
+import { defaultMediaDir } from '../../host/media.ts'
+import { defaultContextTransferDir } from '../../provider/context-delivery.ts'
 import { isCmdShim, windowsQuote } from '../../runtime/agy/bin.ts'
 import { nodeScriptEnv } from '../../runtime/agy/env.ts'
 
@@ -15,6 +19,50 @@ export interface AcpSpawnOptions {
   bin: string
   cwd: string
   env?: NodeJS.ProcessEnv
+}
+
+export interface AcpArgsOptions {
+  permissionMode: PermissionMode
+  sandbox?: boolean
+  agent?: string
+  addDirs?: readonly string[]
+}
+
+/**
+ * Build CLI arguments for spawning a persistent `agy acp` process.
+ *
+ * Pre-mounts `<state>/context-transfer` and `<state>/media` (plus any custom
+ * `addDirs`, e.g. custom `mediaDir`) via `--add-dir` so resumed/loaded ACP
+ * sessions in non-`skip` permission modes have the same read access to archive
+ * digests and staged media as CLI `-p` runs.
+ */
+export function buildAcpSpawnArgs(opts: AcpArgsOptions, logFile: string): string[] {
+  const args = ['acp', '--disable-telemetry']
+  if (opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
+  if (opts.sandbox) args.push('--sandbox')
+  if (opts.agent && opts.agent.trim() !== '') args.push('--agent', opts.agent.trim())
+  const baseState = stateDir()
+  const dirs = new Set<string>([defaultContextTransferDir(baseState), defaultMediaDir(baseState)])
+  for (const d of opts.addDirs ?? []) {
+    const trimmed = d.trim()
+    if (trimmed !== '') dirs.add(trimmed)
+  }
+  for (const dir of dirs) {
+    try {
+      mkdirSync(dir, { recursive: true })
+      args.push('--add-dir', dir)
+    } catch {
+      // Unwritable directory must not block ACP transport startup.
+    }
+  }
+  try {
+    mkdirSync(dirname(logFile), { recursive: true })
+    args.push('--log-file', logFile)
+  } catch {
+    // An unwritable log path must not block the transport: the classifier
+    // simply gets no log evidence for this process.
+  }
+  return args
 }
 
 /** Compute the per-process `acp-*.log` path under `<state>/logs` unless overridden. */

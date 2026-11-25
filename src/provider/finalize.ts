@@ -94,6 +94,27 @@ export interface FinalizeInput {
   clearRateLimitFailover: (sessionKey: string) => void
   sharesSingleEgress: () => boolean
   onRun?: (info: RunTelemetry) => void
+  log?: (msg: string) => void
+}
+
+/**
+ * Diagnostic hook for tracking sudden watermark drops (`>= 5` -> `<= 2`) on
+ * persisted session bindings without leaking any prompt content.
+ */
+export function warnWatermarkDrop(opts: {
+  log?: (msg: string) => void
+  source: string
+  key: string
+  conversationId: string
+  previousCount: number
+  nextCount: number
+  messages: readonly Message[]
+}): void {
+  if (!opts.log || opts.previousCount < 5 || opts.nextCount > 2) return
+  const roles = opts.messages.map((m) => String((m as { role?: unknown }).role ?? '?')).join(',')
+  opts.log(
+    `[watermark-drop] ${opts.source} key=${opts.key} cid=${opts.conversationId} prev=${opts.previousCount} next=${opts.nextCount} roles=[${roles}]`,
+  )
 }
 
 /**
@@ -132,6 +153,19 @@ function writeSuccessBinding(input: FinalizeInput): void {
   // longer exists — the exact "silently opens an empty page" failure.
   const finalId = input.conversationId ?? input.binding?.conversationId
   if (!finalId) return
+  const prevCount = Math.max(
+    input.binding?.lastMessageCount ?? 0,
+    input.store.get(input.sessionAccountKey)?.lastMessageCount ?? 0,
+  )
+  warnWatermarkDrop({
+    ...(input.log ? { log: input.log } : {}),
+    source: 'writeSuccessBinding',
+    key: input.sessionAccountKey,
+    conversationId: finalId,
+    previousCount: prevCount,
+    nextCount: input.messages.length,
+    messages: input.messages,
+  })
   const inputTokens = resolveInputTokens(input.rec, input.binding)
   const resolvedCwd = input.binding?.cwd || input.cwd
   input.store.set(input.sessionAccountKey, {
@@ -288,9 +322,17 @@ function persistFailureBinding(input: FinalizeInput, failure: AttemptFailure): v
     if (!finalId) return
     const inputTokens = resolveInputTokens(input.rec, input.binding)
     const resolvedCwd = input.binding?.cwd || input.cwd
+    // Preserve the prior watermark when the turn failed without substantially
+    // consuming the prompt (RATE_LIMIT / NETWORK / OVERLOADED / PROCESS_EXIT).
+    // Advancing `lastMessageCount` on an unconsumed failure made retries and
+    // A→B→A returns skip the foreign catch-up digest. Mid-flight interruptions
+    // (Stop / steer / timeout) still advance alongside `interrupted: true`.
+    const nextMessageCount = interruptedTurn
+      ? input.messages.length
+      : (input.binding !== undefined ? input.binding.lastMessageCount : 0)
     input.store.set(input.sessionAccountKey, {
       conversationId: finalId,
-      lastMessageCount: input.messages.length,
+      lastMessageCount: nextMessageCount,
       updatedAt: Date.now(),
       model: input.activeModel,
       // Images are only "delivered" when the run actually consumed

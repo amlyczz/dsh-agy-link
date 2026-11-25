@@ -38,7 +38,7 @@ import type { SpawnLimiter } from './spawn-limiter.ts'
 import { readFileSync } from 'node:fs'
 import { buildOrchestratorSettingsObject, isOrchestratorModel, mergeOrchestratorIntoAgySettings } from '../common/orchestrator.ts'
 import { resolveModelSlug } from '../host/models.ts'
-import type { RunTelemetry } from './finalize.ts'
+import { warnWatermarkDrop, type RunTelemetry } from './finalize.ts'
 import { SubagentTracker } from '../features/subagent/tracker.ts'
 import {
   createLiveQuotaController,
@@ -481,6 +481,19 @@ export function persistBindingOnResult(
   // actually wrote to beats the binding we entered with.
   const finalId = ev.conversationId || recorder.streamCid || input.binding?.conversationId
   if (!finalId) return
+  const prevCount = Math.max(
+    input.binding?.lastMessageCount ?? 0,
+    deps.store.get(input.sessionAccountKey)?.lastMessageCount ?? 0,
+  )
+  warnWatermarkDrop({
+    ...(deps.log ? { log: deps.log } : {}),
+    source: 'persistBindingOnResult',
+    key: input.sessionAccountKey,
+    conversationId: finalId,
+    previousCount: prevCount,
+    nextCount: input.messages.length,
+    messages: input.messages,
+  })
   const mergedImages =
     input.binding?.sentImageIds || input.newlySentImageIds.length > 0
       ? [...new Set([...(input.binding?.sentImageIds ?? []), ...input.newlySentImageIds])]

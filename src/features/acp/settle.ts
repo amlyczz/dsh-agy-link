@@ -124,6 +124,7 @@ export async function settleAcpOutcome(opts: {
     clearRateLimitFailover: (k) => deps.clearRateLimitFailover(k),
     sharesSingleEgress: () => deps.sharesSingleEgress(),
     ...(deps.onRun === undefined ? {} : { onRun: deps.onRun }),
+    ...(deps.log === undefined ? {} : { log: deps.log }),
   })
 }
 

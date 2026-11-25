@@ -464,6 +464,7 @@ export async function handleAttemptOutcome(
       clearRateLimitFailover: (key) => deps.clearRateLimitFailover(key),
       sharesSingleEgress: () => deps.sharesSingleEgress(),
       ...(deps.onRun === undefined ? {} : { onRun: deps.onRun }),
+      ...(deps.log === undefined ? {} : { log: deps.log }),
     })
     // The run settled on `input.account`: refresh just that account so the panel
     // stops showing the pre-turn snapshot (throttled host-side).

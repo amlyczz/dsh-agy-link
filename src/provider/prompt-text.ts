@@ -292,7 +292,7 @@ function collectImageRefs(m: Message, out: ImageRefLike[]): void {
   walk(m.content as readonly unknown[] | undefined)
 }
 
-function collectMediaRefs(m: Message, out: MediaRefLike[]): void {
+export function collectMediaRefs(m: Message, out: MediaRefLike[]): void {
   const walk = (blocks: readonly unknown[] | undefined): void => {
     for (const raw of blocks ?? []) {
       const b = raw as UnknownBlock | undefined
@@ -492,6 +492,8 @@ export interface DigestBudget {
   toolLineBytes?: number
   /** Include the reserved "User: <latest task>" line (default true). */
   includeTaskLine?: boolean
+  /** Objective path notes for historical attachments placed in-place on their owning User message. */
+  attachmentsByMessage?: ReadonlyMap<Message, readonly string[]>
 }
 
 /**
@@ -523,9 +525,12 @@ export function buildDigest(
     if (isSyntheticHarnessMessage(m)) continue
     // Binary tool output (e.g. a quoted .git blob) can carry NUL bytes; they
     // are illegal in argv and would kill the spawn before agy starts.
-    const text = stripNulBytes(textOf(m))
+    const rawText = stripNulBytes(textOf(m))
+    const attNotes = budgetOpts.attachmentsByMessage?.get(m)
+    const attBlock = attNotes !== undefined && attNotes.length > 0 ? attNotes.join('\n') : ''
+    const text = rawText !== '' && attBlock !== '' ? `${rawText}\n${attBlock}` : (rawText || attBlock)
     if (text === '') continue
-    if (taskLine !== '' && !isToolResultMessage(m) && m.role === 'user' && text === taskText) continue
+    if (taskLine !== '' && !isToolResultMessage(m) && m.role === 'user' && rawText === taskText && attBlock === '') continue
     const safeText = isToolResultMessage(m) && isMirrorToolNotFoundText(text)
       ? MIRROR_TOOL_RELOAD_NOTICE
       : defuseQuotedSlashCommands(text)

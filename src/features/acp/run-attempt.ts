@@ -424,6 +424,7 @@ export async function runAcpAttempt(
         mode: input.permissionMode,
         sandbox: input.sandbox ?? cfg.sandbox,
         agent: (input.agent ?? cfg.agent).trim(),
+        ...(cfg.mediaDir !== '' ? { addDirs: [cfg.mediaDir] } : {}),
         preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
         ...(account?.email ? { expectedEmail: account.email } : {}),
         ...(account?.dir && !account.systemHome ? { expectedIsolated: true } : {}),

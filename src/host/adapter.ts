@@ -400,7 +400,8 @@ export class AgyAdapter extends LlmAdapter {
           }
         },
         recentlyCompactedSessions: this.recentlyCompactedSessions,
-        deliverContext: (digest: string, key: string, extraAddDirs: string[]) => deliverContext(digest, key, extraAddDirs, cfg),
+        deliverContext: (digest: string, key: string, extraAddDirs: string[], opts?: import('../provider/context-delivery.ts').DeliverContextOptions) =>
+          deliverContext(digest, key, extraAddDirs, cfg, opts),
       },
     })
     let prompt = plan.prompt

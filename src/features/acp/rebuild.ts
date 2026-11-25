@@ -7,7 +7,7 @@
 import { resolveModelSlug } from '../../host/models.ts'
 import type { AttemptDeps, AttemptInput } from '../../provider/attempt.ts'
 import { deliverContext } from '../../provider/context-delivery.ts'
-import { buildDigest, wrapLiveRequest } from '../../provider/prompt-text.ts'
+import { buildDigest, utf8Bytes, wrapLiveRequest } from '../../provider/prompt-text.ts'
 import type { AcpProcess } from './client.ts'
 
 /**
@@ -45,8 +45,11 @@ export async function rebuildAcpSession(opts: {
     includeTaskLine: false,
   })
   const extraDirs: string[] = []
-  const delivered = digest === '' ? '' : await deliverContext(digest, input.sessionKey, extraDirs, cfg)
-  const prompt = delivered === '' ? input.prompt : wrapLiveRequest(input.prompt) + delivered
+  const liveWrapped = wrapLiveRequest(input.prompt)
+  const delivered = digest === ''
+    ? ''
+    : await deliverContext(digest, input.sessionKey, extraDirs, cfg, { liveRequestBytes: utf8Bytes(liveWrapped) })
+  const prompt = delivered === '' ? input.prompt : liveWrapped + delivered
   let sid = previousSid
   if (extraDirs.length > 0) {
     // The digest was spilled to a file; agy needs that directory in scope.

@@ -5,18 +5,18 @@
 // first-event hand-off are one concern, and they own the "give the slot back"
 // path for spawn failures.
 import { LlmError } from '@deepseek-ai/dsh-llm'
-import { Err, looksLikeTosViolation } from '../common/types.ts'
-import type { AgyEvent } from '../common/types.ts'
+import { Err } from '../common/types.ts'
 import type { RunningProcess } from '../host/runner.ts'
 import { ensureIsolatedKeychain, startAgyProcess } from '../host/runner.ts'
 import { agyHomeDirFor, snapshotAgyLogs, type AgyLogSnapshot } from '../host/agy-log.ts'
 import { buildAgyEnv, pickProxy } from '../runtime/net/account-env.ts'
-import type {
-  AttemptDeps,
-  AttemptInput,
-  AttemptRecorder,
-  AttemptSlot,
-  SpawnPlan,
+import {
+  persistBindingOnResult,
+  type AttemptDeps,
+  type AttemptInput,
+  type AttemptRecorder,
+  type AttemptSlot,
+  type SpawnPlan,
 } from './attempt.ts'
 
 /** Abort-aware sleep: rejects with the same error text the call sites used. */
@@ -38,42 +38,6 @@ function abortableDelay(ms: number, signal: AbortSignal | undefined, abortedMess
 function brief(s: string): string {
   const flat = s.trim().replace(/\s+/g, ' ')
   return flat.length > 300 ? flat.slice(0, 300) + '...' : flat
-}
-
-/** Persist the conversation id the moment a result line proves it (issue #63). */
-function persistBindingOnResult(
-  deps: AttemptDeps,
-  input: AttemptInput,
-  recorder: AttemptRecorder,
-  ev: AgyEvent,
-): void {
-  if (
-    ev.kind !== 'result' ||
-    !ev.ok ||
-    looksLikeTosViolation(ev.response) ||
-    !input.persistBinding ||
-    input.sessionAccountKey === '' ||
-    deps.isSuperseded(input.sessionKey, recorder.rec)
-  ) {
-    return
-  }
-  // Same precedence as finalize.writeSuccessBinding: the conversation this run
-  // actually wrote to beats the binding we entered with.
-  const finalId = ev.conversationId || recorder.streamCid || input.binding?.conversationId
-  if (!finalId) return
-  const mergedImages =
-    input.binding?.sentImageIds || input.newlySentImageIds.length > 0
-      ? [...new Set([...(input.binding?.sentImageIds ?? []), ...input.newlySentImageIds])]
-      : undefined
-  const resolvedCwd = input.binding?.cwd || input.workspaceRoot
-  deps.store.set(input.sessionAccountKey, {
-    conversationId: finalId,
-    lastMessageCount: input.messages.length,
-    updatedAt: Date.now(),
-    model: input.activeModel,
-    ...(mergedImages && mergedImages.length > 0 ? { sentImageIds: mergedImages } : {}),
-    ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
-  })
 }
 
 export interface SpawnedAttempt {

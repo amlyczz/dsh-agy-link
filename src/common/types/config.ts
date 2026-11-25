@@ -403,7 +403,7 @@ export function defaultConfig(): PluginConfig {
     digestMaxChars: 8_000,
     contextTransferMaxChars: 660_000,
     contextTransferMaxBytes: 150_000,
-    contextTransferFileAboveBytes: 55_000,
+    contextTransferFileAboveBytes: 150_000,
     contextTransferFileMaxBytes: 2_000_000,
     modelsCacheTtlMs: 300_000,
     allowAuxiliary: true,

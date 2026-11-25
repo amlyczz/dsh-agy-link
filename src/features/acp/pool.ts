@@ -186,6 +186,7 @@ export class AcpSessionPool {
     mode: PermissionMode
     sandbox: boolean
     agent: string
+    addDirs?: readonly string[]
     preemptAutoUpdate?: boolean
     /** Account this process must authenticate as (gate 2 identity check). */
     expectedEmail?: string
@@ -228,6 +229,7 @@ export class AcpSessionPool {
       permissionMode: req.mode,
       sandbox: req.sandbox,
       ...(req.agent ? { agent: req.agent } : {}),
+      ...(req.addDirs && req.addDirs.length > 0 ? { addDirs: req.addDirs } : {}),
       ...(req.preemptAutoUpdate !== undefined ? { preemptAutoUpdate: req.preemptAutoUpdate } : {}),
       ...(req.expectedEmail ? { expectedEmail: req.expectedEmail } : {}),
       ...(req.expectedIsolated === true ? { expectedIsolated: true } : {}),
@@ -304,6 +306,7 @@ export class AcpSessionPool {
     mode: PermissionMode
     sandbox: boolean
     agent: string
+    addDirs?: readonly string[]
     preemptAutoUpdate?: boolean
     expectedEmail?: string
     usesSharedSlot?: boolean

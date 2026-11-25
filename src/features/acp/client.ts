@@ -1,8 +1,6 @@
 // Persistent `agy acp` stdio JSON-RPC client process.
 import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
 import type { PermissionMode } from '../../common/types.ts'
 import { preemptAgyAutoUpdate } from '../../host/auto-updater.ts'
 import { killTree } from '../../runtime/agy/process.ts'
@@ -13,7 +11,7 @@ import { clearProcSessions, nextMcpProcId } from './mcp-session.ts'
 import { extractAvailableCommands, pickPermissionOption, type AvailableCommand, type JsonRpcResponse } from './protocol.ts'
 import { runAcpTurn, type AcpPromptOptions } from './turn.ts'
 import { collectAdvertisedModelIds } from './session-models.ts'
-import { resolveAcpLogFile, spawnAcpChild } from './spawn.ts'
+import { buildAcpSpawnArgs, resolveAcpLogFile, spawnAcpChild } from './spawn.ts'
 
 export interface AcpProcessOptions {
   bin: string
@@ -22,6 +20,7 @@ export interface AcpProcessOptions {
   permissionMode: PermissionMode
   sandbox?: boolean
   agent?: string
+  addDirs?: readonly string[]
   preemptAutoUpdate?: boolean
   log?: (msg: string) => void
   /** Directory for the per-process `acp-*.log` (default: <state>/logs). */
@@ -196,18 +195,7 @@ export class AcpProcess extends EventEmitter {
     const env = withAgyQuietEnv(this.opts.env ?? process.env)
     env.DSH_MCP_PROC = this.mcpProcId
     if (this.opts.preemptAutoUpdate !== false) preemptAgyAutoUpdate(env)
-    const args = ['acp', '--disable-telemetry']
-    if (this.opts.permissionMode === 'skip') args.push('--dangerously-skip-permissions')
-    if (this.opts.sandbox) args.push('--sandbox')
-    if (this.opts.agent && this.opts.agent.trim() !== '') args.push('--agent', this.opts.agent.trim())
-    const logFile = this.resolveLogFile()
-    try {
-      mkdirSync(dirname(logFile), { recursive: true })
-      args.push('--log-file', logFile)
-    } catch {
-      // An unwritable log path must not block the transport: the classifier
-      // simply gets no log evidence for this process.
-    }
+    const args = buildAcpSpawnArgs(this.opts, this.resolveLogFile())
 
     const child = spawnAcpChild(this.opts, args, env)
     this.child = child
