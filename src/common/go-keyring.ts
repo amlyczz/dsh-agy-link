@@ -15,7 +15,11 @@ export const GO_KEYRING_PREFIX = 'go-keyring-base64:'
 
 /**
  * Unwrap a `go-keyring` payload (`go-keyring-base64:<b64>` or a raw JSON string)
- * into UTF-8 JSON text.
+ * into UTF-8 JSON text. Trims surrounding whitespace for both forms.
+ *
+ * NB: an invalid base64 tail still decodes to *some* bytes (Buffer is
+ * permissive); callers that need soundness must run `JSON.parse` on the
+ * result, which is exactly what `parseCredentialDoc` does.
  */
 export function unwrapGoKeyringPayload(raw: string): string {
   const trimmed = raw.trim()
@@ -23,4 +27,9 @@ export function unwrapGoKeyringPayload(raw: string): string {
     return Buffer.from(trimmed.slice(GO_KEYRING_PREFIX.length), 'base64').toString('utf8')
   }
   return trimmed
+}
+
+/** Wrap raw JSON text the way AGY's desktop build stores it (round-trip tests). */
+export function wrapGoKeyringPayload(rawJson: string): string {
+  return GO_KEYRING_PREFIX + Buffer.from(rawJson, 'utf8').toString('base64')
 }

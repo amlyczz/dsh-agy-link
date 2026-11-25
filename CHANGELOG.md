@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.92 (2026-11-25)
+
+### English
+
+- **Fix(provider): recognise `working-context` and DSH snapshot/catalog sources as harness context, so they no longer break a tool continuation (PR #206 by @hyh48).** `detectContinuation()` decides what it may skip by `isSyntheticHarnessMessage()`, whose source-kind list lagged DSH 0.2.2: a `[Working Context: …]` message (bare, preset-prefixed, or a custom `*-working-context`), a custom `form: 'snapshot' | 'catalog'` producer, or the built-in `working-directory` / `ptc-mode` / `repeat-tool-reminder` / `user-approval` kinds stopped the backward scan at a `role: 'user'` context message, so the tool result underneath looked like a new turn — the same preemption/abort loop as #205. The kinds are now a Set, custom presets are suffix-matched, and an arbitrary `[Working Context:` producer without a recognised kind is caught by a text fallback; actionable sources (`goal`, `schedule`, `webhook`, `subagent-settled`, `dsh-mnemon`, plugin notices) stay non-synthetic. Merged together with its regression suite (working-context hops, custom snapshot/catalog, actionable-source boundaries, live-run continuity).
+
+### 中文
+
+- **修复(provider)：把 `working-context` 与 DSH 的 snapshot/catalog 来源识别为 harness 上下文，不再打断工具续跑（PR #206，作者 @hyh48）。** `detectContinuation()` 依赖 `isSyntheticHarnessMessage()` 决定可跳过哪些消息，而后者的 source kind 列表落后于 DSH 0.2.2：`[Working Context: …]`（裸 kind、preset 前缀或自定义 `*-working-context`）、自定义 `form: 'snapshot' | 'catalog'` 生产者、以及内置 `working-directory` / `ptc-mode` / `repeat-tool-reminder` / `user-approval` 都会让反向扫描停在这条 `role: 'user'` 上下文消息上，底下的工具结果被当成新回合——与 #205 相同的抢占/取消循环。现在 kind 收敛为 Set，自定义 preset 用后缀匹配，无法识别 kind 但以 `[Working Context:` 开头的生产者由文本兜底识别；可执行来源（`goal`、`schedule`、`webhook`、`subagent-settled`、`dsh-mnemon`、插件通知）仍保持非 synthetic。连同其回归套件一起合并（working-context 续跑、自定义 snapshot/catalog、可执行来源边界、live run 连续性）。
+
+## 0.6.91 (2026-11-25)
+
+### English
+
+- **Fix(provider): a harness lifecycle hop must never preempt the run that produced it (issue #205).** Two independent paths caused the `!samePrompt` → `requestAbort()` cancel loop. (1) `detectContinuation()` stopped at a trailing `system`/`developer` message (mid-turn system-prompt / tool-registry refresh), so a tool result underneath looked like a fresh turn; those roles cannot be a human boundary and are now skipped. (2) The interruption notice injected on preemption was stored in the duplicate-debounce baseline, so the notice-free replay of the same hop compared unequal; `promptIdentity()` now canonicalises both sides and `hasNewHumanTask()` gates steer preemption — no new typed (or media) turn means resume the cut span (`lastCutIndex + 1`) instead of aborting, and BUSY only when nothing has been cut yet.
+- **Feat(orchestrator): role whitelists and resident-ACP settings (issue #204).** The Planner/Executor dropdowns now filter by agy's own `orchestrator-model-roles` (verified in the 1.5.15 binary: planner = Neon/Carbon/Argon/Opus 5.5, executor = Hydrogen/Sonnet 5.5); a configured out-of-list value still renders so the control never lies. ACP has no `--settings`, so a customized orchestrator previously forced the batch CLI. It now stays on the resident ACP path: `prepareOrchestratorSettingsForAcp()` merges the payload into `<home>/.gemini/antigravity-cli/settings.json` (atomic, preserves unrelated keys, refuses to touch an unparsable file) and tags the ACP process key with the seats, so a server started under different seats is never reused; a failed merge falls back to CLI `-p --settings`. Free-form `agySettings` still use the CLI, because persisting them would outlive one call.
+- **Fix(credentials): complete the #203 envelope fix on the read paths that bypassed `parseCredentialDoc`.** `extractRefreshToken()` now unwraps `go-keyring-base64:` before matching, instead of returning the base64 blob as a "token"; the external-sign-in guard gained a regression test that feeds it a wrapped foreign grant. No behaviour change for plain JSON writers.
+
+### 中文
+
+- **修复(provider)：Harness 生命周期消息不得抢占产生它的运行（issue #205）。** 两条独立路径共同造成 `!samePrompt` → `requestAbort()` 取消循环：① `detectContinuation()` 遇到尾部 `system`/`developer` 消息（回合中的 system-prompt / tool-registry 刷新）就停止，底下的工具结果被当成新回合；这两种角色不可能是人类边界，现予跳过。② 抢占时注入的中断提示被写入去重基线，同一跳的无提示重放必然不等；`promptIdentity()` 现统一两侧规范形，`hasNewHumanTask()` 决定是否允许抢占——没有新的用户输入（文字或媒体）就沿 `lastCutIndex + 1` 续跑，只有尚未切出 span 时才 BUSY。
+- **特性(编排器)：角色白名单与常驻 ACP 设置（issue #204）。** Planner/Executor 下拉按 agy 自带 `orchestrator-model-roles` 过滤（1.5.15 二进制实测：planner = Neon/Carbon/Argon/Opus 5.5，executor = Hydrogen/Sonnet 5.5）；手配的白名单外值仍会显示，控件不撒谎。ACP 没有 `--settings`，此前自定义编排器只能绕开常驻 ACP 走 CLI。现在保留 ACP：`prepareOrchestratorSettingsForAcp()` 把 payload 原子合并进 `<home>/.gemini/antigravity-cli/settings.json`（保留无关字段，文件不可解析则放弃），并把 seats 作为 ACP 进程 key 的一部分（`settingsTag`），换过配置的旧进程永不被复用；合并失败回退 CLI `-p --settings`。用户自由 `agySettings` 仍走 CLI，避免把单次调用设置持久化到每个账号。
+- **修复(凭据)：补齐 #203 信封修复中绕过 `parseCredentialDoc` 的读取路径。** `extractRefreshToken()` 现在先解 `go-keyring-base64:` 再匹配，不再把 base64 串当 token 返回；外部登录守卫新增「信封包裹的外部 grant」回归用例。纯 JSON 写入方行为不变。
+
 ## 0.6.90 (2026-11-25)
 
 ### English

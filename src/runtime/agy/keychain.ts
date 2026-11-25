@@ -7,8 +7,11 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-
 import { GO_KEYRING_PREFIX, unwrapGoKeyringPayload } from '../../common/go-keyring.ts'
+
+// Re-exported for the existing macOS/Linux keyring readers and boot-time
+// recovery. The implementation lives in `common/` so `domain/` can use it
+// without importing `runtime/` (issue #203).
 export { GO_KEYRING_PREFIX, unwrapGoKeyringPayload }
 
 /**

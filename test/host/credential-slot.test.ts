@@ -33,6 +33,9 @@ import {
 import { invalidateWindowsCredentialCache, readWindowsCredentialRaw } from '../../src/host/wincred.ts'
 import { buildAgyCredentialDoc } from '../../src/host/oauth.ts'
 import { normalizeStoredToken } from '../../src/domain/quota/identity.ts'
+import { wrapGoKeyringPayload } from '../../src/common/go-keyring.ts'
+import { extractRefreshToken } from '../../src/domain/credentials/docs.ts'
+import { isExternalSlotSignIn } from '../../src/domain/credentials/external-guard.ts'
 
 test('issue #112: an imported credential document always carries a parseable expiry', () => {
   // `/agy import` on a Windows primary account wrote a token doc WITHOUT
@@ -122,6 +125,57 @@ test('parseCredentialDoc reads agy nested shape, flat shape, and rejects garbage
   assert.equal(parseCredentialDoc(''), null)
   assert.equal(parseCredentialDoc(null), null)
   assert.equal(parseCredentialDoc('[]'), null)
+})
+
+// Issue #203: the AGY desktop build stores its document through Go's
+// `go-keyring`, i.e. `go-keyring-base64:<base64(JSON)>`. Parsing the envelope
+// as JSON made the Windows slot look unreadable, which silently disabled the
+// `respectExternalSignIn` guard (sameCredentialGrant / isExternalSlotSignIn
+// both start from `parseCredentialDoc`).
+test('parseCredentialDoc unwraps the go-keyring envelope (issue #203)', () => {
+  const plain = tokenDoc('R-keyring', 'A-keyring')
+  const wrapped = wrapGoKeyringPayload(plain)
+  assert.ok(wrapped.startsWith('go-keyring-base64:'))
+
+  const doc = parseCredentialDoc(wrapped)
+  assert.equal(doc?.refreshToken, 'R-keyring')
+  assert.equal(doc?.accessToken, 'A-keyring')
+  assert.ok(doc?.expiryMs)
+  // Same identity as the plain document: the guard must see ONE account.
+  assert.equal(credentialFingerprint(wrapped), credentialFingerprint(plain))
+
+  // Legacy plain JSON still parses (older writers / hand-edited files).
+  assert.equal(parseCredentialDoc(plain)?.refreshToken, 'R-keyring')
+  // Whitespace around the envelope is tolerated (keyring stores often pad).
+  assert.equal(parseCredentialDoc('\n  ' + wrapped + '  \n')?.refreshToken, 'R-keyring')
+  // A corrupted envelope must stay null — no half-parsed document may leak.
+  assert.equal(parseCredentialDoc('go-keyring-base64:not-base64-at-all'), null)
+  assert.equal(parseCredentialDoc(wrapGoKeyringPayload('not json')), null)
+  // A bare prefix is not a credential.
+  assert.equal(parseCredentialDoc('go-keyring-base64:'), null)
+})
+
+test('extractRefreshToken unwraps the go-keyring envelope instead of returning base64', () => {
+  const plain = tokenDoc('R-extract')
+  assert.equal(extractRefreshToken(wrapGoKeyringPayload(plain)), 'R-extract')
+  assert.equal(extractRefreshToken(plain), 'R-extract')
+})
+
+test('isExternalSlotSignIn recognises a keyring-wrapped external sign-in (issue #203 symptom)', () => {
+  const dir = tmp('agy-keyring-guard-')
+  try {
+    const primary = tokenDoc('R-primary')
+    const external = tokenDoc('R-external')
+    // Before #203 the wrapped blob parsed to null -> hash null -> `false`, so
+    // respectExternalSignIn never fired and the primary was written over it.
+    assert.equal(isExternalSlotSignIn(wrapGoKeyringPayload(external), primary, dir), true)
+    // A wrapped copy of our OWN grant is still recognised as ours.
+    assert.equal(isExternalSlotSignIn(wrapGoKeyringPayload(primary), primary, dir), false)
+    // A plain external blob keeps working (older agy writers).
+    assert.equal(isExternalSlotSignIn(external, primary, dir), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('credentialFingerprint is anchored on the refresh token, not the access token', () => {

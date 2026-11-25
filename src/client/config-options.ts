@@ -10,7 +10,7 @@
 //     selectable, otherwise the control would silently misreport the state.
 
 import { isGeminiFamilyModel } from '../common/model-lineup.ts'
-import { isOrchestratorModel } from '../common/orchestrator.ts'
+import { isOrchestratorModel, isOrchestratorRoleModel, type OrchestratorRole } from '../common/orchestrator.ts'
 
 export interface SelectOption {
 	value: string
@@ -94,6 +94,24 @@ export function geminiCatalogModels(models: ReadonlyArray<CatalogModelLike>): Ca
 /** Models eligible as Orchestrator Planner or Executor (excludes orchestrator role slugs themselves). */
 export function orchestratorRoleModels(models: ReadonlyArray<CatalogModelLike>): CatalogModelLike[] {
 	return models.filter((model) => typeof model?.id === 'string' && !isOrchestratorModel(model.id))
+}
+
+/**
+ * Models agy accepts for ONE Orchestrator seat (issue #204).
+ *
+ * agy has a fixed role whitelist (`orchestrator-model-roles`); a model outside
+ * it is ignored upstream, so offering it here only produces a silently
+ * ineffective setting. The Btw dropdown keeps using `orchestratorRoleModels`:
+ * it runs a normal chat model, not an Orchestrator seat.
+ */
+export function orchestratorRoleModelsFor(
+	role: OrchestratorRole,
+	models: ReadonlyArray<CatalogModelLike>,
+): CatalogModelLike[] {
+	return models.filter((model) =>
+		typeof model?.id === 'string'
+		&& !isOrchestratorModel(model.id)
+		&& isOrchestratorRoleModel(role, model.id))
 }
 
 /**

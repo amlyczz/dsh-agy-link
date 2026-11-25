@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { once } from 'node:events'
-import { mkdtempSync } from 'node:fs'
+import { once, EventEmitter } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -64,5 +64,47 @@ test('a foreground ACP prompt survives idle eviction and starts a fresh idle win
     pool.dispose()
     await exited
     await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('issue #204: the orchestrator settings tag is part of the ACP process key', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-pool-settings-tag-'))
+  const created: unknown[] = []
+  const pool = new AcpSessionPool({
+    bin: () => 'agy',
+    cfg: defaultConfig,
+    strays: null,
+    createProcess: () => {
+      const proc = new EventEmitter()
+      Object.assign(proc, {
+        isAlive: () => true,
+        isBusy: false,
+        hasOpenSession: () => false,
+        lastUsedAt: 0,
+        close: () => undefined,
+      })
+      created.push(proc)
+      return proc as never
+    },
+  })
+  const acquire = (settingsTag?: string) => pool.acquireProcess({
+    bin: 'agy',
+    cwd: dir,
+    mode: 'auto',
+    sandbox: false,
+    agent: '',
+    ...(settingsTag === undefined ? {} : { settingsTag }),
+  })
+  try {
+    const a = acquire('seats-a')
+    assert.equal(acquire('seats-a'), a, 'same seats reuse the resident process')
+    const b = acquire('seats-b')
+    assert.notEqual(b, a, 'changed seats must spawn a fresh process')
+    assert.equal(created.length, 2)
+    // Non-orchestrator turns keep their historical key (no tag).
+    assert.equal(acquire(), acquire())
+  } finally {
+    pool.dispose()
+    rmSync(dir, { recursive: true, force: true })
   }
 })

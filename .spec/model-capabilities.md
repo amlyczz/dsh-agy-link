@@ -68,10 +68,11 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
 
 ## 6. Orchestrator 上下级模型与思考档位（issue #174）
 
-- 自 `agy 1.5.14` 起，命令行 `agy --settings '{"orchestrator":{"planner":"<tiered-slug>","executor":"<tiered-slug>"}}'` 支持为编排器角色模型（`gemini-pro-orchestrator*`）分别覆盖上级（Planner）与下级（Executor）模型及各自思考档位，而 `agy acp` 仍无 `--settings` 入参且会拒绝嵌套对象格式 `{ planner: { model, effort } }`。
+- 自 `agy 1.5.14` 起，命令行 `agy --settings '{"orchestrator":{"planner":"<tiered-slug>","executor":"<tiered-slug>"}}'` 支持为编排器角色模型（`gemini-pro-orchestrator*`）分别覆盖上级（Planner）与下级（Executor）模型及各自思考档位。`agy acp` 没有 `--settings` 入参，但启动时读取 `<home>/.gemini/antigravity-cli/settings.json`（与 `--settings` 同一套 key），因此编排器覆盖现在**写入该文件**而不是绕开 ACP（issue #204）。
 - **唯一格式化与合并源（`src/common/orchestrator.ts`）**：`isOrchestratorModel()`、`resolveOrchestratorRoleSlug()`（保留 `gpt-oss-120b-medium` 等无独立档位枚举模型后缀、剥离其余已有档位后再拼接 `<base>-<effort>`）、`buildOrchestratorSettingsObject()` 与 `mergeOrchestratorIntoAgySettings()`（合并进现有内联 JSON 或文件路径型 `agySettings` 的 `orchestrator` 对象，不覆盖无关字段）。
-- **生效路由边界**：仅当当前会话模型（或 `runAgyOnce` 请求模型）命中 `isOrchestratorModel()` 且配置了至少一个上级/下级模型时，`resolveEffectiveAgySettings()`（`src/provider/attempt.ts`）与 `runAgyOnce`（`src/host/oneshot.ts`）才会注入 `--settings`；`runAgyAttempt`（`src/provider/attempt-outcome.ts`）基于 `resolveEffectiveAgySettings(input)` 判定仅在此场景下绕开 ACP 走 CLI `-p --settings`，非编排器模型与未自定义编排器继续走 ACP 不受影响。
-- **配置与界面**：`orchestratorPlannerModel`、`orchestratorPlannerEffort`、`orchestratorExecutorModel`、`orchestratorExecutorEffort`（`src/common/types/config.ts` / `config.ts` / `/config` / `/status` / `/agy status` / `OrchestratorSettingsRows.ts`）；Role 下拉排除 `isOrchestratorModel` 本身，模型选「自动」或固定无档位模型时档位下拉仅允许「自动」。
+- **角色白名单（issue #204）**：`agy 1.5.15` 的 `orchestrator-model-roles` 固定为 Planner = `gemini-4-neon` / `gemini-4-carbon` / `gemini-4-argon` / `claude-opus-5-5`，Executor = `gemini-4-hydrogen` / `claude-sonnet-5-5`。`ORCHESTRATOR_ROLE_MODELS` + `isOrchestratorRoleModel()` 是唯一判据，设置页两个下拉分别过滤；`/agy-btw` 下拉不受角色限制（它跑普通聊天模型）。
+- **生效路由**：仅当当前会话模型命中 `isOrchestratorModel()` 且配置了至少一个上级/下级模型时，`resolveEffectiveAgySettings()` 才会生成 payload。若用户没有自己的自由 `agySettings`，`orchestratorSettingsCoveredByAcp()` 判定为「ACP 可覆盖」：`prepareOrchestratorSettingsForAcp()`（`src/features/acp/orchestrator-prep.ts`）先把 payload 合并写入账号 home 的 `settings.json`（原子写、保留无关字段、不可解析则放弃），并返回 payload 作为进程 key 的 `settingsTag`——不同 seats 绝不复用同一 ACP 进程，旧进程跑完由空闲 TTL 收敛；合并失败则返回 null 回退 CLI `-p --settings`，不允许静默丢失设置。用户自定义 `agySettings` 仍走 CLI，避免把一次调用的设置持久化进每个账号。
+- **配置与界面**：`orchestratorPlannerModel`、`orchestratorPlannerEffort`、`orchestratorExecutorModel`、`orchestratorExecutorEffort`（`src/common/types/config.ts` / `config.ts` / `/config` / `/status` / `/agy status` / `OrchestratorSettingsRows.ts`）；模型选「自动」或固定无档位模型时档位下拉仅允许「自动」。
 
 ## 7. 测试锚点
 

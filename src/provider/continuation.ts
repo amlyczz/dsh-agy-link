@@ -41,12 +41,21 @@ export function detectContinuation(messages: readonly Message[]): { runId: strin
   // like a human steer: the adapter aborted the live agy run and told the model
   // not to continue (issue #138). Skip anything the harness itself injected —
   // the same predicate the prompt builder uses — and stop at everything else.
-  // A human message, another provider's tool result, or any unknown boundary
-  // must still stop the scan: continuing past one could replay a run for the
-  // wrong request instead of spawning the requested turn.
+  //
+  // Some hosts append the mid-turn context as `role: 'system'` / `'developer'`
+  // instead of `'user'` (system-prompt and tool-registry refreshes). Those
+  // roles cannot be a human boundary — a person cannot type them — so a tail of
+  // them must not hide the tool result underneath (issue #205). A real user
+  // message, another provider's tool result, an assistant reply, or any
+  // unknown boundary still stops the scan: continuing past one could replay a
+  // run for the wrong request instead of spawning the requested turn.
   let i = messages.length - 1
   while (i >= 0) {
     const candidate = messages[i] as unknown as { role?: string }
+    if (candidate.role === 'system' || candidate.role === 'developer') {
+      i--
+      continue
+    }
     if (candidate.role !== 'user') break
     if (!isSyntheticHarnessMessage(messages[i] as Message)) break
     i--

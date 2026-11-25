@@ -33,6 +33,14 @@
 
 **仍在临界线上**：`src/client/sections/AccountsPanel.ts` 599 行（预算 600）。下次动它之前先抽 `dotColor` / 卡片头部渲染，不要再靠删注释腾空间。
 
+## 2026-11-25 增量（区间修复顺带抽取）
+
+- `adapter` 的一次性告警门 → `src/provider/warn-once.ts`；steer/lifecycle 判定（`promptIdentity` / `hasNewHumanTask`）→ `src/provider/prompt-identity.ts`（#205）。
+- ACP 首事件门限与单行格式化 → `src/features/acp/turn-format.ts`；编排器设置落盘与空闲进程回收策略 → `src/features/acp/orchestrator-prep.ts`（#204）。
+- `go-keyring` 信封 → `src/common/go-keyring.ts`（`domain/` 不再 import `runtime/`）；`settings.json` 原子合并 → `src/runtime/agy/settings-sync.ts`（#203/#204）。
+- 结果：`adapter` 599、`run-attempt` 597、`prompt-text` 597、`pool` 598（均 < 600，无 ratchet）。
+
+
 ## 重复实现（比体积更该处理）
 
 - **`delay(ms[, signal])` 在 13 个文件里各写一遍**（`host/models`、`host/services`、`quota/freshness`、`acp/pool`、`acp/run-attempt`、`warmup/schedule`、`provider/mapper/event-mapper`、`provider/retry-policy`、`provider/failover-budget`、`common/pool-types`、`domain/quota/identity`、`client/mermaid-render`、`translation/service`）。多数是 `new Promise(r => setTimeout(r, ms))`，但**并非全部等价**（部分带 `AbortSignal` 且 abort 后 resolve 而非 reject）。

@@ -22,7 +22,8 @@ import type { RunRecording } from '../../host/recording.ts'
 import { resolveModelSlug } from '../../host/models.ts'
 import { ensureIsolatedKeychain, type RunOutcome } from '../../host/runner.ts'
 import { supportsSshIsolation } from '../../runtime/agy/env.ts'
-import { buildAgyEnv } from '../../runtime/net/account-env.ts'
+import { accountHome, buildAgyEnv } from '../../runtime/net/account-env.ts'
+import { prepareOrchestratorSettingsForAcp } from './orchestrator-prep.ts'
 import { createAttemptRecorder, type AttemptDeps, type AttemptInput, type AttemptSlot } from '../../provider/attempt.ts'
 import { deliverContext } from '../../provider/context-delivery.ts'
 import { classifyFailure, type AttemptFailure } from '../../provider/failure.ts'
@@ -51,19 +52,7 @@ import {
 export { isAgyFailureBanner, shouldSelfHealAcpResult } from './settle.ts'
 import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
 import { reportAcpCacheTurn } from './cache-turn.ts'
-
-/**
- * How long we watch a fresh ACP turn for its first event before handing the
- * recording back to the caller. A turn that dies without emitting anything is
- * the signature of a transport that is up but cannot reach Google; waiting for
- * the whole idle budget first would make the CLI fallback feel like a hang.
- */
-const FIRST_OUTPUT_GATE_MS = 20_000
-
-function firstLine(text: string): string {
-  const line = text.split('\n').find((l) => l.trim() !== '')
-  return (line ?? text).trim().slice(0, 240)
-}
+import { FIRST_OUTPUT_GATE_MS, firstLine } from './turn-format.ts'
 
 /** Drive one prompt and classify what happened. Never settles, never cleans up. */
 async function runAcpPrompt(opts: {
@@ -394,6 +383,23 @@ export async function runAcpAttempt(
     telemetryFlags: cfg.disableTelemetry,
   })
 
+  // ACP has no per-invocation `--settings`: the resident server reads
+  // `<home>/.gemini/antigravity-cli/settings.json` at STARTUP. Persist the
+  // Orchestrator seats; the returned tag joins the process key so a process
+  // spawned under other seats is never reused. If the file cannot be merged
+  // safely, fall back to the CLI path below so `--settings` still applies (#204).
+  let settingsTag: string | undefined
+  if (!input.isAux) {
+    const prep = prepareOrchestratorSettingsForAcp({
+      cfg,
+      activeModel: input.activeModel,
+      account,
+      ...(deps.log === undefined ? {} : { log: deps.log }),
+    })
+    if (!prep.ok) return null
+    settingsTag = prep.settingsTag
+  }
+
   // Isolated accounts must authenticate from their OWN token file. If that
   // token is stale agy may fall back to the machine-wide keyring and silently
   // run as another account (observed 2026-11-23: "authenticated via keyring",
@@ -428,6 +434,7 @@ export async function runAcpAttempt(
         preemptAutoUpdate: cfg.suppressAgyAutoUpdate,
         ...(account?.email ? { expectedEmail: account.email } : {}),
         ...(account?.dir && !account.systemHome ? { expectedIsolated: true } : {}),
+        ...(settingsTag === undefined ? {} : { settingsTag }),
         usesSharedSlot,
       })
       releaseProcSession?.()

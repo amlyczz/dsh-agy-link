@@ -44,6 +44,7 @@ import {
   buildSpawnArgs,
   createAttemptRecorder,
   createAttemptSlot,
+  orchestratorSettingsCoveredByAcp,
   resolveEffectiveAgySettings,
   type AttemptDeps,
   type AttemptInput,
@@ -512,7 +513,11 @@ export async function* runAgyAttempt(
   const slot = yield* dispatchCredentialSlot(deps, { ...input, prompt: spawn.prompt })
   recorder.setTrackerSession?.(input.sessionKey)
   const effectiveAgySettings = resolveEffectiveAgySettings(input)
-  if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && !effectiveAgySettings) {
+  // Orchestrator-only overrides are written to the account's settings.json by
+  // the ACP path itself, so they no longer force the batch CLI (issue #204).
+  // Free-form agySettings still do: persisting them would outlive one call.
+  const acpCoversSettings = orchestratorSettingsCoveredByAcp(input)
+  if ((input.transport ?? input.cfg.transport) === 'acp' && deps.runAcp && !input.jsonSchema && (!effectiveAgySettings || acpCoversSettings)) {
     const acpRec = await deps.runAcp(deps, { ...input, prompt: spawn.prompt }, slot).catch(() => null)
     if (acpRec !== null) {
       recorder.stop()
