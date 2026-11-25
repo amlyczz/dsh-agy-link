@@ -64,6 +64,24 @@ export interface AcpPromptOutcome {
   keyringJitter?: boolean
 }
 
+export function buildAcpPromptOutcome(
+  failure: AttemptFailure | null,
+  startedAt: number,
+  stderr: string,
+  cooledInLiveFamilies: AcpPromptOutcome['cooledInLiveFamilies'],
+): AcpPromptOutcome {
+  return {
+    failure,
+    durationMs: Date.now() - startedAt,
+    stderr,
+    rawErrText: '',
+    runLogText: '',
+    silentTimeout: false,
+    empty: false,
+    cooledInLiveFamilies,
+  }
+}
+
 
 export async function settleAcpOutcome(opts: {
   deps: AttemptDeps
@@ -157,6 +175,9 @@ export async function finishAcpAttempt(opts: {
       ...(result.cooledInLiveFamilies === undefined ? {} : { cooledInLiveFamilies: result.cooledInLiveFamilies }),
       ...(result.outcomeOverride === undefined ? {} : { outcomeOverride: result.outcomeOverride }),
     })
+    if (!input.isAux && input.account !== undefined && result.failure === null) {
+      deps.onAccountUsed?.(input.account.id, input.family)
+    }
   } finally {
     recorder.stop()
     deps.unregisterActiveRun(sessionKey, recorder.rec)

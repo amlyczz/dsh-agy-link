@@ -54,7 +54,10 @@ function handleMermaid(services: HostServices, req: unknown, res: unknown): void
   }
 }
 
-export function collectWorkspaceRoots(services: HostServices): string[] {
+export function collectWorkspaceRoots(
+  services: HostServices,
+  opts: { includeDownloadsAndTmp?: boolean } = {},
+): string[] {
   const { getConfig, mediaDir, activeCwds } = services
   const roots: string[] = []
   const cfgRoot = getConfig().workspaceRoot
@@ -74,20 +77,23 @@ export function collectWorkspaceRoots(services: HostServices): string[] {
   const cwd = process.cwd()
   if (!roots.includes(cwd)) roots.push(cwd)
 
+  const includeDownloadsAndTmp = opts.includeDownloadsAndTmp !== false
   const home = homedir()
   const allowedUserDirs = [
     join(home, 'Developer'),
     join(home, 'Workspace'),
     join(home, 'Projects'),
     join(home, 'Desktop'),
-    join(home, 'Downloads'),
+    ...(includeDownloadsAndTmp ? [join(home, 'Downloads')] : []),
   ]
   for (const d of allowedUserDirs) {
     if (existsSync(d) && !roots.includes(d)) roots.push(d)
   }
 
-  const tmp = tmpdir()
-  if (tmp && existsSync(tmp) && !roots.includes(tmp)) roots.push(tmp)
+  if (includeDownloadsAndTmp) {
+    const tmp = tmpdir()
+    if (tmp && existsSync(tmp) && !roots.includes(tmp)) roots.push(tmp)
+  }
 
   try {
     for (const b of brainDirCandidates()) {
@@ -106,7 +112,7 @@ function handleMedia(services: HostServices, req: unknown, res: unknown): void {
 }
 
 function handleOpen(services: HostServices, req: unknown, res: unknown): void {
-  const roots = collectWorkspaceRoots(services)
+  const roots = collectWorkspaceRoots(services, { includeDownloadsAndTmp: false })
   handleOpenFile(req as HttpRequestLike, res as HttpResponseLike, { workspaceRoots: roots })
 }
 

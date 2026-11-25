@@ -2,7 +2,8 @@
 // the host webServer and returns one disposer that tears them all down.
 // Route bodies live in ./routes/*; this module only wires them up.
 import type { HostServices } from '../../host/services.ts'
-import type { RouteRegistrar, WebServerLike } from './respond.ts'
+import { isCrossOriginBlocked, type HttpRequestLike } from '../../host/media-route.ts'
+import { methodOf, sendJson, type RawRes, type RouteRegistrar, type WebServerLike } from './respond.ts'
 import { register as registerStatus } from './routes/status.ts'
 import { register as registerSessionView } from './routes/session-view.ts'
 import { register as registerPool } from './routes/pool.ts'
@@ -20,7 +21,21 @@ export type { WebServerLike, Route, RouteHandler, RouteRegistrar } from './respo
 export function registerRoutes(webServer: WebServerLike, services: HostServices): () => void {
   const disposers: Array<() => void> = []
   const reg: RouteRegistrar = (route) => {
-    const d = webServer.register(route) as unknown as () => void | undefined
+    const exempt = route.path === '/plugins/agy-link/open' || route.path.startsWith('/plugins/agy-link/lease')
+    const guarded = exempt
+      ? route
+      : {
+          ...route,
+          handler: (req: unknown, res: unknown) => {
+            const m = methodOf(req)
+            if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS' && isCrossOriginBlocked(req as HttpRequestLike)) {
+              sendJson(res as RawRes, 403, { ok: false, error: 'cross-origin request denied' })
+              return
+            }
+            route.handler(req, res)
+          },
+        }
+    const d = webServer.register(guarded) as unknown as () => void | undefined
     if (typeof d === 'function') disposers.push(d)
   }
   registerStatus(reg, services)

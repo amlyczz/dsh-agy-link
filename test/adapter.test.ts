@@ -3146,3 +3146,55 @@ test('live run continues without abort or replacement when working-context follo
   assert.equal(hop2Finish.reason.kind, 'stop')
   assert.match(replyText, /Continued cleanly/)
 })
+
+test('issue #207: immediate retry after Stop on a dying activeRun waits cleanly instead of BUSY', async () => {
+  let spawns = 0
+  let dyingRec: ReturnType<RunRegistry['create']> | undefined
+  const { adapter } = makeAdapter(
+    { transport: 'acp' },
+    {
+      runAcp: async (deps, input, slot) => {
+        spawns += 1
+        const rec = deps.runs.create()
+        dyingRec = rec
+        if (spawns === 1) {
+          deps.registerActiveRun(input.sessionKey, rec)
+          rec.requestAbort = () => { rec.markAbortRequested() }
+          // Stay unsettled briefly across Stop, then settle shortly after Retry arrives
+          setTimeout(() => {
+            slot.releaseOnce()
+            deps.unregisterActiveRun(input.sessionKey, rec)
+            deps.clearInFlightPrompt(input.sessionKey, input.prompt)
+            rec.settle({ kind: 'aborted', code: 'ABORTED', message: 'aborted' })
+          }, 40)
+          return rec
+        }
+        rec.append({ kind: 'init', conversationId: 'conv-retry-ok', raw: {} })
+        rec.append({ kind: 'step', stepKey: '1', stepKind: 'text', state: 'DONE', text: 'Fresh answer' })
+        rec.append({ kind: 'result', conversationId: 'conv-retry-ok', ok: true, response: 'Fresh answer', usage: { input_tokens: 5, output_tokens: 3 }, raw: {} })
+        slot.releaseOnce()
+        deps.unregisterActiveRun(input.sessionKey, rec)
+        deps.clearInFlightPrompt(input.sessionKey, input.prompt)
+        rec.settle(null)
+        return rec
+      },
+    },
+  )
+  const sessionId = 'sess-stop-retry' as never
+  const userMsg = { role: 'user', content: [{ type: 'text', text: 'Same prompt' }], source: { kind: 'user' } } as unknown as Message
+
+  const ac = new AbortController()
+  const turn1Promise = collect(adapter.stream(opts([userMsg], { sessionId, signal: ac.signal })))
+  await new Promise((r) => setTimeout(r, 10))
+  ac.abort()
+  await turn1Promise
+  assert.equal(dyingRec?.isAbortRequested, true)
+  assert.equal(dyingRec?.isSettled, false, 'dying run has not finished settling yet when Stop resolves')
+
+  // Immediately re-send the exact same prompt before the 40ms cancel settle completes.
+  const turn2Chunks = await collect(adapter.stream(opts([userMsg], { sessionId })))
+  const finish2 = turn2Chunks[turn2Chunks.length - 1] as { type: string; reason: { kind: string } }
+  assert.equal(spawns, 2, 'retry after Stop must start a fresh run instead of attaching/BUSY')
+  assert.equal(finish2.reason.kind, 'stop')
+  assert.ok(dyingRec?.isSettled, 'adapter waited for dying run to settle before spawning retry')
+})

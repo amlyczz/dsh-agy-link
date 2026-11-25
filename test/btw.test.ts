@@ -5,7 +5,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CommandRuntime, parseCommand, type CommandInvocation } from '@deepseek-ai/dsh-commands'
 import { resolveConfig } from '../src/common/config.ts'
 import { defaultConfig, type AgyEvent } from '../src/common/types.ts'
-import { BtwService } from '../src/features/btw/service.ts'
+import { BtwService, buildBtwAgySettings } from '../src/features/btw/service.ts'
 import { btwCommandDefinition, parseBtwArgs } from '../src/host/btw-command.ts'
 import { registerRoutes } from '../src/transport/http/router.ts'
 import type { HostServices } from '../src/host/services.ts'
@@ -25,6 +25,7 @@ test('BtwService streams text and tool steps, isolates from main session, and re
     prompt: string
     mode?: string
     disableSlashCommands?: boolean
+    agySettings?: string
     cwd?: string
     model?: string
     effort?: string
@@ -64,8 +65,12 @@ test('BtwService streams text and tool steps, isolates from main session, and re
 
   const { promise } = service.start({ sessionId: 'sess-1', question: 'What is adapter doing?' })
   assert.equal(calls.length, 1)
-  assert.equal(calls[0]?.mode, 'plan')
+  assert.equal(calls[0]?.mode, 'default')
   assert.equal(calls[0]?.disableSlashCommands, true)
+  const settingsObj = JSON.parse(calls[0]?.agySettings ?? '{}') as { permissions?: { allow?: string[]; deny?: string[] } }
+  assert.ok(settingsObj.permissions?.allow?.includes('read_file(*)'))
+  assert.ok(settingsObj.permissions?.deny?.includes('run_command(*)'))
+  assert.ok(settingsObj.permissions?.deny?.includes('write_file(*)'))
   assert.equal(calls[0]?.cwd, '/ws/sess-1')
   assert.equal(calls[0]?.conversationId, undefined)
   assert.match(calls[0]?.prompt ?? '', /Check adapter/)
@@ -415,4 +420,21 @@ test('BtwService honors btwModel / btwEffort config and DSH_AGY_BTW_* env vars, 
   })
   await autoSvc.ask({ sessionId: 's-auto', question: 'auto model pick' })
   assert.deepEqual(calls[3], { model: 'gemini-4-hydrogen', effort: 'medium' })
+})
+
+test('buildBtwAgySettings preserves safe keys and enforces read-only permissions even when baseSettings allows writes', () => {
+  const merged = JSON.parse(buildBtwAgySettings(JSON.stringify({
+    customKey: 42,
+    permissions: {
+      allow: ['run_command(*)', 'custom_read(*)'],
+      deny: ['custom_deny(*)'],
+    },
+  }))) as { customKey?: number; permissions: { allow: string[]; deny: string[] } }
+  assert.equal(merged.customKey, 42)
+  assert.ok(merged.permissions.allow.includes('read_file(*)'))
+  assert.ok(merged.permissions.allow.includes('custom_read(*)'))
+  assert.ok(!merged.permissions.allow.includes('run_command(*)'))
+  assert.ok(merged.permissions.deny.includes('run_command(*)'))
+  assert.ok(merged.permissions.deny.includes('write_file(*)'))
+  assert.ok(merged.permissions.deny.includes('custom_deny(*)'))
 })

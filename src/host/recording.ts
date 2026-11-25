@@ -22,7 +22,12 @@ import {
   isConsumableResult,
   mergeSpanUsage,
   mirrorCallId,
+  buildZeroDeltaUsage,
+  isFinishableEvent,
+  selectSpanUsage,
+  usageBucketsOf,
   parseMirrorCallId,
+  type EmittedUsageBuckets,
   type ToolErrorKind,
 } from './recording-helpers.ts'
 
@@ -73,6 +78,7 @@ export class RunRecording {
   private pendingSpanUsage: RawUsage | null = null
   private readonly pendingSpanStepGen = new Map<string, { output: number; thinking: number }>()
   private anyUsageEmitted = false
+  private lastEmittedUsageBuckets: EmittedUsageBuckets | null = null
   /**
    * Per-step generation timing for token-speed statistics: stepKey ->
    * { startedAt, lastAt, outputTokens }. The last usage sample of a step wins
@@ -105,7 +111,10 @@ export class RunRecording {
    * is still alive; without aborting it, two agy processes would append to
    * the SAME conversation concurrently.
    */
+  private abortRequested = false
   requestAbort: (() => void) | null = null
+  get isAbortRequested(): boolean { return this.abortRequested }
+  markAbortRequested(): void { this.abortRequested = true }
 
   constructor(runId: string = randomUUID(), private readonly now: () => number = Date.now) {
     this.runId = runId
@@ -259,20 +268,22 @@ export class RunRecording {
    * cached-read / output counts.
    */
   consumeSpanUsage(resultRaw?: RawUsage): RawUsage | null {
-    if (this.pendingSpanUsage !== null) {
-      const out = this.pendingSpanUsage
+    const pending = this.pendingSpanUsage
+    if (pending !== null) {
       this.pendingSpanUsage = null
       this.pendingSpanStepGen.clear()
-      if (hasUsageBreakdown(out) || !resultRaw || Object.keys(resultRaw).length === 0) {
-        this.anyUsageEmitted = true
-        return out
-      }
     }
-    if (resultRaw !== undefined && Object.keys(resultRaw).length > 0 && !this.anyUsageEmitted) {
+    const out = selectSpanUsage(pending, resultRaw, this.anyUsageEmitted)
+    if (out !== null) {
       this.anyUsageEmitted = true
-      return resultRaw
+      this.lastEmittedUsageBuckets = usageBucketsOf(out)
     }
-    return null
+    return out
+  }
+
+  /** Zero-delta bucket-preserving usage for concurrent tool cuts 2..N (#210). */
+  zeroDeltaUsageForCut(): RawUsage | null {
+    return this.anyUsageEmitted ? buildZeroDeltaUsage(this.lastEmittedUsageBuckets) : null
   }
 
   /**
@@ -345,18 +356,7 @@ export class RunRecording {
   hasFinishableEventFrom(from: number, cutOnTool = true): boolean {
     for (let i = Math.max(0, from); i < this.events.length; i++) {
       const ev = this.events[i]
-      if (ev === undefined) continue
-      if (ev.kind === 'result' && isConsumableResult(ev)) return true
-      if (
-        cutOnTool
-        && ev.kind === 'step'
-        && ev.stepKind === 'tool'
-        && ev.tool !== undefined
-        && (ev.state === 'DONE' || ev.state === 'ERROR' || ev.state === 'CANCELED' || ev.state === 'CANCELLED' || ev.state === 'RUNNING'
-          || (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined)))
-      ) {
-        return true
-      }
+      if (ev !== undefined && isFinishableEvent(ev, cutOnTool)) return true
     }
     return false
   }

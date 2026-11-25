@@ -430,3 +430,47 @@ test('cold, warm and switched accounts receive the latest profile and every pend
     }
   })
 })
+
+test('issue #207: finalizeAttempt detects parseModelNotRecognized on Err.PROCESS_EXIT and Err.AGY_ERROR', async () => {
+  await withTempDshHome(async (dir) => {
+    const store = new SessionStore(join(dir, 'sessions.json'))
+    for (const code of [Err.PROCESS_EXIT, Err.AGY_ERROR] as const) {
+      const calls: Array<[string, ...unknown[]]> = []
+      const pool = {
+        markModelUnsupported: (...a: unknown[]) => calls.push(['markModelUnsupported', ...a]),
+        advanceAccount: (...a: unknown[]) => { calls.push(['advanceAccount', ...a]); return null },
+      } as never
+      const acc = { id: 'acc-model', dir, enabled: true, alias: 'acc-model', createdAt: 0, cooldowns: {}, quotas: {} } as never
+      await finalizeAttempt({
+        rec: new RunRecording('r-unrecog'),
+        outcome: { code: 1, signal: null, timedOut: false, aborted: false, capped: false, stdout: '', stderrTail: '', durationMs: 10 },
+        store,
+        pool,
+        account: acc,
+        family: 'google',
+        persistBinding: false,
+        sessionAccountKey: 'sess-unrecog:acc-model',
+        conversationId: 'c1',
+        cwd: dir,
+        messages: [msg('user', 'hi')],
+        model: 'gemini-99-unknown',
+        activeModel: 'gemini-99-unknown',
+        superseded: false,
+        newlySentImageIds: [],
+        rawErrText: '',
+        runLogText: '',
+        silentTimeout: false,
+        sessionKey: 'sess-unrecog',
+        clearNetworkStreak: () => undefined,
+        dropFailoverBudget: () => undefined,
+        clearRateLimitFailover: () => undefined,
+        sharesSingleEgress: () => false,
+        failure: { kind: 'error', code, message: 'model "gemini-99-unknown" is not recognized as a known model' },
+      })
+      assert.deepEqual(calls, [
+        ['markModelUnsupported', 'acc-model', 'gemini-99-unknown'],
+        ['advanceAccount', 'acc-model', 'google', 'gemini-99-unknown'],
+      ], `code=${code} must mark unsupported and advance account`)
+    }
+  })
+})

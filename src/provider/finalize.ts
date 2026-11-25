@@ -231,9 +231,11 @@ function rotateOnFailure(input: FinalizeInput, failure: AttemptFailure): void {
   // Region refusal is scoped to the account's own egress (skip the
   // primary's direct connection, take a proxied account). Rotate so the
   // automatic retry cannot land back on the refused account.
-  if (account && failure.code === Err.ELIGIBILITY) {
-    const rawErr = failure.message ?? ''
-    const unrecog = parseModelNotRecognized(rawErr)
+  const unrecog =
+    failure.code === Err.ELIGIBILITY || failure.code === Err.PROCESS_EXIT || failure.code === Err.AGY_ERROR
+      ? parseModelNotRecognized(failure.message ?? '')
+      : null
+  if (account && (failure.code === Err.ELIGIBILITY || unrecog !== null)) {
     if (unrecog && typeof (pool as any)?.markModelUnsupported === 'function') {
       (pool as any).markModelUnsupported(account.id, unrecog)
     }

@@ -34,11 +34,9 @@ export function prepareOrchestratorSettingsForAcp(input: {
   )
   if (!isOrchestratorModel(effectiveModel)) return { ok: true }
   const payload = buildOrchestratorSettingsObject(input.cfg)
-  if (payload === undefined) return { ok: true }
 
-  const settingsTag = JSON.stringify(payload)
   const file = agySettingsFilePath(accountHome(input.account))
-  const sync = syncOrchestratorSettingsFileAt(file, payload)
+  const sync = syncOrchestratorSettingsFileAt(file, payload, { clearRemovedSeats: true })
   if (sync === 'skipped') {
     input.log?.(`[agy-link] orchestrator settings could not be merged into ${file} — using the CLI path so --settings still applies`)
     return { ok: false, reason: 'merge-failed' }
@@ -46,5 +44,5 @@ export function prepareOrchestratorSettingsForAcp(input: {
   if (sync === 'written') {
     input.log?.(`[agy-link] orchestrator settings updated in ${file} — the next ACP process will read them`)
   }
-  return { ok: true, settingsTag }
+  return payload === undefined ? { ok: true } : { ok: true, settingsTag: JSON.stringify(payload) }
 }

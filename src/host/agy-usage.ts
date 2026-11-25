@@ -9,6 +9,7 @@
 //
 // Everything here degrades to null/undefined: a missing binary, a hung spawn or
 // an unknown agy version must never break the system.
+import { tmpdir } from 'node:os'
 import type { FamilyQuotaInfo, ModelFamily } from '../common/pool-types.ts'
 import { startAgyProcess } from './runner.ts'
 
@@ -251,6 +252,7 @@ export async function readAgyUsage(opts: {
     const proc = startAgyProcess({
       bin: opts.bin,
       args: ['-p', '/usage', '--output-format', 'stream-json'],
+      cwd: tmpdir(),
       timeoutMs: opts.timeoutMs ?? 20_000,
       signal: opts.signal,
       env: opts.env,

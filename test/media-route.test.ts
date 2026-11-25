@@ -5,6 +5,7 @@ import {
   handleMediaRequest,
   handleAssetRequest,
   handleOpenFile,
+  isCrossOriginBlocked,
   executeOpenInSystem,
   spawnDetachedOpener,
 } from '../src/host/media-route.ts';
@@ -395,4 +396,42 @@ test('media-route: a synchronously throwing spawn reports false instead of escap
     throw new Error('spawn blocked');
   }) as unknown as Parameters<typeof spawnDetachedOpener>[2];
   assert.equal(spawnDetachedOpener('xdg-open', ['/tmp/x'], throwingSpawn), false);
+});
+
+test('media-route: isCrossOriginBlocked rejects null/file:// and allows dsh-app://', () => {
+  assert.equal(isCrossOriginBlocked({ headers: {} }), false);
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'http://localhost:3000' } }), false);
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'http://127.0.0.1:8080' } }), false);
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'dsh-app://desktop' } }), false);
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'app://dsh' } }), false);
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'vscode-webview://panel' } }), false);
+
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'null' } }), true);
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'file:///tmp/evil.html' } }), true);
+  assert.equal(isCrossOriginBlocked({ headers: { origin: 'https://evil.example' } }), true);
+});
+
+test('media-route: handleOpenFile rejects executable extensions unless reveal=1', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-open-exe-'));
+  try {
+    for (const ext of ['.exe', '.bat', '.ps1', '.sh']) {
+      const script = join(root, 'payload' + ext);
+      writeFileSync(script, 'echo hello');
+      let status = 0;
+      let body = '';
+      const res = {
+        writeHead(s: number) { status = s; },
+        end(b?: unknown) { body = String(b ?? ''); },
+      };
+      handleOpenFile(
+        { method: 'POST', url: '/plugins/agy-link/open?path=' + encodeURIComponent(script) },
+        res as never,
+        { workspaceRoots: [root] },
+      );
+      assert.equal(status, 403, `${ext} must be refused without reveal=1`);
+      assert.match(body, /executable/i);
+    }
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 });

@@ -1174,6 +1174,17 @@ test('acquireCrossProcessSlotLock acquires, releases, and instantly recovers fro
     assert.equal(lockContent.pid, process.pid, 'new lock must belong to current process')
     release2()
     assert.equal(existsSync(lockFile), false)
+
+    // 4. Live non-stale lock held by a live PID must block (never be overwritten) until released
+    const holder = await acquireCrossProcessSlotLock(baseDir, { timeoutMs: 2000, holder: 'first' })
+    await assert.rejects(
+      () => acquireCrossProcessSlotLock(baseDir, { timeoutMs: 120, pollIntervalMs: 25, holder: 'second' }),
+      /timed out waiting for cross-process slot lock/,
+    )
+    const stillFirst = JSON.parse(readFileSync(lockFile, 'utf8')) as { holder?: string }
+    assert.equal(stillFirst.holder, 'first', 'live lock holder must never be overwritten')
+    holder()
+    assert.equal(existsSync(lockFile), false)
   } finally {
     rmSync(baseDir, { recursive: true, force: true })
   }

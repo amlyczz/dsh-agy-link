@@ -222,9 +222,7 @@ export class AgyAdapter extends LlmAdapter {
       options,
       cfg: this.deps.getConfig(),
       bin: this.deps.bin(),
-      ...(this.deps.sessionCwd === undefined
-        ? {}
-        : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
+      ...(this.deps.sessionCwd === undefined ? {} : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
       warnOnce: (key: string, message: string) => this.warnOnce(key, message),
     })
     const { cfg, bin, isReview, isTitle, isCompaction, isTranslate, isImage, isAux } = ctx
@@ -429,10 +427,9 @@ export class AgyAdapter extends LlmAdapter {
       }
       const prevPrompt = this.activeSessionPrompts.get(sessionKey)
       const liveRun = this.activeRuns.get(sessionKey)
-      const runLive = liveRun !== undefined && !liveRun.isSettled
-      // Compare the CANONICAL prompt: the interruption notice injected below is
-      // transport metadata and used to poison the stored baseline, so every
-      // continuation replay looked like a steer and aborted its own live run
+      const runLive = liveRun !== undefined && !liveRun.isSettled && !liveRun.isAbortRequested
+      // Compare the CANONICAL prompt: the interruption notice injected below is transport metadata
+      // and used to poison the stored baseline, so continuation replays used to look like steers.
       // (issue #205).
       const identity = promptIdentity(prompt)
       // A harness lifecycle hop (tool result / context append, no new typed
@@ -506,6 +503,7 @@ export class AgyAdapter extends LlmAdapter {
               binding.interrupted = true
             }
           }
+          liveRun.markAbortRequested()
           liveRun.requestAbort?.()
           const exited = await waitForRunSettle(liveRun, 3_500)
           if (!exited) {
@@ -520,6 +518,7 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
       }
+      if (liveRun !== undefined && !liveRun.isSettled && liveRun.isAbortRequested) await waitForRunSettle(liveRun, 1_500)
       this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
     }
 

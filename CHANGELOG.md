@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.94 (2026-11-26)
+
+### English
+
+- **Fix(client): eliminate O(N) DOM MutationObserver rescanning & `/status` bloat.**
+  - `src/client/compaction.ts`, `mermaid-render.ts`, `decisions.ts`, and `images/scanner.ts` now stamp non-matching `<p>` elements, known non-mermaid `.md-code-block` nodes (before reading `textContent`), already-scanned markdown containers, and settled image-alt containers so large session histories no longer trigger full-DOM re-scans on every mutation.
+  - Omit `availableCommands` from HTTP `/status` (`acpStatus`) to stop serializing 20 KB+ of skill descriptions on every 3s console poll.
+- **Fix(quota): stop background pool sweeps from locking the manual refresh UI and skip workspace MCP startup in `/usage`.**
+  - `QuotaService.refreshAccountQuota` now only populates `refreshingAccounts()` for manual (`force === true`) refreshes so unattended serial startup/background sweeps no longer lock the console button as `刷新中` / `同步中`.
+  - `readAgyUsage` spawns `agy -p /usage` with `cwd: tmpdir()` so project-local config never triggers unnecessary startup overhead.
+- **Fix(btw): grant read-only tool permissions for `/atw` side questions.** `BtwService` now passes `mode: 'default'` with `disableSlashCommands: true` and an explicit read-only `--settings` permission profile (`BTW_READ_ONLY_PERMISSIONS`, denying mutating tools), resolving `warning: --mode plan has no effect while slash command expansion is disabled` and `read_file` auto-denial in headless `agy 1.5.x`.
+- **Fix(mcp): keep reverse MCP call IDs unique across bridge restarts (PR #209 by @ZhangjiaxinGZS).** Replaced incrementing `callSeq` with `randomUUID()` (`'agy-mcp-' + randomUUID()`) in `src/host/mcp-bridge.ts`.
+- **Fix(usage): emit bucket-consistent zero-delta usage on concurrent tool cuts (Issue #210).** `RunRecording` remembers `lastEmittedUsageBuckets` (`cacheRead` / `cacheWrite`) and exposes `zeroDeltaUsageForCut()`, wired through `EventMapper` into `buildToolCallBlock` so parallel tool cuts `2..N` emit zero-delta `{ type: 'usage' }` chunks matching prior cache bucket presence while preserving strict 1x token totals and leaving `emitFailure()` sample-free when no measurement exists.
+- **Fix(security,credentials,acp,rotation): address verified Issue #207 P0 & P1 bugs.**
+  - **Cross-process slot lock (`src/domain/credentials/lock.ts`)**: stop falling through on live non-stale locks and acquire with exclusive `flag: 'wx'` instead of `renameSync` overwrite.
+  - **HTTP CSRF & `/open` hardening (`src/host/media-route.ts`, `src/transport/http/router.ts`, `src/transport/http/routes/media.ts`)**: block `Origin: null` and `file://` in `isCrossOriginBlocked` while allowing `dsh-app://`; gate all state-mutating POST routes (except `/open` & `/lease*` which enforce their own envelopes); block executable extensions (`DANGEROUS_OPEN_EXTS`) on `handleOpenFile` unless `reveal=1`; exclude `Downloads` and `tmpdir()` from default `/open` workspace roots.
+  - **ACP cancel & Stop+Retry race**: `acpPromptResultToAgyEvent` treats `cancelled`/`canceled` `stopReason` as `ok = false`; `runAcpPrompt` skips `shouldSelfHealAcpResult` and settles aborted when cancelled instead of `failure: null` overwriting `binding.interrupted`; `RunRecording` tracks `isAbortRequested` so rapid Stop + Retry waits cleanly for the dying run instead of colliding or throwing `Err.BUSY`.
+  - **Pool/Account/Cleanup**: fire `onAccountUsed` on settled non-aux ACP turns; clear removed Orchestrator seats on disk in `prepareOrchestratorSettingsForAcp` / `syncOrchestratorSettingsFileAt`; enforce `quotaModel`/`avoidAccountIds`/`quotaClear` on `win32 + parallelSameAccount`; detect `parseModelNotRecognized` on `Err.PROCESS_EXIT`/`Err.AGY_ERROR` without double-marking in `retry-policy.ts`; dispose `quotaRefresher` on plugin teardown.
+
+### 中文
+
+- **修复(client)：消除 DOM MutationObserver 全量 O(N) 重复扫描与 `/status` 冗余序列化。**
+  - `compaction.ts`、`mermaid-render.ts`、`decisions.ts` 与 `images/scanner.ts` 分别为未命中 `<p>`、已知非 mermaid 代码块（读取 `textContent` 前）、已扫描 Markdown 容器与已稳定图片容器打标跳过，大幅降低长会话历史切换与加载时的渲染进程阻塞。
+  - 从 HTTP `/status`（`acpStatus`）移除约 20 KB 的技能描述列表 `availableCommands`，减轻每 3 秒轮询体积。
+- **修复(quota)：后台串联刷新不再锁死控制台刷新按钮，`/usage` 改在临时目录启动。**
+  - `QuotaService.refreshAccountQuota` 仅在手动刷新（`force === true`）时写入 `refreshingAccounts()`，避免启动 5 秒后的后台串口巡检把按钮与卡片长时间锁在 `刷新中` / `同步中`。
+  - `readAgyUsage` 在 `tmpdir()` 下运行 `agy -p /usage`。
+- **修复(btw)：修复 `/atw` 旁路提问因 `--mode plan` 与 `--disable-slash-commands` 冲突导致的只读权限被拒。** 改为 `mode: 'default'` + `disableSlashCommands: true` + 显式只读 `--settings` 权限配置（`BTW_READ_ONLY_PERMISSIONS`，拒绝写操作与命令执行）。
+- **修复(mcp)：保证桥接重启后反向 MCP `callId` 全局唯一（合并 PR #209，作者 @ZhangjiaxinGZS）。** 使用 `randomUUID()` 替代重启清零的 `callSeq` 计数器。
+- **修复(usage)：并发工具切分（cuts 2..N）补发桶结构一致的零增量 usage chunk（Issue #210）。** `RunRecording` 记录已发射的 `cacheRead`/`cacheWrite` 桶键并提供 `zeroDeltaUsageForCut()`，在不改变 1x 总量统计的前提下确保 DSH 回合 token 页脚与缓存桶校验完整，失败无采样场景保持不发射。
+- **修复(security,credentials,acp,rotation)：修复 Issue #207 已核实的 P0 与 P1 问题。**
+  - **跨进程凭据槽位锁**：修复未过期活锁误穿透覆盖问题，并用原子 `{ flag: 'wx' }` 替代 `renameSync` 抢占覆盖。
+  - **HTTP CSRF 与 `/open` 加固**：`isCrossOriginBlocked` 拒绝 `Origin: null` 与 `file://`、放行 `dsh-app://`；对所有写操作路由统一启用 Origin 校验；无 `reveal=1` 时拒绝直接打开可执行文件；`/open` 默认根目录移除 `Downloads` 与 `tmpdir()`。
+  - **ACP 取消自愈与 Stop+Retry 竞态**：ACP `cancelled` 不再触发自愈提示词或误以 `failure: null` 覆盖 `binding.interrupted`；`RunRecording` 记录 `isAbortRequested`，快速点击 Stop+Retry 时优雅等待旧进程收尾而不是碰撞或误报 `Err.BUSY`。
+  - **账号池与资源清理**：非 aux ACP 成功回合补发 `onAccountUsed`；Orchestrator 清空席位时清理 `settings.json` 中已移除角色键；Windows `parallelSameAccount` 分支严格尊重 `quotaModel`/`quotaClear`；`Err.PROCESS_EXIT`/`Err.AGY_ERROR` 识别未支持模型后不再被 `retry-policy.ts` 二次误标下一账号；插件卸载时调用 `quotaRefresher.dispose()`。
+
 ## 0.6.93 (2026-11-25)
 
 ### English

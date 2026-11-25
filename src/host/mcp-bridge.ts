@@ -18,7 +18,7 @@ import type { BridgeStep, StepToolSet } from './bridge-steps.ts'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { readJsonBody } from './read-json-body.ts'
 import { extractMcpContentBlocks, prepareMcpTools } from './mcp-schema.ts'
 import {
@@ -180,7 +180,6 @@ export function startMcpBridge(opts: {
     return agent
   }
   const token = randomBytes(24).toString('hex')
-  let callSeq = 0
   const server: Server = createServer((req, res) => {
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
@@ -248,7 +247,7 @@ export function startMcpBridge(opts: {
           sendJson(res, 403, { error: 'tool unavailable for this session step' })
           return
         }
-        const callId = 'agy-mcp-' + ++callSeq
+        const callId = 'agy-mcp-' + randomUUID()
         // Audit trail: the bridge is the only path from an external agent
         // runtime into DSH tools, and it used to log nothing per call, so a
         // failed run could only be reconstructed from transcripts. Log the

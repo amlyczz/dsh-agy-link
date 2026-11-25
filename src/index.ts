@@ -561,6 +561,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
       pluginDisposing = true
       bridgeDisposed = true
       services.backgroundWakeup.dispose()
+      services.quotaRefresher?.dispose()
       services.translationWorkers?.dispose()
       services.btw.dispose()
       acpPool.dispose()

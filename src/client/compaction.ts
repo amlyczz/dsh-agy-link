@@ -333,10 +333,15 @@ export function scanAndEnhanceCompactionCards(root: ParentNode = document): void
   }
 
   // 3. Legacy escaped <p> containing <div class="agy-compaction-card"...>
-  const paragraphs = root.querySelectorAll<HTMLElement>('p:not([data-agy-compaction-rendered="true"])');
+  const paragraphs = root.querySelectorAll<HTMLElement>(
+    'p:not([data-agy-compaction-scanned="true"]):not([data-agy-compaction-rendered="true"])',
+  );
   for (const p of Array.from(paragraphs)) {
     const text = p.textContent || '';
-    if (!text.includes('class="agy-compaction-card"') && !text.includes('agy-compaction-card')) continue;
+    if (!text.includes('class="agy-compaction-card"') && !text.includes('agy-compaction-card')) {
+      p.setAttribute('data-agy-compaction-scanned', 'true');
+      continue;
+    }
     p.setAttribute('data-agy-compaction-rendered', 'true');
 
     const beforeMatch = /data-before="(\d+)"/.exec(text);

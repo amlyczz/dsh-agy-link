@@ -1,8 +1,11 @@
 // BtwService — non-blocking, read-only, streaming side-question orchestrator.
 //
 // Mirrors agy's native `/btw`:
-//  - Runs in isolated `--mode plan` (`--disable-slash-commands`) without ever
-//    touching the main session's `sessions.json` binding or model-visible log.
+//  - Runs in read-only isolation (`mode: 'default'` + `--disable-slash-commands`
+//    + explicit read-only `permissions.allow`/`deny` via `--settings`, because
+//    `--mode plan` is implemented via `/plan` slash expansion and is ignored when
+//    slash commands are disabled) without touching the main session's
+//    `sessions.json` binding or model-visible log.
 //  - Feeds `<session_context>` + `<live_run_progress>` on initial ask, and
 //    chains follow-up questions onto the side thread's own `conversationId`.
 //  - Streams text fragments, thinking status, and read-only tool steps live to
@@ -16,6 +19,98 @@ import type { AgyEvent, PluginConfig } from '../../common/types.ts'
 export const MAX_BTW_SESSIONS = 100
 export const MAX_ENTRIES_PER_SESSION = 20
 
+/**
+ * Explicit read-only tool permissions passed via `--settings` for `/atw`.
+ *
+ * `agy` implements `--mode plan` as `/plan` slash-command expansion, which has
+ * no effect when `--disable-slash-commands` is enabled — falling back to
+ * `request-review` and auto-denying `read_file` in headless `-p` mode.
+ */
+export const BTW_READ_ONLY_PERMISSIONS: { allow: readonly string[]; deny: readonly string[] } = {
+  allow: [
+    'read_file(*)',
+    'view_file(*)',
+    'view_file_outline(*)',
+    'view_code_item(*)',
+    'grep_search(*)',
+    'find_by_name(*)',
+    'list_dir(*)',
+    'search_web(*)',
+    'read_url_content(*)',
+    'list_resources(*)',
+    'read_resource(*)',
+  ],
+  deny: [
+    'run_command(*)',
+    'write_file(*)',
+    'write_to_file(*)',
+    'edit_file(*)',
+    'replace_file_content(*)',
+    'multi_replace_file_content(*)',
+    'sed_file(*)',
+    'notebook_edit(*)',
+    'notebook_execution(*)',
+    'delete_knowledge(*)',
+    'generate_image(*)',
+    'invoke_subagent(*)',
+    'run_workflow(*)',
+    'schedule(*)',
+    'send_command_input(*)',
+  ],
+}
+
+const DENIED_TOOL_PREFIXES = new Set(
+  BTW_READ_ONLY_PERMISSIONS.deny.map((rule) => rule.split('(')[0]!.trim().toLowerCase()),
+)
+
+function ruleToolPrefix(rule: string): string {
+  return rule.split('(')[0]!.trim().toLowerCase()
+}
+
+/**
+ * Build `--settings` JSON for `/atw` preserving safe non-permission keys from
+ * `baseSettings` (when inline JSON) and enforcing read-only `permissions`.
+ */
+export function buildBtwAgySettings(baseSettings?: string): string {
+  let parsedBase: Record<string, unknown> = {}
+  const trimmed = baseSettings?.trim() ?? ''
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        parsedBase = { ...(parsed as Record<string, unknown>) }
+      }
+    } catch {
+      // ignore malformed baseSettings
+    }
+  }
+  const basePerms = parsedBase.permissions && typeof parsedBase.permissions === 'object' && !Array.isArray(parsedBase.permissions)
+    ? (parsedBase.permissions as Record<string, unknown>)
+    : {}
+  const rawAllow = Array.isArray(basePerms.allow) ? basePerms.allow : []
+  const rawDeny = Array.isArray(basePerms.deny) ? basePerms.deny : []
+  const allowSet = new Set<string>(BTW_READ_ONLY_PERMISSIONS.allow)
+  for (const r of rawAllow) {
+    if (typeof r === 'string' && r.trim() !== '' && !DENIED_TOOL_PREFIXES.has(ruleToolPrefix(r))) {
+      allowSet.add(r.trim())
+    }
+  }
+  const denySet = new Set<string>(BTW_READ_ONLY_PERMISSIONS.deny)
+  for (const r of rawDeny) {
+    if (typeof r === 'string' && r.trim() !== '') {
+      denySet.add(r.trim())
+    }
+  }
+  return JSON.stringify({
+    ...parsedBase,
+    permissions: {
+      ...basePerms,
+      allow: [...allowSet],
+      deny: [...denySet],
+    },
+  })
+}
+
 export interface BtwOneShotRequest {
   prompt: string
   model?: string
@@ -23,6 +118,7 @@ export interface BtwOneShotRequest {
   mode?: string
   cwd?: string
   disableSlashCommands?: boolean
+  agySettings?: string
   timeoutMs?: number
   signal?: AbortSignal
   conversationId?: string
@@ -391,8 +487,9 @@ export class BtwService {
     try {
       const res = await this.deps.runOnce({
         prompt,
-        mode: 'plan',
+        mode: 'default',
         disableSlashCommands: true,
+        agySettings: buildBtwAgySettings(this.deps.cfg().agySettings),
         cwd,
         model: entry.model,
         effort: entry.effort,

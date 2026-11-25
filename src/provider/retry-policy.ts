@@ -226,10 +226,11 @@ export async function* streamWithEffortRetry(
           }
           if (deps.pool) {
             const fam = modelFamilyOf(unrecog)
-            const currentId = deps.pool.getActiveAccountId(fam)
-            if (currentId) deps.pool.markModelUnsupported(currentId, unrecog)
-            deps.pool.selectAccount(fam, unrecog)
-            continue
+            // finalizeAttempt already marked the failing account unsupported and advanced the pool.
+            // Replay only if another eligible account can serve the model, without clobbering it.
+            if (deps.pool.selectAccount(fam, unrecog) !== null) {
+              continue
+            }
           }
         }
       }

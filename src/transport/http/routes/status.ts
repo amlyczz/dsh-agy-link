@@ -67,6 +67,10 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
             }
           }
         }
+        const rawAcpStatus = typeof acpPool?.status === 'function' ? acpPool.status() : null
+        const acpStatus = rawAcpStatus && typeof rawAcpStatus === 'object' && 'availableCommands' in rawAcpStatus
+          ? (({ availableCommands: _omit, ...rest }) => rest)(rawAcpStatus as Record<string, unknown>)
+          : rawAcpStatus
         sendJsonWithEtag(req, res as RawRes, 200, {
           plugin: 'dsh-agy-link',
           bin: bin(),
@@ -78,7 +82,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           agent: cfg.agent,
           agySettings: cfg.agySettings,
           transport: cfg.transport,
-          acpStatus: typeof acpPool?.status === 'function' ? acpPool.status() : null,
+          acpStatus,
           backgroundWakeup: cfg.backgroundWakeup,
           mcpBridge: cfg.mcpBridge,
           backgroundWakeupTtlMinutes: cfg.backgroundWakeupTtlMinutes,

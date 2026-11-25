@@ -366,6 +366,52 @@ test('account-selection: win32 + parallelSameAccount pins the pool candidate dir
   }
 })
 
+test('issue #207: win32 + parallelSameAccount enforces quotaModel findAccount and quotaClear', async () => {
+  const cooled = account('acc_cooled', {
+    modelCooldowns: { 'gemini-3-pro-image': { reason: 'quota', consecutiveFailures: 1, cooldownUntil: Date.now() + 60_000 } },
+  })
+  const clear = account('acc_clear')
+  const findCalls: unknown[][] = []
+  const { pool, calls } = selPool({ accounts: [cooled, clear], select: () => cooled })
+  ;(pool as unknown as Record<string, unknown>).findAccount = (...args: unknown[]) => {
+    findCalls.push(args)
+    return clear
+  }
+  const { deps } = selectionDeps(pool)
+  const restore = setPlatform('win32')
+  try {
+    const out = await selectSessionAccount({
+      deps,
+      cfg: cfgSelect({ parallelSameAccount: true }),
+      model: 'gemini-3.8-flash',
+      quotaModel: 'gemini-3-pro-image',
+      avoidAccountIds: ['acc_skip'],
+      isAux: false,
+      sessionKey: 's1',
+    })
+    assert.equal(out.account?.id, 'acc_clear', 'must prefer findAccount with quotaModel/avoidAccountIds over raw selectAccount')
+    assert.equal(findCalls.length, 1)
+    assert.deepEqual(findCalls[0], ['google', 'gemini-3.8-flash', 'gemini-3-pro-image', ['acc_skip']])
+    assert.deepEqual(calls.select, [])
+
+    delete (pool as unknown as Record<string, unknown>).findAccount
+    await assert.rejects(
+      selectSessionAccount({
+        deps,
+        cfg: cfgSelect({ parallelSameAccount: true }),
+        model: 'gemini-3.8-flash',
+        quotaModel: 'gemini-3-pro-image',
+        isAux: false,
+        sessionKey: 's2',
+      }),
+      /unavailable/i,
+      'cooled account returned by selectAccount must be rejected by quotaClear',
+    )
+  } finally {
+    restore()
+  }
+})
+
 test('account-selection: model=="" syncs the default model into the session', async () => {
   const a = account('acc_s')
   const { pool } = selPool({ accounts: [a], select: () => a })
