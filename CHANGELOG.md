@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.87 (2026-11-25)
+
+### English
+
+- **Refactor(translation): extract the four pure helpers.** `translation/service.ts` sat at 599/600 lines. `failureText` / `mapCode` / `emptyResult` / `sameModel` are stateless (error mapping, empty result, provider-qualified model compare), so they now live in `translation/helpers.ts`; the service is back to 567 lines. No behaviour change — the existing suite is the net.
+- **Docs: the refactor backlog now also records duplicate implementations, not just oversized files.** First entry: **`delay()` is redefined in 13 files**, and they are *not* all equivalent (some take an `AbortSignal`, and on abort they resolve rather than reject). The note spells out the safe way to converge them: verify each semantics first, never replace them all with "the most similar one".
+
+### 中文
+
+- **重构(翻译)：抽出四个纯 helper。** `translation/service.ts` 一直贴着 599/600 行。`failureText` / `mapCode` / `emptyResult` / `sameModel` 都是无状态工具（错误映射、空结果、带 provider 前缀的模型名比较），现移入 `translation/helpers.ts`，服务主体回到 567 行。行为不变——既有测试就是回归网。
+- **文档：重构待办现在也记录重复实现，而不只是超大文件。** 第一条：**`delay()` 在 13 个文件里各写一遍**，而且它们**并不等价**（部分接受 `AbortSignal`，且 abort 后是 resolve 而非 reject）。清单写明了安全收敛方式：先逐个确认语义，**不要**一次性换成"最像的那个"。
+
 ## 0.6.86 (2026-11-25)
 
 ### English
