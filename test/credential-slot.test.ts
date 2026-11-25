@@ -1377,3 +1377,24 @@ test('a peer refuses to join an installed identity the slot no longer names', as
     for (const d of [baseDir, homeDir]) rmSync(d, { recursive: true, force: true })
   }
 })
+
+// issue #203: the Windows desktop app writes the Credential Manager entry with
+// a `go-keyring-base64:` prefix. parseCredentialDoc must unwrap it before
+// JSON.parse, otherwise respectExternalSignIn cannot see the desktop sign-in
+// and the slot gets overwritten anyway.
+test('issue #203: parseCredentialDoc unwraps a go-keyring-base64 payload', () => {
+  const doc = { token: { access_token: 'at-1', refresh_token: 'rt-1', expiry: '2026-12-01T00:00:00Z' } }
+  const prefixed = 'go-keyring-base64:' + Buffer.from(JSON.stringify(doc)).toString('base64')
+  const fromPrefixed = parseCredentialDoc(prefixed)
+  assert.equal(fromPrefixed?.accessToken, 'at-1', 'prefixed payload must parse')
+  assert.equal(fromPrefixed?.refreshToken, 'rt-1')
+
+  // A plain JSON document (older writers) must still parse unchanged.
+  const plain = parseCredentialDoc(JSON.stringify(doc))
+  assert.equal(plain?.accessToken, 'at-1')
+
+  // Whitespace around the prefix is tolerated.
+  assert.equal(parseCredentialDoc('  ' + prefixed + '  ')?.accessToken, 'at-1')
+  // Garbage stays null.
+  assert.equal(parseCredentialDoc('go-keyring-base64:not-base64!!'), null)
+})

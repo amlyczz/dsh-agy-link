@@ -1,3 +1,4 @@
+import { unwrapGoKeyringPayload } from '../../common/go-keyring.ts'
 // Credential token documents, durable primary-credential store, and per-account
 // token-file helpers.
 //
@@ -35,7 +36,10 @@ export function parseCredentialDoc(raw: string | null | undefined): CredentialDo
   if (!raw) return null
   let parsed: unknown
   try {
-    parsed = JSON.parse(raw)
+    // Issue #203: the Windows desktop app writes the Credential Manager entry
+    // with a `go-keyring-base64:` prefix. Parsing raw text rejected it, so the
+    // external-slot guard never saw the desktop sign-in it was meant to protect.
+    parsed = JSON.parse(unwrapGoKeyringPayload(raw))
   } catch {
     return null
   }

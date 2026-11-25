@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.89 (2026-11-25)
+
+### English
+
+- **Fix(credentials): unwrap the `go-keyring-base64:` envelope before parsing a credential document (fixes #203).** The Windows Credential Manager entry (`gemini:antigravity`) written by the **Antigravity desktop app** carries a `go-keyring-base64:` prefix in front of the base64 JSON. `parseCredentialDoc()` called `JSON.parse(raw)` directly, so that document looked like garbage and was rejected — which meant the `respectExternalSignIn` guard **could not see the desktop sign-in it was supposed to protect**, and the slot was overwritten anyway (the desktop switched back to the DSH primary ~55 minutes later, on the OAuth refresh).
+  - The unwrapper already existed (`unwrapGoKeyringPayload`) but only runtime/ could reach it. It now lives in `common/go-keyring.ts` (the one place that knows the envelope), with `runtime/agy/keychain.ts` re-exporting it so existing imports are unchanged — `domain/` must not import `runtime/`.
+  - Tests cover: prefixed payload parses, plain JSON still parses, surrounding whitespace tolerated, malformed base64 still returns null.
+
+### 中文
+
+- **修复(凭证)：解析凭据文档前先解包 `go-keyring-base64:` 信封（修复 #203）。** **Antigravity 桌面版**写入 Windows 凭据管理器（`gemini:antigravity`）的内容，会在 base64 JSON 前面带一个 `go-keyring-base64:` 前缀。`parseCredentialDoc()` 直接 `JSON.parse(raw)`，于是这份文档被当作垃圾丢弃——这意味着 `respectExternalSignIn` 守卫**看不到它本该保护的那次桌面版登录**，槽位照样被覆写（桌面版约 55 分钟后在 OAuth 刷新时切回 DSH 主账号）。
+  - 解包函数本来就有（`unwrapGoKeyringPayload`），但只有 runtime 层能访问。现下沉到 `common/go-keyring.ts`（唯一知道该信封的地方），由 `runtime/agy/keychain.ts` 重新导出，既有导入不变——因为 `domain/` 不应依赖 `runtime/`。
+  - 测试覆盖：带前缀可解析、纯 JSON 仍可解析、前后空白容忍、非法 base64 仍返回 null。
+
 ## 0.6.88 (2026-11-25)
 
 ### English

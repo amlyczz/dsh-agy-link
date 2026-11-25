@@ -8,20 +8,8 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-const GO_KEYRING_PREFIX = 'go-keyring-base64:'
-
-/**
- * Unwrap a `go-keyring` payload (`go-keyring-base64:<b64>` or raw JSON string)
- * into UTF-8 JSON text. Shared by macOS/Linux/Windows keyring readers and
- * boot-time recovery.
- */
-export function unwrapGoKeyringPayload(raw: string): string {
-  const trimmed = raw.trim()
-  if (trimmed.startsWith(GO_KEYRING_PREFIX)) {
-    return Buffer.from(trimmed.slice(GO_KEYRING_PREFIX.length), 'base64').toString('utf8')
-  }
-  return trimmed
-}
+import { GO_KEYRING_PREFIX, unwrapGoKeyringPayload } from '../../common/go-keyring.ts'
+export { GO_KEYRING_PREFIX, unwrapGoKeyringPayload }
 
 /**
  * Best-effort update of the system keyring (`service=gemini`, `account=antigravity`)
