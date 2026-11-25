@@ -1,4 +1,3 @@
-import { unwrapGoKeyringPayload } from '../../common/go-keyring.ts'
 // Credential token documents, durable primary-credential store, and per-account
 // token-file helpers.
 //
@@ -11,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tryWriteFileAtomic } from '../../common/atomic-write.ts'
+import { unwrapGoKeyringPayload } from '../../common/go-keyring.ts'
 import type { ManagedAccount } from '../../common/pool-types.ts'
 import { readAccountCredential } from './backup.ts'
 
@@ -89,8 +89,12 @@ export function parseCredentialDoc(raw: string | null | undefined): CredentialDo
  */
 export function extractRefreshToken(input: string | null | undefined): string | null {
   if (!input || typeof input !== 'string') return null
-  const trimmed = input.trim()
-  if (!trimmed) return null
+  const trimmedInput = input.trim()
+  if (!trimmedInput) return null
+  // A keyring-wrapped document is JSON once unwrapped; leaving the envelope on
+  // would make the regex miss and the base64 blob be returned as a "token".
+  const trimmed = unwrapGoKeyringPayload(trimmedInput).trim()
+  if (trimmed === '') return null
 
   // 1. Try parsing structured JSON
   if (trimmed.startsWith('{') || trimmed.endsWith('}')) {

@@ -2,16 +2,19 @@ import './helpers/client-render.ts'
 import { React, renderToStaticMarkup } from './helpers/client-render.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
   buildOrchestratorSettingsObject,
   isOrchestratorModel,
+  isOrchestratorRoleModel,
   mergeOrchestratorIntoAgySettings,
   resolveOrchestratorRoleSlug,
 } from '../src/common/orchestrator.ts'
+import { agySettingsFilePath, syncOrchestratorSettingsFileAt } from '../src/runtime/agy/settings-sync.ts'
+import { prepareOrchestratorSettingsForAcp } from '../src/features/acp/orchestrator-prep.ts'
 import { resolveConfig } from '../src/common/config.ts'
 import { defaultConfig, type PluginConfig } from '../src/common/types/config.ts'
 import { effortLabel } from '../src/common/reasoning.ts'
@@ -24,7 +27,7 @@ import { renderStatus } from '../src/host/commands/status.ts'
 import { registerRoutes } from '../src/transport/http/router.ts'
 import type { HostServices } from '../src/host/services.ts'
 import type { Route } from '../src/transport/http/respond.ts'
-import { orchestratorEffortOptions, orchestratorRoleModels, type EffortLabels } from '../src/client/config-options.ts'
+import { orchestratorEffortOptions, orchestratorRoleModels, orchestratorRoleModelsFor, type EffortLabels } from '../src/client/config-options.ts'
 import { renderOrchestratorRows } from '../src/client/sections/OrchestratorSettingsRows.ts'
 import { zh } from '../src/client/locales/zh.ts'
 import { en } from '../src/client/locales/en.ts'
@@ -135,6 +138,109 @@ test('buildOrchestratorSettingsObject and mergeOrchestratorIntoAgySettings prese
   }
 })
 
+test('issue #204: the Planner/Executor dropdown follows agy\'s role whitelist', () => {
+  const catalog = [
+    { id: 'gemini-4-neon', name: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'] },
+    { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', efforts: ['low', 'medium', 'high'] },
+    { id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['low', 'medium', 'high'] },
+    { id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen', efforts: ['low', 'medium', 'high', 'xhigh'] },
+    { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ['low', 'medium', 'high'] },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', efforts: ['low', 'medium', 'high'] },
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', efforts: ['low', 'medium', 'high'] },
+    { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)' },
+  ]
+  assert.deepEqual(
+    orchestratorRoleModelsFor('planner', catalog).map((m) => m.id),
+    ['gemini-4-neon', 'gemini-4-carbon', 'gemini-4-argon', 'claude-opus-5-5'],
+  )
+  assert.deepEqual(
+    orchestratorRoleModelsFor('executor', catalog).map((m) => m.id),
+    ['gemini-4-hydrogen', 'claude-sonnet-5-5'],
+  )
+  // Effort suffixes and the agy/ prefix are presentation variants of the same id.
+  assert.equal(isOrchestratorRoleModel('planner', 'gemini-4-neon-xhigh'), true)
+  assert.equal(isOrchestratorRoleModel('planner', 'agy/gemini-4-neon-high'), true)
+  assert.equal(isOrchestratorRoleModel('planner', 'claude-opus-5-5@default'), true)
+  assert.equal(isOrchestratorRoleModel('executor', 'gemini-4-neon'), false)
+  assert.equal(isOrchestratorRoleModel('planner', 'gemini-3.8-flash'), false)
+  // The Btw dropdown is NOT role-scoped and keeps every worker model.
+  assert.equal(orchestratorRoleModels(catalog).includes(catalog[6]!), true)
+})
+
+test('issue #204: syncOrchestratorSettingsFileAt merges settings.json and reports real changes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-orch-settings-file-'))
+  try {
+    const file = agySettingsFilePath(dir)
+    assert.equal(syncOrchestratorSettingsFileAt(file, undefined), 'skipped')
+
+    const payload = { planner: 'gemini-4-neon-high', executor: 'gemini-4-hydrogen-medium' }
+    assert.equal(syncOrchestratorSettingsFileAt(file, payload), 'written')
+    const first = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    assert.deepEqual(first.orchestrator, payload)
+
+    // Re-running with the same seats must not rewrite (no ACP recycle noise).
+    assert.equal(syncOrchestratorSettingsFileAt(file, payload), 'unchanged')
+
+    // Unrelated keys and the rest of the orchestrator object survive a merge.
+    writeFileSync(file, JSON.stringify({ theme: 'dark', orchestrator: { keep: true, ...payload } }), 'utf8')
+    assert.equal(syncOrchestratorSettingsFileAt(file, { planner: 'claude-opus-5-5' }), 'written')
+    const merged = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    assert.equal(merged.theme, 'dark')
+    assert.deepEqual(merged.orchestrator, { keep: true, ...payload, planner: 'claude-opus-5-5' })
+
+    // A corrupt document is never overwritten by the sync helper.
+    writeFileSync(file, '{ not json', 'utf8')
+    assert.equal(syncOrchestratorSettingsFileAt(file, payload), 'skipped')
+    assert.equal(readFileSync(file, 'utf8'), '{ not json')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('issue #204: prepareOrchestratorSettingsForAcp writes settings and tags the process key', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-orch-prep-'))
+  const prevHome = process.env.HOME
+  process.env.HOME = dir
+  try {
+    const cfg = {
+      ...defaultConfig(),
+      orchestratorPlannerModel: 'gemini-4-neon',
+      orchestratorPlannerEffort: 'high',
+      orchestratorExecutorModel: 'gemini-4-hydrogen',
+      orchestratorExecutorEffort: 'high',
+    }
+    // A worker model never touches settings.json and carries no key tag.
+    assert.deepEqual(
+      prepareOrchestratorSettingsForAcp({ cfg, activeModel: 'gemini-4-neon', account: undefined }),
+      { ok: true },
+    )
+
+    const first = prepareOrchestratorSettingsForAcp({ cfg, activeModel: 'gemini-pro-orchestrator-neon', account: undefined })
+    assert.equal(first.ok, true)
+    assert.equal(first.ok && first.settingsTag, JSON.stringify({ planner: 'gemini-4-neon-high', executor: 'gemini-4-hydrogen-high' }))
+    const file = agySettingsFilePath(dir)
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).orchestrator, {
+      planner: 'gemini-4-neon-high',
+      executor: 'gemini-4-hydrogen-high',
+    })
+
+    // Stable tag across turns: the resident ACP process stays reusable.
+    const second = prepareOrchestratorSettingsForAcp({ cfg, activeModel: 'gemini-pro-orchestrator-neon', account: undefined })
+    assert.equal(second.ok && second.settingsTag, first.ok && first.settingsTag)
+
+    // An unparsable document is never overwritten: the caller must fall back
+    // to the CLI path rather than run the orchestrator with unknown settings.
+    writeFileSync(file, '{ broken', 'utf8')
+    const failed = prepareOrchestratorSettingsForAcp({ cfg, activeModel: 'gemini-pro-orchestrator-neon', account: undefined })
+    assert.equal(failed.ok, false)
+    assert.equal(readFileSync(file, 'utf8'), '{ broken')
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('resolveConfig loads orchestrator config fields from overrides and DSH_AGY_ORCHESTRATOR_* env vars', () => {
   const cfg = resolveConfig(
     {},
@@ -220,8 +326,10 @@ test('buildSpawnArgs injects --settings {orchestrator} only on Orchestrator mode
   assert.equal(resolveEffectiveAgySettings({ ...baseInput, activeModel: 'claude-opus-5-5', agySettings: undefined, cfg: defaultConfig() }), undefined)
 })
 
-test('runAgyAttempt bypasses ACP for CLI --settings only when orchestrator overrides apply', async () => {
+test('orchestrator overrides stay on ACP by writing settings.json, instead of forcing CLI --settings (issue #204)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-orch-attempt-'))
+  const prevHome = process.env.HOME
+  process.env.HOME = dir
   try {
     const argvLog = join(dir, 'argv.json')
     const fakeBin = join(dir, 'agy.cjs')
@@ -319,25 +427,21 @@ console.log(JSON.stringify({ event: 'complete', stats: { total_tokens: 5 } }));
     })
     assert.equal(acpCalls, 2)
 
-    // 3. Orchestrator model WITH custom planner/executor bypasses ACP and passes --settings to CLI
+    // 3. Orchestrator model WITH custom planner/executor now keeps ACP: the
+    // payload is written to <home>/.gemini/antigravity-cli/settings.json by
+    // runAcpAttempt, so the batch CLI is never spawned for this case.
     await runAndDrain({
       ...baseInput,
       model: 'gemini-pro-orchestrator-neon',
       activeModel: 'gemini-pro-orchestrator-neon',
       effort: undefined,
     })
-    assert.equal(acpCalls, 2, 'must route customized orchestrator via CLI -p instead of ACP')
-    const cliArgs = JSON.parse(readFileSync(argvLog, 'utf8')) as string[]
-    const idx = cliArgs.indexOf('--settings')
-    assert.notEqual(idx, -1)
-    assert.deepEqual(JSON.parse(cliArgs[idx + 1]!), {
-      orchestrator: {
-        planner: 'gemini-4-neon-xhigh',
-        executor: 'gemini-4-hydrogen-medium',
-      },
-    })
+    assert.equal(acpCalls, 3, 'customized orchestrator must stay on the resident ACP path')
+    assert.equal(existsSync(argvLog), false, 'no CLI fallback was spawned for orchestrator overrides')
   } finally {
     rmSync(dir, { recursive: true, force: true })
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
   }
 })
 

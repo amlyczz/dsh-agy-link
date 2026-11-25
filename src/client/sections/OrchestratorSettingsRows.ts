@@ -3,7 +3,7 @@
 import {
 	modelEfforts,
 	orchestratorEffortOptions,
-	orchestratorRoleModels,
+	orchestratorRoleModelsFor,
 	translateModelOptions,
 	type EffortLabels,
 } from '../config-options.ts';
@@ -59,12 +59,14 @@ export function renderOrchestratorRows(
 	setCfg: (key: string, value: unknown) => Promise<void>,
 	labels: EffortLabels,
 ): unknown[] {
-	const roleCatalog = orchestratorRoleModels(catalogModels);
 	const autoLabel = t('config.orchestratorModelAuto');
 
 	async function onModelChange(spec: OrchestratorRoleSpec, nextModel: string, currentEffort: string): Promise<void> {
 		await setCfg(spec.modelKey, nextModel);
 		if (currentEffort.trim() === '') return;
+		// Each seat has its own agy whitelist (issue #204), so the effort lookup
+		// must use the SAME role-filtered catalog the select rendered from.
+		const roleCatalog = orchestratorRoleModelsFor(spec.role, catalogModels);
 		const trimmed = nextModel.trim();
 		const entry = trimmed === '' ? undefined : roleCatalog.find((m) => m.id === trimmed);
 		const supported = trimmed === '' ? [] : entry ? modelEfforts(entry) : undefined;
@@ -77,6 +79,7 @@ export function renderOrchestratorRows(
 		const busy = Boolean(loadingAction);
 		const currentModel = spec.currentModel(status);
 		const currentEffort = spec.currentEffort(status);
+		const roleCatalog = orchestratorRoleModelsFor(spec.role, catalogModels);
 		const effortOptions = orchestratorEffortOptions(currentEffort, labels, currentModel, roleCatalog);
 		return h(Row, {
 			key: spec.role,

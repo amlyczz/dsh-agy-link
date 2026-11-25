@@ -8,7 +8,8 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, parseEffortUnsupported, parseModelNotRecognized, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { AgyAdapter, buildDigest, collectUnsentImageRefs, detectContinuation, elideMiddle, hasNewHumanTask, isRealUserMessage, isSyntheticHarnessMessage, latestUserTaskText, mergeSentImageIds, parseEffortUnsupported, parseModelNotRecognized, type AgyAdapterDeps } from '../src/host/adapter.ts'
+import { INTERRUPTION_NOTICE, promptIdentity } from '../src/provider/prompt-identity.ts'
 import { utf8Bytes } from '../src/host/adapter.ts'
 import { ModelCatalog } from '../src/host/models.ts'
 import { DEFAULT_FALLBACK_MODELS } from '../src/common/types.ts'
@@ -2859,6 +2860,41 @@ test('issue #138: DSH context messages never make a tool continuation look like 
   )
   // A real typed message still ends the scan: it IS a new request.
   assert.equal(detectContinuation([toolResult('agytc-run-1-7'), msg('user', '补充一点：先写草稿')]), null)
+})
+
+test('issue #205: system/developer tail messages do not hide a tool continuation', () => {
+  const toolResult = (callId: string): Message =>
+    ({ role: 'user', content: [{ type: 'tool-result', toolCallId: callId, content: [] }], source: { kind: 'tool', callId } }) as never
+  const systemTail = { role: 'system', content: [{ type: 'text', text: 'tool-registry refresh' }] } as unknown as Message
+  const developerTail = { role: 'developer', content: [{ type: 'text', text: 'system prompt update' }] } as unknown as Message
+  const expected = { runId: 'run-1', eventIndex: 7 }
+
+  assert.deepEqual(detectContinuation([toolResult('agytc-run-1-7'), systemTail]), expected,
+    'a system-prompt refresh after the tool result must not break continuation detection')
+  assert.deepEqual(detectContinuation([toolResult('agytc-run-1-7'), developerTail, systemTail]), expected,
+    'a developer/tool-registry tail is harness context, not a human boundary')
+  assert.equal(detectContinuation([systemTail]), null, 'a system message alone is never a continuation')
+  assert.equal(detectContinuation([toolResult('agytc-run-1-7'), msg('user', 'new ask'), systemTail]), null,
+    'a real human ask must still end the scan even when a system message follows it')
+})
+
+test('issue #205: prompt identity ignores the interruption notice, and lifecycle hops are not steers', () => {
+  const base = '/plan do the thing'
+  assert.equal(promptIdentity(INTERRUPTION_NOTICE + '\n\n' + base), promptIdentity(base))
+  // Behind a leading slash command the notice is appended at the END.
+  assert.equal(promptIdentity('/plan\n\ndo the thing\n\n' + INTERRUPTION_NOTICE), promptIdentity('/plan\n\ndo the thing'))
+
+  const toolResult = { role: 'user', content: [{ type: 'tool-result', toolCallId: 'agytc-run-1-7', content: [] }], source: { kind: 'tool', callId: 'agytc-run-1-7' } } as unknown as Message
+  const assistant = { role: 'assistant', content: [{ type: 'text', text: 'working' }] } as unknown as Message
+  const timeContext = { role: 'user', content: [{ type: 'text', text: 'Time sampled while preparing turn 1' }], source: { kind: 'time-context' } } as unknown as Message
+  const mnemon = { role: 'user', content: [{ type: 'text', text: 'memory snapshot' }], source: { kind: 'dsh-mnemon' } } as unknown as Message
+  const systemTail = { role: 'system', content: [{ type: 'text', text: 'tool-registry' }] } as unknown as Message
+
+  assert.equal(hasNewHumanTask([msg('user', 'task'), assistant, toolResult]), false, 'a tool result is a continuation')
+  assert.equal(hasNewHumanTask([msg('user', 'task'), assistant, toolResult, systemTail]), false, 'harness context is not a steer')
+  assert.equal(hasNewHumanTask([msg('user', 'task'), assistant, timeContext]), false, 'time telemetry is not a steer')
+  assert.equal(hasNewHumanTask([msg('user', 'task'), assistant, mnemon]), false, 'a memory snapshot is not a typed task')
+  assert.equal(hasNewHumanTask([msg('user', 'task'), assistant, msg('user', 'new ask')]), true, 'a typed message IS a steer')
 })
 
 test('plan approval continues execution via agy (drops --mode plan) while dismissal stops cleanly', async () => {

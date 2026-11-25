@@ -137,8 +137,8 @@ export class AcpSessionPool {
     }
   }
 
-  private keyFor(opts: { accountId?: string; mode: PermissionMode; sandbox: boolean; agent: string }): string {
-    return `${opts.accountId || 'primary'}|${opts.mode}|${opts.sandbox ? '1' : '0'}|${opts.agent}`
+  private keyFor(opts: { accountId?: string; mode: PermissionMode; sandbox: boolean; agent: string; settingsTag?: string }): string {
+    return `${opts.accountId || 'primary'}|${opts.mode}|${opts.sandbox ? '1' : '0'}|${opts.agent}|${opts.settingsTag ?? ''}`
   }
 
   /** Grace window for draining: the same budget background tasks get to finish. */
@@ -194,6 +194,7 @@ export class AcpSessionPool {
     expectedIsolated?: boolean
     /** True when this process depends on the shared Windows Credential Manager slot (legacy agy < 1.5). */
     usesSharedSlot?: boolean
+    settingsTag?: string // different startup settings must not reuse this process
   }): AcpProcess {
     if (process.platform === 'win32' && req.usesSharedSlot === true) {
       this.evictOtherAccounts(req.accountId)

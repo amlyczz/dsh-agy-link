@@ -34,7 +34,8 @@
 - **同秒日志增量读取（`src/host/agy-log.ts`）**：`snapshotAgyLogs()` 记录 `Map<filename, byteOffset>` 而非仅文件名集合；同一秒内多次 `agy` 进程共享同一 `cli-YYYYMMDD_HHMMSS.log` 时，`readAgyRunLogText()` 按字节偏移读取新增尾部，确保 `keyringAuth: timed out` 等网络抖动证据永不丢失（issue #71 深化）。
 - **第三方 MCP 鉴权错误隔离**：stderr 中明确带 MCP 服务前缀的鉴权报错不归因于 Google Antigravity 账号登出。
 - **Windows 凭据槽瞬时网络错误与文件缺失解耦**：`resolvePrimaryCredentialAt` 因网络不可达无法在线核验主账号身份时，抛可重试瞬时错误而非把当前调度的辅账号标为 `authRequired`；仅当账号自身凭据文件确实缺失或损坏时才标 `authRequired`。
-- **macOS 启动钥匙串自愈无损化（`boot-hygiene.ts` / `keychain.ts`）**：`security` 命令超时不删除隔离钥匙串文件；`restoreTokenFromMacKeychain` 复用统一的 `parseGoKeyringPayload`（同时兼容 `go-keyring-base64:` 与明文 JSON）。
+- **macOS 启动钥匙串自愈无损化（`boot-hygiene.ts` / `keychain.ts`）**：`security` 命令超时不删除隔离钥匙串文件；`restoreTokenFromMacKeychain` 复用统一的 `unwrapGoKeyringPayload`（同时兼容 `go-keyring-base64:` 与明文 JSON）。
+- **Windows 槽位必须是「解信封后的文档」（issue #203）**：AGY 桌面版通过 Go `keyring` 写入 `gemini:antigravity` 的内容带 `go-keyring-base64:` 前缀。`parseCredentialDoc()` 必须先 `unwrapGoKeyringPayload()` 再 `JSON.parse`，否则真实槽位被当成垃圾 → `credentialFingerprint()` 返回 null → `isExternalSlotSignIn()` 恒为 false → `respectExternalSignIn` 失效、主账号覆盖外部登录。信封知识只存在于 `src/common/go-keyring.ts`，`domain/credentials` 不依赖 `runtime/`。
 - **macOS/Linux `systemHome` 与 OS 钥匙串互不踩踏（`token.ts` / `services.ts`）**：
   - 隔离池账号使用各自目录的 `Library/Keychains/login.keychain-db`（macOS）与 `.gemini/antigravity-cli/antigravity-oauth-token`，绝不触碰系统默认钥匙串；仅 `systemHome`（`acc_primary`）与 `Antigravity.app` / 系统终端 `agy` 共用单一钥匙串项（`service=gemini, account=antigravity`）。
   - 非 Windows 下对 `systemHome` 刷新 OAuth token 时，落盘前再次校验实时系统钥匙串 `refreshToken` 未切换；若用户在刷新途中于 `Antigravity.app` 切号则直接丢弃本次旧响应，且当 `~/.gemini/antigravity-cli/antigravity-oauth-token` 不存在时不创建磁盘残片。

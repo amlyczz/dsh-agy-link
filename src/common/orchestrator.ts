@@ -13,6 +13,39 @@ export interface OrchestratorSettingsPayload {
   executor?: string
 }
 
+/** The two Orchestrator seats agy can route work to. */
+export type OrchestratorRole = 'planner' | 'executor'
+
+/**
+ * Model ids agy accepts for each Orchestrator seat.
+ *
+ * Source of truth: the `orchestrator-model-roles` feature value embedded in the
+ * agy 1.5.15 binary (verified 2026-11-25):
+ *   orchestrators: gemini-4-neon, gemini-4-carbon, gemini-4-argon, claude-opus-5-5
+ *   executors:     gemini-4-hydrogen, claude-sonnet-5-5
+ *
+ * agy silently ignores (or falls back from) anything outside its own list, so
+ * the settings dropdown must not offer a model the CLI will never use.
+ */
+export const ORCHESTRATOR_ROLE_MODELS: Readonly<Record<OrchestratorRole, readonly string[]>> = {
+  planner: ['gemini-4-neon', 'gemini-4-carbon', 'gemini-4-argon', 'claude-opus-5-5'],
+  executor: ['gemini-4-hydrogen', 'claude-sonnet-5-5'],
+}
+
+/** Base id of a role-model slug: drops `agy/`, a trailing `@default` and the effort suffix. */
+export function normalizeOrchestratorRoleModelId(modelId: string): string {
+  const normalized = modelId.trim().toLowerCase().replace(/^agy\//, '').replace(/@default$/, '')
+  if (normalized === '') return ''
+  return splitEffortSuffix(normalized).base
+}
+
+/** Whether `modelId` (with or without an effort suffix) is allowed in `role`'s seat. */
+export function isOrchestratorRoleModel(role: OrchestratorRole, modelId: string | undefined): boolean {
+  if (typeof modelId !== 'string') return false
+  const base = normalizeOrchestratorRoleModelId(modelId)
+  return base !== '' && ORCHESTRATOR_ROLE_MODELS[role].includes(base)
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

@@ -17,6 +17,9 @@ export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
 import { extractLeadingAgySlash, formatWithLeadingAgySlash } from '../provider/leading-slash.ts'
+import { INTERRUPTION_NOTICE, hasNewHumanTask, promptIdentity } from '../provider/prompt-identity.ts'
+import { warnOnce } from '../provider/warn-once.ts'
+export { hasNewHumanTask } from '../provider/prompt-identity.ts'
 import { buildAgyArgs, resolveAttemptOverrides, waitForRunSettle, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
 import { runAgyAttempt } from '../provider/attempt-outcome.ts'
 export { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from '../provider/notices.ts'
@@ -46,11 +49,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly warnedKeys = new Set<string>()
   /** sessionKey -> in-flight run, for steer-time preemption. */
   private readonly activeRuns = new Map<string, RunRecording>()
-  /**
-   * sessionKey -> prompt info for duplicate submission debounce.
-   * `inFlight` is true from submit until the run settles (or spawn throws),
-   * so a settled failure can never wall a legitimate retry.
-   */
+  /** sessionKey -> canonical prompt + in-flight flag for duplicate debounce/steer. */
   private readonly activeSessionPrompts = new Map<string, { prompt: string; startedAt: number; inFlight: boolean }>()
   /** accountId -> timestamp of last spawn for spacing throttling */
   private readonly lastAccountSpawnTime = new Map<string, number>()
@@ -98,13 +97,7 @@ export class AgyAdapter extends LlmAdapter {
   }
 
   private warnOnce(key: string, msg: string): void {
-    if (this.warnedKeys.has(key)) return
-    if (this.warnedKeys.size >= 512) {
-      const oldest = this.warnedKeys.values().next().value
-      if (oldest !== undefined) this.warnedKeys.delete(oldest)
-    }
-    this.warnedKeys.add(key)
-    this.deps.log?.('WARNING: ' + msg)
+    warnOnce(this.warnedKeys, key, msg, this.deps.log)
   }
 
   private noteNetworkFailure(sessionKey: string): number {
@@ -137,7 +130,7 @@ export class AgyAdapter extends LlmAdapter {
   private clearInFlightPrompt(sessionKey: string, prompt: string): void {
     if (sessionKey === '') return
     const ap = this.activeSessionPrompts.get(sessionKey)
-    if (ap === undefined || ap.prompt !== prompt) return
+    if (ap === undefined || ap.prompt !== promptIdentity(prompt)) return
     this.activeSessionPrompts.set(sessionKey, { ...ap, inFlight: false })
   }
 
@@ -439,20 +432,33 @@ export class AgyAdapter extends LlmAdapter {
       const prevPrompt = this.activeSessionPrompts.get(sessionKey)
       const liveRun = this.activeRuns.get(sessionKey)
       const runLive = liveRun !== undefined && !liveRun.isSettled
-      const samePrompt = prevPrompt !== undefined && prevPrompt.prompt === prompt
+      // Compare the CANONICAL prompt: the interruption notice injected below is
+      // transport metadata and used to poison the stored baseline, so every
+      // continuation replay looked like a steer and aborted its own live run
+      // (issue #205).
+      const identity = promptIdentity(prompt)
+      // A harness lifecycle hop (tool result / context append, no new typed
+      // turn) is never a steer: it is a continuation of the live run. Treat it
+      // as the same request so the rescue below resumes the cut span instead of
+      // aborting the run that produced it (issue #205).
+      const lifecycleHop = !hasNewHumanTask(messages)
+      const samePrompt = prevPrompt !== undefined && (prevPrompt.prompt === identity || lifecycleHop)
       if (runLive && samePrompt) {
         // Rescue an identical prompt if the live run already cut a span instead of failing BUSY.
         const rescueFrom = liveRun.lastCutIndex !== null ? liveRun.lastCutIndex + 1 : null
         if (rescueFrom !== null) {
           this.deps.log?.(
-            'duplicate-debounce rescue: identical prompt for a live agy run ' + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
+            (lifecycleHop ? 'lifecycle-continuation rescue: no new human turn for live agy run ' : 'duplicate-debounce rescue: identical prompt for a live agy run ')
+              + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
           )
-          this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
+          this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
           yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
           return
         }
         throw new LlmError(
-          'Duplicate request ignored: an identical request is already running for this session.',
+          lifecycleHop
+            ? 'Duplicate request ignored: a harness continuation arrived while the same request is still running for this session.'
+            : 'Duplicate request ignored: an identical request is already running for this session.',
           Err.BUSY,
         )
       }
@@ -509,14 +515,13 @@ export class AgyAdapter extends LlmAdapter {
               'the preempted agy run did not exit within 3.5s — starting the replacement anyway; its late write-back is ignored because the newer run owns the session',
             )
           }
-          if (!wasConsumable && !prompt.includes('the previous turn was interrupted')) {
-            const notice = '[the previous turn was interrupted before it finished — do not continue or answer that unfinished work; respond only to the newest request below]'
+          if (!wasConsumable && !prompt.includes(INTERRUPTION_NOTICE)) {
             const slash = extractLeadingAgySlash(prompt)
-            prompt = slash ? formatWithLeadingAgySlash(slash, notice) : `${notice}\n\n${prompt}`
+            prompt = slash ? formatWithLeadingAgySlash(slash, INTERRUPTION_NOTICE) : `${INTERRUPTION_NOTICE}\n\n${prompt}`
           }
         }
       }
-      this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
+      this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
     }
 
     // Dispatch to attempt-outcome.ts. Inject private state callbacks so adapter owns activeRuns/failover.

@@ -15,6 +15,7 @@ import { isMirrorToolNotFoundText, MIRROR_TOOL_RELOAD_NOTICE } from '../common/m
 import { stateDir } from '../common/config.ts'
 import { stripNulBytes } from '../host/runner.ts'
 import { sweepDir, mediaKindFor, type ImageRefLike, type MediaRefLike } from '../host/media.ts'
+export type { MediaRefLike }
 
 export type ForeignSource = { source?: { kind?: string; provider?: string; callId?: string; replayState?: unknown } }
 
@@ -242,6 +243,11 @@ export function latestUserMessageAny(messages: readonly Message[]): string {
     if (text !== '') return text
   }
   return ''
+}
+
+/** True for a dsh-mnemon memory snapshot (role:user, but never the task text). */
+export function isMemorySnapshotMessage(m: Message): boolean {
+  return sourceKindOf(m) === MEMORY_SNAPSHOT_SOURCE_KIND
 }
 
 const MULTIMODAL_BLOCK_TYPES = new Set(['image', 'file', 'document', 'pdf', 'audio', 'video', 'attachment'])

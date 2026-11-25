@@ -292,6 +292,26 @@ export function resolveEffectiveAgySettings(
   )
 }
 
+/**
+ * True when the ONLY reason `resolveEffectiveAgySettings` returns a value is
+ * the Orchestrator planner/executor payload — i.e. the user has no free-form
+ * `agySettings` of their own (issue #204).
+ *
+ * ACP has no `--settings` flag but reads `settings.json` at startup, and the
+ * flag accepts exactly the same "settings.json keys". So an orchestrator-only
+ * payload is covered by writing that file, and routing does not need to force
+ * the batch CLI. A user's own agySettings stay on the CLI path: persisting them
+ * into every account's settings.json would silently outlive one call.
+ */
+export function orchestratorSettingsCoveredByAcp(
+  input: Pick<AttemptInput, 'activeModel' | 'agySettings' | 'cfg'>,
+): boolean {
+  if ((input.agySettings ?? input.cfg.agySettings).trim() !== '') return false
+  const activeModel = input.activeModel === '' ? input.cfg.defaultModel : input.activeModel
+  if (!isOrchestratorModel(resolveModelSlug(activeModel))) return false
+  return buildOrchestratorSettingsObject(input.cfg) !== undefined
+}
+
 export interface AttemptRecorder {
   rec: RunRecording
   parser: StreamJsonParser
