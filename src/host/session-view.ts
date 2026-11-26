@@ -10,6 +10,7 @@ import { latestAgyModelOf } from './service-helpers.ts'
 import { buildSessionView, type SessionView } from '../common/session-view.ts'
 import { modelFamilyOf, type ModelFamily } from '../common/pool-types.ts'
 import { stickyAccount } from '../provider/account-selection.ts'
+import { resolveEligibleActiveAccountId } from '../domain/accounts/selection.ts'
 
 /**
  * The model that governs THIS session:
@@ -38,7 +39,7 @@ export function resolveSessionView(services: HostServices, sessionId: string): S
   const cfg = services.getConfig()
   const model = resolveSessionModel(services, sessionId)
   const pool = services.pool
-  const poolData = typeof pool?.getPoolData === 'function'
+  let poolData = typeof pool?.getPoolData === 'function'
     ? pool.getPoolData(cfg.proxyUrl?.trim() || undefined)
     : undefined
   const accounts = typeof pool?.getAccounts === 'function'
@@ -55,6 +56,24 @@ export function resolveSessionView(services: HostServices, sessionId: string): S
         stickyId = undefined
       }
     }
+  }
+  // The pool's `resolvedActiveAccountIds` is family-level (no model), so it
+  // may name an account that cannot serve this session's model. Refine an
+  // existing prediction with the model, matching what dispatch would pick;
+  // never invent one for a family the pool has no prediction for.
+  const fam = model === '' ? 'unknown' : modelFamilyOf(model)
+  if (poolData !== undefined && fam !== 'unknown' && pool !== undefined &&
+      poolData.resolvedActiveAccountIds?.[fam] !== undefined) {
+    let predicted: string | undefined
+    try {
+      predicted = resolveEligibleActiveAccountId(accounts, poolData.activeAccountIds, fam, pool, Date.now(), model)
+    } catch {
+      predicted = undefined
+    }
+    const resolved = { ...(poolData.resolvedActiveAccountIds ?? {}) }
+    if (predicted !== undefined) resolved[fam] = predicted
+    else delete resolved[fam]
+    poolData = { ...poolData, resolvedActiveAccountIds: resolved }
   }
   return buildSessionView({ poolData, accounts, model, stickyAccountId: stickyId })
 }

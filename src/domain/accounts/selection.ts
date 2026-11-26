@@ -331,6 +331,12 @@ export function orderByExpiry(
  * Pure, side-effect-free lookup of the active eligible account ID for a given
  * family. Honors a still-eligible family pin first, then falls back to the
  * first eligible candidate in rotation order without mutating pool state.
+ *
+ * The narrowest-capability preference only applies when `model` is known: it
+ * ranks accounts that can all serve that model. Without a model the candidate
+ * set spans the whole family, so "narrowest" may be an account that cannot
+ * serve the session's model at all (a Hydrogen-only account displacing the
+ * pinned Neon-capable one in the header) — the pin is kept instead.
  */
 export function resolveEligibleActiveAccountId(
   accounts: readonly ManagedAccount[],
@@ -345,7 +351,8 @@ export function resolveEligibleActiveAccountId(
   if (candidates.length === 0) return undefined
   const pinned = candidates.find((a) => a.id === pinnedId)
   const catalogFor = poolCatalog(pool)
-  if (pinned && isInNarrowestTier(pinned, candidates, family, catalogFor)) return pinned.id
+  const modelKnown = model !== undefined && model.trim() !== ''
+  if (pinned && (!modelKnown || isInNarrowestTier(pinned, candidates, family, catalogFor))) return pinned.id
   return orderByExpiry(accounts, candidates, family, pinnedId, now, catalogFor)[0]?.id
 }
 
