@@ -90,7 +90,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 
 Scope selection takes effect when the bridge is enabled. It applies to discovery, direct calls and the inner tools available to PTC. With an explicit allowlist, include both `run_code` and the inner tools you need. For bridged tools that share an AGY built-in name, the prompt names the session's MCP server and requires that route.
 
-When a chat step includes host tools and either `mcpBridge` or `forwardSystemPrompt` is off, the host logs a warning once per distinct set of tools and disabled settings. `GET /plugins/agy-link/status` reports the most recent chat step's `bridgeDiagnostic.hostTools` and `bridgeDiagnostic.disabledSettings`. A healthy chat step clears it to `null`. In PTC the diagnostic identifies the projected `run_code` executor. Changing either setting remains an explicit user action.
+When a chat step includes host tools and either `mcpBridge` or `forwardSystemPrompt` is off, the host logs once per distinct set of tools and disabled settings. Both switches off produce an informational message. Exactly one switch off produces a warning. Each message explains how to enable the missing capability. `GET /plugins/agy-link/status` reports the most recent chat step's `bridgeDiagnostic.hostTools` and `bridgeDiagnostic.disabledSettings`. A healthy chat step clears it to `null`. In PTC the diagnostic identifies the projected `run_code` executor. Changing either setting remains an explicit user action.
 
 ## Network, quota and updates
 

@@ -14,7 +14,7 @@ import { defaultConfig } from '../../src/common/types.ts'
 import { createHostServices } from '../../src/host/services.ts'
 
 type FakeCtx = {
-  logger?: { info: (m: string) => void }
+  logger?: { info: (m: string) => void; warn?: (m: string) => void }
   emit?: (event: string) => void
   get?: (key: string) => unknown
   sessions?: unknown
@@ -313,6 +313,18 @@ test('rememberEffortUnsupported persists, announces, and de-duplicates case/spac
   services.rememberEffortUnsupported('  CLAUDE-SONNET-4-6 ')
   assert.deepEqual(events, ['llm/models-updated', 'llm/adapters-updated'])
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), ['a', 'claude-sonnet-4-6'])
+})
+
+test('host log dispatches bridge diagnostics at the requested severity', t => {
+  sandbox(t)
+  const levels: string[] = []
+  const { log } = createHostServices(asCtx({ logger: {
+    info: () => levels.push('info'),
+    warn: () => levels.push('warn'),
+  } }), {})
+  log('both off', 'info')
+  log('one off', 'warn')
+  assert.deepEqual(levels.slice(-2), ['info', 'warn'])
 })
 
 test('createHostServices wires per-account catalog into pool.isModelSupported and dsh-agent model.select', async (t) => {

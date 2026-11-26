@@ -171,7 +171,7 @@ reference-counted slot is the strongest isolation the plugin can provide.
   sessionless-execution API is upstream work, not this bundle.
 - **Toolbox size and name collisions.** Select `mcpBridgeScope: host-only` to leave basic file and terminal work to AGY and save room under its 20,000-token toolbox limit. Large extension catalogs can still reach the limit. Narrow `mcpToolAllowlist` when needed.
   When an advertised tool such as `send_message` also exists in AGY, the prompt names the tool and requires dispatch through `dsh-tools-<port>` for the current DSH session. AGY still controls its own dispatch. Its native messaging tool cannot resolve DSH recipients.
-  A chat step with host tools and a disabled bridge or system-prompt forwarding produces a deduplicated warning. The status endpoint records the detected tool names and disabled settings in `bridgeDiagnostic`.
+  A chat step with host tools and a disabled bridge or system-prompt forwarding produces a deduplicated diagnostic (info when both are off, warn when only one is off). The status endpoint records the detected tool names and disabled settings in `bridgeDiagnostic`.
 - **Weekly quota auto-warmup is opt-in (v0.4.74+)** - `autoWarmup` defaults to
   `false` because the feature deliberately bypasses the CLI-first quota path and
   sends minimal `loadCodeAssist` + `generateContent` probes straight to Google's

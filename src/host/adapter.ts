@@ -20,7 +20,7 @@ import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
 import { extractLeadingAgySlash, formatWithLeadingAgySlash } from '../provider/leading-slash.ts'
 import { INTERRUPTION_NOTICE, hasNewHumanTask, promptIdentity } from '../provider/prompt-identity.ts'
-import { warnOnce } from '../provider/warn-once.ts'
+import { logOnce } from '../provider/log-once.ts'
 export { hasNewHumanTask } from '../provider/prompt-identity.ts'
 import { buildAgyArgs, resolveAttemptOverrides, waitForRunSettle, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
 import { runAgyAttempt } from '../provider/attempt-outcome.ts'
@@ -104,7 +104,7 @@ export class AgyAdapter extends LlmAdapter {
   }
 
   private warnOnce(key: string, msg: string): void {
-    warnOnce(this.warnedKeys, key, msg, this.deps.log)
+    logOnce(this.warnedKeys, key, () => this.deps.log?.('WARNING: ' + msg))
   }
 
   private noteNetworkFailure(sessionKey: string): number {
@@ -235,7 +235,8 @@ export class AgyAdapter extends LlmAdapter {
     })
     const { bin, isReview, isTitle, isCompaction, isTranslate, isImage, isAux } = ctx
     const { permissionMode, sessionKey, workspaceRoot, isCodeMode, hasToolSupport } = ctx
-    if (!isAux) this.bridgeDiagnostic = diagnoseBridge(cfg, options.tools, (key, msg) => this.warnOnce(key, msg))
+    if (!isAux) this.bridgeDiagnostic = diagnoseBridge(cfg, options.tools, (key, msg, level) =>
+      logOnce(this.warnedKeys, key, () => this.deps.log?.(msg, level)))
     const policy = purposePolicy(ctx)
     const translateSession = ctx.translateSession
     const isTranslateSession = translateSession !== null
@@ -322,7 +323,6 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
 
-    // ---- prompt assembly (ADR-7) is handled by buildPromptPlan below ----
     const messages = options.messages
 
     // Sliding-window TAT rate limit protection per minute (zero thundering herd)

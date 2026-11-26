@@ -59,9 +59,10 @@ function safeCtxGet<T>(ctx: Context, name: string): T | undefined {
 
 export function createHostServices(ctx: Context, entryConfig: Record<string, unknown> = {}) {
   const tag = '[dsh-agy-link] '
-  const log = (msg: string) => {
-    const logger = (ctx as unknown as { logger?: { info?: (m: string) => void } }).logger
-    logger?.info?.(tag + msg)
+  const log = (msg: string, level: 'info' | 'warn' = 'info') => {
+    const logger = (ctx as unknown as { logger?: Partial<Record<'info' | 'warn', (m: string) => void>> }).logger
+    if (level === 'warn' && logger?.warn) logger.warn(tag + msg)
+    else logger?.info?.(tag + (level === 'warn' ? 'WARNING: ' : '') + msg)
   }
 
   let binCache: string | null | undefined = undefined

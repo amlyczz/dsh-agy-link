@@ -25,7 +25,7 @@ export interface AgyAdapterDeps {
   bin: () => string | null
   /** Shared semaphore for cross-session concurrency (ADR-12). */
   acquire: (signal?: AbortSignal) => Promise<() => void>
-  log?: (msg: string) => void
+  log?: (msg: string, level?: 'info' | 'warn') => void
   /**
    * Re-poll pool quotas and the model catalog. Used ONLY as a self-heal when
    * every enabled account is denied purely because the requested model is

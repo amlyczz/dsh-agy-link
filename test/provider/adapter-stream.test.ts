@@ -446,29 +446,31 @@ test('goal round with a live active goal emits update_goal with the live revisio
 })
 
 test('chat diagnostics identify disabled settings, deduplicate reordered tools, and clear after recovery', async () => {
-  const cfg = { ...defaultConfig(), forwardSystemPrompt: false }
+  const cfg = { ...defaultConfig(), mcpBridge: false, forwardSystemPrompt: false }
   const logs: string[] = []
-  const { adapter } = makeAdapter({}, { getConfig: () => cfg, log: msg => logs.push(msg) })
+  const { adapter } = makeAdapter({}, { getConfig: () => cfg, log: (msg, level) => logs.push(level + ': ' + msg) })
   const stream = (names: string[]) => collect(adapter.stream(opts([msg('user', 'hello')], {
     tools: names.map(name => ({ name, description: '', parameters: {} })),
   })))
-  const warnings = () => logs.filter(msg => msg.includes('DSH host tools'))
+  const diagnostics = () => logs.filter(msg => msg.includes('DSH host tools'))
   await stream(['read', 'agy_tool', 'bash'])
   assert.equal(adapter.bridgeDiagnostic, null)
-  assert.equal(warnings().length, 0)
+  assert.equal(diagnostics().length, 0)
   for (const names of [['send_message', 'read_ticket', 'bash'], ['read_ticket', 'send_message', 'send_message']]) await stream(names)
   assert.deepEqual(adapter.bridgeDiagnostic, { hostTools: ['read_ticket', 'send_message'], disabledSettings: ['mcpBridge', 'forwardSystemPrompt'] })
-  assert.equal(warnings().length, 1)
-  assert.match(warnings()[0]!, /read_ticket.*send_message.*mcpBridge=false.*forwardSystemPrompt=false/)
+  assert.equal(diagnostics().length, 1)
+  assert.match(diagnostics()[0]!, /^info: .*read_ticket.*send_message.*Reverse MCP bridge in Settings.*enable forwardSystemPrompt/)
   cfg.mcpBridge = true
   await stream(['run_code'])
   assert.deepEqual(adapter.bridgeDiagnostic, { hostTools: ['run_code'], disabledSettings: ['forwardSystemPrompt'] })
+  assert.match(diagnostics()[1]!, /^warn: .*enable forwardSystemPrompt in the plugin configuration/)
   cfg.forwardSystemPrompt = true
   cfg.mcpBridge = false
   await stream(['read_ticket'])
   assert.deepEqual(adapter.bridgeDiagnostic, { hostTools: ['read_ticket'], disabledSettings: ['mcpBridge'] })
+  assert.match(diagnostics()[2]!, /^warn: .*enable Reverse MCP bridge in Settings/)
   cfg.mcpBridge = true
   await stream(['read_ticket'])
   assert.equal(adapter.bridgeDiagnostic, null)
-  assert.equal(warnings().length, 3)
+  assert.equal(diagnostics().length, 3)
 })

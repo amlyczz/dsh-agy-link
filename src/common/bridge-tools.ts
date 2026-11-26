@@ -43,15 +43,16 @@ export interface BridgeDiagnostic {
 }
 
 export function diagnoseBridge(cfg: PluginConfig, tools: readonly Tool[] | undefined,
-  warnOnce: (key: string, message: string) => void): BridgeDiagnostic | null {
+  logOnce: (key: string, message: string, level: 'info' | 'warn') => void): BridgeDiagnostic | null {
   if (!tools?.length || (cfg.mcpBridge && cfg.forwardSystemPrompt)) return null
   const hostTools = [...new Set(tools.map(t => t.name).filter(n => !BASIC_TOOLS.has(n) && !INTERNAL_TOOL_NAMES.has(n)))].sort()
   if (!hostTools.length) return null
   const disabledSettings = (['mcpBridge', 'forwardSystemPrompt'] as const).filter(key => !cfg[key])
   const diagnostic = { hostTools, disabledSettings }
   const issues = []
-  if (!cfg.mcpBridge) issues.push('mcpBridge=false prevents calls through the DSH bridge')
-  if (!cfg.forwardSystemPrompt) issues.push('forwardSystemPrompt=false omits DSH system instructions')
-  warnOnce('bridge:' + JSON.stringify(diagnostic), 'DSH host tools [' + hostTools.join(', ') + ']: ' + issues.join('. '))
+  if (!cfg.mcpBridge) issues.push('To call these tools (mcpBridge=false), enable Reverse MCP bridge in Settings → Runtime.')
+  if (!cfg.forwardSystemPrompt) issues.push('To forward DSH instructions (forwardSystemPrompt=false), enable forwardSystemPrompt in the plugin configuration.')
+  const level = !cfg.mcpBridge && !cfg.forwardSystemPrompt ? 'info' : 'warn'
+  logOnce('bridge:' + JSON.stringify(diagnostic), 'DSH host tools [' + hostTools.join(', ') + ']: ' + issues.join(' '), level)
   return diagnostic
 }
