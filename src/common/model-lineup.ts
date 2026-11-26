@@ -15,19 +15,26 @@
 //      a string literal repeated across features, which drifted every time a
 //      model was retired.
 //
-// Ground truth (verified against `agy models`, agy 1.5.15, 2026-11-24):
+// Ground truth (verified against `agy models`, agy 1.5.18, 2026-11-26; the
+// ACP `models.availableModels` payload lists the same 33 ids):
 //
-//   gemini-4-neon-low|-medium|-high|-xhigh     Gemini 4 Neon
 //   gemini-4-carbon-low|-medium|-high          Gemini 4 Carbon (Pro/Ultra)
+//   gemini-4-neon-low|-medium|-high|-xhigh     Gemini 4 Neon
+//   gemini-4-hydrogen-low|-medium|-high        Gemini 4 Hydrogen (all plans; `xhigh` retired in 1.5.18)
 //   gemini-4-argon-low|-medium|-high           Gemini 4 Argon
-//   gemini-4-hydrogen-low|-medium|-high|-xhigh Gemini 4 Hydrogen (all plans)
-//   gemini-pro-orchestrator-neon               Orchestrator (Neon)
-//   gemini-pro-orchestrator                    Orchestrator (Carbon)
-//   gemini-pro-orchestrator-argon              Orchestrator (Argon)
 //   gemini-3.8-flash-low|-medium|-high         Gemini 3.8 Flash
-//   claude-opus-5-5-low|-medium|-high          Claude Opus 5.5
-//   claude-sonnet-5-5-low|-medium|-high        Claude Sonnet 5.5
-//   gpt-oss-120b-medium                        GPT-OSS 120B (Medium)
+//   gemini-3.7-flash-low|-medium|-high         Gemini 3.7 Flash (back on 1.5.18)
+//   gemini-3.6-flash-low|-medium|-high         Gemini 3.6 Flash (back on 1.5.18)
+//   gemini-3.1-pro-low|-high                   Gemini 3.1 Pro (back on 1.5.18)
+//   claude-opus-5-5-low|-medium|-high|-max     Claude Opus 5.5 (`max` new in 1.5.18)
+//   claude-sonnet-5-5-low|-medium|-high|-max   Claude Sonnet 5.5 (`max` new in 1.5.18)
+//   gemini-pro-orchestrator                    Orchestrator
+//
+// Retired between 1.5.17 and 1.5.18: `gemini-pro-orchestrator-neon`,
+// `gemini-pro-orchestrator-argon` and `gpt-oss-120b-medium`. `PREFERRED_OPENAI`
+// still names the GPT-OSS id on purpose: it is what the plugin reaches for WHEN
+// a catalog offers that family, and it is validated against the live catalog
+// first, so it does not depend on being in this mirror.
 //
 // The Claude 4.6 line is retired upstream.
 //
@@ -81,17 +88,17 @@ export const PREFERRED_OPENAI = 'gpt-oss-120b-medium'
  * same ids, same effort sets, same order.
  */
 export const DEFAULT_FALLBACK_MODELS: readonly FallbackModelDef[] = [
-  { id: 'gemini-4-neon', name: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'] },
   { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', efforts: ['low', 'medium', 'high'] },
+  { id: 'gemini-4-neon', name: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'] },
+  { id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen', efforts: ['low', 'medium', 'high'] },
   { id: 'gemini-4-argon', name: 'Gemini 4 Argon', efforts: ['low', 'medium', 'high'] },
-  { id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen', efforts: ['low', 'medium', 'high', 'xhigh'] },
-  { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)' },
-  { id: 'gemini-pro-orchestrator', name: 'Orchestrator (Carbon)' },
-  { id: 'gemini-pro-orchestrator-argon', name: 'Orchestrator (Argon)' },
   { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', efforts: ['low', 'medium', 'high'] },
-  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ['low', 'medium', 'high'] },
-  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', efforts: ['low', 'medium', 'high'] },
-  { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)' },
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', efforts: ['low', 'medium', 'high'] },
+  { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', efforts: ['low', 'medium', 'high'] },
+  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', efforts: ['low', 'high'] },
+  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ['low', 'medium', 'high', 'max'] },
+  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', efforts: ['low', 'medium', 'high', 'max'] },
+  { id: 'gemini-pro-orchestrator', name: 'Orchestrator' },
 ]
 
 /** Models the plugin treats as the Gemini family for UI filtering. */

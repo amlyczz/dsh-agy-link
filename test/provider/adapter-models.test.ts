@@ -62,11 +62,11 @@ test('listModels never returns duplicate ids even with duplicate fallback defs (
 })
 
 test('listModels hides hiddenModels from the picker while resolveModel still resolves them', async () => {
-  const { adapter } = makeAdapter({ hiddenModels: ['gemini-3.8-flash', ' gpt-oss-120b-medium '] })
+  const { adapter } = makeAdapter({ hiddenModels: ['gemini-3.8-flash', ' gemini-pro-orchestrator '] })
   const models = await adapter.listModels('antigravity')
   const ids = models.map((m) => m.id)
   assert.ok(!ids.includes('gemini-3.8-flash'), 'a hidden id must leave the picker list')
-  assert.ok(!ids.includes('gpt-oss-120b-medium'), 'hidden ids are matched after trimming')
+  assert.ok(!ids.includes('gemini-pro-orchestrator'), 'hidden ids are matched after trimming')
   assert.ok(ids.includes('claude-sonnet-5-5'), 'unlisted models stay visible (deny-list semantics)')
   // resolveModel deliberately does not filter: in-flight sessions and direct
   // references keep resolving a model after it has been hidden.
