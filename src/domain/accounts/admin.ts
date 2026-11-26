@@ -459,7 +459,7 @@ export class PoolAdmin {
       const sharedArgon = argonSharesGoogleGroup(acc)
       if (targetFamily) {
         delete acc.cooldowns[targetFamily]
-        if (targetFamily === 'google' && !acc.quotas?.argon) delete acc.cooldowns.argon
+        if (targetFamily === 'google' && (sharedArgon || !acc.quotas?.argon)) delete acc.cooldowns.argon
         if (targetFamily === 'argon' && includeQuotaBench && sharedArgon) delete acc.cooldowns.google
       } else {
         acc.cooldowns = {}
@@ -467,7 +467,7 @@ export class PoolAdmin {
       acc.modelCooldowns = {} // same user action: release paused model buckets too
       if (!includeQuotaBench) return
       const families: ModelFamily[] = targetFamily
-        ? ((targetFamily === 'google' && !acc.quotas?.argon) || (targetFamily === 'argon' && sharedArgon) ? ['google', 'argon'] : [targetFamily])
+        ? ((targetFamily === 'google' && (sharedArgon || !acc.quotas?.argon)) || (targetFamily === 'argon' && sharedArgon) ? ['google', 'argon'] : [targetFamily])
         : [...new Set([...(Object.keys(acc.quotas ?? {}) as ModelFamily[]), ...(sharedArgon ? (['argon'] as ModelFamily[]) : [])])]
       if (families.length === 0) return
       acc.quotaGateClearedAt ??= {}
@@ -509,9 +509,10 @@ export class PoolAdmin {
     const acc = this.account(id)
     if (!acc) return
     acc.cooldowns ??= {}
+    const now = Date.now()
     const prev = effectiveFamilyCooldown(acc, family)
     const failures = (prev?.consecutiveFailures ?? 0) + 1
-    const entry = { cooldownUntil: cooldownUntilFor(data, failures, reason, serverResetTime), reason, consecutiveFailures: failures }
+    const entry = { cooldownUntil: cooldownUntilFor(data, failures, reason, serverResetTime, now), reason, consecutiveFailures: failures, recordedAt: now }
     acc.cooldowns[family] = entry
     const peer = sharedArgonPeerFamily(acc, family)
     if (peer) acc.cooldowns[peer] = { ...entry }

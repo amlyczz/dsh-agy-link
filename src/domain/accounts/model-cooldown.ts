@@ -53,6 +53,7 @@ export function applyModelFailure(
     cooldownUntil: cooldownUntilFor(budget, failures, reason, serverResetTime, now),
     reason,
     consecutiveFailures: failures,
+    recordedAt: now,
   }
   acc.modelCooldowns[key] = next
   return next

@@ -25,6 +25,7 @@ import { defaultPoolDir } from '../domain/accounts/paths.ts'
 import { PoolAdmin } from '../domain/accounts/admin.ts'
 import { earliestAvailableCountdown, earliestResetCountdown, sweepOldAgyLogs } from '../domain/accounts/countdown.ts'
 import { PoolStore } from '../domain/accounts/store.ts'
+import { reconcileCooldownsFromQuota } from '../domain/accounts/cooldown-reconcile.ts'
 import {
   LOW_QUOTA_5H,
   LOW_QUOTA_WEEKLY,
@@ -371,10 +372,8 @@ export class AccountPoolManager {
   updateAccountQuotas(id: string, quotas: Partial<Record<ModelFamily, FamilyQuotaInfo>>, email?: string): void {
     const acc = this.getAccount(id)
     if (!acc) return
-    acc.quotas = {
-      ...acc.quotas,
-      ...quotas,
-    }
+    const prevQuotas = acc.quotas
+    acc.quotas = { ...acc.quotas, ...quotas }
     if (email) acc.email = email
 
     // Heal a PERSISTED tier that the fresh evidence contradicts: an account
@@ -385,8 +384,9 @@ export class AccountPoolManager {
     const healed = resolveAccountPlanTier(acc)
     if (healed !== undefined && acc.planTier !== healed) acc.planTier = healed
 
-    // If an updated family has exhausted its quota, proactively advance to the next account
+    // Reconcile superseded cooldowns and proactively advance exhausted families.
     const now = Date.now()
+    reconcileCooldownsFromQuota(acc, prevQuotas, quotas, now)
     for (const [famKey, info] of Object.entries(quotas) as [ModelFamily, FamilyQuotaInfo][]) {
       if (!info) continue
       const isExhausted5h = typeof info.remainingFraction === 'number' && info.remainingFraction <= LOW_QUOTA_5H &&

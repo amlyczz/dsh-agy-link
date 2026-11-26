@@ -107,6 +107,8 @@ export interface FamilyCooldownState {
   reason: string
   /** Consecutive rate-limit failure count (for exponential/tiered backoff). */
   consecutiveFailures: number
+  /** Timestamp when this cooldown was recorded (detects quota window rollovers). */
+  recordedAt?: number
 }
 
 export interface ManagedAccount {

@@ -16,6 +16,7 @@ import {
   type ModelFamily,
 } from '../../common/pool-types.ts'
 import { writeJsonAtomic } from './paths.ts'
+import { reconcileCooldownsFromQuota } from './cooldown-reconcile.ts'
 
 export interface PoolStoreLoadResult {
   data: AccountPoolData
@@ -158,13 +159,19 @@ export class PoolStore {
             const diskAcc = onDiskMap.get(ourAcc.id)
             if (!diskAcc || !this.knownIds.has(ourAcc.id)) return ourAcc
             const baseAcc = baseMap.get(ourAcc.id)
+            const prevQuot = ourAcc.quotas
             let nextQuot = ourAcc.quotas
+            const adoptedForReconcile: Partial<Record<ModelFamily, NonNullable<ManagedAccount['quotas'][ModelFamily]>>> = {}
             for (const [fam, dq] of Object.entries(diskAcc.quotas ?? {}) as [ModelFamily, ManagedAccount['quotas'][ModelFamily]][]) {
               if (!dq) continue
               const oq = ourAcc.quotas?.[fam]
               const bq = baseAcc?.quotas?.[fam]
               if ((dq.updatedAt ?? 0) > (oq?.updatedAt ?? 0) && (dq.updatedAt ?? 0) > (bq?.updatedAt ?? 0)) {
                 nextQuot = { ...nextQuot, [fam]: dq }
+                const dcd = diskAcc.cooldowns?.[fam]
+                if (!dcd || dcd.cooldownUntil <= now) {
+                  adoptedForReconcile[fam] = dq
+                }
                 accountMerged = true
               }
             }
@@ -186,6 +193,9 @@ export class PoolStore {
             // Mutate in place as well so callers holding `data` see the merged state immediately.
             ourAcc.quotas = nextQuot
             ourAcc.cooldowns = nextCd
+            if (Object.keys(adoptedForReconcile).length > 0) {
+              reconcileCooldownsFromQuota(ourAcc, prevQuot, adoptedForReconcile, now)
+            }
             if (adoptTos) {
               ourAcc.authRequired = true
               ourAcc.authError = diskAcc.authError

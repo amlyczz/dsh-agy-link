@@ -157,6 +157,9 @@ export class WarmupService {
     const res = await this.probeModel(account, model)
     if (res.ok) {
       this.history.record(manualKey, now)
+      const fam = modelFamilyOf(model)
+      if (fam !== 'unknown') this.pool.recordSuccess?.(account.id, fam)
+      this.pool.recordModelSuccess?.(account.id, model)
     } else {
       this.history.record(manualFailureKey, now)
     }
@@ -236,6 +239,8 @@ export class WarmupService {
           this.slidingIdleKeys.delete(extra)
         }
         this.history.record(`${identity}:${target.model}:100`, now)
+        this.pool.recordSuccess?.(account.id, target.family)
+        this.pool.recordModelSuccess?.(account.id, target.model)
       } else {
         this.history.record(target.failureKey, now)
         if (isModelUnavailableError(res.error ?? '')) {
