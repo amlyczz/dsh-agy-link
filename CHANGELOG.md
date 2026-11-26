@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.95 (2026-11-26)
+
+### English
+
+- **Feat(pool): prefer the account with the fewest exclusive capabilities (merges PR #211).** Some accounts can only run `gemini-4-hydrogen` while others can run both `4h` and `gemini-4-neon`, and the two share one quota bucket. Rotation looked only at reset time, so a `4h` request could burn a dual-capability account and leave `4n` with nothing.
+  - One rule: **give the request to the account that other models need least.** `exclusiveCapabilityScores` counts, per candidate, the models it supports that not every candidate supports (from `quotas[family].models`, base slugs with the effort suffix stripped). Models every candidate shares cancel out; accounts that report no model list score 0.
+  - `orderByExpiry` gains a Priority 0 layer (fewest exclusive capabilities first); **within the same layer the order is unchanged**.
+  - Stickiness: the current account keeps the turn only while it is in the narrowest layer, otherwise a narrower account takes over — at selection time only, never interrupting an in-flight request.
+  - No configuration, no labels, no hard-coded model names; applies to other capability groups (Argon, …) too.
+
+### 中文
+
+- **特性(账号池)：优先使用"独占能力最少"的账号（合并 PR #211）。** 部分账号只能跑 `gemini-4-hydrogen`，另一部分 `4h` 与 `gemini-4-neon` 都能跑，而两者共用一个额度。原轮换只看重置时间，于是 `4h` 请求可能先烧掉双能力账号，之后 `4n` 无号可用。
+  - 一条规则：**把请求交给别的模型最不需要的账号。** `exclusiveCapabilityScores` 统计每个候选账号"支持、但并非所有候选都支持"的模型数（来自 `quotas[family].models`，按 base slug 去 effort 后缀）。所有候选共有的模型相互抵消；未上报模型列表的账号记 0。
+  - `orderByExpiry` 在原有排序前增加 Priority 0 层（独有能力少的优先）；**同层内顺序与原来完全一致**。
+  - 粘性：当前账号只在"最窄层"内时保持，否则让位给更窄的账号——仅发生在选号时，不中断进行中的请求。
+  - 无配置、无标签、不硬编码模型名；对 Argon 等其他能力组合同样适用。
+
 ## 0.6.94 (2026-11-26)
 
 ### English
