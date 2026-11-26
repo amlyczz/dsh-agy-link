@@ -34,6 +34,7 @@ import {
 	onScrollSettle,
 	setOverlaySuspended,
 	setScrollActiveForTest,
+	settleScrollForTest,
 } from '../../src/client/scroll-guard.ts';
 import { actionStateOf, setActionState, TranslateAction } from '../../src/client/translate-state.ts';
 import { disposeStatusPolling, publishStatusSnapshot } from '../../src/client/status.ts';
@@ -874,6 +875,38 @@ test('translate action: a reply busy on mount (auto-translate) keeps probing and
 	await fire();
 	assert.equal((second.container.querySelector('.agy-tsl-icon') as HTMLButtonElement).getAttribute('data-state'), 'idle');
 	await act(() => { second.root.unmount(); });
+	setActionState(ACTION_KEY, 'idle');
+});
+
+test('status publish is deferred mid-scroll, flushed on settle, and re-binds after teardown', async () => {
+	setGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ showTranslateAction: true }) }));
+	setActionState(ACTION_KEY, 'idle');
+	publishStatusSnapshot({ showTranslateAction: true });
+	const { container, root } = await mount(createElement(TranslateAction, { messageId: 'msg-scroll-defer', sessionId: 'sess-scroll-defer' }));
+	assert.ok(container.querySelector('.agy-tsl-icon'), 'the action starts visible');
+
+	// A poll that lands mid-gesture must not re-render the console tree.
+	setScrollActiveForTest(true);
+	publishStatusSnapshot({ showTranslateAction: false });
+	await act(async () => { await Promise.resolve(); });
+	assert.ok(container.querySelector('.agy-tsl-icon'), 'mid-scroll publish must be deferred');
+
+	// Settling the gesture flushes the newest snapshot once.
+	await act(async () => { settleScrollForTest(); await Promise.resolve(); });
+	assert.equal(container.querySelector('.agy-tsl-icon'), null, 'settle must deliver the deferred snapshot');
+
+	// Teardown clears the scroll listeners; the next deferred publish must
+	// re-subscribe instead of leaving a permanently stale console.
+	disposeStatusPolling();
+	disposeScrollListener();
+	setScrollActiveForTest(true);
+	publishStatusSnapshot({ showTranslateAction: true });
+	await act(async () => { settleScrollForTest(); await Promise.resolve(); });
+	assert.ok(container.querySelector('.agy-tsl-icon'), 'a deferred publish after teardown re-binds the idle listener');
+
+	await act(() => { root.unmount(); });
+	setScrollActiveForTest(false);
+	disposeStatusPolling();
 	setActionState(ACTION_KEY, 'idle');
 });
 

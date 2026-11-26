@@ -214,7 +214,6 @@ export function isUiVisible(
  * deferred until the scroll settles, then flushed once with the newest payload.
  */
 let pendingPublish: StatusPayload | null = null;
-let settleFlushBound = false;
 
 function notifyListeners(st: StatusPayload): void {
 	for (const fn of [...statusListeners]) {
@@ -228,9 +227,13 @@ function flushPendingPublish(): void {
 	if (pending !== null) notifyListeners(pending);
 }
 
+/**
+ * `onScrollIdle` keeps a Set, so re-registering the same callback is a no-op.
+ * Binding on every deferred publish (instead of a module flag) keeps working
+ * after a teardown cleared the listeners: the next publish re-subscribes, while
+ * the steady state still holds exactly one listener.
+ */
 function bindSettleFlush(): void {
-	if (settleFlushBound) return;
-	settleFlushBound = true;
 	onScrollIdle(flushPendingPublish);
 }
 

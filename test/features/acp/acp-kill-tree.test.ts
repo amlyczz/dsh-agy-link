@@ -6,13 +6,14 @@
 // live `agy acp` server — plus its MCP children — on every eviction.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { AcpProcess } from '../../../src/features/acp/client.ts'
 import { killTree } from '../../../src/runtime/agy/process.ts'
 import { pidAlive } from '../../../src/runtime/agy/process-table.ts'
+import { removeTempDir } from '../../helpers/temp.ts'
 
 /** Mock acp server: answers `initialize`, ignores SIGTERM, spawns a child. */
 const STUBBORN_ACP = `
@@ -106,7 +107,7 @@ test('killTree escalates a SIGTERM-ignoring process group to SIGKILL', async () 
     assert.equal(await exited, true, 'the direct child must die')
     assert.equal(await waitForDeath(grandPid), true, 'the group kill must reach the grandchild')
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+    removeTempDir(dir)
   }
 })
 
@@ -118,7 +119,10 @@ test('AcpProcess.close() terminates the server and its children even when SIGTER
     writeFileSync(script, STUBBORN_ACP)
     const proc = new AcpProcess({
       bin: script,
-      cwd: dir,
+      // cwd deliberately OUTSIDE the temp dir: a process whose cwd is the temp
+      // directory keeps it locked on Windows even after it dies, which made the
+      // final rmSync flake with EPERM under full-suite concurrency.
+      cwd: tmpdir(),
       env: { ...process.env, PID_FILE: pidFile },
       permissionMode: 'skip',
       sandbox: false,
@@ -136,6 +140,6 @@ test('AcpProcess.close() terminates the server and its children even when SIGTER
     assert.equal(await waitForDeath(pid!), true, 'the acp server must not survive close()')
     assert.equal(await waitForDeath(grandPid), true, 'its MCP-style children must go too')
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+    removeTempDir(dir)
   }
 })
