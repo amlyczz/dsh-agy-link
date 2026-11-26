@@ -12,6 +12,7 @@ import {
   argonSharesGoogleGroup,
   baseModelSlug,
   effectiveFamilyCooldown,
+  modelFamilyOf,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
@@ -102,9 +103,10 @@ export function pickEligibleAccount(
   )
   if (candidates.length === 0) return null
   const active = candidates.find((acc) => acc.id === input.activeId)
+  const catalogFor = poolCatalog(pool)
   return (
-    (active && isInNarrowestTier(active, candidates, input.family) ? active : undefined) ??
-    orderByExpiry(accounts, candidates, input.family, input.activeId, input.now)[0] ??
+    (active && isInNarrowestTier(active, candidates, input.family, catalogFor) ? active : undefined) ??
+    orderByExpiry(accounts, candidates, input.family, input.activeId, input.now, catalogFor)[0] ??
     null
   )
 }
@@ -145,14 +147,28 @@ function effectiveFamilyQuota(acc: ManagedAccount, family: ModelFamily): FamilyQ
   return acc.quotas?.[family]
 }
 
+/** Account-scoped discovered catalog lookup (`AccountPoolManager.catalogForAccount`). */
+export type CatalogLookup = (id: string) => { source?: string; models?: readonly { id: string }[] } | undefined
+
 /**
  * Capability set an account reports for one family: base slugs of the models
- * in its quota breakdown. Undefined when the account has not reported any.
+ * in its quota breakdown, else of the models in its own discovered catalog.
+ * Undefined when neither source lists any.
+ *
+ * The catalog fallback matters because the default CLI-first quota refresh
+ * (`agy -p /usage`) reports per-group numbers only and never fills
+ * `quotas[family].models`; without it every account scored 0 and the
+ * narrowest-capability preference never applied.
  */
-function familyCapabilities(acc: ManagedAccount, family: ModelFamily): Set<string> | undefined {
+function familyCapabilities(acc: ManagedAccount, family: ModelFamily, catalogFor?: CatalogLookup): Set<string> | undefined {
   const models = effectiveFamilyQuota(acc, family)?.models
-  if (!Array.isArray(models) || models.length === 0) return undefined
-  return new Set(models.map((m) => baseModelSlug(m.modelId)))
+  if (Array.isArray(models) && models.length > 0) {
+    return new Set(models.map((m) => baseModelSlug(m.modelId)))
+  }
+  const cat = catalogFor?.(acc.id)
+  if (cat?.source !== 'discovered' || !Array.isArray(cat.models)) return undefined
+  const ids = cat.models.map((m) => m.id).filter((id) => modelFamilyOf(id) === family)
+  return ids.length === 0 ? undefined : new Set(ids.map(baseModelSlug))
 }
 
 /**
@@ -170,8 +186,9 @@ function familyCapabilities(acc: ManagedAccount, family: ModelFamily): Set<strin
 export function exclusiveCapabilityScores(
   candidates: readonly ManagedAccount[],
   family: ModelFamily,
+  catalogFor?: CatalogLookup,
 ): Map<string, number> {
-  const caps = candidates.map((acc) => [acc.id, familyCapabilities(acc, family)] as const)
+  const caps = candidates.map((acc) => [acc.id, familyCapabilities(acc, family, catalogFor)] as const)
   const known = caps.flatMap(([, c]) => (c ? [c] : []))
   const shared = known.length === 0 ? new Set<string>() : new Set([...known[0]!].filter((m) => known.every((c) => c.has(m))))
   return new Map(caps.map(([id, c]) => [id, c ? [...c].filter((m) => !shared.has(m)).length : 0]))
@@ -186,8 +203,9 @@ export function isInNarrowestTier(
   acc: ManagedAccount,
   candidates: readonly ManagedAccount[],
   family: ModelFamily,
+  catalogFor?: CatalogLookup,
 ): boolean {
-  const scores = exclusiveCapabilityScores(candidates, family)
+  const scores = exclusiveCapabilityScores(candidates, family, catalogFor)
   return (scores.get(acc.id) ?? 0) <= Math.min(...scores.values())
 }
 
@@ -249,8 +267,9 @@ export function orderByExpiry(
   family: ModelFamily,
   fromId: string | undefined,
   now: number,
+  catalogFor?: CatalogLookup,
 ): ManagedAccount[] {
-  const exclusive = exclusiveCapabilityScores(candidates, family)
+  const exclusive = exclusiveCapabilityScores(candidates, family, catalogFor)
   return candidates
     .map((acc, index) => {
       const q = effectiveFamilyQuota(acc, family)
@@ -325,6 +344,13 @@ export function resolveEligibleActiveAccountId(
   const candidates = accounts.filter((acc) => isAccountEligible(acc, family, now, pool, model))
   if (candidates.length === 0) return undefined
   const pinned = candidates.find((a) => a.id === pinnedId)
-  if (pinned && isInNarrowestTier(pinned, candidates, family)) return pinned.id
-  return orderByExpiry(accounts, candidates, family, pinnedId, now)[0]?.id
+  const catalogFor = poolCatalog(pool)
+  if (pinned && isInNarrowestTier(pinned, candidates, family, catalogFor)) return pinned.id
+  return orderByExpiry(accounts, candidates, family, pinnedId, now, catalogFor)[0]?.id
+}
+
+/** The pool's catalog lookup, bound so `this` survives the method extraction. */
+function poolCatalog(pool: DedicatedGroupSource | null | undefined): CatalogLookup | undefined {
+  const fn = pool?.catalogForAccount
+  return fn ? (id) => fn.call(pool, id) : undefined
 }

@@ -58,6 +58,36 @@ test('sticky broader account yields to an eligible narrower one', () => {
   assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', null, NOW), 'h-only')
 })
 
+// CLI-first quota refresh (`agy -p /usage`) never fills quotas.models; the
+// account's own discovered catalog must then supply the capability set.
+function cliOnly(id: string, weeklyInH: number): ManagedAccount {
+  const a = acc(id, [], weeklyInH)
+  delete (a.quotas!.google as { models?: unknown }).models
+  return a
+}
+const CATALOGS: Record<string, string[]> = {
+  'h-only': ['gemini-4-hydrogen', 'gemini-3.8-flash', 'claude-opus-5-5'],
+  dual: ['gemini-4-neon', 'gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'claude-opus-5-5'],
+}
+const catalogPool = {
+  catalogForAccount: (id: string) => ({ source: 'discovered', models: (CATALOGS[id] ?? []).map((m) => ({ id: m })) }),
+}
+
+test('capabilities fall back to the discovered catalog when quotas list no models', () => {
+  const accounts = [cliOnly('dual', 1), cliOnly('h-only', 100)]
+  const scores = exclusiveCapabilityScores(accounts, 'google', catalogPool.catalogForAccount)
+  assert.equal(scores.get('h-only'), 0)
+  assert.equal(scores.get('dual'), 2) // neon + carbon; argon/claude are other families
+  assert.equal(pickEligibleAccount(accounts, catalogPool, { family: 'google', model: 'gemini-4-hydrogen', activeId: 'dual', now: NOW })?.id, 'h-only')
+  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', catalogPool, NOW), 'h-only')
+})
+
+test('fallback (non-discovered) catalogs are not capability evidence', () => {
+  const accounts = [cliOnly('dual', 1), cliOnly('h-only', 100)]
+  const fallback = (id: string) => ({ source: 'fallback', models: (CATALOGS[id] ?? []).map((m) => ({ id: m })) })
+  assert.deepEqual([...exclusiveCapabilityScores(accounts, 'google', fallback).values()], [0, 0])
+})
+
 test('broader account is used when it is the only one serving the model', () => {
   const pool = { isModelSupported: (a: ManagedAccount, m: string) => a.id === 'dual' || m !== 'gemini-4-neon' }
   const accounts = [hOnly(), dual()]
