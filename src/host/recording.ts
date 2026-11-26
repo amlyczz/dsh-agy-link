@@ -14,6 +14,7 @@
 // DSH message list alone — retries and replays stay idempotent with no
 // mutable per-stream state.
 import { randomUUID } from 'node:crypto'
+import type { ModelFamily } from '../common/pool-types.ts'
 import type { AgyEvent, RawUsage } from '../common/types.ts'
 import {
   AGY_CALL_PREFIX,
@@ -93,6 +94,10 @@ export class RunRecording {
   private thoughts: Map<number, string> | null = null
   /** Isolated pool-account HOME used for this run's agy conversation DB. */
   accountHome: string | undefined = undefined
+  /** Pool account id serving this run (authoritative for live session-view). */
+  accountId: string | undefined = undefined
+  /** Quota family serving this run. */
+  family: ModelFamily | undefined = undefined
 
   /**
    * Index of the event where the most recent span CUT (the last event the

@@ -360,6 +360,8 @@ export function createAttemptRecorder(
 ): AttemptRecorder {
   const rec = deps.runs.create()
   rec.accountHome = account && account.dir ? account.dir : undefined
+  rec.accountId = account?.id
+  rec.family = quotaCtx?.family
   const conversationsDir = conversationsDirFor(rec.accountHome)
   const before = snapshotConversations(conversationsDir)
   const parser = new StreamJsonParser()

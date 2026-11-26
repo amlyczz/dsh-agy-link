@@ -59,6 +59,9 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
 - `selectSessionAccount()` 中：
   - `stickyAccount()` 仅在会话上次绑定模型属于同一 `modelFamilyOf(b.model)` 时复用同族粘性账号（例如会话 A 选 `gemini-pro-orchestrator-neon` 在 `google` 池内轮换，会话 B 选 `gemini-4-argon` 在 `argon` 池内独立轮换，互不串扰）。
   - 若用户对该模型族显式切号发生在旧会话绑定更新时间之后（`Math.max(manualPinAt, manualPinAtByFamily[family]) > binding.updatedAt`），该同族会话**立即跟随用户新选账号**，不再被旧会话亲和拉回；且 `stickyAccount` 命中旧会话亲和时**绝不反向覆写全局其他族的 `activeAccountIds`**（`lastActiveAccountId` 亦受 `family === 'google' || !lastActiveAccountId` 守卫）。
+  - **实时在途回合与同族换模失效（`resolveSessionView` + `resolvePromptBinding`）**：
+    - `resolveSessionView()`（会话顶栏徽标数据源）按 **在途活跃运行（`adapter.activeAccountForSession()` / `getActiveRun()`，校验与当前模型族或共享 Argon 组兼容） > `stickyAccount()` > `resolvedActiveAccountIds[family]`** 顺序解析，避免长回合尚未写盘 `sessions.json`（或同族换模已删旧绑定）时顶栏误显示陈旧账号。
+    - `resolvePromptBinding()` 因模型 slug 变更使当前账号绑定失效时，同步清理同一 `bindingKey` 下属于目标模型族（及共享组）且模型 slug 不匹配的陈旧绑定（保留其他隔离族绑定），防止更早的旧账号（如已轮换走的账号）在 `stickyAccount()` 中复活。
 - `syncSessionModel()` 兼容 `dsh-agent` 真实接口 `(await ctx.agents.resolve(sessionId))?.model?.select(...)` 与持久事件追加。
 
 ## 5. `--effort` 档位拒绝自愈（issue #67 / #115）

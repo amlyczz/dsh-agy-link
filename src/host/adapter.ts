@@ -28,6 +28,7 @@ export { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from '../provider/notices
 export { AGY_PROMPT_SAFE_BYTES, AGY_SINGLE_MESSAGE_MAX_BYTES, buildDigest, collectUnsentImageRefs, elideMiddle, isRealUserMessage, isSyntheticHarnessMessage, latestUserMessageAny, latestUserTaskText, utf8Bytes } from '../provider/prompt-text.ts'
 import { Err, accountsShareSingleEgress, PROVIDER_ID, type PluginConfig } from '../common/types.ts'
 import { isAgyLinkNoticeSource } from '../common/agy-link-source.ts'
+import { ActiveRunTracker, type LiveSessionAccount } from './active-runs.ts'
 import type { RunRecording } from './recording.ts'
 import { defaultEffortFor, findEntry, resolveModelSlug } from './models.ts'
 import { detectSystemProxy } from './wincred.ts'
@@ -48,8 +49,8 @@ export class AgyAdapter extends LlmAdapter {
 
   bridgeDiagnostic: BridgeDiagnostic | null = null
   private readonly warnedKeys = new Set<string>()
-  /** sessionKey -> in-flight run, for steer-time preemption. */
-  private readonly activeRuns = new Map<string, RunRecording>()
+  /** sessionKey -> in-flight run + pre-spawn pending account assignment. */
+  private readonly activeRuns = new ActiveRunTracker()
   /** sessionKey -> canonical prompt + in-flight flag for duplicate debounce/steer. */
   private readonly activeSessionPrompts = new Map<string, { prompt: string; startedAt: number; inFlight: boolean }>()
   /** accountId -> timestamp of last spawn for spacing throttling */
@@ -85,6 +86,11 @@ export class AgyAdapter extends LlmAdapter {
   /** Turns in flight: boot probes yield to real work instead of competing. */
   activeRunCount(): number {
     return this.activeRuns.size
+  }
+
+  /** Live in-flight (or pre-spawn pending) account for `sessionKey`, if any. */
+  activeAccountForSession(sessionKey: string): LiveSessionAccount | undefined {
+    return this.activeRuns.activeAccountFor(sessionKey)
   }
 
   /** True when `--effort` must not be passed to this model. */
@@ -385,15 +391,7 @@ export class AgyAdapter extends LlmAdapter {
       deps: {
         store: this.deps.store,
         ...(this.deps.readImage === undefined ? {} : { readImage: this.deps.readImage }),
-        getActiveRun: (key: string) => {
-          const rec = this.activeRuns.get(key)
-          if (rec === undefined) return undefined
-          return {
-            isSettled: rec.isSettled,
-            conversationId: rec.conversationId,
-            ...(rec.accountHome === undefined ? {} : { accountHome: rec.accountHome }),
-          }
-        },
+        getActiveRun: (key: string) => this.activeRuns.promptView(key),
         recentlyCompactedSessions: this.recentlyCompactedSessions,
         deliverContext: (digest: string, key: string, extraAddDirs: string[], opts?: import('../provider/context-delivery.ts').DeliverContextOptions) =>
           deliverContext(digest, key, extraAddDirs, cfg, opts),
@@ -541,12 +539,7 @@ export class AgyAdapter extends LlmAdapter {
       ...(this.deps.onAccountUsed === undefined ? {} : { onAccountUsed: this.deps.onAccountUsed }),
       ...(this.deps.ensureFreshToken === undefined ? {} : { ensureFreshToken: this.deps.ensureFreshToken }),
       clearInFlightPrompt: (key: string, p: string) => this.clearInFlightPrompt(key, p),
-      registerActiveRun: (key: string, r: RunRecording) => this.activeRuns.set(key, r),
-      unregisterActiveRun: (key: string, r: RunRecording) => {
-        if (this.activeRuns.get(key) === r) this.activeRuns.delete(key)
-      },
-      isSuperseded: (key: string, r: RunRecording) =>
-        this.activeRuns.get(key) !== undefined && this.activeRuns.get(key) !== r,
+      ...this.activeRuns.attemptHooks(),
       noteNetworkFailure: (key: string) => this.noteNetworkFailure(key),
       clearNetworkStreak: (key: string) => this.clearNetworkStreak(key),
       dropFailoverBudget: (key: string) => this.failover.dropBudget(key),
@@ -590,10 +583,17 @@ export class AgyAdapter extends LlmAdapter {
       ...(options.agyAvoidAccountIds === undefined ? {} : { avoidAccountIds: options.agyAvoidAccountIds }),
       ...resolveAttemptOverrides(options, cfg),
     }
-    const rec = yield* runAgyAttempt(attemptDeps, attemptInput)
+    const pendingToken = !isAux && sessionKey !== '' && account !== undefined
+      ? this.activeRuns.setPending(sessionKey, account.id, family)
+      : undefined
+    try {
+      const rec = yield* runAgyAttempt(attemptDeps, attemptInput)
 
-    // First span of the run: stream recorded events until the first
-    // completed tool step cuts it (or the result finishes it).
-    yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice, false, sessionKey)
+      // First span of the run: stream recorded events until the first
+      // completed tool step cuts it (or the result finishes it).
+      yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice, false, sessionKey)
+    } finally {
+      if (pendingToken !== undefined) this.activeRuns.clearPending(sessionKey, pendingToken)
+    }
   }
 }

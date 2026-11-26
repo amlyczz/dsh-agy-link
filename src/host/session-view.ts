@@ -8,7 +8,7 @@
 import type { HostServices } from './services.ts'
 import { latestAgyModelOf } from './service-helpers.ts'
 import { buildSessionView, type SessionView } from '../common/session-view.ts'
-import { modelFamilyOf, type ModelFamily } from '../common/pool-types.ts'
+import { modelFamilyOf, sharedArgonPeerFamily, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
 import { stickyAccount } from '../provider/account-selection.ts'
 import { resolveEligibleActiveAccountId } from '../domain/accounts/selection.ts'
 
@@ -35,6 +35,28 @@ export function resolveSessionModel(services: HostServices, sessionId: string): 
   return model
 }
 
+function liveSessionAccountId(
+  services: HostServices,
+  accounts: readonly ManagedAccount[],
+  sessionId: string,
+  family: ModelFamily,
+): string | undefined {
+  const fromTracker = services.adapter?.activeAccountForSession?.(sessionId)
+  const raw = fromTracker ?? (() => {
+    const rec = services.adapter?.getActiveRun?.(sessionId)
+    return rec && !rec.isSettled && rec.accountId && rec.family
+      ? { accountId: rec.accountId, family: rec.family }
+      : undefined
+  })()
+  if (raw === undefined) return undefined
+  const acc = accounts.find((a) => a.id === raw.accountId)
+  if (acc === undefined) return undefined
+  if (raw.family === family || sharedArgonPeerFamily(acc, family) === raw.family) {
+    return acc.id
+  }
+  return undefined
+}
+
 export function resolveSessionView(services: HostServices, sessionId: string): SessionView {
   const cfg = services.getConfig()
   const model = resolveSessionModel(services, sessionId)
@@ -49,11 +71,14 @@ export function resolveSessionView(services: HostServices, sessionId: string): S
   if (model !== '' && sessionId !== '' && pool !== undefined) {
     const family: ModelFamily = modelFamilyOf(model)
     if (family !== 'unknown') {
-      try {
-        const bound = stickyAccount({ pool, store: services.store }, family, sessionId, model)
-        stickyId = bound?.id
-      } catch {
-        stickyId = undefined
+      stickyId = liveSessionAccountId(services, accounts, sessionId, family)
+      if (stickyId === undefined) {
+        try {
+          const bound = stickyAccount({ pool, store: services.store }, family, sessionId, model)
+          stickyId = bound?.id
+        } catch {
+          stickyId = undefined
+        }
       }
     }
   }

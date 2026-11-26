@@ -17,7 +17,10 @@ const TEST_DIR = join(ROOT, 'test')
 const COMPONENT_TEST_MAP = {
   'src/index.ts': ['test/integration/lifecycle.test.ts', 'test/host/services.test.ts'],
   'src/host/services.ts': ['test/host/services.test.ts', 'test/transport/http-contract-*.test.ts'],
-  'src/host/adapter.ts': ['test/provider/adapter-*.test.ts'],
+  'src/host/adapter.ts': ['test/provider/adapter-*.test.ts', 'test/host/session-view.test.ts'],
+  'src/host/active-runs.ts': ['test/host/session-view.test.ts'],
+  'src/host/session-view.ts': ['test/host/session-view.test.ts', 'test/transport/http-contract-status-routes.test.ts'],
+  'src/provider/prompt.ts': ['test/provider/adapter-*.test.ts', 'test/provider/model-switch-stale-bindings.test.ts'],
   'src/host/models.ts': ['test/host/models.test.ts', 'test/domain/model-support-ineligibility.test.ts'],
   'src/host/quota.ts': ['test/features/quota/quota-*.test.ts', 'test/domain/domain-quota.test.ts'],
   'src/host/pool.ts': ['test/domain/pool.test.ts', 'test/host/pool-auth.test.ts'],

@@ -484,6 +484,7 @@ export async function runAcpAttempt(
   }
 
   const recorder = createAttemptRecorder(deps, cfg, account, sid, !input.isAux)
+  recorder.rec.family = input.family
   recorder.setTrackerSession?.(input.sessionKey)
   recorder.streamCid = sid
   recorder.startTracker?.()
