@@ -55,7 +55,21 @@ test('equal capability keeps expiry order', () => {
 test('sticky broader account yields to an eligible narrower one', () => {
   const accounts = [dual(), hOnly()]
   assert.equal(pickEligibleAccount(accounts, null, { family: 'google', activeId: 'dual', now: NOW })?.id, 'h-only')
-  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', null, NOW), 'h-only')
+  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', null, NOW, 'gemini-4-hydrogen'), 'h-only')
+})
+
+test('family-level resolution (no model) keeps the pin instead of a narrower account', () => {
+  // Without a model the narrower account may not serve the session's model
+  // (Hydrogen-only vs a Neon session): the header must not predict it.
+  const accounts = [dual(), hOnly()]
+  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', null, NOW), 'dual')
+})
+
+test('model-aware resolution never predicts an account that cannot serve the model', () => {
+  const pool = { isModelSupported: (a: ManagedAccount, m: string) => a.id === 'dual' || m !== 'gemini-4-neon' }
+  const accounts = [hOnly(), dual()]
+  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', pool, NOW, 'gemini-4-neon'), 'dual')
+  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', pool, NOW, 'gemini-4-hydrogen'), 'h-only')
 })
 
 // CLI-first quota refresh (`agy -p /usage`) never fills quotas.models; the
@@ -79,7 +93,7 @@ test('capabilities fall back to the discovered catalog when quotas list no model
   assert.equal(scores.get('h-only'), 0)
   assert.equal(scores.get('dual'), 2) // neon + carbon; argon/claude are other families
   assert.equal(pickEligibleAccount(accounts, catalogPool, { family: 'google', model: 'gemini-4-hydrogen', activeId: 'dual', now: NOW })?.id, 'h-only')
-  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', catalogPool, NOW), 'h-only')
+  assert.equal(resolveEligibleActiveAccountId(accounts, { google: 'dual' }, 'google', catalogPool, NOW, 'gemini-4-hydrogen'), 'h-only')
 })
 
 test('fallback (non-discovered) catalogs are not capability evidence', () => {
