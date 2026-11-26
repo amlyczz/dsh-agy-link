@@ -31,6 +31,7 @@ import {
   explainIneligibility,
   isAccountEligible,
   isModelQuotaClear,
+  isInNarrowestTier,
   orderByExpiry,
   pickEligibleAccount,
   resolveEligibleActiveAccountId,
@@ -554,7 +555,8 @@ export class AccountPoolManager {
     const activeId = this.data.activeAccountIds?.[family]
     if (activeId) {
       const activeCandidate = candidates.find((a) => a.id === activeId)
-      if (activeCandidate) {
+      // Stick only while no narrower account could serve this model instead.
+      if (activeCandidate && isInNarrowestTier(activeCandidate, candidates, family)) {
         const peerMoved = this.syncSharedSelect(activeCandidate, family, activeId)
         const needLast = (family === 'google' || !this.data.lastActiveAccountId) && this.data.lastActiveAccountId !== activeCandidate.id
         if (needLast || peerMoved) {
