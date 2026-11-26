@@ -85,6 +85,8 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           acpStatus,
           backgroundWakeup: cfg.backgroundWakeup,
           mcpBridge: cfg.mcpBridge,
+          mcpBridgeScope: cfg.mcpBridgeScope,
+          bridgeDiagnostic: adapter.bridgeDiagnostic ?? null,
           backgroundWakeupTtlMinutes: cfg.backgroundWakeupTtlMinutes,
           backgroundWakeupMaxPerSession: cfg.backgroundWakeupMaxPerSession,
           backgroundWakeState: typeof backgroundWakeup?.status === 'function' ? backgroundWakeup.status() : null,

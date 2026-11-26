@@ -169,6 +169,7 @@ export interface PluginConfig {
   mediaMaxImages: number
   /** Experimental: expose DSH tools to agy over a local MCP bridge. */
   mcpBridge: boolean
+  mcpBridgeScope: 'all' | 'host-only'
   /** Where the bridge publishes its MCP entry. `agy` 1.4+ only reads the global registry. */
   mcpConfigScope: 'global' | 'workspace' | 'both'
   /** Absolute override for the agy MCP registry file. Empty = <agy home>/.gemini/config/mcp_config.json */
@@ -419,6 +420,7 @@ export function defaultConfig(): PluginConfig {
     mediaMaxBytes: 10 * 1024 * 1024,
     mediaMaxImages: 8,
     mcpBridge: false,
+    mcpBridgeScope: 'all',
     mcpConfigScope: 'global',
     mcpConfigPath: '',
     mcpToolAllowlist: '',

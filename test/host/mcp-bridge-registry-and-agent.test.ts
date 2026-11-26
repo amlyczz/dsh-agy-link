@@ -509,3 +509,50 @@ test('empty steps, session changes and account switches cannot reuse a previous 
   second.close()
   assert.equal(steps.resolve(current), undefined)
 })
+
+test('host-only filters the live step catalog, direct dispatch and PTC inner tools', async t => {
+  const steps = new BridgeSteps()
+  const agent = { session: { id: 'scope-test' } }
+  const signal = new AbortController().signal
+  const names = ['read', 'bash', 'terminal_open', 'run_command', 'send_message', 'read_ticket', 'agy_ask']
+  const schemas = (tools: string[]) => tools.map(name => ({ name, description: '', parameters: {} }))
+  steps.capture({ agent, signal, toolSet: { view: () => new Map(names.map(n => [n, n])) } })
+  let scope: 'all' | 'host-only' = 'host-only'
+  let allowlist = ''
+  const executed: string[] = []
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT, allowlist: () => allowlist, scope: () => scope, resolveStep: token => steps.resolve(token),
+    tools: () => ({
+      schemas: () => { throw new Error('expected a scoped step') },
+      execute: async ({ calls, toolSet }) => {
+        const call = calls[0]!
+        executed.push(call.name)
+        assert.deepEqual([...toolSet!.view(agent).keys()], ['send_message', 'read_ticket'])
+        return { results: [{ callId: call.id, result: { text: 'ok' } }] }
+      },
+    }),
+  })
+  t.after(() => bridge.close())
+  const enter = (names: string[]) => steps.enter(agent, { signal, sessionId: agent.session.id, tools: schemas(names) })!
+  const lease = enter(names)
+  const headers = { authorization: 'Bearer ' + bridge.token, 'x-dsh-route': lease.bind('owner') }
+  const list = async () => ((await (await fetch(bridge.url + '/tools', { headers })).json()).tools as {name: string}[]).map(t => t.name)
+  const call = (dshName: string) => fetch(bridge.url + '/call', { method: 'POST', headers, body: JSON.stringify({ dshName }) })
+  assert.deepEqual(await list(), ['send_message', 'read_ticket'])
+  assert.equal((await call('bash')).status, 403)
+  assert.equal((await call('send_message')).status, 200)
+  scope = 'all'
+  assert.deepEqual(await list(), names.filter(n => n !== 'agy_ask'))
+  scope = 'host-only'
+  allowlist = 'run_code,send_message,read_ticket,bash'
+  lease.close()
+  const ptc = enter(['run_code'])
+  headers['x-dsh-route'] = ptc.bind('owner')
+  assert.deepEqual(await list(), ['run_code'])
+  assert.equal((await call('run_code')).status, 200)
+  allowlist = 'send_message'
+  assert.deepEqual(await list(), [])
+  assert.equal((await call('run_code')).status, 403)
+  assert.deepEqual(executed, ['send_message', 'run_code'])
+  ptc.close()
+})

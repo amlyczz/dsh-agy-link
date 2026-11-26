@@ -1,3 +1,4 @@
+import { bridgeAllows, projectBridgeTools } from '../common/bridge-tools.ts'
 import { lastHistoryIndex } from './history-boundary.ts'
 // Prompt assembly (ADR-7): turn DSH messages into the single agy prompt for
 // this hop (trailing user/tool selection, binding lookup/invalidation, history
@@ -85,6 +86,26 @@ export interface PromptPlan {
   lastAssistantIdx: number
 }
 
+// agy dispatches unqualified calls to its own runtime, which has different session state.
+const AGY_BUILTIN_TOOLS = new Set([
+  'send_message', 'invoke_subagent', 'define_subagent', 'manage_subagents', 'schedule', 'swarm',
+  'run_workflow', 'read_file', 'view_file', 'write_file', 'write_to_file', 'edit_file', 'run_command',
+  'list_dir', 'grep_search', 'find_by_name', 'replace_file_content', 'multi_replace_file_content',
+  'manage_task', 'update_steps', 'update_focus', 'search_web', 'read_url_content', 'generate_image',
+])
+
+function bridgeRouting(server: string, tools: NonNullable<AgyGenerateOptions['tools']>, cfg: PluginConfig): string {
+  const exposed = projectBridgeTools(tools, bridgeAllows(cfg.mcpBridgeScope, cfg.mcpToolAllowlist))
+  if (!exposed.length) return ''
+  const colliding = exposed.filter(({ tool, name }) => AGY_BUILTIN_TOOLS.has(tool.name) || AGY_BUILTIN_TOOLS.has(name))
+  let hint = `For this DSH session, use the tools exposed on MCP server ${server}. Use its advertised tool names and schemas for the current step.`
+  if (colliding.length) {
+    const labels = colliding.map(({ tool, name }) => tool.name === name ? name : `${tool.name} (MCP name ${name})`)
+    hint += ` For ${labels.join(', ')}, you MUST use MCP server ${server} in this DSH session. Never call AGY's same-named built-in tools for these operations.`
+  }
+  return hint + '\n\n'
+}
+
 type DigestMode = 'none' | 'first' | 'foreign'
 
 /** Index of the last assistant message plus the user/tool messages after it. */
@@ -165,7 +186,7 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
     if (sections.length) prompt = [...sections, prompt].filter(Boolean).join('\n\n')
   }
   if (input.bridgeServer && options.tools?.length) {
-    prompt = `For this DSH session, use the tools exposed on MCP server ${input.bridgeServer}. Use its advertised tool names and schemas for the current step.\n\n` + prompt
+    prompt = bridgeRouting(input.bridgeServer, options.tools, cfg) + prompt
   }
   if (leadingSlash) prompt = formatWithLeadingAgySlash(leadingSlash, prompt)
 

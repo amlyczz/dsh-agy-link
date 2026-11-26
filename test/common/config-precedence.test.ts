@@ -228,3 +228,15 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
   assert.equal(junk.poolWideCatalog, false)
   assert.equal(junk.imageTimeoutMs, base.imageTimeoutMs)
 })
+
+test('bridge scope honors environment, runtime overrides and entry configuration without enabling MCP', () => {
+  const host = { mcpBridgeScope: 'host-only' }
+  const all = { mcpBridgeScope: 'all' }
+  assert.equal(resolveConfig({}, {}, {}).mcpBridgeScope, 'all')
+  assert.equal(resolveConfig(host, {}, {}).mcpBridgeScope, 'host-only')
+  assert.equal(resolveConfig(host, {}, all).mcpBridgeScope, 'all')
+  const cfg = resolveConfig(host, { DSH_AGY_MCP_BRIDGE_SCOPE: 'host-only' }, all)
+  assert.equal(cfg.mcpBridgeScope, 'host-only')
+  assert.equal(cfg.mcpBridge, false)
+  assert.equal(resolveConfig(host, { DSH_AGY_MCP_BRIDGE_SCOPE: 'invalid' }, { mcpBridgeScope: true }).mcpBridgeScope, 'host-only')
+})

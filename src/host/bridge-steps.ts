@@ -77,12 +77,12 @@ export class BridgeSteps {
   }
 }
 
-export function observeBridgeAssemblies(ctx: Context, steps: BridgeSteps): void {
+export function observeBridgeAssemblies(ctx: Context, steps: BridgeSteps, enabled: () => boolean): void {
   // Older SDKs do not declare the 0.2.2 assembly overload.
   const events = ctx as unknown as { on(event: 'system-prompt/assemble',
     fn: (presentation: unknown, context: Partial<AssemblyStep>, next: () => Promise<unknown>) => Promise<unknown>): void }
   events.on('system-prompt/assemble', async (_presentation, context, next) => {
-    steps.capture(context)
+    if (enabled()) steps.capture(context)
     return next()
   })
 }

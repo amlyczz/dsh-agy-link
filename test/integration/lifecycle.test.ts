@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -59,7 +59,7 @@ test('hiding a model announces itself to the picker via llm/adapters-updated', a
       origEmit(...args)
     }
     await new Promise((resolve) => setTimeout(resolve, 20))
-    apply(ctx, { enabled: false, mcpBridge: false })
+    apply(ctx, { enabled: true, agyBin: '/nonexistent/test-agy' })
     await new Promise((resolve) => setTimeout(resolve, 20))
     const configRoute = routes.find((r) => r.path === '/plugins/agy-link/config')
     assert.ok(configRoute, 'config route must be registered')
@@ -87,8 +87,12 @@ test('hiding a model announces itself to the picker via llm/adapters-updated', a
     assert.equal(await post({ key: 'translateModel', value: 'gemini-3.8-flash' }), 200)
     assert.equal(await post({ key: 'translateEffort', value: 'medium' }), 200)
     assert.equal(emitted.length, before, 'translation dropdown writes must not emit the picker event')
+    assert.equal(await post({ key: 'mcpBridgeScope', value: 'host-only' }), 200)
+    assert.equal(existsSync(join(dir, '.gemini', 'config', 'mcp_config.json')), false)
     // The write landed in the runtime-overrides file under DSH_HOME.
     const overrides = JSON.parse(readFileSync(join(dir, 'agy-link', 'runtime-overrides.json'), 'utf8')) as Record<string, unknown>
+    assert.equal(overrides.mcpBridgeScope, 'host-only')
+    assert.equal(overrides.mcpBridge, undefined)
     assert.deepEqual(overrides.hiddenModels, ['gemini-3.7-flash'])
     assert.equal(overrides.translateModel, 'gemini-3.8-flash')
     assert.equal(overrides.translateEffort, 'medium')

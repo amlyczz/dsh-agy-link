@@ -30,6 +30,9 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'permissionMode must be skip, auto, plan, or accept-edits'
   }
+  if (key === 'mcpBridgeScope') {
+    return value === 'all' || value === 'host-only' ? null : 'mcpBridgeScope must be all or host-only'
+  }
   if (key === 'transport') {
     return typeof value === 'string' && TRANSPORTS.has(value)
       ? null
@@ -114,7 +117,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const body = await readBody(req)
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
-          'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup', 'mcpBridge', 'btwEnabled',
+          'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup', 'mcpBridge', 'mcpBridgeScope', 'btwEnabled',
           'cloakSystemPrompt', 'respectExternalSignIn', 'auxNeutralWorkspace',
           'defaultModel', 'defaultEffort',
           'orchestratorPlannerModel', 'orchestratorPlannerEffort', 'orchestratorExecutorModel', 'orchestratorExecutorEffort',

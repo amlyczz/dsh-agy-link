@@ -206,3 +206,17 @@ test('router CSRF gate blocks cross-origin POST to /config and /pool/* while all
   assert.equal(allowed.status(), 200)
   assert.deepEqual(writes, [['btwEnabled', true]])
 })
+
+test('bridge scope validates settings writes and status reports the effective scope and diagnostic', async () => {
+  const writes: Array<[string, unknown]> = []
+  const bridgeDiagnostic = { hostTools: ['read_ticket'], disabledSettings: ['forwardSystemPrompt'] }
+  const s = setup({ setOverride: (k: string, v: unknown) => writes.push([k, v]),
+    adapter: { effortUnsupportedModels: () => [], bridgeDiagnostic } }, { mcpBridgeScope: 'host-only' })
+  const update = (value: unknown) => s.call('/plugins/agy-link/config', fakeReq('POST', '/', { key: 'mcpBridgeScope', value }))
+  for (const valid of ['all', 'host-only']) assert.equal((await update(valid)).status(), 200)
+  for (const invalid of [true, '', 'other']) assert.equal((await update(invalid)).status(), 400)
+  assert.deepEqual(writes, [['mcpBridgeScope', 'all'], ['mcpBridgeScope', 'host-only']])
+  const status = (await s.call('/plugins/agy-link/status', fakeReq('GET', '/'))).json() as Record<string, unknown>
+  assert.equal(status.mcpBridgeScope, 'host-only')
+  assert.deepEqual(status.bridgeDiagnostic, bridgeDiagnostic)
+})

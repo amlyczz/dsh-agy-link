@@ -444,3 +444,31 @@ test('goal round with a live active goal emits update_goal with the live revisio
   assert.equal(args.revision, 5, 'live revision wins over the stale one in history')
   assert.equal(args.action, 'complete')
 })
+
+test('chat diagnostics identify disabled settings, deduplicate reordered tools, and clear after recovery', async () => {
+  const cfg = { ...defaultConfig(), forwardSystemPrompt: false }
+  const logs: string[] = []
+  const { adapter } = makeAdapter({}, { getConfig: () => cfg, log: msg => logs.push(msg) })
+  const stream = (names: string[]) => collect(adapter.stream(opts([msg('user', 'hello')], {
+    tools: names.map(name => ({ name, description: '', parameters: {} })),
+  })))
+  const warnings = () => logs.filter(msg => msg.includes('DSH host tools'))
+  await stream(['read', 'agy_tool', 'bash'])
+  assert.equal(adapter.bridgeDiagnostic, null)
+  assert.equal(warnings().length, 0)
+  for (const names of [['send_message', 'read_ticket', 'bash'], ['read_ticket', 'send_message', 'send_message']]) await stream(names)
+  assert.deepEqual(adapter.bridgeDiagnostic, { hostTools: ['read_ticket', 'send_message'], disabledSettings: ['mcpBridge', 'forwardSystemPrompt'] })
+  assert.equal(warnings().length, 1)
+  assert.match(warnings()[0]!, /read_ticket.*send_message.*mcpBridge=false.*forwardSystemPrompt=false/)
+  cfg.mcpBridge = true
+  await stream(['run_code'])
+  assert.deepEqual(adapter.bridgeDiagnostic, { hostTools: ['run_code'], disabledSettings: ['forwardSystemPrompt'] })
+  cfg.forwardSystemPrompt = true
+  cfg.mcpBridge = false
+  await stream(['read_ticket'])
+  assert.deepEqual(adapter.bridgeDiagnostic, { hostTools: ['read_ticket'], disabledSettings: ['mcpBridge'] })
+  cfg.mcpBridge = true
+  await stream(['read_ticket'])
+  assert.equal(adapter.bridgeDiagnostic, null)
+  assert.equal(warnings().length, 3)
+})
