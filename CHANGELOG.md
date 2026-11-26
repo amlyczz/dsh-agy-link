@@ -11,6 +11,7 @@
   - `agyIcon` uses deterministic gradient IDs by size instead of incrementing `agyIconSeq` per render;
   - `html.agy-scrolling` now pauses animations and transitions inside embedded `.agy-console` mounts (Settings / Plugins pages) as well as `.agy-modal-panel`, `scroll-guard` avoids redundant class toggles and listens to passive `touchmove`, quota shimmer animates via paint-only `background-position` instead of per-bar `transform` GPU layers, card styles drop hover `box-shadow` transitions, and `.agy-modal-body` / `.agy-console` set `overflow-anchor: none` (`overflow-x: clip` on `.agy-console`).
 - **Fix(session-view): predict the header account with the session's model (merges PR #216 by @Ronnoc).** `resolveEligibleActiveAccountId` now applies the narrowest-capability preference only when a concrete `model` is known (preserving family pins in un-scoped pool snapshots), and `/session-view` refines existing family predictions with the session's resolved model.
+- **Fix(session-view, prompt): report live in-flight account and clear stale same-family bindings on model switch (`a1bb6f5`).** `ActiveRunTracker` tracks active and pre-spawn runs so `/session-view` reports the live running account instead of stale sticky bindings, and switching models within a family clears older stale bindings in that family.
 - **Fix(mcp): issue #215 bridge error passthrough, one-shot `defer_execute_tool` activation, and ambiguous DB telemetry.**
   - `bridge.mjs` preserves raw HTTP status + plain-text bodies (e.g., 403/502) instead of overwriting them with `JSON.parse` `SyntaxError`s, and throws an explicit error on 200 non-JSON `/tools` responses instead of silently returning an empty tool list;
   - `mcp-bridge` auto-activates unloaded deferred tools via `defer_execute_tool` at most once inside the exact same admitted step + `allows` policy, prioritizes structured error codes over centralized text matching, never bypasses permission denials, and records audit + visible tool-result provenance;
@@ -24,6 +25,7 @@
   - `useSessionView` 增加全字段判等并在滚动期间延迟提交状态；`agyIcon` 改用按尺寸确定的渐变 ID，避免每次渲染销毁重建 SVG `<linearGradient>`；
   - `html.agy-scrolling` 同步冻结设置页/插件页中嵌入式 `.agy-console` 的动画与过渡，`scroll-guard` 去重滚动激活并监听 `touchmove`，微光进度条改为纯绘制 `background-position` 扫光（移除 `transform` 合成层抖动），卡片移除悬停 `box-shadow` 过渡，`.agy-modal-body` 与 `.agy-console` 禁用 `overflow-anchor` 并将 `.agy-console` 设为 `overflow-x: clip`。
 - **修复(会话视图)：按当前会话模型预测顶栏账号（合并 PR #216，作者 @Ronnoc）。** `resolveEligibleActiveAccountId` 仅在已知具体模型时启用最窄能力偏好（无模型时保留家族置顶），`/session-view` 使用会话模型细化已有家族预测。
+- **修复(会话视图/提示词)：上报在途真实账号并在同家族切模型时清理过期绑定（`a1bb6f5`）。** `ActiveRunTracker` 跟踪在途及预启动运行以替代过期 sticky 绑定，并在同家族内切换模型时清理旧绑定。
 - **修复(MCP)：Issue #215 非 JSON 错误透传、`defer_execute_tool` 单次自动激活与并发 DB 歧义日志。**
   - `bridge.mjs` 透传非 200 纯文本错误（如 403/502）而非被 `JSON.parse` 异常覆盖，并在 `200` + 非 JSON `/tools` 响应时明确报错而不静默退化为空工具列表；
   - `mcp-bridge` 对懒加载未激活工具优先识别结构化信号（集中兜底文本匹配），在绝不绕过权限拒绝的前提下仅于同一准入 step + 策略边界内自动调用一次 `defer_execute_tool` 重试，并保留审计与结果留痕；
