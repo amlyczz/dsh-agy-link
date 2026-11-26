@@ -1,5 +1,6 @@
 // Map an agy_tool mirror step onto the card model the renderers consume.
 
+import { cleanToolOutput } from '../../common/tool-output.ts';
 import { isImageFile } from '../images.ts';
 import { extractImagePathsFromText, mirrorInfo, num, parsedArgsRaw, pick, resultText } from './args.ts';
 import { classifyExtendedCard } from './extended-model.ts';
@@ -17,11 +18,16 @@ const IMAGE_TOOLS = new Set(['generate_image', 'create_image', 'render_image']);
 
 export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): MirrorCardModel {
 	const info = mirrorInfo(block);
-	const out = resultText(block);
+	const rawOut = resultText(block);
 	if (info === null) {
-		return { kind: 'generic', title: 'agy_tool', output: out, raw: parsedArgsRaw(block) };
+		return { kind: 'generic', title: 'agy_tool', output: cleanToolOutput('', rawOut).body, raw: parsedArgsRaw(block) };
 	}
 	const { tool, input } = info;
+	// agy wraps every result in a status envelope (Created At / Completed At /
+	// Command exited with code N / Command output:) and numbers file reads. The
+	// card must show the payload, not the envelope: the collapsed preview used
+	// to read "Created At: …" instead of the command's first real output line.
+	const out = cleanToolOutput(tool, rawOut).body;
 	const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary', 'Instruction', 'instruction');
 
 	if (tool === 'invoke_subagent') {

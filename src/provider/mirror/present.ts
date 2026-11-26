@@ -16,6 +16,7 @@ import type {
 } from '@deepseek-ai/dsh-tools'
 import { formatChecklistMarkdown, parseChecklistSteps, summarizeChecklist } from '../../common/checklist.ts'
 import { isMirrorToolNotFoundText, MIRROR_TOOL_RELOAD_NOTICE } from '../../common/mirror-error.ts'
+import { cleanToolOutput } from '../../common/tool-output.ts'
 import { cleanResultText, pick, resultText, unwrapMcpTool, clip } from './args.ts'
 import { getGitHeadContent } from './git-head.ts'
 
@@ -422,6 +423,11 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
   const transientMirrorMiss = result.isError && isMirrorToolNotFoundText(cleanedText)
   const text = transientMirrorMiss ? MIRROR_TOOL_RELOAD_NOTICE : cleanedText
   const effectiveIsError = transientMirrorMiss ? false : result.isError
+  // agy's status envelope (Created At / Completed At / Command exited with code
+  // N / Command output:) is not part of the payload: strip it before the card
+  // body is built, and take the exit code from the parsed envelope.
+  const cleaned = cleanToolOutput(name, text)
+  const body = cleaned.body
   switch (name) {
     case 'run_command':
     case 'bash':
@@ -429,28 +435,28 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
     case 'ops_bash':
     case 'sh':
     case 'shell': {
-      let exitCode: number | undefined
+      let exitCode: number | undefined = cleaned.exitCode
       const m = /The command exited with code (\d+)/i.exec(text) ?? /\[exit code (\d+)\]/i.exec(text)
       if (m && m[1]) {
         exitCode = parseInt(m[1], 10)
-      } else if (/\[command timed out/i.test(text) || effectiveIsError) {
+      } else if (exitCode === undefined && (/\[command timed out/i.test(text) || effectiveIsError)) {
         exitCode = 1
       }
-      const rendered = formatBackgroundTerminalOutput(text)
+      const rendered = formatBackgroundTerminalOutput(body)
       const view: TerminalResultView = { card: 'terminal', output: rendered, ...(exitCode !== undefined ? { exitCode } : {}) }
       return view
     }
     case 'schedule': {
-      const rendered = formatScheduleResultOutput(unwrapped.input, text)
+      const rendered = formatScheduleResultOutput(unwrapped.input, body)
       const view: GenericResultView = { card: 'generic', content: [{ type: 'text', text: clip(rendered, 4000) }] }
       return view
     }
     case 'update_steps':
     case 'todo_write': {
-      const steps = parseChecklistSteps(unwrapped.input, text)
-      const rendered = (text === '' || /^OK$/i.test(text.trim())) && steps.length > 0
+      const steps = parseChecklistSteps(unwrapped.input, body)
+      const rendered = (body === '' || /^OK$/i.test(body.trim())) && steps.length > 0
         ? formatChecklistMarkdown(steps)
-        : text
+        : body
       const view: GenericResultView = { card: 'generic', content: [{ type: 'text', text: clip(rendered, 4000) }] }
       return view
     }
@@ -467,7 +473,7 @@ export function presentMirrorResult(args: unknown, result: { content: unknown[];
       return view
     }
     default: {
-      const view: GenericResultView = { card: 'generic', content: [{ type: 'text', text: clip(text, 4000) }] }
+      const view: GenericResultView = { card: 'generic', content: [{ type: 'text', text: clip(body, 4000) }] }
       return view
     }
   }

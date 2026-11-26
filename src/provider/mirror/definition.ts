@@ -9,6 +9,7 @@ import { toolInput, unwrapMcpTool } from './args.ts'
 import { toolStepBrief } from './brief.ts'
 import { MIRROR_TOOL_NAME } from './names.ts'
 import { presentMirrorCall, presentMirrorResult } from './present.ts'
+import { recoverRecordedResult } from './result-recovery.ts'
 
 /** Short preview of the recorded step for the degraded-result message. */
 function stepLabel(toolName: string, input: unknown): string {
@@ -112,8 +113,16 @@ export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
         throw new Error('agy tool ' + t.name + ' failed: ' + t.error)
       }
       const out = t.output
-      const outStr = typeof out === 'string' ? out : ''
+      let outStr = typeof out === 'string' ? out : ''
       const effTool = unwrapMcpTool(t.name, t.args).tool
+      // agy's stream envelope carries no output for some steps (every
+      // `read_file` result is empty on stdout, which made the Read card say
+      // "(no output)"). The conversation DB still holds the rendered result, so
+      // recover it there instead of showing nothing.
+      if (outStr.trim() === '') {
+        const recovered = await recoverRecordedResult(rec, step, effTool)
+        if (recovered !== null) outStr = recovered
+      }
       if (effTool === 'update_steps' || effTool === 'todo_write') {
         const steps = parseChecklistSteps(t.args, outStr)
         if (steps.length > 0) {
@@ -128,6 +137,7 @@ export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
           }
         }
       }
+      if (outStr !== '') return outStr
       if (out === undefined || out === null) return ''
       if (typeof out === 'string') return out
       try {

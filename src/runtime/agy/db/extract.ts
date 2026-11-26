@@ -339,3 +339,67 @@ function scanFallbackJson(payload: Buffer): CachedStep | null {
   }
   return null
 }
+
+/** Find one length-delimited field inside a protobuf message (top level only). */
+function findDelimitedField(buf: Buffer, target: number): Buffer | null {
+  let pos = 0
+  while (pos < buf.length) {
+    const tag = readVarint(buf, pos)
+    if (tag === null) return null
+    pos = tag.next
+    const field = Math.floor(tag.val / 8)
+    const wire = tag.val & 0x7
+    if (wire === 2) {
+      const lenRes = readVarint(buf, pos)
+      if (lenRes === null) return null
+      pos = lenRes.next
+      const len = lenRes.val
+      if (len < 0 || len > buf.length - pos) return null
+      if (field === target) return buf.subarray(pos, pos + len)
+      pos += len
+    } else if (wire === 0) {
+      const vRes = readVarint(buf, pos)
+      if (vRes === null) return null
+      pos = vRes.next
+    } else if (wire === 1) {
+      pos += 8
+    } else if (wire === 5) {
+      pos += 4
+    } else {
+      return null
+    }
+  }
+  return null
+}
+
+/** Cap on the recovered result text: a single agy step never needs more. */
+const MAX_RESULT_TEXT_CHARS = 200_000
+
+/**
+ * Extract the RESULT text agy recorded for a tool step.
+ *
+ * The stream envelope agy prints strips most tool output (a `read_file` step
+ * carries an EMPTY result on stdout, so its DSH card rendered "(no output)").
+ * The conversation DB keeps the rendered result:
+ *
+ *   step_payload → field 140 (result container)
+ *                → field 2   (ToolResult)
+ *                → field 1   (rendered text, e.g. "Created At: …\n1: …")
+ *
+ * The text still carries agy's own status envelope and read gutter; the display
+ * layer (common/tool-output.ts) strips those. Returns null when the payload has
+ * no usable result (write/edit steps, interrupted steps).
+ */
+export function extractToolResultText(payload: Buffer): string | null {
+  if (payload.length < 16) return null
+  const container = findDelimitedField(payload, 140)
+  if (container === null) return null
+  const result = findDelimitedField(container, 2)
+  if (result === null) return null
+  const textBuf = findDelimitedField(result, 1)
+  if (textBuf === null || textBuf.length === 0) return null
+  const text = textBuf.toString('utf8')
+  if (text.trim() === '') return null
+  return text.length > MAX_RESULT_TEXT_CHARS ? text.slice(0, MAX_RESULT_TEXT_CHARS) : text
+}
+

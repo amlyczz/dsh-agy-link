@@ -187,9 +187,10 @@ test('completed call_mcp_tool step unwraps ops_bash in standard and code mode', 
     },
   ])
 
-  // Verify live progress reasoning delta was unwrapped
+  // Pending progress no longer writes into the reasoning stream (it used to
+  // carry the unwrapped `ops_bash (dsh-ops)` label).
   const reasoningDeltas = chunksNative.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.ok(reasoningDeltas.includes('ops_bash (dsh-ops)'), reasoningDeltas)
+  assert.ok(!reasoningDeltas.includes('agy tool running'), reasoningDeltas)
 
   // Verify tool-call block is unwrapped to ops_bash with server: dsh-ops
   const endNative = toolCallEnd(chunksNative)
@@ -326,12 +327,14 @@ test('agy 1.1.15 stream maps onto spans: thinking turn, tool cuts, fragments, re
     { kind: 'result', conversationId: 'c15', ok: true, response: 'There are 2 files.', usage: { input_tokens: 9, output_tokens: 8, thinking_tokens: 95 } },
   ]
   // Span 1: thinking visibility (issue #43) + first tool cut. The
-  // thinking-only DONE tail emits the bare banner (no prose available), and
-  // the ACTIVE envelope emits exactly one pending-progress note.
+  // thinking-only DONE tail emits the bare banner (no prose available); the
+  // ACTIVE envelope stays silent — pending progress must not be written into
+  // the reasoning block (it used to be, and read back as model thinking).
   const s1 = newSpan('run15')
   const c1 = mapAll(s1, events, 0)
   const reasoning1 = c1.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-  assert.equal(reasoning1, '[agy · 80 tokens]\n[agy tool running: run_command — the result card streams when it finishes]\n')
+  assert.equal(reasoning1, '[agy · 80 tokens]\n')
+  assert.ok(!reasoning1.includes('agy tool running'), 'no pending-progress note in the reasoning stream')
   assert.ok(!reasoning1.includes('Chain-of-Thought') && !/tokens\].+tokens/s.test(reasoning1), 'no invented prose, no duplicate banner')
   assert.equal(toolCallEnd(c1).block.id, mirrorCallId('run15', 3))
   assert.equal(asFinish(lastChunk(c1)).reason.kind, 'tool-calls')

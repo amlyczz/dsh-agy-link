@@ -17,8 +17,7 @@
 import type { LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { isAgyQuotaBannerLine, isNonConsumableResultError, type AgyEvent, type RawUsage } from '../../common/types.ts'
 import { type CompactionNotice, renderCompactionMarker } from '../../common/compaction.ts'
-import { type GoalContext, buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock } from '../../host/dsh-goal.ts'
-import { unwrapMcpTool } from '../../host/mirror-tool.ts'
+import { buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock, type GoalContext } from '../../host/dsh-goal.ts'
 import { composeThinkingText } from './thoughts.ts'
 import {
   normalizeFileLinks,
@@ -105,7 +104,6 @@ export class EventMapper {
   private openAcc = ''
   private readonly emittedByKey = new Map<string, string>()
   private readonly announcedTools = new Set<string>()
-  private readonly pendingAnnounced = new Set<string>()
   private readonly thinkingAnnounced = new Set<string>()
   /**
    * Steps whose banner already streamed WITHOUT prose (issue #43: desktop
@@ -417,26 +415,14 @@ export class EventMapper {
           ev.state === 'RUNNING' ||
           (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))
         if (!isCompleted) {
-          // Live progress for long-running agy tools: while a step is ACTIVE
-          // (a maven build can hold the turn for many minutes) nothing else
-          // streams, so the turn looked frozen. Emit the pending note once per
-          // step into the reasoning block; the completed step still cuts the
-          // span with the real tool card below.
-          if (
-            this.canCutOnTool() &&
-            !this.finished &&
-            ev.state === 'ACTIVE' &&
-            !this.pendingAnnounced.has(ev.stepKey)
-          ) {
-            this.pendingAnnounced.add(ev.stepKey)
-            yield* this.ensureBlock('reasoning')
-            const unwrapped = unwrapMcpTool(ev.tool.name, ev.tool.args)
-            const label = unwrapped.server ? `${unwrapped.tool} (${unwrapped.server})` : unwrapped.tool
-            const d = this.appendDelta(
-              '[agy tool running: ' + label + ' — the result card streams when it finishes]\n',
-            )
-            if (d) yield d
-          }
+          // While a step is ACTIVE the turn shows no content of its own. It used
+          // to append a `[agy tool running: …]` note into the reasoning block as
+          // a "not frozen" signal, but that note was indistinguishable from the
+          // model's real thinking, repeated once per tool call (121 times in one
+          // recorded session), and it was persisted and replayed to the model as
+          // reasoning for every later turn. DSH already renders the running span
+          // itself, so the card that the completed step cuts below is the only
+          // progress surface this mapper needs.
           return
         }
         if (ev.state === 'RUNNING' && (ev.tool.output === undefined || ev.tool.output === '')) {
