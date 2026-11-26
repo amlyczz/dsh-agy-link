@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.98 (2026-11-26)
+
+### English
+
+- **Fix(quota): clear expired model/family cooldowns on quota refresh and warmup.** When a quota refresh or warmup confirms that a bucket has recovered (e.g., reset boundary passed or quota is > 0 without an active upstream reset window), stale family cooldowns are reconciled instead of leaving cards stuck with a "cooling" badge at 100%.
+- **Fix(client): stop console screen flickering on post-login refreshes and scrolling.**
+  - `SessionStatus` isolates the 1.5s `/session-view` polling, `useAgyStatus`, and 30s countdown tick inside `HeaderBadge`, so header polls no longer re-render an open `ConsoleDialog` / `Modal` / `SettingsSection`;
+  - `useSessionView` checks shallow equality across all fields and defers state commits while `isScrollActive()`;
+  - `agyIcon` uses deterministic gradient IDs by size instead of incrementing `agyIconSeq` per render;
+  - `html.agy-scrolling` now pauses animations and transitions inside embedded `.agy-console` mounts (Settings / Plugins pages) as well as `.agy-modal-panel`, `scroll-guard` avoids redundant class toggles and listens to passive `touchmove`, quota shimmer animates via paint-only `background-position` instead of per-bar `transform` GPU layers, card styles drop hover `box-shadow` transitions, and `.agy-modal-body` / `.agy-console` set `overflow-anchor: none` (`overflow-x: clip` on `.agy-console`).
+- **Fix(session-view): predict the header account with the session's model (merges PR #216 by @Ronnoc).** `resolveEligibleActiveAccountId` now applies the narrowest-capability preference only when a concrete `model` is known (preserving family pins in un-scoped pool snapshots), and `/session-view` refines existing family predictions with the session's resolved model.
+- **Fix(mcp): issue #215 bridge error passthrough, one-shot `defer_execute_tool` activation, and ambiguous DB telemetry.**
+  - `bridge.mjs` preserves raw HTTP status + plain-text bodies (e.g., 403/502) instead of overwriting them with `JSON.parse` `SyntaxError`s, and throws an explicit error on 200 non-JSON `/tools` responses instead of silently returning an empty tool list;
+  - `mcp-bridge` auto-activates unloaded deferred tools via `defer_execute_tool` at most once inside the exact same admitted step + `allows` policy, prioritizes structured error codes over centralized text matching, never bypasses permission denials, and records audit + visible tool-result provenance;
+  - `provider/attempt` emits a deduplicated diagnostic log when fallback `diffConversations` sees multiple new DBs (`ambiguous: true`).
+
+### 中文
+
+- **修复(配额)：在额度刷新与预热后同步清理已失效的模型/分组冷却。** 当刷新或预热确认对应分组额度已恢复（例如重置窗口已过或额度 > 0 且无有效上游重置时间）时，自动对账并清除残留冷却状态，避免界面在 100% 额度下仍卡在“冷却中”。
+- **修复(客户端)：解决控制台登录后与上下滚动时的闪屏问题。**
+  - `SessionStatus` 将 1.5s `/session-view` 轮询、`useAgyStatus` 与 30s 倒计时隔离在 `HeaderBadge` 子组件内，不再连带重渲染打开中的 `ConsoleDialog` / `Modal` / `SettingsSection`；
+  - `useSessionView` 增加全字段判等并在滚动期间延迟提交状态；`agyIcon` 改用按尺寸确定的渐变 ID，避免每次渲染销毁重建 SVG `<linearGradient>`；
+  - `html.agy-scrolling` 同步冻结设置页/插件页中嵌入式 `.agy-console` 的动画与过渡，`scroll-guard` 去重滚动激活并监听 `touchmove`，微光进度条改为纯绘制 `background-position` 扫光（移除 `transform` 合成层抖动），卡片移除悬停 `box-shadow` 过渡，`.agy-modal-body` 与 `.agy-console` 禁用 `overflow-anchor` 并将 `.agy-console` 设为 `overflow-x: clip`。
+- **修复(会话视图)：按当前会话模型预测顶栏账号（合并 PR #216，作者 @Ronnoc）。** `resolveEligibleActiveAccountId` 仅在已知具体模型时启用最窄能力偏好（无模型时保留家族置顶），`/session-view` 使用会话模型细化已有家族预测。
+- **修复(MCP)：Issue #215 非 JSON 错误透传、`defer_execute_tool` 单次自动激活与并发 DB 歧义日志。**
+  - `bridge.mjs` 透传非 200 纯文本错误（如 403/502）而非被 `JSON.parse` 异常覆盖，并在 `200` + 非 JSON `/tools` 响应时明确报错而不静默退化为空工具列表；
+  - `mcp-bridge` 对懒加载未激活工具优先识别结构化信号（集中兜底文本匹配），在绝不绕过权限拒绝的前提下仅于同一准入 step + 策略边界内自动调用一次 `defer_execute_tool` 重试，并保留审计与结果留痕；
+  - `provider/attempt` 读取 `diffConversations` 的 `ambiguous` 标志并在同一回合内输出一次去重诊断日志。
+
 ## 0.6.97 (2026-11-26)
 
 ### English
