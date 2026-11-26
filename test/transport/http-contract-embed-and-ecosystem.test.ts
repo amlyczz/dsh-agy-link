@@ -4,9 +4,11 @@
 // plugin-toggle endpoints.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { defaultConfig } from '../../src/common/types.ts'
+import { EcosystemService } from '../../src/features/ecosystem/index.ts'
 import { fakeReq, invoke, setup } from './http-contract-helpers.ts'
 
 test('/embed serves confined HTML widgets with strict CSP and bridge script', async (t) => {
@@ -60,4 +62,28 @@ test('/ecosystem routes return snapshot, run sync, and toggle plugin state', asy
   const snap = (okToggle.json() as { snapshot: { plugins: Array<{ id: string; enabled: boolean }> } }).snapshot
   assert.equal(snap.plugins[0]?.id, 'p1')
   assert.equal(snap.plugins[0]?.enabled, false)
+})
+
+// issue #219: the panel is not tied to a session. With no workspaceRoot
+// configured it used to scan the global roots only, so workspace-only skills
+// were invisible there while `/agy skills` listed them for the same project.
+test('issue #219: GET /ecosystem scans every active session directory, not only the global roots', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-eco-route-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const primary = join(root, 'primary')
+  mkdirSync(primary, { recursive: true })
+  const ws = join(root, 'ws')
+  mkdirSync(join(ws, '.agents', 'skills', 'proj'), { recursive: true })
+  writeFileSync(join(ws, '.agents', 'skills', 'proj', 'SKILL.md'), '---\nname: proj-skill\n---\n')
+  const cfg = defaultConfig() // workspaceRoot: ''
+  const eco = new EcosystemService({ primaryHome: primary, pool: { getAccounts: () => [] }, getConfig: () => cfg })
+
+  const withoutSessions = setup({ ecosystem: eco })
+  const before = await withoutSessions.call('/plugins/agy-link/ecosystem', fakeReq('GET', '/'))
+  assert.deepEqual((before.json() as { skills: unknown[] }).skills, [], 'no active session: global roots only')
+
+  const withSession = setup({ ecosystem: eco, activeCwds: () => [ws, ''] })
+  const res = await withSession.call('/plugins/agy-link/ecosystem', fakeReq('GET', '/'))
+  assert.equal(res.status(), 200)
+  assert.deepEqual((res.json() as { skills: Array<{ name: string }> }).skills.map((x) => x.name), ['proj-skill'])
 })

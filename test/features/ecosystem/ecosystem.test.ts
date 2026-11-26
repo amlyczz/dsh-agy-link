@@ -362,3 +362,45 @@ test('ecosystem ignores dsh-tools-* bridges during inspect/sync, preserves targe
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// issue #219: the settings panel calls inspect() with no session behind it, so
+// it scanned the global roots only, while `/agy skills` — which passes the
+// session cwd — listed the workspace skills. Same discovery, different answer.
+test('issue #219: inspect() covers additional workspace roots when no single root is pinned', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-eco-roots-'))
+  try {
+    const primary = join(root, 'primary')
+    mkdirSync(primary, { recursive: true })
+    const skill = (ws: string, dir: string, name: string): void => {
+      mkdirSync(join(ws, '.agents', 'skills', dir), { recursive: true })
+      writeFileSync(join(ws, '.agents', 'skills', dir, 'SKILL.md'), `---\nname: ${name}\n---\n`)
+    }
+    const wsA = join(root, 'ws-a')
+    const wsB = join(root, 'ws-b')
+    skill(wsA, 'alpha', 'alpha-skill')
+    skill(wsA, 'shared', 'shared-skill')
+    skill(wsB, 'beta', 'beta-skill')
+    skill(wsB, 'shared', 'shared-skill')
+    const cfg = defaultConfig() // workspaceRoot: '' — nothing pinned
+    const eco = new EcosystemService({ primaryHome: primary, pool: { getAccounts: () => [] }, getConfig: () => cfg })
+
+    // No root and no sessions: global only, exactly as before.
+    const globalOnly = eco.inspect()
+    assert.deepEqual(globalOnly.skills, [])
+    assert.equal(globalOnly.workspaceRoots, undefined)
+
+    // The panel path: every active session directory, de-duplicated by name.
+    const panel = eco.inspect(undefined, [wsA, wsB, wsA, '  '])
+    assert.deepEqual(panel.skills.map((s) => s.name).sort(), ['alpha-skill', 'beta-skill', 'shared-skill'])
+    assert.ok(panel.skills.every((s) => s.source === 'workspace'))
+    assert.deepEqual(panel.workspaceRoots, [wsA, wsB])
+
+    // A pinned root (explicit argument, or a configured workspaceRoot) is what
+    // the command scans for one session, so extra roots must not widen it.
+    assert.deepEqual(eco.inspect(wsA, [wsB]).skills.map((s) => s.name).sort(), ['alpha-skill', 'shared-skill'])
+    cfg.workspaceRoot = wsB
+    assert.deepEqual(eco.inspect(undefined, [wsA]).skills.map((s) => s.name).sort(), ['beta-skill', 'shared-skill'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

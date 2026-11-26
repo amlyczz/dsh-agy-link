@@ -51,6 +51,8 @@ export interface EcosystemAgent {
 export interface EcosystemSnapshot {
   primaryHome: string
   workspaceRoot?: string
+  /** Every workspace root the inventory scanned, in precedence order (issue #219). */
+  workspaceRoots?: readonly string[]
   plugins: readonly EcosystemPlugin[]
   mcpServers: readonly EcosystemMcpServer[]
   skills: readonly EcosystemSkill[]

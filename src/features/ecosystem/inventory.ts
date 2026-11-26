@@ -372,7 +372,7 @@ export function inspectEcosystem(opts: {
 
   return {
     primaryHome: opts.primaryHome,
-    ...(wsRoot ? { workspaceRoot: wsRoot } : {}),
+    ...(wsRoot ? { workspaceRoot: wsRoot, workspaceRoots: [wsRoot] } : {}),
     plugins,
     mcpServers,
     skills,

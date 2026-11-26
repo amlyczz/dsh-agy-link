@@ -8,6 +8,7 @@ import type { ManagedAccount } from '../../common/pool-types.ts'
 import type { PluginConfig } from '../../common/types.ts'
 import type { AccountPoolManager } from '../../host/pool.ts'
 import { inspectEcosystem } from './inventory.ts'
+import { mergeEcosystemSnapshots } from './merge.ts'
 import { syncEcosystemToPool } from './sync.ts'
 
 export interface EcosystemServiceOpts {
@@ -26,12 +27,33 @@ export class EcosystemService {
     this.primaryHome = opts.primaryHome || homedir()
   }
 
-  inspect(workspaceRoot?: string): EcosystemSnapshot {
+  /**
+   * Inventory for one workspace, or — when nothing pins one — for several.
+   *
+   * A pinned root (explicit `workspaceRoot`, else the configured one) is what
+   * `/agy skills` scans for its session, so `additionalRoots` are ignored in
+   * that case: the panel and the command must not disagree. The settings panel
+   * pins nothing and passes every active session directory; without them it
+   * saw the global roots only and workspace-installed skills looked missing
+   * there while the command listed them (issue #219).
+   */
+  inspect(workspaceRoot?: string, additionalRoots: readonly string[] = []): EcosystemSnapshot {
     const cfgRoot = this.opts.getConfig().workspaceRoot.trim()
     const resolvedRoot = workspaceRoot?.trim() || (cfgRoot !== '' ? cfgRoot : undefined)
+    const base = this.snapshotAt(resolvedRoot)
+    if (resolvedRoot !== undefined) return base
+    const roots: string[] = []
+    for (const raw of additionalRoots) {
+      const root = raw.trim()
+      if (root !== '' && !roots.includes(root)) roots.push(root)
+    }
+    return mergeEcosystemSnapshots(base, roots.map((root) => this.snapshotAt(root)))
+  }
+
+  private snapshotAt(workspaceRoot?: string): EcosystemSnapshot {
     return inspectEcosystem({
       primaryHome: this.primaryHome,
-      ...(resolvedRoot ? { workspaceRoot: resolvedRoot } : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
       syncedAccountCount: this.syncedAccountCount,
       lastSyncAt: this.lastSyncAt,
     })
