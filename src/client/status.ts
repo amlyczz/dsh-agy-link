@@ -110,6 +110,7 @@ export interface StatusPayload {
 	imageOutputDir?: string;
 	btwEnabled?: boolean;
 	slashCommandsEnabled?: boolean;
+	tslEnabled?: boolean;
 	btwModel?: string;
 	btwEffort?: string;
 	bindings?: number;

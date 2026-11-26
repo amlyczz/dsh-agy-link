@@ -327,6 +327,8 @@ export const en: AgyDictionary = {
   'config.btwEnabledDesc': 'On by default. Turn off if you already use a dedicated side-question (/btw) plugin and do not want a second entry. Takes effect on restart.',
   'config.slashCommandsEnabled': 'Enable /a* shortcut commands',
   'config.slashCommandsEnabledDesc': 'On by default. The /aplan, /agoal, /agrill, /aboost, /aswarm, /ateamwork, /aschedule, /abrowser, /acmd, /acompact, /afork and /alearn shortcuts. Turn off to keep them out of the slash menu; /agy keeps working. Takes effect on restart.',
+  'config.tslEnabled': 'Enable the /tsl command',
+  'config.tslEnabledDesc': 'On by default. Turn off to keep /tsl out of the slash menu. Automatic translation and the translate button keep working. Takes effect on restart.',
   'config.btwModel': '/atw model',
   'config.btwModelDesc': 'Model for /atw; auto falls back through defaultModel -> Gemini 4 Hydrogen -> Gemini Flash',
   'config.btwEffort': '/atw effort',

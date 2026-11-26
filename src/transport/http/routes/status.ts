@@ -23,6 +23,11 @@ function selectableModels(
   return sanitizeCatalogEntries(mergeCatalogWithQuotaModels(sanitizeCatalogEntries(supportedModels).entries, quota)).entries
 }
 
+/** The command opt-out switches the settings panel renders (`slashCommandsEnabled`, `tslEnabled`). */
+function commandOptOuts(cfg: ReturnType<HostServices['getConfig']>): { slashCommandsEnabled: boolean; tslEnabled: boolean } {
+  return { slashCommandsEnabled: cfg.slashCommandsEnabled, tslEnabled: cfg.tslEnabled }
+}
+
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
   const { getConfig, bin, store, pool, quota, warmup, catalog, auth, poolAuth, adapter, acpPool, backgroundWakeup, translation, lastRun } = services
   const { version: versionCache, dormantReason } = services.status
@@ -132,7 +137,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           imageEffort: cfg.imageEffort,
           imageOutputDir: cfg.imageOutputDir,
           btwEnabled: cfg.btwEnabled,
-          slashCommandsEnabled: cfg.slashCommandsEnabled,
+          ...commandOptOuts(cfg),
           btwModel: cfg.btwModel,
           btwEffort: cfg.btwEffort,
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },

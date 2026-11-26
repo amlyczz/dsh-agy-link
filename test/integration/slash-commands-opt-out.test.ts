@@ -1,5 +1,5 @@
-// `slashCommandsEnabled` opt-out: with the switch off the top-level `/a*`
-// shortcut family is not registered, while `/agy` itself always is.
+// Command opt-outs: `slashCommandsEnabled` drops the top-level `/a*` shortcut
+// family and `tslEnabled` drops `/tsl`; `/agy` itself is always registered.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Context } from '@deepseek-ai/cordis'
@@ -49,6 +49,7 @@ test('the /a* shortcut family is registered by default', async () => {
   delete process.env.DSH_AGY_SLASH_COMMANDS_ENABLED
   const commands = await bootAndListCommands()
   assert.ok(commands.includes('agy'), '/agy is registered: ' + JSON.stringify(commands))
+  assert.ok(commands.includes('tsl'), '/tsl registered by default')
   for (const name of DIRECT_AGY_SLASH_COMMANDS) assert.ok(commands.includes(name), `/${name} registered by default`)
   for (const name of ['agoal', 'acompact', 'afork', 'alearn']) assert.ok(commands.includes(name), `/${name} registered by default`)
 })
@@ -62,6 +63,18 @@ test('slashCommandsEnabled=false skips the /a* family but keeps /agy', async () 
     assert.deepEqual(leaked, [], 'no /a* shortcut registered with the switch off')
   } finally {
     delete process.env.DSH_AGY_SLASH_COMMANDS_ENABLED
+  }
+})
+
+test('tslEnabled=false skips /tsl but keeps /agy and the /a* family', async () => {
+  process.env.DSH_AGY_TSL_ENABLED = 'false'
+  try {
+    const commands = await bootAndListCommands()
+    assert.ok(commands.includes('agy'), '/agy stays registered')
+    assert.ok(!commands.includes('tsl'), '/tsl not registered with the switch off: ' + JSON.stringify(commands))
+    assert.ok(commands.includes('aplan'), 'the /a* family is independent of tslEnabled')
+  } finally {
+    delete process.env.DSH_AGY_TSL_ENABLED
     rmSync(workDir, { recursive: true, force: true })
   }
 })

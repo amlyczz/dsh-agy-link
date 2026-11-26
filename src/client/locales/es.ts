@@ -327,6 +327,8 @@ export const es: AgyDictionary = {
   'config.btwEnabledDesc': 'Activado por defecto. Desactívalo si ya usas un plugin dedicado de preguntas laterales (/btw). Se aplica al reiniciar.',
   'config.slashCommandsEnabled': 'Activar los atajos /a*',
   'config.slashCommandsEnabledDesc': 'Activado por defecto. Los atajos /aplan, /agoal, /agrill, /aboost, /aswarm, /ateamwork, /aschedule, /abrowser, /acmd, /acompact, /afork y /alearn. Desactívalo para quitarlos del menú de comandos; /agy sigue funcionando. Se aplica al reiniciar.',
+  'config.tslEnabled': 'Activar el comando /tsl',
+  'config.tslEnabledDesc': 'Activado por defecto. Desactívalo para quitar /tsl del menú de comandos; la traducción automática y el botón de traducir siguen funcionando. Se aplica al reiniciar.',
   'config.btwModel': 'Modelo /atw',
   'config.btwModelDesc': 'Modelo para /atw; automático usa defaultModel -> Gemini 4 Hydrogen -> Gemini Flash',
   'config.btwEffort': 'Esfuerzo /atw',

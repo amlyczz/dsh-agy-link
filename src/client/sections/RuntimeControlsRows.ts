@@ -252,6 +252,17 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		// Only the /tsl command entry: automatic and button-triggered translation
+		// keep working. Off needs a restart (commands are registered at startup).
+		boolRow({
+			t,
+			title: t('config.tslEnabled'),
+			desc: t('config.tslEnabledDesc'),
+			cfgKey: 'tslEnabled',
+			value: status.tslEnabled !== false,
+			loadingAction,
+			setCfg,
+		}),
 		renderAgentRow({ ...props, draft: agentDraft, setDraft: setAgentDraft }),
 	);
 }

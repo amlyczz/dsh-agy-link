@@ -139,6 +139,7 @@ export const BASE_CONFIG: Record<string, unknown> = {
   mcpBridge: false,
   btwEnabled: true,
   slashCommandsEnabled: true,
+  tslEnabled: true,
   imageTool: true,
   syncAccountCustomizations: true,
   workspaceRoot: '/tmp/agy-contract',

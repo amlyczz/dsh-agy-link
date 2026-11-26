@@ -229,7 +229,9 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   }
 
   // ---- /tsl command (Gemini plain-language translation) ----
-  ctx.commands.register(
+  // Opt-out: only the command entry. Automatic post-turn translation below and the
+  // translate action keep working. Read at registration time (next start).
+  if (getConfig().tslEnabled !== false) ctx.commands.register(
     tslCommandDefinition({
       cfg: getConfig,
       translate: () => translation,
