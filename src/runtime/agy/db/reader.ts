@@ -4,7 +4,7 @@
 import { execFile } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
-import { extractStepThoughts, extractToolInfo } from './extract.ts'
+import { extractStepThoughts, extractToolInfo, extractToolResultText } from './extract.ts'
 import { findConversationDb, isSafeConversationId } from './paths.ts'
 import {
   MAX_CACHE_AGE_MS,
@@ -167,17 +167,18 @@ export function resetReaderState(): void {
 export async function loadAgyDbData(conversationId: string, accountHome?: string, sinceIdx = 0): Promise<AgyDbData> {
   const steps = new Map<number, CachedStep>()
   const thoughts = new Map<number, string>()
+  const results = new Map<number, string>()
   const seenSteps = new Set<number>()
   let maxSeenIdx = sinceIdx > 0 ? Math.floor(sinceIdx) - 1 : -1
-  if (!isSafeConversationId(conversationId)) return { steps, thoughts, seenSteps, maxSeenIdx }
+  if (!isSafeConversationId(conversationId)) return { steps, thoughts, results, seenSteps, maxSeenIdx }
   const dbPath = findConversationDb(conversationId, accountHome)
-  if (dbPath === null) return { steps, thoughts, seenSteps, maxSeenIdx }
+  if (dbPath === null) return { steps, thoughts, results, seenSteps, maxSeenIdx }
 
   try {
     const st = await stat(dbPath)
-    if (st.size === 0) return { steps, thoughts, seenSteps, maxSeenIdx }
+    if (st.size === 0) return { steps, thoughts, results, seenSteps, maxSeenIdx }
   } catch {
-    return { steps, thoughts, seenSteps, maxSeenIdx }
+    return { steps, thoughts, results, seenSteps, maxSeenIdx }
   }
 
   try {
@@ -218,6 +219,8 @@ export async function loadAgyDbData(conversationId: string, accountHome?: string
         if (info !== null) {
           steps.set(idx, info)
         }
+        const resultText = extractToolResultText(payload)
+        if (resultText !== null) results.set(idx, resultText)
       }
       // Thought/intent prose: agent_response steps, plus tool steps that
       // carry toolAction/toolSummary (common in tool-heavy turns).
@@ -252,5 +255,5 @@ export async function loadAgyDbData(conversationId: string, accountHome?: string
     }
   }
 
-  return { steps, thoughts, seenSteps, maxSeenIdx }
+  return { steps, thoughts, results, seenSteps, maxSeenIdx }
 }

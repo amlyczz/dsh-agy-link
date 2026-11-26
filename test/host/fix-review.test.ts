@@ -68,14 +68,17 @@ describe('mapper fixes', () => {
 		assert.equal(text2, ' beta', 'only the grown suffix is emitted')
 	})
 
-	test('ACTIVE tool steps emit a pending reasoning note once', () => {
+	test('ACTIVE tool steps emit nothing into the reasoning stream', () => {
+		// Regression guard: the mapper used to append
+		// "[agy tool running: …]" to the reasoning block for every tool call.
+		// That text was stored as model thinking and replayed on later turns.
 		const rec = new RunRecording()
 		rec.append(step({ stepKey: 't0', stepKind: 'tool', state: 'ACTIVE', tool: { name: 'run_command' } }))
 		rec.append(step({ stepKey: 't0', stepKind: 'tool', state: 'ACTIVE', tool: { name: 'run_command' } }))
 		const mapper = new EventMapper({ runId: 'r', cutOnTool: true, usage: rec })
 		const notes = [...mapper.map(rec.eventAt(0)!, 0), ...mapper.map(rec.eventAt(1)!, 1)]
 			.filter((c) => c.type === 'reasoning-delta')
-		assert.equal(notes.length, 1, 'pending note deduped per stepKey')
+		assert.equal(notes.length, 0, 'no pending-progress note')
 	})
 
 	test('DONE tool cut forwards the last per-call usage sample, not 0/0', () => {

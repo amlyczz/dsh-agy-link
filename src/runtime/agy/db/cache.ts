@@ -58,6 +58,7 @@ async function loadCached(conversationId: string, stepIndex: number, accountHome
           conversationId,
           steps: new Map(),
           thoughts: new Map(),
+          results: new Map(),
           checkedSteps: new Set(),
           maxSeenIdx: -1,
           cacheTime: now,
@@ -65,6 +66,7 @@ async function loadCached(conversationId: string, stepIndex: number, accountHome
         }
     for (const [k, v] of data.steps) target.steps.set(k, v)
     for (const [k, v] of data.thoughts) target.thoughts.set(k, v)
+    for (const [k, v] of data.results) target.results.set(k, v)
     for (const k of data.seenSteps) target.checkedSteps.add(k)
     if (data.maxSeenIdx > target.maxSeenIdx) target.maxSeenIdx = data.maxSeenIdx
     target.cacheTime = Date.now()
@@ -110,6 +112,35 @@ export async function readFullToolArgs(
 
   const updated = await loadCached(conversationId, stepIndex, accountHome)
   return updated?.steps.get(stepIndex) ?? null
+}
+
+/**
+ * Read the rendered RESULT text agy recorded for a given step index.
+ *
+ * The stdout envelope strips most tool output: a `read_file` step exports an
+ * empty result, and long `run_command` output only arrives as a truncated
+ * preview. The DB keeps the rendered result, so the mirror can fill in what the
+ * card is missing. Returns null when the DB is unavailable, the step has no
+ * result (write/edit steps), or the text is empty.
+ */
+export async function readFullToolResult(
+  conversationId: string,
+  stepIndex: number,
+  accountHome?: string,
+): Promise<string | null> {
+  if (!isSafeConversationId(conversationId)) return null
+
+  const now = Date.now()
+  const key = cacheKeyFor(conversationId, accountHome)
+  const entry = getFreshCache(key, now)
+  if (entry) {
+    const cached = entry.results.get(stepIndex)
+    if (cached !== undefined) return cached
+    if (entry.checkedSteps.has(stepIndex) && (now - entry.cacheTime) < 500) return null
+  }
+
+  const updated = await loadCached(conversationId, stepIndex, accountHome)
+  return updated?.results.get(stepIndex) ?? null
 }
 
 /**

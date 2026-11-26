@@ -14,6 +14,8 @@ export interface AgyDbCache {
   steps: Map<number, CachedStep>
   /** stepIndex → extracted thought text */
   thoughts: Map<number, string>
+  /** stepIndex → rendered tool-result text (field 140.2.1) */
+  results: Map<number, string>
   /** Step indices that were present in the database when loaded */
   checkedSteps: Set<number>
   /** Highest step idx observed in the DB for O(1) incremental tail reads. */
@@ -26,6 +28,7 @@ export interface AgyDbCache {
 export interface AgyDbData {
   steps: Map<number, CachedStep>
   thoughts: Map<number, string>
+  results: Map<number, string>
   seenSteps: Set<number>
   maxSeenIdx: number
 }
