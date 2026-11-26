@@ -353,7 +353,7 @@ export class AccountPoolManager {
     family: ModelFamily,
     fromId?: string,
   ): ManagedAccount[] {
-    return orderByExpiry(this.data.accounts, candidates, family, fromId, Date.now())
+    return orderByExpiry(this.data.accounts, candidates, family, fromId, Date.now(), (id) => this.catalogForAccount(id))
   }
 
   /**
@@ -556,7 +556,7 @@ export class AccountPoolManager {
     if (activeId) {
       const activeCandidate = candidates.find((a) => a.id === activeId)
       // Stick only while no narrower account could serve this model instead.
-      if (activeCandidate && isInNarrowestTier(activeCandidate, candidates, family)) {
+      if (activeCandidate && isInNarrowestTier(activeCandidate, candidates, family, (id) => this.catalogForAccount(id))) {
         const peerMoved = this.syncSharedSelect(activeCandidate, family, activeId)
         const needLast = (family === 'google' || !this.data.lastActiveAccountId) && this.data.lastActiveAccountId !== activeCandidate.id
         if (needLast || peerMoved) {
