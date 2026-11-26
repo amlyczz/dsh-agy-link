@@ -474,3 +474,34 @@ test('issue #207: finalizeAttempt detects parseModelNotRecognized on Err.PROCESS
     }
   })
 })
+
+test('route hints qualify only advertised collisions and preserve the leading slash', async () => {
+  await withTempDshHome(async dir => {
+    const cfg = { ...defaultConfig(), mcpBridge: true }
+    const ctx = makeCallCtx('routing', dir, cfg)
+    const makePrompt = async (names: string[], bridgeServer?: string) => (await buildPromptPlan({
+      bridgeServer, options: { messages: [msg('user', '/plan')], model: 'test', provider: 'antigravity',
+        tools: names.map(name => ({ name, description: '', parameters: {} })) },
+      cfg, ctx, policy: purposePolicy(ctx), account: undefined, model: 'test', activeModel: 'test',
+      deps: { store: new SessionStore(join(dir, 'sessions.json')), getActiveRun: () => undefined,
+        recentlyCompactedSessions: new Map(), deliverContext: async () => '' },
+    })).prompt
+    const server = 'dsh-tools-4242'
+    const names = ['send_message', 'invoke_subagent', 'define_subagent', 'manage_subagents', 'schedule', 'swarm',
+      'run_workflow', 'read_file', 'write_file', 'edit_file', 'run_command']
+    const all = await makePrompt(names, server)
+    assert.ok(all.startsWith('/plan'))
+    for (const name of names) assert.ok(all.includes(name))
+    assert.match(all, /MUST use MCP server dsh-tools-4242.*Never call AGY's same-named built-in/)
+    cfg.mcpBridgeScope = 'host-only'
+    cfg.mcpToolAllowlist = 'read_file,send.message,send_message,read_ticket'
+    const filtered = await makePrompt(['read_file', 'send.message', 'send_message', 'schedule'], server)
+    assert.match(filtered, /send_message \(MCP name send_message__2\)/)
+    assert.doesNotMatch(filtered, /read_file|schedule/)
+    const generic = await makePrompt(['read_ticket'], server)
+    assert.match(generic, /advertised tool names/)
+    assert.doesNotMatch(generic, /MUST/)
+    assert.equal(await makePrompt(['read_file'], server), '/plan')
+    assert.equal(await makePrompt(['send_message']), '/plan')
+  })
+})

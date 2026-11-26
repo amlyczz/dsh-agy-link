@@ -83,9 +83,14 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `askTool` | `—` | `false` | Expose the `agy_ask` delegation tool |
 | `mcpBridge` | `DSH_AGY_MCP_BRIDGE` | `false` | Expose the current DSH model step’s tools to agy. Requires a host that supplies the 0.2.2 step tool set. Without a bound step the bridge advertises no tools. |
+| `mcpBridgeScope` | `DSH_AGY_MCP_BRIDGE_SCOPE` | `all` | `all` exposes the admitted tools. `host-only` omits basic file and terminal tools such as `read`, `edit` and `bash`. Both respect `mcpToolAllowlist` and keep the host-projected PTC executor `run_code` if allowed. Set the scope in Settings → Runtime controls or the plugin config. |
 | `mcpConfigScope` | `DSH_AGY_MCP_CONFIG_SCOPE` | `global` | `global` / `workspace` / `both` |
 | `mcpConfigPath` | `DSH_AGY_MCP_CONFIG_PATH` | `''` | Explicit agy MCP config path |
 | `mcpToolAllowlist` | `DSH_AGY_MCP_TOOL_ALLOWLIST` | `''` | Only expose these MCP tools (comma separated) |
+
+Scope selection takes effect when the bridge is enabled. It applies to discovery, direct calls and the inner tools available to PTC. With an explicit allowlist, include both `run_code` and the inner tools you need. For bridged tools that share an AGY built-in name, the prompt names the session's MCP server and requires that route.
+
+When a chat step includes host tools and either `mcpBridge` or `forwardSystemPrompt` is off, the host logs a warning once per distinct set of tools and disabled settings. `GET /plugins/agy-link/status` reports the most recent chat step's `bridgeDiagnostic.hostTools` and `bridgeDiagnostic.disabledSettings`. A healthy chat step clears it to `null`. In PTC the diagnostic identifies the projected `run_code` executor. Changing either setting remains an explicit user action.
 
 ## Network, quota and updates
 

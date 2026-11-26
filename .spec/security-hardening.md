@@ -9,6 +9,7 @@ Each invariant below is enforced in code AND covered by a regression test.
 
 - The installed reverse bridge requires a per-session route and a live DSH provider step. Its catalog uses the model-facing schemas for that step. Execution uses the originating agent, admitted tool set and cancellation signal (`exec.signal` is never omitted).
 - `mcpToolAllowlist` further restricts both discovery and execution, including PTC inner tools. The PTC executor `run_code` is exposed when the host projects it. The recursive AGY helpers `agy_ask`, `agy_tool` and `agy_image` are excluded from BOTH `/tools` and `/call` via one `INTERNAL_TOOL_NAMES` set. (tests: `test/host/mcp-bridge-registry-and-agent.test.ts`, `test/integration/v02.test.ts`)
+- With `mcpBridgeScope: host-only`, discovery, execution and PTC inner dispatch omit overlapping basic file and terminal tools. Prompt routing uses the same projection and explicitly qualifies collisions with AGY built-ins. The scope defaults to `all` and requires the opt-in bridge.
 - Distinct DSH names that normalize to the same MCP name are disambiguated with a
   stable `__<n>` suffix, never silently dropped; `bridge.mjs` calls back by exact
   `dshName`. (test: `test/integration/v02.test.ts`)

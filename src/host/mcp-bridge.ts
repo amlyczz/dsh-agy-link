@@ -14,6 +14,9 @@
 //     an opaque capability. A process ID or declared session ID is not proof
 //     of ownership of a model step.
 
+import { bridgeAllows, projectBridgeTools, INTERNAL_TOOL_NAMES } from '../common/bridge-tools.ts'
+import type { PluginConfig } from '../common/types.ts'
+export { toMcpName } from '../common/bridge-tools.ts'
 import type { BridgeStep, StepToolSet } from './bridge-steps.ts'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
@@ -32,16 +35,6 @@ import {
 import { homedir } from 'node:os'
 
 const MCP_SERVER_KEY = BRIDGE_SERVER_KEY
-
-/**
- * Tools that must NEVER be exposed to an external MCP client. These are
- * internal transports / loopback-only helpers of the plugin itself:
- *  - `agy_ask`   — the plugin's own ask tool (would recurse into agy).
- *  - `agy_tool`  — replays recorded agy tool activity back into DSH; calling it
- *                   over the bridge would let the agy child re-enter the bridge.
- * Kept in one place so the /tools listing and the /call guard can never drift.
- */
-const INTERNAL_TOOL_NAMES = new Set(['agy_ask', 'agy_tool', 'agy_image'])
 
 /** Minimal structural view of the DSH tool registry we need. */
 export interface ToolsServiceLike {
@@ -80,11 +73,6 @@ export interface ToolsServiceLike {
      */
     signal: AbortSignal
   }): Promise<unknown>
-}
-
-/** MCP tool names are [a-zA-Z0-9_-]; DSH names may contain dots. */
-export function toMcpName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
 export interface McpBridge {
@@ -162,6 +150,7 @@ export function startMcpBridge(opts: {
   bridgeScript: string
   tools: () => ToolsServiceLike | undefined
   allowlist: () => string
+  scope?: () => PluginConfig['mcpBridgeScope']
   /** Map the spawning DSH session id to the agent the call runs on behalf of. */
   resolveAgent?: (sessionId: string) => unknown | Promise<unknown>
   resolveStep?: (token: string) => BridgeStep | undefined
@@ -169,6 +158,7 @@ export function startMcpBridge(opts: {
   /** Max buffered request-body bytes (tests use a small value). */
   maxBodyBytes?: number
 }): Promise<McpBridge> {
+  const toolPolicy = () => bridgeAllows(opts.scope?.() ?? 'all', opts.allowlist())
   const resolveSessionAgent = async (req: IncomingMessage): Promise<unknown> => {
     const sessionHeader = String(req.headers['x-dsh-session'] ?? '')
     const resolveSession = async (id: string): Promise<unknown> =>
@@ -196,28 +186,15 @@ export function startMcpBridge(opts: {
           sendJson(res, 503, { error: 'tools service unavailable' })
           return
         }
-        const allow = opts.allowlist().split(',').map((s) => s.trim()).filter(Boolean)
-        const allowSet = new Set(allow)
-        const used = new Set<string>()
-        // List the CALLER's surface: without a scope the whole preset-registered
-        // tool set is filtered out (issue #150).
         const schemas = step?.schemas ?? (noStep ? [] : svc.schemas(await resolveSessionAgent(req)))
-        const rawTools = schemas
-          .filter((t) => allow.length === 0 || allowSet.has(t.name))
-          // internal transports / loopback-only helpers are not bridgeable
-          .filter((t) => !INTERNAL_TOOL_NAMES.has(t.name) && (t.name !== 'run_code' || step !== undefined))
-          .map((t) => {
-            const base = toMcpName(t.name)
-            let name = base
-            for (let i = 2; used.has(name); i++) name = base + '__' + i
-            used.add(name)
-            return {
-              name,
-              dshName: t.name,
-              description: t.description,
-              inputSchema: { type: 'object', ...t.parameters },
-            }
-          })
+        const allows = toolPolicy()
+        const rawTools = projectBridgeTools(schemas, name => allows(name) && (name !== 'run_code' || !!step))
+          .map(({ name, tool }) => ({
+            name,
+            dshName: tool.name,
+            description: tool.description,
+            inputSchema: { type: 'object', ...tool.parameters },
+          }))
         const tools = prepareMcpTools(rawTools)
         sendJson(res, 200, { tools })
         return;
@@ -266,9 +243,9 @@ export function startMcpBridge(opts: {
         // mcpToolAllowlist constrains; filtering only /tools would let a
         // (possibly prompt-injected) child POST /call with an arbitrary dshName
         // and reach tools outside the allowlist. Empty allowlist = all allowed.
-        const allow = opts.allowlist().split(',').map((s) => s.trim()).filter(Boolean)
-        if (allow.length > 0 && !allow.includes(dshName)) {
-          audit('denied: not in allowlist')
+        const allows = toolPolicy()
+        if (!allows(dshName)) {
+          audit('denied: bridge scope or allowlist')
           sendJson(res, 403, { error: 'tool not allowed' })
           return
         }
@@ -308,8 +285,7 @@ export function startMcpBridge(opts: {
             }],
             signal: step ? AbortSignal.any([controller.signal, step.signal]) : controller.signal,
             ...(step && { toolSet: {
-              view: (scope?: unknown) => new Map([...step.toolSet.view(scope)].filter(([name]) =>
-                !INTERNAL_TOOL_NAMES.has(name) && (allow.length === 0 || allow.includes(name)))),
+              view: (scope?: unknown) => new Map([...step.toolSet.view(scope)].filter(([name]) => allows(name))),
             } }),
             ...(agent === undefined ? {} : { agent }),
             // DSH 0.2.1 compatibility (ignored by 0.2.2+).

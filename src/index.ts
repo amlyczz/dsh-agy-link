@@ -46,7 +46,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     sessionsSvc, sessionAuto, mediaDir, bridgeState, webServerPort,
   } = services
 
-  observeBridgeAssemblies(ctx, services.bridgeSteps)
+  observeBridgeAssemblies(ctx, services.bridgeSteps, () => bridgeState.bridge !== null)
 
   // Boot-time pool/store hygiene: stale staging logs, keychains, credential slot.
   runBootHygiene(services)
@@ -512,12 +512,14 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
             bridgeScript: script,
             tools: () => (ctx.get('tools') as ToolsServiceLike | undefined),
             allowlist: () => getConfig().mcpToolAllowlist,
+            scope: () => getConfig().mcpBridgeScope,
             resolveStep: token => services.bridgeSteps.resolve(token),
             log,
           })
           // A scope can be disposed before asynchronous listener startup ends.
           // Do not publish a capability or registry configs after disposal.
-          if (bridgeDisposed) {
+          const current = getConfig()
+          if (bridgeDisposed || !current.enabled || !current.mcpBridge) {
             await bridge.close()
             return
           }

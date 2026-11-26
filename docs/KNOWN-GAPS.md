@@ -169,16 +169,9 @@ reference-counted slot is the strongest isolation the plugin can provide.
   tools that require one need a real `agent` or they fail by design.
   Documenting the full DSH-core `execute(exec)` contract and any official
   sessionless-execution API is upstream work, not this bundle.
-- **DSH `send_message` from an agy child** - DSH's sub-agent runtime appends a
-  footer telling the child to report with `send_message({ agent_id: <parent> })`.
-  In an agy run that name resolves to agy's **own** `send_message`, which does
-  not know DSH agent ids and fails with `recipient "..." not found`. The DSH
-  tool itself is bridgeable - add `send_message` to `mcpToolAllowlist` and call
-  it explicitly on the `dsh-tools-<port>` MCP server (agy dispatches MCP calls
-  by server + tool name, so there is no collision with the native tool). The
-  footer still names the native one, so an agy member should report through
-  `agent_teams_send_message` (or an explicit instruction) instead. Root cause is
-  upstream in `@deepseek-ai/dsh-subagent`, which assumes a DSH-native child.
+- **Toolbox size and name collisions.** Select `mcpBridgeScope: host-only` to leave basic file and terminal work to AGY and save room under its 20,000-token toolbox limit. Large extension catalogs can still reach the limit. Narrow `mcpToolAllowlist` when needed.
+  When an advertised tool such as `send_message` also exists in AGY, the prompt names the tool and requires dispatch through `dsh-tools-<port>` for the current DSH session. AGY still controls its own dispatch. Its native messaging tool cannot resolve DSH recipients.
+  A chat step with host tools and a disabled bridge or system-prompt forwarding produces a deduplicated warning. The status endpoint records the detected tool names and disabled settings in `bridgeDiagnostic`.
 - **Weekly quota auto-warmup is opt-in (v0.4.74+)** - `autoWarmup` defaults to
   `false` because the feature deliberately bypasses the CLI-first quota path and
   sends minimal `loadCodeAssist` + `generateContent` probes straight to Google's

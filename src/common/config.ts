@@ -187,6 +187,8 @@ export function resolveConfig(
     mediaMaxBytes: asNum(get('mediaMaxBytes')) ?? base.mediaMaxBytes,
     mediaMaxImages: asNum(get('mediaMaxImages')) ?? base.mediaMaxImages,
     mcpBridge: asBool(get('mcpBridge')) ?? base.mcpBridge,
+    mcpBridgeScope: [env.DSH_AGY_MCP_BRIDGE_SCOPE, overrides.mcpBridgeScope, e.mcpBridgeScope]
+      .find(value => value === 'all' || value === 'host-only') ?? base.mcpBridgeScope,
     mcpConfigScope: asMcpConfigScope(get('mcpConfigScope')) ?? base.mcpConfigScope,
     mcpConfigPath: asString(get('mcpConfigPath')) ?? base.mcpConfigPath,
     mcpToolAllowlist: asString(get('mcpToolAllowlist')) ?? base.mcpToolAllowlist,

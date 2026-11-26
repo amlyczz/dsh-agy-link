@@ -221,6 +221,15 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		h(Row, {
+			left: rowCaption(t('config.mcpBridgeScope'), t('config.mcpBridgeScopeDesc')),
+			right: segGroup((['all', 'host-only'] as const).map(scope => h(Button, {
+				key: scope,
+				variant: (status.mcpBridgeScope ?? 'all') === scope ? 'segActive' : 'seg',
+				disabled: loadingAction === 'config:mcpBridgeScope',
+				onClick: () => void setCfg('mcpBridgeScope', scope),
+			}, t(scope === 'all' ? 'config.mcpScopeAll' : 'config.mcpScopeHostOnly')))),
+		}),
 		// Issue #201: a user with a dedicated /btw plugin may not want this one
 		// registered. Off needs a restart (commands are registered at startup).
 		boolRow({

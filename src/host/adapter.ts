@@ -1,6 +1,7 @@
 // AgyAdapter — turns one DSH model call into an agy process/ACP session,
 // maps its event stream onto StreamChunks, and binds DSH sessions to agy
 // conversations for multi-turn continuity (spec §3, ADR-4/ADR-7).
+import { diagnoseBridge, type BridgeDiagnostic } from '../common/bridge-tools.ts'
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { withBridgeStep } from './bridge-steps.ts'
@@ -38,8 +39,6 @@ export { parseEffortUnsupported, parseModelNotRecognized } from '../provider/eff
 import { detectContinuation } from '../provider/continuation.ts'
 export { detectContinuation, toolCallIdOf } from '../provider/continuation.ts'
 
-// ---- stream() -------------------------------------------------------------
-
 export class AgyAdapter extends LlmAdapter {
   private readonly recentlyCompactedSessions = new Map<string, number>()
   /** Effort-refusal cache (learned from agy refusals; issue #67). */
@@ -47,6 +46,7 @@ export class AgyAdapter extends LlmAdapter {
   /** Failover / rate-limit / network-streak retry budgets. */
   private readonly failover = new FailoverBudget()
 
+  bridgeDiagnostic: BridgeDiagnostic | null = null
   private readonly warnedKeys = new Set<string>()
   /** sessionKey -> in-flight run, for steer-time preemption. */
   private readonly activeRuns = new Map<string, RunRecording>()
@@ -208,8 +208,11 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     yield* streamWithEffortRetry({
-      streamAttempt: (opts, suppressEffort) => withBridgeStep(this.deps.enterBridgeStep?.(opts),
-        lease => this.streamAttempt(opts, suppressEffort, lease)),
+      streamAttempt: (opts, suppressEffort) => {
+        const cfg = this.deps.getConfig()
+        return withBridgeStep(cfg.mcpBridge ? this.deps.enterBridgeStep?.(opts) : undefined,
+          lease => this.streamAttempt(opts, cfg, suppressEffort, lease))
+      },
       learnEffortUnsupported: (model) => this.learnEffortUnsupported(model),
       catalogAdvertisesEffort: (model) => this.deps.catalog.advertisedEfforts(model).length > 0,
       pool: this.deps.pool,
@@ -217,19 +220,17 @@ export class AgyAdapter extends LlmAdapter {
     }, effective)
   }
 
-  private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false, lease?: BridgeLease): AsyncIterable<StreamChunk> {
+  private async *streamAttempt(options: AgyGenerateOptions, cfg: PluginConfig, suppressEffort: boolean, lease?: BridgeLease): AsyncIterable<StreamChunk> {
     const ctx = resolveCallContext({
-      options,
-      cfg: this.deps.getConfig(),
+      options, cfg,
       bin: this.deps.bin(),
       ...(this.deps.sessionCwd === undefined ? {} : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
       warnOnce: (key: string, message: string) => this.warnOnce(key, message),
     })
-    const { cfg, bin, isReview, isTitle, isCompaction, isTranslate, isImage, isAux } = ctx
+    const { bin, isReview, isTitle, isCompaction, isTranslate, isImage, isAux } = ctx
     const { permissionMode, sessionKey, workspaceRoot, isCodeMode, hasToolSupport } = ctx
+    if (!isAux) this.bridgeDiagnostic = diagnoseBridge(cfg, options.tools, (key, msg) => this.warnOnce(key, msg))
     const policy = purposePolicy(ctx)
-    // Keep the local alias: TypeScript's aliased-condition narrowing makes
-    // `else if (isTranslateSession)` narrow `translateSession` below.
     const translateSession = ctx.translateSession
     const isTranslateSession = translateSession !== null
     // DSH synthetic lifecycle continuations: short-circuit on goal completion
@@ -562,7 +563,7 @@ export class AgyAdapter extends LlmAdapter {
       ...(this.deps.reinstallCredentialSlot === undefined ? {} : { reinstallCredentialSlot: this.deps.reinstallCredentialSlot }),
     }
     const attemptInput: AttemptInput = {
-      bridgeRoute: lease?.bind(JSON.stringify([account?.id, permissionMode, options.agyTransport ?? cfg.transport, options.agySandbox ?? cfg.sandbox, options.agyAgent ?? cfg.agent])),
+      bridgeRoute: lease?.bind(JSON.stringify([account?.id, permissionMode, options.agyTransport ?? cfg.transport, options.agySandbox ?? cfg.sandbox, options.agyAgent ?? cfg.agent, cfg.mcpBridgeScope, cfg.mcpToolAllowlist])),
       cfg,
       bin,
       permissionMode: agyPermissionMode,

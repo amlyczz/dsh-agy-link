@@ -355,6 +355,8 @@ test('client sections (EcosystemPanel, RuntimeControlsRows, ImageSettingsRows, W
     const runtimeHtml = renderToStaticMarkup(createElement(RuntimeControlsSection as never, { t, status, loadingAction: null, setCfg }))
     assert.match(runtimeHtml, /config\.acpStats/)
     assert.match(runtimeHtml, /config\.permissionMode/)
+    assert.match(runtimeHtml, /config\.mcpScopeAll/)
+    assert.match(runtimeHtml, /config\.mcpScopeHostOnly/)
 
     const imageRowHtml = renderToStaticMarkup(createElement('div', null, renderImageRow(
       t,
