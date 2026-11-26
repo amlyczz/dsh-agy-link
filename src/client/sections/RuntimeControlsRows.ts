@@ -241,6 +241,17 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		// The `/a*` shortcut family can crowd DSH's slash menu for users who mostly
+		// run other models. Off needs a restart (commands are registered at startup).
+		boolRow({
+			t,
+			title: t('config.slashCommandsEnabled'),
+			desc: t('config.slashCommandsEnabledDesc'),
+			cfgKey: 'slashCommandsEnabled',
+			value: status.slashCommandsEnabled !== false,
+			loadingAction,
+			setCfg,
+		}),
 		renderAgentRow({ ...props, draft: agentDraft, setDraft: setAgentDraft }),
 	);
 }

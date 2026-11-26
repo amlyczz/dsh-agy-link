@@ -313,6 +313,10 @@ export interface PluginConfig {
   btwModel: string
   /** Reasoning effort for `/btw` side questions (default `'medium'` for balanced quality and speed). */
   btwEffort: string
+  // ---- `/a*` shortcut commands ----
+  /** Register the top-level `/a*` shortcut family (`/aplan`, `/agoal`, `/acmd`, …) at all (default true).
+   *  `/agy` itself always stays. Off needs a restart. */
+  slashCommandsEnabled: boolean
   /**
    * Wake idle DSH sessions across turns when an agy `schedule` timer,
    * detached background task/subagent, or persistent ACP update finishes
@@ -474,6 +478,7 @@ export function defaultConfig(): PluginConfig {
     btwEnabled: true,
     btwModel: '',
     btwEffort: 'medium',
+    slashCommandsEnabled: true,
     backgroundWakeup: false,
     backgroundWakeupTtlMinutes: 30,
     backgroundWakeupMaxPerSession: 12,

@@ -185,6 +185,20 @@ test('issue #201: btwEnabled is settable (boolean) and reported by status', asyn
   assert.ok('btwEnabled' in (status.json() as Record<string, unknown>), 'status must expose btwEnabled')
 })
 
+test('slashCommandsEnabled is settable (boolean) and reported by status', async () => {
+  const writes: Array<[string, unknown]> = []
+  const s = setup({ setOverride: (k: string, v: unknown) => { writes.push([k, v]) } })
+  const route = s.route('/plugins/agy-link/config')
+  const ok = await invoke(route, fakeReq('POST', '/', { key: 'slashCommandsEnabled', value: false }))
+  assert.equal(ok.status(), 200)
+  assert.deepEqual(writes, [['slashCommandsEnabled', false]])
+  const bad = await invoke(route, fakeReq('POST', '/', { key: 'slashCommandsEnabled', value: 'off' }))
+  assert.equal(bad.status(), 400)
+  assert.deepEqual(bad.json(), { error: 'slashCommandsEnabled must be a boolean' })
+  const status = await s.call('/plugins/agy-link/status', fakeReq('GET', '/plugins/agy-link/status'))
+  assert.ok('slashCommandsEnabled' in (status.json() as Record<string, unknown>), 'status must expose slashCommandsEnabled')
+})
+
 test('router CSRF gate blocks cross-origin POST to /config and /pool/* while allowing dsh-app://', async () => {
   const writes: Array<[string, unknown]> = []
   const s = setup({ setOverride: (k: string, v: unknown) => { writes.push([k, v]) } })

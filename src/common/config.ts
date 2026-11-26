@@ -229,6 +229,7 @@ export function resolveConfig(
     imageOutputDir: asString(get('imageOutputDir')) ?? base.imageOutputDir,
     imageRetries: asNum(get('imageRetries')) ?? base.imageRetries,
     btwEnabled: asBool(get('btwEnabled')) ?? base.btwEnabled,
+    slashCommandsEnabled: asBool(get('slashCommandsEnabled')) ?? base.slashCommandsEnabled,
     btwModel: asString(get('btwModel')) ?? base.btwModel,
     btwEffort: asString(get('btwEffort')) ?? base.btwEffort,
     backgroundWakeup: asBool(get('backgroundWakeup')) ?? base.backgroundWakeup,
@@ -421,6 +422,7 @@ export function resolveConfig(
     if (v !== undefined) cfg.imageRetries = v
   }
   if (env.DSH_AGY_BTW_ENABLED !== undefined) cfg.btwEnabled = asBool(env.DSH_AGY_BTW_ENABLED) ?? cfg.btwEnabled
+  if (env.DSH_AGY_SLASH_COMMANDS_ENABLED !== undefined) cfg.slashCommandsEnabled = asBool(env.DSH_AGY_SLASH_COMMANDS_ENABLED) ?? cfg.slashCommandsEnabled
   if (env.DSH_AGY_BTW_MODEL !== undefined) cfg.btwModel = env.DSH_AGY_BTW_MODEL
   if (env.DSH_AGY_BTW_EFFORT !== undefined) cfg.btwEffort = env.DSH_AGY_BTW_EFFORT
   if (env.DSH_AGY_CLOAK_SYSTEM_PROMPT !== undefined) {

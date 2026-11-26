@@ -203,12 +203,17 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     agents: () => (ctx.get('agents') as { get(id: unknown): unknown } | undefined) ?? ((ctx as unknown as { agents?: { get(id: unknown): unknown } }).agents),
   })
   ctx.commands.register(agyCommandDefinition(agyDeps))
-  for (const def of agySlashCommandDefinitions({
-    deps: () => agyDeps,
-    armForcedPlan: services.armForcedPlan,
-    planMode: () => ctx.get('planMode' as never) as { enter?: (agent: unknown) => unknown } | undefined,
-  })) {
-    ctx.commands.register(def)
+  // Opt-out: the top-level `/a*` shortcuts (`/aplan`, `/agoal`, `/acmd`, …) fill DSH's
+  // slash menu even for users who mostly run other models. `/agy` above always stays.
+  // Read at registration time, so the switch takes effect on the next start.
+  if (getConfig().slashCommandsEnabled !== false) {
+    for (const def of agySlashCommandDefinitions({
+      deps: () => agyDeps,
+      armForcedPlan: services.armForcedPlan,
+      planMode: () => ctx.get('planMode' as never) as { enter?: (agent: unknown) => unknown } | undefined,
+    })) {
+      ctx.commands.register(def)
+    }
   }
 
   // Opt-out (issue #201): a user who already runs a dedicated /btw plugin can

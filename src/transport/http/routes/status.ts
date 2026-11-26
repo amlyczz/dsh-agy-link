@@ -132,6 +132,7 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           imageEffort: cfg.imageEffort,
           imageOutputDir: cfg.imageOutputDir,
           btwEnabled: cfg.btwEnabled,
+          slashCommandsEnabled: cfg.slashCommandsEnabled,
           btwModel: cfg.btwModel,
           btwEffort: cfg.btwEffort,
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },

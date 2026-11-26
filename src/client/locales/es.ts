@@ -325,6 +325,8 @@ export const es: AgyDictionary = {
   'config.btwDesc': 'Modelo de Antigravity e intensidad usados para preguntas de solo lectura /atw',
   'config.btwEnabled': 'Activar preguntas laterales /agy-btw',
   'config.btwEnabledDesc': 'Activado por defecto. Desactívalo si ya usas un plugin dedicado de preguntas laterales (/btw). Se aplica al reiniciar.',
+  'config.slashCommandsEnabled': 'Activar los atajos /a*',
+  'config.slashCommandsEnabledDesc': 'Activado por defecto. Los atajos /aplan, /agoal, /agrill, /aboost, /aswarm, /ateamwork, /aschedule, /abrowser, /acmd, /acompact, /afork y /alearn. Desactívalo para quitarlos del menú de comandos; /agy sigue funcionando. Se aplica al reiniciar.',
   'config.btwModel': 'Modelo /atw',
   'config.btwModelDesc': 'Modelo para /atw; automático usa defaultModel -> Gemini 4 Hydrogen -> Gemini Flash',
   'config.btwEffort': 'Esfuerzo /atw',
