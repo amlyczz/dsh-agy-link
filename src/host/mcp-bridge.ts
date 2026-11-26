@@ -25,6 +25,12 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { readJsonBody } from './read-json-body.ts'
 import { extractMcpContentBlocks, prepareMcpTools } from './mcp-schema.ts'
 import {
+  annotateDeferredRetry,
+  DEFER_EXECUTE_TOOL_NAME,
+  isDeferredToolSignal,
+  resolveDeferActivationArgs,
+} from './mcp-defer.ts'
+import {
   applySchemaDoctor,
   BRIDGE_SERVER_KEY,
   invalidateToolStateCaches,
@@ -274,40 +280,96 @@ export function startMcpBridge(opts: {
           // pre-execute hook treats any parent as a PTC dispatch and then looks
           // for a session-log start that a native call does not have).
           const isPtc = !step && svc.schemas(agent).some((tool) => tool.name === 'run_code')
-          const result = await svc.execute({
-            calls: [{
-              type: 'tool-call',
-              id: callId,
-              name: dshName,
-              // The batch API expects the raw model JSON text; it parses it and
-              // keeps malformed input for tool-owned diagnostics.
-              arguments: JSON.stringify(parsed.arguments ?? {}),
-            }],
-            signal: step ? AbortSignal.any([controller.signal, step.signal]) : controller.signal,
-            ...(step && { toolSet: {
-              view: (scope?: unknown) => new Map([...step.toolSet.view(scope)].filter(([name]) => allows(name))),
-            } }),
-            ...(agent === undefined ? {} : { agent }),
-            // DSH 0.2.1 compatibility (ignored by 0.2.2+).
-            callId,
-            name: dshName,
-            arguments: parsed.arguments ?? {},
-            ...(isPtc ? { parent: Symbol(callId) } : {}),
-          })
-          if (step && !Array.isArray((result as { results?: unknown } | null)?.results)) {
-            throw new Error('The host returned no tool batch for this step')
+          const execSignal = step ? AbortSignal.any([controller.signal, step.signal]) : controller.signal
+          const executeOnce = async (
+            targetName: string,
+            targetArgs: unknown,
+            cid: string,
+          ): Promise<{ settled?: unknown; err?: unknown }> => {
+            try {
+              const result = await svc.execute({
+                calls: [{
+                  type: 'tool-call',
+                  id: cid,
+                  name: targetName,
+                  // The batch API expects the raw model JSON text; it parses it and
+                  // keeps malformed input for tool-owned diagnostics.
+                  arguments: JSON.stringify(targetArgs ?? {}),
+                }],
+                signal: execSignal,
+                ...(step && { toolSet: {
+                  view: (scope?: unknown) => new Map([...step.toolSet.view(scope)].filter(([name]) => allows(name))),
+                } }),
+                ...(agent === undefined ? {} : { agent }),
+                // DSH 0.2.1 compatibility (ignored by 0.2.2+).
+                callId: cid,
+                name: targetName,
+                arguments: targetArgs ?? {},
+                ...(isPtc ? { parent: Symbol(cid) } : {}),
+              })
+              if (step && !Array.isArray((result as { results?: unknown } | null)?.results)) {
+                throw new Error('The host returned no tool batch for this step')
+              }
+              return { settled: settledToolResult(result, cid) }
+            } catch (err) {
+              return { err }
+            }
           }
-          const settled = settledToolResult(result, callId)
-          if ((settled as { isError?: boolean } | null)?.isError) {
-            audit('tool returned error')
-            sendJson(res, 422, { ok: false, error: resultText(settled) })
+
+          const first = await executeOnce(dshName, parsed.arguments ?? {}, callId)
+          const firstFailed = first.err !== undefined || Boolean((first.settled as { isError?: boolean } | null)?.isError)
+          if (firstFailed) {
+            const failSignal = first.settled ?? first.err
+            const failText = first.settled !== undefined
+              ? resultText(first.settled)
+              : (first.err instanceof Error ? first.err.message : String(first.err))
+            const deferArgs = isDeferredToolSignal(failSignal, failText) && !execSignal.aborted
+              ? resolveDeferActivationArgs({
+                  targetToolName: dshName,
+                  admittedSchemas: step ? step.schemas : svc.schemas(agent),
+                  allows,
+                })
+              : null
+
+            if (deferArgs !== null) {
+              audit('deferred: activating via ' + DEFER_EXECUTE_TOOL_NAME)
+              const activation = await executeOnce(DEFER_EXECUTE_TOOL_NAME, deferArgs, 'agy-mcp-' + randomUUID())
+              const actFailed = activation.err !== undefined || Boolean((activation.settled as { isError?: boolean } | null)?.isError)
+              if (actFailed || execSignal.aborted) {
+                const actErr = activation.settled !== undefined ? resultText(activation.settled) : String(activation.err ?? 'aborted')
+                audit('deferred-activate-failed: ' + actErr.slice(0, 160))
+                sendJson(res, 422, { ok: false, error: `${failText} (${DEFER_EXECUTE_TOOL_NAME}: ${actErr})` })
+                return
+              }
+              const retried = await executeOnce(dshName, parsed.arguments ?? {}, 'agy-mcp-' + randomUUID())
+              const retryFailed = retried.err !== undefined || Boolean((retried.settled as { isError?: boolean } | null)?.isError)
+              if (retryFailed) {
+                const retryErr = retried.settled !== undefined ? resultText(retried.settled) : String(retried.err)
+                audit('deferred-retry-failed: ' + retryErr.slice(0, 200))
+                sendJson(res, 422, { ok: false, error: retryErr })
+                return
+              }
+              audit('deferred-retried caller=' + (agent === undefined ? 'none' : 'agent'))
+              const rawContent = extractMcpContentBlocks(retried.settled)
+              const annotated = annotateDeferredRetry(resultText(retried.settled), rawContent, dshName)
+              sendJson(res, 200, {
+                ok: true,
+                text: annotated.text,
+                ...(annotated.content ? { content: annotated.content } : {}),
+              })
+              return
+            }
+
+            audit((first.settled !== undefined ? 'tool returned error' : 'failed: ' + failText).slice(0, 200))
+            sendJson(res, 422, { ok: false, error: failText })
             return
           }
+
           audit('ok caller=' + (agent === undefined ? 'none' : 'agent'))
-          const content = extractMcpContentBlocks(settled)
+          const content = extractMcpContentBlocks(first.settled)
           sendJson(res, 200, {
             ok: true,
-            text: resultText(settled),
+            text: resultText(first.settled),
             ...(content ? { content } : {}),
           })
         } catch (e) {

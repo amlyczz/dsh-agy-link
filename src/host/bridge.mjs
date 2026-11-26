@@ -40,10 +40,15 @@ function post(path, body) {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8')
+        if (raw.trim() === '') {
+          resolve({ status: res.statusCode, body: null, raw })
+          return
+        }
         try {
-          resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) })
-        } catch (e) {
-          reject(e)
+          resolve({ status: res.statusCode, body: JSON.parse(raw), raw })
+        } catch {
+          resolve({ status: res.statusCode, body: null, raw })
         }
       })
     });
@@ -53,10 +58,21 @@ function post(path, body) {
   })
 }
 
+function formatHttpError(res) {
+  if (res.body !== null && res.body !== undefined && typeof res.body === 'object') {
+    return JSON.stringify(res.body)
+  }
+  const text = typeof res.raw === 'string' && res.raw.trim() !== '' ? res.raw.trim() : '<empty response>'
+  return 'HTTP ' + String(res.status) + ': ' + text
+}
+
 async function listTools() {
   const res = await post('/tools', {})
-  if (res.status !== 200) throw new Error('bridge /tools failed: ' + JSON.stringify(res.body))
-  return (res.body.tools || []).map((t) => ({
+  if (res.status !== 200) throw new Error('bridge /tools failed: ' + formatHttpError(res))
+  if (!res.body || typeof res.body !== 'object' || !Array.isArray(res.body.tools)) {
+    throw new Error('bridge /tools returned invalid JSON payload: ' + formatHttpError(res))
+  }
+  return res.body.tools.map((t) => ({
     name: t.name,
     description: t.description || t.dshName,
     inputSchema: t.inputSchema || { type: 'object' },
@@ -91,8 +107,8 @@ async function handle(id, method, params) {
     }
     try {
       const res = await post('/call', { dshName: hit._dshName, arguments: args })
-      if (res.status !== 200 || res.body.ok !== true) {
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'ERROR: ' + JSON.stringify(res.body) }], isError: true } })
+      if (res.status !== 200 || !res.body || typeof res.body !== 'object' || res.body.ok !== true) {
+        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'ERROR: ' + formatHttpError(res) }], isError: true } })
         return;
       }
       const content = Array.isArray(res.body.content) && res.body.content.length > 0

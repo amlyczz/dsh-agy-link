@@ -334,6 +334,20 @@ export interface AttemptRecorder {
   conversationId: () => string | null
 }
 
+function resolveFallbackConversationId(
+  before: DirSnapshot,
+  conversationsDir: string,
+  log: ((msg: string) => void) | undefined,
+  logged: { done: boolean },
+): string | null {
+  const outcome = diffConversations(before, conversationsDir)
+  if (outcome.ambiguous && !logged.done) {
+    logged.done = true
+    log?.(`[discovery] multiple new conversation dbs detected; picked newest ${outcome.conversationId ?? 'none'}`)
+  }
+  return outcome.conversationId
+}
+
 /** Create the recording, parser, HOME snapshot and tool watchdog for one run. */
 export function createAttemptRecorder(
   deps: AttemptDeps,
@@ -377,6 +391,7 @@ export function createAttemptRecorder(
         noteActivity: () => watchdog.markEvent(),
       })
     : undefined
+  const loggedAmbiguousCid = { done: false }
   const state: AttemptRecorder = {
     rec,
     parser,
@@ -447,7 +462,7 @@ export function createAttemptRecorder(
     },
     quotaFailover: () => quotaCtrl?.failoverState() ?? null,
     cooledInLiveFamilies: () => quotaCtrl?.cooledFamilies() ?? new Set<ModelFamily>(),
-    conversationId: () => state.streamCid ?? diffConversations(before, conversationsDir).conversationId,
+    conversationId: () => state.streamCid ?? resolveFallbackConversationId(before, conversationsDir, deps.log, loggedAmbiguousCid),
   }
   return state
 }
