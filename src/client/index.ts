@@ -21,6 +21,7 @@ import { installCompactionCard } from './compaction.ts';
 import { ensureScrollListener, disposeScrollListener, setOverlaySuspended } from './scroll-guard.ts';
 import { installSettingsNavIcon } from './icons.ts';
 import { disposeStatusPolling, ensureStatusPolling } from './status.ts';
+import { h } from './react.ts';
 import { injectGlobalStyles } from './styles.ts';
 import { agyModalStore } from './ui/Modal.ts';
 import { createSettingsSection } from './sections/SettingsSection.ts';
@@ -153,7 +154,7 @@ export function apply(ctx: ClientContext): void {
 			(ownerProps?: unknown) => {
 				const view = (ownerProps as { view?: string } | undefined)?.view;
 				if (view === 'summary') return null;
-				return AgySettingsSection({ isModal: false });
+				return h(AgySettingsSection, { isModal: false });
 			},
 		);
 		return dispose;
@@ -167,7 +168,7 @@ export function apply(ctx: ClientContext): void {
 			(ownerProps?: unknown) => {
 				const view = (ownerProps as { view?: string } | undefined)?.view;
 				if (view === 'summary') return null;
-				return AgySettingsSection({ isModal: false });
+				return h(AgySettingsSection, { isModal: false });
 			},
 		);
 		return dispose;

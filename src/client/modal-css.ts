@@ -61,7 +61,7 @@ html.agy-modal-open body {
 	   it worse (big fixed layer + shadow re-composited per frame). A 640px panel
 	   needs neither hint; plain overflow: hidden already clips it. */
 }
-.agy-modal-body { scrollbar-gutter: stable; }
+.agy-modal-body { scrollbar-gutter: stable; overflow-anchor: none; }
 /* While a scroll gesture is in flight (scroll-guard toggles html.agy-scrolling),
    freeze every decorative effect inside the console PANEL - header spinner and
    status chips included, they share the layer the scroller moves in. Continuous animation
@@ -70,6 +70,12 @@ html.agy-modal-open body {
    the console flashes" symptom (2026-11-25). Paused effects resume when the
    gesture settles, so nothing looks permanently frozen. */
 html.agy-scrolling :is(.agy-modal-panel, .agy-modal-panel *) {
+	animation-play-state: paused !important;
+	transition: none !important;
+}
+/* Pause transitions/animations for embedded consoles (Settings / Plugins pages)
+   as well, since they mount outside .agy-modal-panel. */
+html.agy-scrolling :is(.agy-console, .agy-console *) {
 	animation-play-state: paused !important;
 	transition: none !important;
 }

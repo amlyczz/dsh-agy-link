@@ -270,7 +270,7 @@ body.dark,
 	border-radius: 50%;
 }
 .agy-card-hover {
-	transition: border-color 0.15s ease, opacity 0.15s ease;
+	transition: border-color 0.12s ease;
 }
 .agy-card-hover:hover {
 	border-color: var(--agy-border-card-primary, #3b82f6) !important;
@@ -326,8 +326,8 @@ body.dark,
 	transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes agy-shimmer {
-	0% { transform: translateX(-100%); }
-	100% { transform: translateX(100%); }
+	0% { background-position: 200% 0; }
+	100% { background-position: -200% 0; }
 }
 .agy-shimmer-track {
 	position: relative;
@@ -341,17 +341,18 @@ body.dark,
 	position: absolute;
 	top: 0; left: 0; right: 0; bottom: 0;
 	background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.22) 50%, transparent 100%);
-	transform: translateX(-100%);
-	/* No will-change: transform: it pins a compositing layer for a decorative
-	   loop even while it is idle, and inside the overlay that layer is another
-	   thing the compositor can drop mid-scroll. */
+	background-size: 200% 100%;
+	/* Paint-only background-position sweep avoids per-bar GPU transform layer
+	   promotion/teardown during quota refreshes and page scrolls; also no
+	   will-change: transform so no idle compositor layer is pinned. */
 	animation: agy-shimmer 1.8s infinite ease-in-out;
 	pointer-events: none;
 }
 .agy-console {
 	max-width: 100%;
 	box-sizing: border-box;
-	overflow-x: hidden;
+	overflow-x: clip;
+	overflow-anchor: none;
 }
 /* Settings row: label absorbs squeeze with ellipsis; right controls wrap before overflowing. */
 .agy-row { min-width: 0; }

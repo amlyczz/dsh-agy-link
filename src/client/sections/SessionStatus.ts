@@ -118,6 +118,85 @@ export function resolveBadgeReadout(input: {
   }
 }
 
+type StatusTranslator = ReturnType<typeof useAgyTranslation>;
+
+const closeConsoleModal = (): void => {
+	agyModalStore.setOpen(false);
+};
+
+function HeaderBadge({ hostId, sessionId, t }: { hostId: string; sessionId: string; t: StatusTranslator }): unknown {
+	const { status } = useAgyStatus();
+	const view = useSessionView(sessionId);
+	// Wall-clock tick: cooldown dots derive from Date.now() and the payload
+	// does not change when a cooldown lapses.
+	const [, setTimeTick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => setTimeTick((n) => n + 1), 30_000);
+		return () => clearInterval(timer);
+	}, []);
+
+	if (!isUiVisible(status, 'showHeaderBadge')) {
+		return null;
+	}
+
+	const pool = status?.pool;
+	// Live agy-internal subagents for THIS session (injected by the header slot).
+	const subSessions = (status as unknown as { subagents?: Array<{ session: string; total: number; running: number; items: Array<{ role: string; lastAction: string; running: boolean }> }> })?.subagents ?? [];
+	const mySubs = sessionId !== '' ? subSessions.find((s) => s.session === sessionId) : undefined;
+	const subItems = mySubs?.items ?? [];
+	const accounts = pool?.accounts ?? [];
+	const now = Date.now();
+	const readout = resolveBadgeReadout({ pool, accounts, view, sessionScoped: sessionId !== '', now });
+	const activeAcc = readout.account;
+	const activeAuthRequired = activeAcc ? isAccountCriticalAuth(activeAcc) : false;
+	const allInCooldown = accounts.length > 0 && accounts.every((a) =>
+		!a.enabled || isAccountCriticalAuth(a) || isAccountFullyCooling(a, now)
+	);
+	const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
+	const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : allInCooldown ? '#f59e0b' : activeAuthRequired ? '#ef4444' : readout.cooling ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
+
+	const displayAlias = accountDisplayAlias(t as unknown as AliasTranslator, activeAcc, activeAcc ? accounts.indexOf(activeAcc) : -1);
+	const activePct = readout.percent;
+	// A percentage is only printed when it comes from the family in use (or,
+	// with no session context, from an eligible google account).
+	const showPct = activePct !== null && (view !== null || readout.eligible);
+	const inUseLabel = readout.source === 'predicted' ? t('account.predictedInUse') : t('status.inUse');
+	const windowLabel = readout.window === 'weekly' ? t('quota.weekly') : readout.window === 'five-hour' ? t('quota.fiveHour') : '';
+	const detail = activeAcc !== undefined && readout.eligible
+		? ` · ${inUseLabel}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}${showPct ? ` · ${windowLabel} ${activePct}%` : ''}${readout.stale ? ` · ${t('header.quotaStale')}` : ''}${readout.model ? ` · ${t('header.model')}: ${readout.model}` : ''}`
+		: readout.family !== null && readout.accountId === null
+			? ` · ${t('header.familyNoAccount', { family: FAMILY_LABEL[readout.family] ?? readout.family })}`
+			: '';
+	const badgeTitle = status === null
+		? t('header.badgeLoading')
+		: `${t('header.badgeTitle', { count: accounts.length })}${detail}`;
+	const buttonLabel = status === null
+		? 'AGY'
+		: displayAlias ? `AGY · ${displayAlias}` : `AGY (${accounts.length})`;
+	const pctColor = activePct === null ? undefined : readout.stale ? 'var(--agy-text-secondary)' : activePct <= 20 ? '#ef4444' : activePct <= 50 ? '#f59e0b' : '#10b981';
+
+	const badge = h(Button,
+		{
+			variant: 'pill',
+			title: badgeTitle,
+			className: 'agy-btn agy-session-status-btn',
+			onClick: () => {
+				modalHostManager.claim(hostId);
+				agyModalStore.setOpen(true);
+			},
+		},
+		h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color, flexShrink: 0 } }),
+		h('span', { className: 'agy-session-status-label' }, buttonLabel),
+		showPct
+			? h('span', { className: 'agy-session-status-label', style: { color: pctColor, fontWeight: 700, fontSize: '10.5px' } }, `${activePct}%`)
+			: null,
+	);
+	return h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
+		badge,
+		h(SubagentControl, { t, items: subItems }),
+	);
+}
+
 export function createSessionStatus(locale: LocaleLike, SettingsSection: SettingsSectionComponent): () => unknown {
 	return function AgySessionStatus(props?: { sessionId?: string }): unknown {
 		const hostIdRef = useRef<string | null>(null);
@@ -145,76 +224,12 @@ export function createSessionStatus(locale: LocaleLike, SettingsSection: Setting
 		}, []);
 
 		const t = useAgyTranslation(locale);
-		const { status } = useAgyStatus();
 		const sessionId = props?.sessionId ?? '';
-		const view = useSessionView(sessionId);
-		// Wall-clock tick: cooldown dots derive from Date.now() and the payload
-		// does not change when a cooldown lapses.
-		const [, setTimeTick] = useState(0);
-		useEffect(() => {
-			const timer = setInterval(() => setTimeTick((n) => n + 1), 30_000);
-			return () => clearInterval(timer);
-		}, []);
-
-		const pool = status?.pool;
-		// Live agy-internal subagents for THIS session (injected by the header slot).
-		const subSessions = (status as unknown as { subagents?: Array<{ session: string; total: number; running: number; items: Array<{ role: string; lastAction: string; running: boolean }> }> })?.subagents ?? [];
-		const mySubs = sessionId !== '' ? subSessions.find((s) => s.session === sessionId) : undefined;
-		const subItems = mySubs?.items ?? [];
-		const accounts = pool?.accounts ?? [];
-		const now = Date.now();
-		const readout = resolveBadgeReadout({ pool, accounts, view, sessionScoped: sessionId !== '', now });
-		const activeAcc = readout.account;
-		const activeAuthRequired = activeAcc ? isAccountCriticalAuth(activeAcc) : false;
-		const allInCooldown = accounts.length > 0 && accounts.every((a) =>
-			!a.enabled || isAccountCriticalAuth(a) || isAccountFullyCooling(a, now)
-		);
-		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
-		const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : allInCooldown ? '#f59e0b' : activeAuthRequired ? '#ef4444' : readout.cooling ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
-
-		const displayAlias = accountDisplayAlias(t as unknown as AliasTranslator, activeAcc, activeAcc ? accounts.indexOf(activeAcc) : -1);
-		const activePct = readout.percent;
-		// A percentage is only printed when it comes from the family in use (or,
-		// with no session context, from an eligible google account).
-		const showPct = activePct !== null && (view !== null || readout.eligible);
-		const inUseLabel = readout.source === 'predicted' ? t('account.predictedInUse') : t('status.inUse');
-		const windowLabel = readout.window === 'weekly' ? t('quota.weekly') : readout.window === 'five-hour' ? t('quota.fiveHour') : '';
-		const detail = activeAcc !== undefined && readout.eligible
-			? ` · ${inUseLabel}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}${showPct ? ` · ${windowLabel} ${activePct}%` : ''}${readout.stale ? ` · ${t('header.quotaStale')}` : ''}${readout.model ? ` · ${t('header.model')}: ${readout.model}` : ''}`
-			: readout.family !== null && readout.accountId === null
-				? ` · ${t('header.familyNoAccount', { family: FAMILY_LABEL[readout.family] ?? readout.family })}`
-				: '';
-		const badgeTitle = status === null
-			? t('header.badgeLoading')
-			: `${t('header.badgeTitle', { count: accounts.length })}${detail}`;
-		const buttonLabel = status === null
-			? 'AGY'
-			: displayAlias ? `AGY · ${displayAlias}` : `AGY (${accounts.length})`;
-		const pctColor = activePct === null ? undefined : readout.stale ? 'var(--agy-text-secondary)' : activePct <= 20 ? '#ef4444' : activePct <= 50 ? '#f59e0b' : '#10b981';
-
-		const badge = h(Button,
-			{
-				variant: 'pill',
-				title: badgeTitle,
-				className: 'agy-btn agy-session-status-btn',
-				onClick: () => {
-					modalHostManager.claim(hostId);
-					agyModalStore.setOpen(true);
-				},
-			},
-			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color, flexShrink: 0 } }),
-			h('span', { className: 'agy-session-status-label' }, buttonLabel),
-			showPct
-				? h('span', { className: 'agy-session-status-label', style: { color: pctColor, fontWeight: 700, fontSize: '10.5px' } }, `${activePct}%`)
-				: null,
-		);
+		// Keep ConsoleDialog outside HeaderBadge's 1.5s session-view and 30s clock
+		// subscriptions so polling the header never re-renders the open console.
 		const modalPortal = isPrimaryHost && isModalOpen ? portalToBody(h(ConsoleDialog, { t, SettingsSection })) : null;
-		if (!isUiVisible(status, 'showHeaderBadge')) {
-			return modalPortal;
-		}
 		return h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
-			badge,
-			h(SubagentControl, { t, items: subItems }),
+			h(HeaderBadge, { hostId, sessionId, t }),
 			modalPortal,
 		);
 	};
@@ -228,7 +243,7 @@ function ConsoleDialog({ t, SettingsSection }: { t: (key: any, params?: Record<s
 		),
 		closeLabel: t('console.close'),
 		ariaLabelledby: 'agy-console-title',
-		onClose: () => agyModalStore.setOpen(false),
-		children: h(SettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
+		onClose: closeConsoleModal,
+		children: h(SettingsSection, { isModal: true, onClose: closeConsoleModal }),
 	});
 }

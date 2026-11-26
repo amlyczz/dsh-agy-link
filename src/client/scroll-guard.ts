@@ -50,8 +50,10 @@ function syncScrollClass(active: boolean): void {
 }
 
 function onScrollActivity(): void {
-	isScrolling = true;
-	syncScrollClass(true);
+	if (!isScrolling) {
+		isScrolling = true;
+		syncScrollClass(true);
+	}
 	if (scrollTimer !== null) clearTimeout(scrollTimer);
 	scrollTimer = setTimeout(() => {
 		isScrolling = false;
@@ -164,12 +166,14 @@ export function ensureScrollListener(): void {
 	listenerAttached = true;
 	window.addEventListener('scroll', onScrollActivity, { passive: true, capture: true });
 	window.addEventListener('wheel', onScrollActivity, { passive: true, capture: true });
+	window.addEventListener('touchmove', onScrollActivity, { passive: true, capture: true });
 }
 
 export function disposeScrollListener(): void {
 	if (typeof window === 'undefined' || typeof window.removeEventListener !== 'function' || !listenerAttached) return;
 	window.removeEventListener('scroll', onScrollActivity, true);
 	window.removeEventListener('wheel', onScrollActivity, true);
+	window.removeEventListener('touchmove', onScrollActivity, true);
 	listenerAttached = false;
 	if (scrollTimer !== null) {
 		clearTimeout(scrollTimer);

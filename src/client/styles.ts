@@ -96,7 +96,7 @@ export const S: Record<string, Record<string, unknown>> = {
 		marginBottom: '8px',
 		color: 'var(--agy-text-primary)',
 		boxShadow: 'var(--agy-shadow-card)',
-		transition: 'border-color 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease',
+		transition: 'border-color 0.12s ease',
 	},
 	cardPrimary: {
 		background: 'var(--agy-bg-card)',
@@ -106,7 +106,7 @@ export const S: Record<string, Record<string, unknown>> = {
 		marginBottom: '8px',
 		color: 'var(--agy-text-primary)',
 		boxShadow: 'var(--agy-shadow-card)',
-		transition: 'border-color 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease',
+		transition: 'border-color 0.12s ease',
 	},
 	quotaBox: {
 		background: 'var(--agy-bg-box)',
