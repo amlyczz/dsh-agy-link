@@ -404,6 +404,7 @@ test('QuotaService exposes the account ids currently refreshing', async () => {
         return { email: 'spinner@example.com' }
       }
       protected override async fetchSummaryEndpoint(): Promise<Response> {
+        await gate
         return new Response(JSON.stringify({ groups: [] }), { status: 200 })
       }
       protected override async fetchUserQuotaEndpoint(): Promise<Response> {
@@ -414,12 +415,30 @@ test('QuotaService exposes the account ids currently refreshing', async () => {
       }
     }
     const qs = new GatedQuota()
-    const running = qs.refreshAccountQuota(pool.getAccount(id)!, true)
+    const bgRunning = qs.refreshAccountQuota(pool.getAccount(id)!, false)
     await sleep(10)
-    assert.deepEqual(qs.refreshingAccounts(), [id], 'the console can show which row is being refreshed')
+    assert.deepEqual(qs.refreshingAccounts(), [], 'unattended background refresh (force=false) must not lock the console as refreshing')
     release!()
+    await bgRunning
+
+    let releaseManual: () => void
+    const manualGate = new Promise<void>((r) => { releaseManual = r })
+    class ManualGatedQuota extends GatedQuota {
+      override async fetchUserInfo(): Promise<{ email?: string } | null> {
+        return { email: 'spinner@example.com' }
+      }
+      protected override async fetchSummaryEndpoint(): Promise<Response> {
+        await manualGate
+        return new Response(JSON.stringify({ groups: [] }), { status: 200 })
+      }
+    }
+    const qsManual = new ManualGatedQuota()
+    const running = qsManual.refreshAccountQuota(pool.getAccount(id)!, true)
+    await sleep(10)
+    assert.deepEqual(qsManual.refreshingAccounts(), [id], 'the console can show which row is being refreshed')
+    releaseManual!()
     await running
-    assert.deepEqual(qs.refreshingAccounts(), [], 'and clears it when the refresh settles')
+    assert.deepEqual(qsManual.refreshingAccounts(), [], 'and clears it when the refresh settles')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -101,8 +101,9 @@ export function pickEligibleAccount(
         isModelQuotaClear(acc, input.family, input.quotaModel, input.now)),
   )
   if (candidates.length === 0) return null
+  const active = candidates.find((acc) => acc.id === input.activeId)
   return (
-    candidates.find((acc) => acc.id === input.activeId) ??
+    (active && isInNarrowestTier(active, candidates, input.family) ? active : undefined) ??
     orderByExpiry(accounts, candidates, input.family, input.activeId, input.now)[0] ??
     null
   )
@@ -142,6 +143,52 @@ function effectiveFamilyQuota(acc: ManagedAccount, family: ModelFamily): FamilyQ
     return acc.quotas?.google
   }
   return acc.quotas?.[family]
+}
+
+/**
+ * Capability set an account reports for one family: base slugs of the models
+ * in its quota breakdown. Undefined when the account has not reported any.
+ */
+function familyCapabilities(acc: ManagedAccount, family: ModelFamily): Set<string> | undefined {
+  const models = effectiveFamilyQuota(acc, family)?.models
+  if (!Array.isArray(models) || models.length === 0) return undefined
+  return new Set(models.map((m) => baseModelSlug(m.modelId)))
+}
+
+/**
+ * "Exclusive capability" of each candidate: how many models it can serve that
+ * NOT every candidate can. All candidates already serve the requested model,
+ * so this counts what an account would be uniquely needed for later.
+ *
+ * A request should go to the account the other models need least: when a
+ * cheaper model shares a quota bucket with a scarcer one (e.g. Hydrogen and
+ * Neon on the same account), spending a Hydrogen-only account first keeps the
+ * dual-capable account's bucket for Neon. Models every candidate supports
+ * cancel out, so catalog noise common to all accounts never matters. Accounts
+ * with no reported model list score 0 (no evidence of extra capability).
+ */
+export function exclusiveCapabilityScores(
+  candidates: readonly ManagedAccount[],
+  family: ModelFamily,
+): Map<string, number> {
+  const caps = candidates.map((acc) => [acc.id, familyCapabilities(acc, family)] as const)
+  const known = caps.flatMap(([, c]) => (c ? [c] : []))
+  const shared = known.length === 0 ? new Set<string>() : new Set([...known[0]!].filter((m) => known.every((c) => c.has(m))))
+  return new Map(caps.map(([id, c]) => [id, c ? [...c].filter((m) => !shared.has(m)).length : 0]))
+}
+
+/**
+ * True when `acc` is among the candidates with the fewest exclusive
+ * capabilities. A sticky account outside that tier should yield, so a
+ * narrower account that comes back from cooldown is picked up again.
+ */
+export function isInNarrowestTier(
+  acc: ManagedAccount,
+  candidates: readonly ManagedAccount[],
+  family: ModelFamily,
+): boolean {
+  const scores = exclusiveCapabilityScores(candidates, family)
+  return (scores.get(acc.id) ?? 0) <= Math.min(...scores.values())
 }
 
 /** Reset timestamps within 5m belong to the same reset cohort (avoids 1-60s clock jitter). */
@@ -189,6 +236,7 @@ function candidateSurplusScore(q: FamilyQuotaInfo | undefined, now: number): num
 
 /**
  * "Use it or lose it" rotation order with cohort burn-rate surplus tie-breaking.
+ * Priority 0: Fewest exclusive capabilities (see exclusiveCapabilityScores).
  * Priority 1: Weekly quota expiring soonest (>5m difference).
  * Priority 2: 5-hour quota expiring soonest (>5m difference).
  * Priority 3: Within the same reset cohort, fewest consecutive failures, then
@@ -202,6 +250,7 @@ export function orderByExpiry(
   fromId: string | undefined,
   now: number,
 ): ManagedAccount[] {
+  const exclusive = exclusiveCapabilityScores(candidates, family)
   return candidates
     .map((acc, index) => {
       const q = effectiveFamilyQuota(acc, family)
@@ -218,9 +267,13 @@ export function orderByExpiry(
         fiveHourKnown: Number.isFinite(fiveHourRemaining),
         failures: effectiveFamilyCooldown(acc, family)?.consecutiveFailures ?? 0,
         surplus: candidateSurplusScore(q, now),
+        exclusive: exclusive.get(acc.id) ?? 0,
       }
     })
     .sort((a, b) => {
+      // Priority 0: Keep scarce capabilities in reserve
+      if (a.exclusive !== b.exclusive) return a.exclusive - b.exclusive
+
       // Priority 1: Weekly quota reset time (outside cohort jitter tolerance)
       if (a.weeklyKnown && b.weeklyKnown) {
         if (Math.abs(a.weeklyRemaining - b.weeklyRemaining) > RESET_COHORT_TOLERANCE_MS) {
@@ -269,13 +322,9 @@ export function resolveEligibleActiveAccountId(
   model?: string,
 ): string | undefined {
   const pinnedId = activeAccountIds?.[family]
-  if (pinnedId) {
-    const pinned = accounts.find((a) => a.id === pinnedId)
-    if (pinned && isAccountEligible(pinned, family, now, pool, model)) {
-      return pinned.id
-    }
-  }
   const candidates = accounts.filter((acc) => isAccountEligible(acc, family, now, pool, model))
   if (candidates.length === 0) return undefined
+  const pinned = candidates.find((a) => a.id === pinnedId)
+  if (pinned && isInNarrowestTier(pinned, candidates, family)) return pinned.id
   return orderByExpiry(accounts, candidates, family, pinnedId, now)[0]?.id
 }

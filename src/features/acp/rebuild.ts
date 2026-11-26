@@ -1,3 +1,4 @@
+import { lastHistoryIndex } from '../../provider/history-boundary.ts'
 // Rebuilding a session agy can no longer find.
 //
 // A stale session id must never be silently replaced by an empty one: the new
@@ -39,7 +40,8 @@ export async function rebuildAcpSession(opts: {
       '原常驻会话已重置（agy 侧已找不到该会话），已自动携历史上下文重建新会话。' +
       '\nThe persistent ACP session was reset; a new one was created with the conversation history carried over.',
   })
-  const digest = buildDigest(input.messages, 0, cfg.contextTransferMaxChars, {
+  const history = input.messages.slice(0, lastHistoryIndex(input.messages) + 1)
+  const digest = buildDigest(history, 0, cfg.contextTransferMaxChars, {
     maxBytes: cfg.contextTransferFileMaxBytes,
     maxLineBytes: 40_000,
     includeTaskLine: false,

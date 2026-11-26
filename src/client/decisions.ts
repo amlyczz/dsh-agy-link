@@ -189,7 +189,9 @@ export function scanAndEnhanceDecisions(): void {
   if (typeof document === 'undefined') return;
   if (isInteractionLocked()) return;
 
-  const markdownContainers = document.querySelectorAll<HTMLElement>('div[class*="_markdown_"], [data-markdown-variant]');
+  const markdownContainers = document.querySelectorAll<HTMLElement>(
+    'div[class*="_markdown_"]:not([data-agy-decisions-scanned="true"]), [data-markdown-variant]:not([data-agy-decisions-scanned="true"])',
+  );
   for (let i = 0; i < markdownContainers.length; i++) {
     const container = markdownContainers[i];
     if (!container || container.dataset.agyDecisionsScanned === 'true') continue;

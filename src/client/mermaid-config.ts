@@ -128,6 +128,10 @@ const KNOWN_NON_MERMAID = new Set([
 	'xml', 'graphql', 'toml', 'ini', 'dockerfile', 'makefile',
 ])
 
+export function isKnownNonMermaidLang(lang: string): boolean {
+	return KNOWN_NON_MERMAID.has(lang)
+}
+
 export function isMermaidBlock(lang: string, source: string): boolean {
 	if (isMermaidLang(lang)) return true
 	if (KNOWN_NON_MERMAID.has(lang)) return false

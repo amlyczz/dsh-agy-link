@@ -53,8 +53,9 @@ function safeDecodeUri(s: string): string | null {
 export function isCrossOriginBlocked(req: HttpRequestLike): boolean {
   const rawOrigin = req.headers?.origin;
   const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  if (!origin || origin === 'null') return false;
-  if (/^(?:file|app|vscode-webview):\/\//i.test(origin)) return false;
+  if (!origin) return false;
+  if (origin === 'null') return true;
+  if (/^(?:dsh-app|app|vscode-webview):\/\//i.test(origin)) return false;
   try {
     const u = new URL(origin);
     return u.hostname !== 'localhost' && u.hostname !== '127.0.0.1' && u.hostname !== '[::1]';
@@ -450,6 +451,13 @@ export function executeOpenInSystem(
  * Handle POST /plugins/agy-link/open?path=...&reveal=1
  * Strictly POST-only and loopback-origin gated to prevent markdown-image RCE.
  */
+const DANGEROUS_OPEN_EXTS = new Set([
+  '.exe', '.bat', '.cmd', '.com', '.msi', '.msix', '.ps1', '.psm1', '.psd1',
+  '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.scr', '.pif', '.hta',
+  '.cpl', '.lnk', '.url', '.reg', '.sh', '.bash', '.zsh', '.command', '.app',
+  '.action', '.workflow', '.apk', '.jar', '.dll', '.sys', '.drv',
+]);
+
 export function handleOpenFile(
   req: HttpRequestLike,
   res: HttpResponseLike,
@@ -494,6 +502,12 @@ export function handleOpenFile(
   if (!isConfinementAllowed(filePath, opts.workspaceRoots)) {
     res.writeHead(403, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'access denied: path outside allowed workspace roots' }));
+    return;
+  }
+
+  if (!reveal && DANGEROUS_OPEN_EXTS.has(extname(filePath).toLowerCase())) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'access denied: executable file type requires reveal=1' }));
     return;
   }
 

@@ -187,8 +187,10 @@ function makeTestEl(tagName: string, className = ''): TestEl {
         if (sel === 'a[href*="#agy-compaction"]:not([data-agy-compaction-rendered="true"])') {
           return item.tagName === 'A' && (item.getAttribute('href') || '').includes('#agy-compaction') && item.getAttribute('data-agy-compaction-rendered') !== 'true'
         }
-        if (sel === 'p:not([data-agy-compaction-rendered="true"])') {
-          return item.tagName === 'P' && item.getAttribute('data-agy-compaction-rendered') !== 'true'
+        if (sel.startsWith('p:not(')) {
+          return item.tagName === 'P' &&
+            item.getAttribute('data-agy-compaction-rendered') !== 'true' &&
+            item.getAttribute('data-agy-compaction-scanned') !== 'true'
         }
         return false
       }

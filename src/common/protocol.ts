@@ -24,6 +24,13 @@ export interface AgyAccountInfo {
   home: string
 }
 
+export interface BridgeLease {
+  serverName: string
+  bind(owner: string): string
+  resume(): void
+  close(): void
+}
+
 export type AgyGenerateOptions = Omit<GenerateOptions, 'purpose'> & {
   purpose?: AgyPurpose
   agyTranslateSession?: AgyTranslateSession

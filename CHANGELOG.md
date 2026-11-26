@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.6.95 (2026-11-26)
+
+### English
+
+- **Feat(pool): prefer the account with the fewest exclusive capabilities (merges PR #211).** Some accounts can only run `gemini-4-hydrogen` while others can run both `4h` and `gemini-4-neon`, and the two share one quota bucket. Rotation looked only at reset time, so a `4h` request could burn a dual-capability account and leave `4n` with nothing.
+  - One rule: **give the request to the account that other models need least.** `exclusiveCapabilityScores` counts, per candidate, the models it supports that not every candidate supports (from `quotas[family].models`, base slugs with the effort suffix stripped). Models every candidate shares cancel out; accounts that report no model list score 0.
+  - `orderByExpiry` gains a Priority 0 layer (fewest exclusive capabilities first); **within the same layer the order is unchanged**.
+  - Stickiness: the current account keeps the turn only while it is in the narrowest layer, otherwise a narrower account takes over — at selection time only, never interrupting an in-flight request.
+  - No configuration, no labels, no hard-coded model names; applies to other capability groups (Argon, …) too.
+
+### 中文
+
+- **特性(账号池)：优先使用"独占能力最少"的账号（合并 PR #211）。** 部分账号只能跑 `gemini-4-hydrogen`，另一部分 `4h` 与 `gemini-4-neon` 都能跑，而两者共用一个额度。原轮换只看重置时间，于是 `4h` 请求可能先烧掉双能力账号，之后 `4n` 无号可用。
+  - 一条规则：**把请求交给别的模型最不需要的账号。** `exclusiveCapabilityScores` 统计每个候选账号"支持、但并非所有候选都支持"的模型数（来自 `quotas[family].models`，按 base slug 去 effort 后缀）。所有候选共有的模型相互抵消；未上报模型列表的账号记 0。
+  - `orderByExpiry` 在原有排序前增加 Priority 0 层（独有能力少的优先）；**同层内顺序与原来完全一致**。
+  - 粘性：当前账号只在"最窄层"内时保持，否则让位给更窄的账号——仅发生在选号时，不中断进行中的请求。
+  - 无配置、无标签、不硬编码模型名；对 Argon 等其他能力组合同样适用。
+
+## 0.6.94 (2026-11-26)
+
+### English
+
+- **Fix(client): eliminate O(N) DOM MutationObserver rescanning & `/status` bloat.**
+  - `src/client/compaction.ts`, `mermaid-render.ts`, `decisions.ts`, and `images/scanner.ts` now stamp non-matching `<p>` elements, known non-mermaid `.md-code-block` nodes (before reading `textContent`), already-scanned markdown containers, and settled image-alt containers so large session histories no longer trigger full-DOM re-scans on every mutation.
+  - Omit `availableCommands` from HTTP `/status` (`acpStatus`) to stop serializing 20 KB+ of skill descriptions on every 3s console poll.
+- **Fix(quota): stop background pool sweeps from locking the manual refresh UI and skip workspace MCP startup in `/usage`.**
+  - `QuotaService.refreshAccountQuota` now only populates `refreshingAccounts()` for manual (`force === true`) refreshes so unattended serial startup/background sweeps no longer lock the console button as `刷新中` / `同步中`.
+  - `readAgyUsage` spawns `agy -p /usage` with `cwd: tmpdir()` so project-local config never triggers unnecessary startup overhead.
+- **Fix(btw): grant read-only tool permissions for `/atw` side questions.** `BtwService` now passes `mode: 'default'` with `disableSlashCommands: true` and an explicit read-only `--settings` permission profile (`BTW_READ_ONLY_PERMISSIONS`, denying mutating tools), resolving `warning: --mode plan has no effect while slash command expansion is disabled` and `read_file` auto-denial in headless `agy 1.5.x`.
+- **Fix(mcp): keep reverse MCP call IDs unique across bridge restarts (PR #209 by @ZhangjiaxinGZS).** Replaced incrementing `callSeq` with `randomUUID()` (`'agy-mcp-' + randomUUID()`) in `src/host/mcp-bridge.ts`.
+- **Fix(usage): emit bucket-consistent zero-delta usage on concurrent tool cuts (Issue #210).** `RunRecording` remembers `lastEmittedUsageBuckets` (`cacheRead` / `cacheWrite`) and exposes `zeroDeltaUsageForCut()`, wired through `EventMapper` into `buildToolCallBlock` so parallel tool cuts `2..N` emit zero-delta `{ type: 'usage' }` chunks matching prior cache bucket presence while preserving strict 1x token totals and leaving `emitFailure()` sample-free when no measurement exists.
+- **Fix(security,credentials,acp,rotation): address verified Issue #207 P0 & P1 bugs.**
+  - **Cross-process slot lock (`src/domain/credentials/lock.ts`)**: stop falling through on live non-stale locks and acquire with exclusive `flag: 'wx'` instead of `renameSync` overwrite.
+  - **HTTP CSRF & `/open` hardening (`src/host/media-route.ts`, `src/transport/http/router.ts`, `src/transport/http/routes/media.ts`)**: block `Origin: null` and `file://` in `isCrossOriginBlocked` while allowing `dsh-app://`; gate all state-mutating POST routes (except `/open` & `/lease*` which enforce their own envelopes); block executable extensions (`DANGEROUS_OPEN_EXTS`) on `handleOpenFile` unless `reveal=1`; exclude `Downloads` and `tmpdir()` from default `/open` workspace roots.
+  - **ACP cancel & Stop+Retry race**: `acpPromptResultToAgyEvent` treats `cancelled`/`canceled` `stopReason` as `ok = false`; `runAcpPrompt` skips `shouldSelfHealAcpResult` and settles aborted when cancelled instead of `failure: null` overwriting `binding.interrupted`; `RunRecording` tracks `isAbortRequested` so rapid Stop + Retry waits cleanly for the dying run instead of colliding or throwing `Err.BUSY`.
+  - **Pool/Account/Cleanup**: fire `onAccountUsed` on settled non-aux ACP turns; clear removed Orchestrator seats on disk in `prepareOrchestratorSettingsForAcp` / `syncOrchestratorSettingsFileAt`; enforce `quotaModel`/`avoidAccountIds`/`quotaClear` on `win32 + parallelSameAccount`; detect `parseModelNotRecognized` on `Err.PROCESS_EXIT`/`Err.AGY_ERROR` without double-marking in `retry-policy.ts`; dispose `quotaRefresher` on plugin teardown.
+
+### 中文
+
+- **修复(client)：消除 DOM MutationObserver 全量 O(N) 重复扫描与 `/status` 冗余序列化。**
+  - `compaction.ts`、`mermaid-render.ts`、`decisions.ts` 与 `images/scanner.ts` 分别为未命中 `<p>`、已知非 mermaid 代码块（读取 `textContent` 前）、已扫描 Markdown 容器与已稳定图片容器打标跳过，大幅降低长会话历史切换与加载时的渲染进程阻塞。
+  - 从 HTTP `/status`（`acpStatus`）移除约 20 KB 的技能描述列表 `availableCommands`，减轻每 3 秒轮询体积。
+- **修复(quota)：后台串联刷新不再锁死控制台刷新按钮，`/usage` 改在临时目录启动。**
+  - `QuotaService.refreshAccountQuota` 仅在手动刷新（`force === true`）时写入 `refreshingAccounts()`，避免启动 5 秒后的后台串口巡检把按钮与卡片长时间锁在 `刷新中` / `同步中`。
+  - `readAgyUsage` 在 `tmpdir()` 下运行 `agy -p /usage`。
+- **修复(btw)：修复 `/atw` 旁路提问因 `--mode plan` 与 `--disable-slash-commands` 冲突导致的只读权限被拒。** 改为 `mode: 'default'` + `disableSlashCommands: true` + 显式只读 `--settings` 权限配置（`BTW_READ_ONLY_PERMISSIONS`，拒绝写操作与命令执行）。
+- **修复(mcp)：保证桥接重启后反向 MCP `callId` 全局唯一（合并 PR #209，作者 @ZhangjiaxinGZS）。** 使用 `randomUUID()` 替代重启清零的 `callSeq` 计数器。
+- **修复(usage)：并发工具切分（cuts 2..N）补发桶结构一致的零增量 usage chunk（Issue #210）。** `RunRecording` 记录已发射的 `cacheRead`/`cacheWrite` 桶键并提供 `zeroDeltaUsageForCut()`，在不改变 1x 总量统计的前提下确保 DSH 回合 token 页脚与缓存桶校验完整，失败无采样场景保持不发射。
+- **修复(security,credentials,acp,rotation)：修复 Issue #207 已核实的 P0 与 P1 问题。**
+  - **跨进程凭据槽位锁**：修复未过期活锁误穿透覆盖问题，并用原子 `{ flag: 'wx' }` 替代 `renameSync` 抢占覆盖。
+  - **HTTP CSRF 与 `/open` 加固**：`isCrossOriginBlocked` 拒绝 `Origin: null` 与 `file://`、放行 `dsh-app://`；对所有写操作路由统一启用 Origin 校验；无 `reveal=1` 时拒绝直接打开可执行文件；`/open` 默认根目录移除 `Downloads` 与 `tmpdir()`。
+  - **ACP 取消自愈与 Stop+Retry 竞态**：ACP `cancelled` 不再触发自愈提示词或误以 `failure: null` 覆盖 `binding.interrupted`；`RunRecording` 记录 `isAbortRequested`，快速点击 Stop+Retry 时优雅等待旧进程收尾而不是碰撞或误报 `Err.BUSY`。
+  - **账号池与资源清理**：非 aux ACP 成功回合补发 `onAccountUsed`；Orchestrator 清空席位时清理 `settings.json` 中已移除角色键；Windows `parallelSameAccount` 分支严格尊重 `quotaModel`/`quotaClear`；`Err.PROCESS_EXIT`/`Err.AGY_ERROR` 识别未支持模型后不再被 `retry-policy.ts` 二次误标下一账号；插件卸载时调用 `quotaRefresher.dispose()`。
+
+## 0.6.93 (2026-11-25)
+
+### English
+
+- **Fix(mcp): bind reverse-MCP discovery and execution to the model step that started the call (merges PR #208).** Two failures showed up when team sessions ran concurrently:
+  - the host projects its model-facing catalog into `GenerateOptions.tools`; rebuilding that catalog from the global registry could hide PTC's `run_code` or advertise tools the model could not execute, so dispatch without the step's `toolSet` answered "unknown tool" for an admitted team tool;
+  - associating an ACP process with its most recent session made overlapping calls ambiguous — the same class of problem as #200's `DSH_MCP_SESSION` staleness.
+  The bridge now uses the **projected schemas** for discovery and the **originating agent, admitted tool set and cancellation signal** for execution. The process-level association (`acp/mcp-session.ts`) is deleted rather than repaired, which removes the ambiguity instead of narrowing it.
+  - Also covered: pending teammate reports leaking into the history digest and the live request, a warm session retaining outdated system instructions, and a previous turn's screenshot being staged again.
+
+### 中文
+
+- **修复(mcp)：把反向 MCP 的发现与执行绑定到**发起调用的那个 model step**（合并 PR #208）。** 团队会话并发时暴露了两类失败：
+  - 宿主会把面向模型的目录投影进 `GenerateOptions.tools`；若改从全局注册表重建，可能藏掉 PTC 的 `run_code`，或列出模型无法执行的工具——于是在没有该 step 的 `toolSet` 时派发，会对本已准入的团队工具回"unknown tool"；
+  - 把 ACP 进程与"最近一次会话"关联，会让重叠调用变得歧义——这与 #200 的 `DSH_MCP_SESSION` 陈旧是同一类问题。
+  现在桥接用**投影后的 schema** 做发现，用**发起方 agent、准入工具集与取消信号**做执行。进程级关联（`acp/mcp-session.ts`）被**删除**而不是修补，从根上消除歧义，而不是收窄它。
+  - 一并覆盖：待处理的同侪报告泄漏进历史摘要与实时请求、热会话保留过期的系统指令、上一轮的截图被再次 staging。
+
+## Unreleased
+
+- Bind reverse MCP discovery and execution to the active DSH model step and session, including PTC. Refresh opted-in system instructions on warm turns and keep pending messages and current images separate from recovery history.
+- 反向 MCP 桥按会话和当前步骤列出并执行工具，支持 PTC。启用系统提示词转发后，热会话也能收到更新；恢复历史时保留本轮待处理消息与图片的边界。
+
 ## 0.6.92 (2026-11-25)
 
 ### English

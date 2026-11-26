@@ -26,6 +26,8 @@ export interface ToolCallBlockInput {
   toolCallStates: Map<string, ToolCallState>
   /** Unconsumed per-call usage sample for this cut, or null/undefined to omit usage (#161). */
   finalUsage: () => RawUsage | null | undefined
+  /** Zero-delta bucket-preserving usage for concurrent cuts 2..N (#210). */
+  zeroDeltaUsage?: () => RawUsage | null | undefined
 }
 
 export interface ToolCallBlockResult {
@@ -80,7 +82,7 @@ export function buildToolCallBlock(input: ToolCallBlockInput): ToolCallBlockResu
   // explicit 0/0 resets the meter and drags token speed down (issue #158).
   // Concurrent tool cuts 2..N of the same turn therefore forward no sample at
   // all, so DSH neither double-bills totals nor flashes context pressure (#161).
-  const trackedCut = input.finalUsage()
+  const trackedCut = input.finalUsage() ?? input.zeroDeltaUsage?.()
   const chunks: StreamChunk[] = [
     { type: 'block-start', index: idx, blockType: 'tool-call' },
     {

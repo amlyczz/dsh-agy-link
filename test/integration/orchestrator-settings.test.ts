@@ -639,3 +639,40 @@ test('client orchestratorRoleModels, orchestratorEffortOptions, and Orchestrator
     assert.ok(html.includes('gemini-4-neon'))
   }
 })
+
+test('issue #207: prepareOrchestratorSettingsForAcp clears removed seats on disk while keeping unrelated settings', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-orch-clear-'))
+  const prevHome = process.env.HOME
+  process.env.HOME = dir
+  try {
+    const file = agySettingsFilePath(dir)
+    syncOrchestratorSettingsFileAt(file, { planner: 'gemini-4-neon-high', executor: 'gemini-4-hydrogen-high' })
+    const doc = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    doc.theme = 'light'
+    ;(doc.orchestrator as Record<string, unknown>).customFlag = true
+    writeFileSync(file, JSON.stringify(doc, null, 2), 'utf8')
+
+    // Clear only executor seat
+    const cfgOne: PluginConfig = { ...defaultConfig(), orchestratorPlannerModel: 'gemini-4-neon', orchestratorPlannerEffort: 'high' }
+    const one = prepareOrchestratorSettingsForAcp({ cfg: cfgOne, activeModel: 'gemini-pro-orchestrator-neon', account: undefined })
+    assert.equal(one.ok, true)
+    assert.equal(one.ok ? one.settingsTag : undefined, JSON.stringify({ planner: 'gemini-4-neon-high' }))
+    const afterOne = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    assert.equal(afterOne.theme, 'light')
+    assert.deepEqual(afterOne.orchestrator, { planner: 'gemini-4-neon-high', customFlag: true })
+
+    // Clear remaining planner seat -> customFlag stays, planner removed; if no custom keys left, orchestrator key deleted
+    delete (afterOne.orchestrator as Record<string, unknown>).customFlag
+    writeFileSync(file, JSON.stringify(afterOne, null, 2), 'utf8')
+    const cfgNone = defaultConfig()
+    const none = prepareOrchestratorSettingsForAcp({ cfg: cfgNone, activeModel: 'gemini-pro-orchestrator-neon', account: undefined })
+    assert.equal(none.ok, true)
+    assert.equal(none.ok ? none.settingsTag : 'err', undefined)
+    const afterNone = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    assert.deepEqual(afterNone, { theme: 'light' })
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

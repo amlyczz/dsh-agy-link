@@ -1,3 +1,4 @@
+import { lastHistoryIndex } from './history-boundary.ts'
 // Prompt assembly (ADR-7): turn DSH messages into the single agy prompt for
 // this hop (trailing user/tool selection, binding lookup/invalidation, history
 // digest delivery, image staging, and final prompt branches).
@@ -19,6 +20,7 @@ import { extractLeadingAgySlash, formatWithLeadingAgySlash } from './leading-sla
 import type { PurposePolicy } from './purpose-policy.ts'
 import {
   buildDigest,
+  snapshotSource,
   isForeignAssistant,
   isSyntheticHarnessMessage,
   isToolResultMessage,
@@ -54,6 +56,7 @@ export interface PromptPlanDeps {
 }
 
 export interface PromptPlanInput {
+  bridgeServer?: string
   options: AgyGenerateOptions
   cfg: PluginConfig
   ctx: CallContext
@@ -86,14 +89,7 @@ type DigestMode = 'none' | 'first' | 'foreign'
 
 /** Index of the last assistant message plus the user/tool messages after it. */
 function trailingSpanOf(messages: readonly Message[]): { lastAssistantIdx: number; trailingUser: Message[] } {
-  let lastAssistantIdx = -1
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const mm = messages[i]
-    if (mm !== undefined && mm.role === 'assistant') {
-      lastAssistantIdx = i
-      break
-    }
-  }
+  const lastAssistantIdx = lastHistoryIndex(messages)
   // Include tool-role messages (dsh-llm 0.1.7+) in the trailing span. A
   // post-tool hop's trailing run is otherwise empty and the call is dispatched
   // with no task at all (issue #34).
@@ -153,15 +149,23 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
     coveredHistory = digestRes.coveredHistory
   }
 
-  // Forward the system prompt once on the initial turn of a conversation (or on
-  // one-shot review/title calls) to preserve Google prompt cache prefixes.
-  if ((cfg.forwardSystemPrompt && binding === undefined) || ctx.isReview || ctx.isTitle) {
-    const rawSys = options.system || (() => {
-      const sm = messages.find((m) => m.role === 'system')
-      return sm ? textOf(sm).trim() : ''
-    })()
-    const sysInstruction = cloakPromptText(rawSys, cfg.cloakSystemPrompt)
-    if (sysInstruction) prompt = 'System instructions:\n' + sysInstruction + (prompt !== '' ? '\n\n' + prompt : '')
+  if ((cfg.forwardSystemPrompt && !isAux) || ctx.isReview || ctx.isTitle) {
+    const lastSystem = messages.findLast(m => m.role === 'system')
+    const system = options.system ?? (lastSystem ? textOf(lastSystem) : '')
+    const sys = cloakPromptText(system, cfg.cloakSystemPrompt)
+    const sections = sys ? ['System instructions:\n' + sys] : []
+    if (!isAux) {
+      const snapshots = new Map<string, string>()
+      for (const message of messages) {
+        const source = snapshotSource(message)
+        if (source) snapshots.set(source, cloakPromptText(textOf(message), cfg.cloakSystemPrompt))
+      }
+      if (snapshots.size) sections.push('Current DSH context (supersedes previous snapshots):\n' + [...snapshots.values()].join('\n\n'))
+    }
+    if (sections.length) prompt = [...sections, prompt].filter(Boolean).join('\n\n')
+  }
+  if (input.bridgeServer && options.tools?.length) {
+    prompt = `For this DSH session, use the tools exposed on MCP server ${input.bridgeServer}. Use its advertised tool names and schemas for the current step.\n\n` + prompt
   }
   if (leadingSlash) prompt = formatWithLeadingAgySlash(leadingSlash, prompt)
 
@@ -474,7 +478,7 @@ async function applyContextDigest(input: DigestInput): Promise<{
         })
       : { attachmentsByMessage: new Map(), stagedDir: null, stagedIds: [] }
     if (hist.stagedDir !== null && !stagedDirs.includes(hist.stagedDir)) stagedDirs.push(hist.stagedDir)
-    const digest = buildDigest(messages, 0, cfg.contextTransferMaxChars, {
+    const digest = buildDigest(messages.slice(0, lastAssistantIdx + 1), 0, cfg.contextTransferMaxChars, {
       maxBytes: cfg.contextTransferFileMaxBytes,
       maxLineBytes: 40_000,
       includeTaskLine: false,

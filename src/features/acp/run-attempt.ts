@@ -36,7 +36,6 @@ import {
 } from '../../provider/quota-failover.ts'
 import { SubagentTracker } from '../subagent/tracker.ts'
 import type { AcpProcess } from './client.ts'
-import { beginProcSessionTurn } from './mcp-session.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
 import { rebuildAcpSession } from './rebuild.ts'
@@ -44,6 +43,7 @@ import {
   finishAcpAttempt,
   identityFailureKind,
   isAgyFailureBanner,
+  buildAcpPromptOutcome,
   settleEarlyAbort,
   settleIdentityFailure,
   shouldSelfHealAcpResult,
@@ -198,12 +198,14 @@ async function runAcpPrompt(opts: {
     if (liveQf !== null) {
       throw new Error(liveQf.rawErrorText)
     }
+    const isCancelled = () => recorder.rec.isAbortRequested || result.stopReason === 'cancelled' || result.stopReason === 'canceled'
     let selfHealed = false
     let resEv = acpPromptResultToAgyEvent(sid, result, streamState.accumulatedText, streamState.lastContextUsed)
     if (
       !input.isAux &&
       !input.signal?.aborted &&
       !quotaCancelled &&
+      !isCancelled() &&
       shouldSelfHealAcpResult(resEv, { sawText, sawThinking, sawTools })
     ) {
       selfHealed = true
@@ -233,6 +235,9 @@ async function runAcpPrompt(opts: {
       : undefined
     if (quotaBanner !== undefined) {
       throw new Error(quotaBanner)
+    }
+    if (!quotaCancelled && isCancelled()) {
+      return buildAcpPromptOutcome({ kind: 'aborted', code: Err.AGY_ERROR, message: 'ACP prompt cancelled' }, startedAt, roundStderr(), quotaCtrl.cooledFamilies())
     }
     if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
       throw new Error(resEv.error ?? 'ACP prompt returned error without response')
@@ -268,16 +273,7 @@ async function runAcpPrompt(opts: {
       }
       throw new Error(`ACP prompt returned an empty turn: ${firstLine(textOnly) || 'agy produced no output for this request'}`)
     }
-    return {
-      failure: null,
-      durationMs: Date.now() - startedAt,
-      stderr: roundStderr(),
-      rawErrText: '',
-      runLogText: '',
-      silentTimeout: false,
-      empty: false,
-      cooledInLiveFamilies: quotaCtrl.cooledFamilies(),
-    }
+    return buildAcpPromptOutcome(null, startedAt, roundStderr(), quotaCtrl.cooledFamilies())
   } catch (err) {
     subTracker?.flush()
     const liveQf = quotaCtrl.failoverState()
@@ -288,7 +284,7 @@ async function runAcpPrompt(opts: {
     // A quota-triggered kill is not a timeout and not the user aborting: its
     // classification comes from the quota evidence, not from the error text.
     const timedOut = liveQf === null && /timed out/i.test(msg)
-    const aborted = !quotaCancelled && liveQf === null && (Boolean(input.signal?.aborted) || /aborted/i.test(msg))
+    const aborted = !quotaCancelled && liveQf === null && (Boolean(input.signal?.aborted) || recorder.rec.isAbortRequested || /aborted|cancelled|canceled/i.test(msg))
     const outcome: RunOutcome = {
       code: 1,
       signal: null,
@@ -382,6 +378,8 @@ export async function runAcpAttempt(
     ...(sessionKey === '' ? {} : { sessionId: sessionKey }),
     telemetryFlags: cfg.disableTelemetry,
   })
+  if (input.bridgeRoute) env.DSH_MCP_ROUTE = input.bridgeRoute
+  else delete env.DSH_MCP_ROUTE
 
   // ACP has no per-invocation `--settings`: the resident server reads
   // `<home>/.gemini/antigravity-cli/settings.json` at STARTUP. Persist the
@@ -419,7 +417,6 @@ export async function runAcpAttempt(
   // being stolen (another agy refreshing it hourly), and retrying forever would
   // just burn the wrong account's quota.
   let identityRetried = false
-  let releaseProcSession: (() => void) | undefined
   for (;;) {
     try {
       proc = pool.acquireProcess({
@@ -437,8 +434,6 @@ export async function runAcpAttempt(
         ...(settingsTag === undefined ? {} : { settingsTag }),
         usesSharedSlot,
       })
-      releaseProcSession?.()
-      releaseProcSession = proc.mcpProcId && sessionKey !== '' ? beginProcSessionTurn(proc.mcpProcId, sessionKey) : undefined
       const resumeId = input.persistBinding ? input.binding?.conversationId : undefined
       // Returning to the original cwd preserves agy's system-prompt prefix and
       // keeps Google prompt cache hit rate high across turns.
@@ -460,8 +455,6 @@ export async function runAcpAttempt(
       }
       break
     } catch (err) {
-      releaseProcSession?.()
-      releaseProcSession = undefined
       const msg = err instanceof Error ? err.message : String(err)
       if (input.signal?.aborted) {
         return settleEarlyAbort(deps, input, slot, input.binding?.conversationId ?? null, msg)
@@ -486,7 +479,6 @@ export async function runAcpAttempt(
   }
 
   if (input.signal?.aborted) {
-    releaseProcSession?.()
     proc.cancelSession(sid)
     return settleEarlyAbort(deps, input, slot, sid, 'request aborted after ACP session opened')
   }
@@ -495,7 +487,10 @@ export async function runAcpAttempt(
   recorder.setTrackerSession?.(input.sessionKey)
   recorder.streamCid = sid
   recorder.startTracker?.()
-  recorder.rec.requestAbort = () => proc.cancelSession(sid)
+  recorder.rec.requestAbort = () => {
+    recorder.rec.markAbortRequested()
+    proc.cancelSession(sid)
+  }
   if (!input.isAux && sessionKey !== '') {
     deps.registerActiveRun(sessionKey, recorder.rec)
   }
@@ -536,7 +531,6 @@ export async function runAcpAttempt(
     sessionStatus: openedStatus,
     onFirstOutput: () => settleGate('stream'),
   }).finally(() => {
-    releaseProcSession?.()
   })
   promptPromise.then(
     () => {

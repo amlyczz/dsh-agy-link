@@ -2,7 +2,7 @@
 //
 // MOVED VERBATIM from src/host/credential-slot.ts (Phase 5g). File path,
 // stale window, poll interval, lock payload and error types are unchanged.
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AbortedWaitError, WaitTimeoutError } from './errors.ts'
 
@@ -98,19 +98,24 @@ export async function acquireCrossProcessSlotLock(
         } catch {
           // ignore
         }
+      } else {
+        if (deadline > 0 && Date.now() >= deadline) {
+          throw new WaitTimeoutError('timed out waiting for cross-process slot lock')
+        }
+        await new Promise((r) => setTimeout(r, pollMs))
+        continue
       }
     }
 
-    // Try atomic write of temporary file and rename
+    // Atomic exclusive creation (`O_CREAT | O_EXCL` via `wx`): never overwrite
+    // an active lock via Windows MoveFileExW/renameSync.
     const payload: SlotLockData = {
       pid: process.pid,
       acquiredAt: Date.now(),
       holder: options.holder,
     }
-    const tempFile = lockFile + '.tmp-' + process.pid + '-' + Date.now()
     try {
-      writeFileSync(tempFile, JSON.stringify(payload), { flag: 'wx', encoding: 'utf8' })
-      renameSync(tempFile, lockFile)
+      writeFileSync(lockFile, JSON.stringify(payload), { flag: 'wx', encoding: 'utf8' })
       let released = false
       return () => {
         if (released) return
@@ -128,11 +133,7 @@ export async function acquireCrossProcessSlotLock(
         }
       }
     } catch {
-      try {
-        unlinkSync(tempFile)
-      } catch {
-        // ignore
-      }
+      // EEXIST from a concurrent acquirer; retry until timeout
     }
 
     if (deadline > 0 && Date.now() >= deadline) {

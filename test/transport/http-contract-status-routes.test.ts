@@ -185,6 +185,16 @@ test('/status forwards the account ids the host is refreshing right now', async 
   registerRoutes(ws2, withoutMethod)
   const second = await invoke(routeFor(ws2.routes, '/plugins/agy-link/status'), fakeReq('GET'))
   assert.deepEqual((second.json() as Record<string, unknown>).quotaRefreshing, [])
+  // availableCommands is stripped from HTTP /status to avoid 20KB+ per-poll bloat.
+  const withCmds = fakeServices({
+    acpPool: { status: () => ({ activeProcesses: 1, sessions: 1, keys: ['k1'], availableCommands: [{ name: 'plan', description: 'big' }] }) },
+  })
+  const ws3 = fakeWebServer()
+  registerRoutes(ws3, withCmds)
+  const third = await invoke(routeFor(ws3.routes, '/plugins/agy-link/status'), fakeReq('GET'))
+  const acpSt = (third.json() as Record<string, unknown>).acpStatus as Record<string, unknown>
+  assert.equal(acpSt.activeProcesses, 1)
+  assert.equal('availableCommands' in acpSt, false)
 })
 
 test('/status exposes warmup.status() snapshot as warmupState', async () => {

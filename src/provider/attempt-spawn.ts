@@ -87,6 +87,8 @@ export async function startAttemptProcess(
     ...(sessionKey === '' ? {} : { sessionId: sessionKey }),
     telemetryFlags: cfg.disableTelemetry,
   })
+  if (input.bridgeRoute) env.DSH_MCP_ROUTE = input.bridgeRoute
+  else delete env.DSH_MCP_ROUTE
 
   let proc: RunningProcess
   let spawned = false

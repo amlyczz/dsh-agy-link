@@ -279,10 +279,8 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
     const sticky = stickyAccount(deps, family, sessionKey, activeModel)
     if (quotaClear(sticky)) account = sticky
   }
-  if (account === undefined && pool !== undefined && !isAux && sessionKey !== '' && process.platform === 'win32' && cfg.parallelSameAccount) {
-    account = pool.selectAccount(family, activeModel) ?? undefined
-  }
   if (account === undefined && pool !== undefined) {
+    // Applies uniformly including win32 + parallelSameAccount: honour quotaModel/avoidAccountIds and quotaClear.
     if (quotaModel !== '' && typeof pool.findAccount === 'function') {
       // Image-style call: pick WITHOUT moving the family's sticky pointer.
       const picked = pool.findAccount(family, activeModel, quotaModel, input.avoidAccountIds) ?? undefined

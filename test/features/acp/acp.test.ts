@@ -822,6 +822,142 @@ console.log(JSON.stringify({ event: 'complete', stats: { total_tokens: 3 } }));
     await drain({ ...baseInput, jsonSchema: '{"type":"object"}' })
     assert.equal(acpCalls, 1, 'isAux with jsonSchema must stay on CLI')
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 }) } catch { /* windows handle cleanup */ }
+  }
+})
+
+test('issue #207: ACP cancel sets ok=false, skips self-heal, preserves interrupted binding, and fires onAccountUsed on success', async () => {
+  for (const sr of ['cancelled', 'canceled']) {
+    const ev = acpPromptResultToAgyEvent('s1', { stopReason: sr }, '')
+    assert.equal(ev.kind, 'result')
+    if (ev.kind === 'result') {
+      assert.equal(ev.ok, false)
+      assert.equal(ev.error, 'ACP prompt cancelled')
+    }
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-cancel-'))
+  try {
+    const scriptPath = join(dir, 'mock-acp-cancel.mjs')
+    writeFileSync(scriptPath, `
+import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+let prompts = 0;
+const rl = createInterface({ input: process.stdin });
+rl.on('close', () => process.exit(0));
+rl.on('line', (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') return send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } });
+  if (msg.method === 'session/new') return send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'acp-c-1' } });
+  if (msg.method === 'session/close') return send({ jsonrpc: '2.0', id: msg.id, result: {} });
+  if (msg.method === 'session/prompt') {
+    prompts++;
+    const logDir = process.env.MOCK_CANCEL_LOG;
+    if (logDir) appendFileSync(logDir, 'prompt\\n');
+    const mode = process.env.MOCK_ACP_MODE || 'cancel';
+    if (mode === 'ok') {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: msg.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done' } } } });
+      return send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 2 } } });
+    }
+    return send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'cancelled' } });
+  }
+  send({ jsonrpc: '2.0', id: msg.id, result: {} });
+});
+`, 'utf8')
+    const fakeBin = join(dir, process.platform === 'win32' ? 'agy.cmd' : 'agy')
+    if (process.platform === 'win32') {
+      writeFileSync(fakeBin, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, 'utf8')
+    } else {
+      writeFileSync(fakeBin, `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf8')
+      chmodSync(fakeBin, 0o755)
+    }
+
+    const logFile = join(dir, 'prompts.log')
+    const acpCfg = { ...defaultConfig(), transport: 'acp' as const }
+    const pool = new AcpSessionPool({ bin: () => fakeBin, cfg: () => acpCfg })
+    const runs = new RunRegistry()
+    const store = new SessionStore(join(dir, 'sessions.json'))
+    const usedCalls: Array<[string, string]> = []
+    const deps: AttemptDeps = {
+      acquire: async () => () => undefined,
+      runs,
+      store,
+      onAccountUsed: (id, fam) => usedCalls.push([id, fam]),
+      clearInFlightPrompt: () => undefined,
+      registerActiveRun: () => undefined,
+      unregisterActiveRun: () => undefined,
+      isSuperseded: () => false,
+      noteNetworkFailure: () => 0,
+      clearNetworkStreak: () => undefined,
+      dropFailoverBudget: () => undefined,
+      clearRateLimitFailover: () => undefined,
+      sharesSingleEgress: () => false,
+      lastAccountSpawnTime: new Map(),
+      minSpawnIntervalMs: 0,
+    }
+    const acc = { id: 'acc-1', dir, enabled: true, email: 'a@b.c' } as never
+    const baseInput = (sessionKey: string): AttemptInput => ({
+      cfg: { ...defaultConfig(), transport: 'acp' },
+      bin: fakeBin,
+      permissionMode: 'skip',
+      sessionKey,
+      workspaceRoot: dir,
+      isAux: false,
+      account: acc,
+      prompt: 'hello',
+      model: 'gemini-3.8-flash',
+      activeModel: 'gemini-3.8-flash',
+      effort: undefined,
+      addDirs: [],
+      persistBinding: true,
+      binding: { conversationId: 'acp-c-1', lastMessageCount: 1, updatedAt: Date.now(), model: 'gemini-3.8-flash', interrupted: true },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as unknown as Message],
+      newlySentImageIds: [],
+      sessionAccountKey: `${sessionKey}:acc-1`,
+      family: 'google',
+      signal: undefined,
+      agyOnEvent: undefined,
+      sandbox: false,
+      agent: '',
+    })
+
+    const prevLog = process.env.MOCK_CANCEL_LOG
+    const prevMode = process.env.MOCK_ACP_MODE
+    process.env.MOCK_CANCEL_LOG = logFile
+    const makeSlot = (): AttemptSlot => ({ releaseOnce: () => undefined, armHandoff: () => null })
+    try {
+      process.env.MOCK_ACP_MODE = 'cancel'
+      const cancelInput = baseInput('s-cancel')
+      store.set(cancelInput.sessionAccountKey, cancelInput.binding!)
+      const cancelRec = await runAcpAttempt(pool, deps, cancelInput, makeSlot())
+      assert.ok(cancelRec, 'cancelled ACP prompt returns settled RunRecording')
+      for await (const _ of cancelRec.eventsFrom(0)) { /* wait for settlement */ }
+      assert.equal(cancelRec.failureInfo?.kind, 'aborted', 'cancelled ACP prompt must settle as aborted, never failure: null')
+      assert.equal(readFileSync(logFile, 'utf8').trim().split(/\r?\n/).length, 1, 'cancelled ACP prompt must NOT trigger self-heal retry')
+      assert.equal(usedCalls.length, 0, 'cancelled ACP prompt must not fire onAccountUsed')
+      assert.equal(store.get(cancelInput.sessionAccountKey)?.interrupted, true, 'cancelled ACP prompt must preserve interrupted binding')
+
+      const poolOk = new AcpSessionPool({ bin: () => fakeBin, cfg: () => acpCfg })
+      try {
+        process.env.MOCK_ACP_MODE = 'ok'
+        const okRec = await runAcpAttempt(poolOk, deps, baseInput('s-ok'), makeSlot())
+        assert.ok(okRec)
+        for await (const _ of okRec.eventsFrom(0)) { /* wait for settlement */ }
+        assert.equal(okRec.failureInfo, null)
+        assert.deepEqual(usedCalls, [['acc-1', 'google']], 'successful non-aux ACP turn must fire onAccountUsed')
+      } finally {
+        poolOk.dispose()
+      }
+    } finally {
+      pool.dispose()
+      if (prevLog === undefined) delete process.env.MOCK_CANCEL_LOG
+      else process.env.MOCK_CANCEL_LOG = prevLog
+      if (prevMode === undefined) delete process.env.MOCK_ACP_MODE
+      else process.env.MOCK_ACP_MODE = prevMode
+    }
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 }) } catch { /* windows handle cleanup */ }
   }
 })

@@ -30,7 +30,8 @@ const COMPONENT_TEST_MAP = {
   'src/host/agy-log.ts': ['test/host/auth-jitter.test.ts', 'test/provider/failure-classifier.test.ts'],
   'src/host/agy-usage.ts': ['test/host/agy-usage.test.ts'],
   'src/host/parser.ts': ['test/host/parser.test.ts', 'test/provider/mapper.test.ts'],
-  'src/host/mcp-bridge.ts': ['test/host/mcp-bridge-registry-and-agent.test.ts', 'test/host/mcp-ready-disposal.test.ts'],
+  'src/host/mcp-bridge.ts': ['test/host/mcp-bridge-registry-and-agent.test.ts', 'test/host/mcp-ready-disposal.test.ts', 'test/host/mcp-bridge-call-id.test.ts'],
+  'src/host/bridge-steps.ts': ['test/host/mcp-bridge-registry-and-agent.test.ts'],
   'src/host/media-route.ts': ['test/transport/media-route.test.ts'],
   'src/host/recording.ts': ['test/provider/adapter-*.test.ts'],
   'src/host/oneshot.ts': ['test/integration/v02.test.ts', 'test/features/quota/quota-failover-alignment.test.ts', 'test/features/image/slash-bridge-and-image-tool.test.ts', 'test/features/btw/btw.test.ts'],
@@ -44,7 +45,7 @@ const COMPONENT_TEST_MAP = {
 
 const PREFIX_TEST_MAP = [
   ['src/common/types/', ['test/provider/failure-classifier.test.ts', 'test/common/rate-limit-classify.test.ts', 'test/common/network-backoff.test.ts']],
-  ['src/domain/accounts/', ['test/domain/pool.test.ts', 'test/domain/model-support-ineligibility.test.ts']],
+  ['src/domain/accounts/', ['test/domain/pool.test.ts', 'test/domain/model-support-ineligibility.test.ts', 'test/domain/narrow-account-preference.test.ts']],
   ['src/domain/credentials/', ['test/host/credential-slot.test.ts', 'test/host/credential-backup.test.ts', 'test/provider/issue101-slot-failover.test.ts']],
   ['src/domain/quota/', ['test/domain/domain-quota.test.ts', 'test/features/quota/quota-*.test.ts', 'test/transport/status-argon-filter.test.ts']],
   ['src/features/quota/', ['test/features/quota/quota-*.test.ts', 'test/domain/domain-quota.test.ts']],

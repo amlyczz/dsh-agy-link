@@ -280,6 +280,7 @@ export function acpPromptResultToAgyEvent(
   fallbackContextUsed?: number,
 ): AgyEvent {
   const stopReason = typeof result.stopReason === 'string' ? result.stopReason : 'end_turn'
+  const isCancelledStop = stopReason === 'cancelled' || stopReason === 'canceled'
   const rawErr = result.error
   const errObj = asObj(rawErr)
   const extractedErr =
@@ -287,8 +288,10 @@ export function acpPromptResultToAgyEvent(
       ? rawErr
       : typeof errObj?.message === 'string' && errObj.message !== ''
         ? errObj.message
-        : undefined
-  const ok = stopReason !== 'error' && stopReason !== 'refusal' && extractedErr === undefined
+        : isCancelledStop
+          ? 'ACP prompt cancelled'
+          : undefined
+  const ok = stopReason !== 'error' && stopReason !== 'refusal' && !isCancelledStop && extractedErr === undefined
   const usage = acpUsageToRawUsage(result.usage)
   if (Object.keys(usage).length === 0 && typeof fallbackContextUsed === 'number' && fallbackContextUsed > 0) {
     usage.input_tokens = fallbackContextUsed

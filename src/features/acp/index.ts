@@ -1,5 +1,4 @@
 export { AcpProcess, type AcpProcessOptions } from './client.ts'
-export { beginProcSessionTurn, clearProcSessions, nextMcpProcId, resolveProcSession } from './mcp-session.ts'
 export type { AcpPromptOptions } from './turn.ts'
 export { AcpSessionPool, type AcpPoolOptions } from './pool.ts'
 export { runAcpAttempt } from './run-attempt.ts'

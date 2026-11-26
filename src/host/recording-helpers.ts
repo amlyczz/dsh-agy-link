@@ -1,6 +1,6 @@
 // Pure helpers for RunRecording: tool-error classification, mirror callId
 // encoding/decoding, usage breakdown predicates, and per-span usage merging.
-import { isNonConsumableResultError, type RawUsage } from '../common/types.ts'
+import { isNonConsumableResultError, type AgyEvent, type RawUsage } from '../common/types.ts'
 
 /** Status guidance only: retain the original tool error for replay and logs. */
 export type ToolErrorKind = 'missing_file' | 'system_protection' | 'approval' | 'tool_error'
@@ -16,6 +16,32 @@ export function isConsumableResult(ev: { ok: boolean; response: string; error?: 
   return (ev.ok || ev.response !== '') && !isNonConsumableResultError(ev.ok, ev.error, ev.response)
 }
 
+export function isFinishableEvent(ev: AgyEvent, cutOnTool: boolean): boolean {
+  if (ev.kind === 'result' && isConsumableResult(ev)) return true
+  return Boolean(
+    cutOnTool
+      && ev.kind === 'step'
+      && ev.stepKind === 'tool'
+      && ev.tool !== undefined
+      && (ev.state === 'DONE' || ev.state === 'ERROR' || ev.state === 'CANCELED' || ev.state === 'CANCELLED' || ev.state === 'RUNNING'
+        || (ev.state === undefined && (ev.tool.output !== undefined || ev.tool.error !== undefined))),
+  )
+}
+
+export function selectSpanUsage(
+  pending: RawUsage | null,
+  resultRaw: RawUsage | undefined,
+  anyUsageEmitted: boolean,
+): RawUsage | null {
+  if (pending !== null && (hasUsageBreakdown(pending) || !resultRaw || Object.keys(resultRaw).length === 0)) {
+    return pending
+  }
+  if (resultRaw !== undefined && Object.keys(resultRaw).length > 0 && !anyUsageEmitted) {
+    return resultRaw
+  }
+  return null
+}
+
 /**
  * True when a usage sample carries a token breakdown rather than a bare input
  * count. Only such samples may stand in for the result envelope's usage; see
@@ -26,6 +52,29 @@ export function hasUsageBreakdown(raw: RawUsage): boolean {
   return positive(raw.output_tokens) || positive(raw.cache_read_tokens) ||
     positive(raw.cache_write_tokens) || positive(raw.thinking_tokens) ||
     positive(raw.total_tokens)
+}
+
+export interface EmittedUsageBuckets {
+  cacheRead: boolean
+  cacheWrite: boolean
+}
+
+export function usageBucketsOf(raw: RawUsage): EmittedUsageBuckets {
+  return {
+    cacheRead: raw.cache_read_tokens !== undefined,
+    cacheWrite: raw.cache_write_tokens !== undefined,
+  }
+}
+
+export function buildZeroDeltaUsage(buckets: EmittedUsageBuckets | null): RawUsage | null {
+  if (buckets === null) return null
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    ...(buckets.cacheRead ? { cache_read_tokens: 0 } : {}),
+    ...(buckets.cacheWrite ? { cache_write_tokens: 0 } : {}),
+  }
 }
 
 /**

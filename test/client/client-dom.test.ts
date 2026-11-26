@@ -24,6 +24,7 @@ import {
 	installCompactionCard,
 	scanAndEnhanceCompactionCards,
 } from '../../src/client/compaction.ts';
+import { scan as scanMermaidBlocks } from '../../src/client/mermaid-render.ts';
 import {
 	disposeScrollListener,
 	ensureScrollListener,
@@ -1138,4 +1139,35 @@ test('file links scanner: clicking a local file link opens the native sidebar (n
 
 	document.body.removeChild(a);
 	setClientContext(null);
+});
+
+test('scanners stamp non-matching paragraphs, non-mermaid blocks, and settled alt containers so repeated mutations stay O(1)', () => {
+	const p = document.createElement('p');
+	p.textContent = 'ordinary history paragraph';
+	document.body.appendChild(p);
+	scanAndEnhanceCompactionCards(document);
+	assert.equal(p.getAttribute('data-agy-compaction-scanned'), 'true');
+	assert.equal(p.getAttribute('data-agy-compaction-rendered'), null);
+
+	const codeBlock = document.createElement('div');
+	codeBlock.className = 'md-code-block';
+	const content = document.createElement('div');
+	content.setAttribute('data-code-block-content', '');
+	const code = document.createElement('code');
+	code.className = 'language-typescript';
+	code.textContent = 'const x = 1\nconst y = 2';
+	content.appendChild(code);
+	codeBlock.appendChild(content);
+	document.body.appendChild(codeBlock);
+	scanMermaidBlocks();
+	assert.equal(codeBlock.getAttribute('data-agy-mermaid-skip'), 'true');
+
+	const imgContainer = markdownWithImageSpan('![pic](/home/user/pic.png)', 'pic');
+	scanAndEnhanceImages();
+	assert.ok(imgContainer.querySelector('.agy-image-card'));
+	assert.equal(imgContainer.getAttribute('data-agy-alt-md'), null, 'settled container clears alt fingerprint so it stops re-hashing');
+
+	document.body.removeChild(p);
+	document.body.removeChild(codeBlock);
+	document.body.removeChild(imgContainer);
 });

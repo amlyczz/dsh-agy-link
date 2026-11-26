@@ -26,7 +26,7 @@ import { AGY_PROMPT_SAFE_BYTES, buildDigest, utf8Bytes } from '../../src/provide
 import { purposePolicy } from '../../src/provider/purpose-policy.ts'
 import type { CallContext } from '../../src/provider/call-context.ts'
 
-function msg(role: 'user' | 'assistant', text: string, source?: Record<string, unknown>): Message {
+function msg(role: 'user' | 'assistant' | 'system', text: string, source?: Record<string, unknown>): Message {
   return {
     role,
     content: [{ type: 'text', text }],
@@ -246,6 +246,7 @@ test('first-contact and foreign digests place historical images in-place while k
     })
 
     assert.ok(planFirst.prompt.includes('[earlier image attachment: "img-old.png"'), 'old image must be noted in-place in digest')
+    assert.deepEqual(reads, ['img-live'])
     assert.equal(planFirst.stagedImages.length, 1, 'only current-turn image should ride as ACP inlineImage')
     assert.ok(planFirst.stagedImages[0]!.path.includes('img-live') || reads.includes('img-live'))
     assert.deepEqual(planFirst.newlySentImageIds, ['img-old', 'img-live'], 'both historical and live ids recorded for watermark')
@@ -282,7 +283,7 @@ test('first-contact and foreign digests place historical images in-place while k
       activeModel: 'gemini-4-neon-high',
       deps,
     })
-    assert.deepEqual(reads, ['img-b'], 'only unseen foreign-span image should be read')
+    assert.deepEqual(reads, [], 'historical screenshots must not be read or staged again')
     assert.ok(planForeign.prompt.includes('[earlier image attachment: "img-b.png"'), 'foreign image annotated in-place')
     assert.deepEqual(planForeign.stagedImages, [], 'no stale inlineImages when current turn is text-only')
     assert.deepEqual(planForeign.newlySentImageIds, ['img-b'])
@@ -397,5 +398,79 @@ test('finalizeAttempt preserves watermark on unconsumed failures and logs [water
       messages: [msg('user', 'hi')],
     })
     assert.deepEqual(noDropLogs, [])
+  })
+})
+
+test('cold, warm and switched accounts receive the latest profile and every pending report exactly once', async () => {
+  await withTempDshHome(async dir => {
+    const cfg = { ...defaultConfig(), forwardSystemPrompt: true, cloakSystemPrompt: false }
+    const key = 'isolated-role'
+    const ctx = makeCallCtx(key, dir, cfg)
+    const store = new SessionStore(join(dir, 'bindings.json'))
+    const messages = [
+      msg('user', 'old task'), msg('assistant', 'done'),
+      msg('system', 'Profile revision two; roster = Lead, Reviewer'),
+      msg('user', 'Memory revision two', { kind: 'runtime-context' }),
+      msg('user', 'Obsolete plugin snapshot', { kind: 'plugin:other', form: 'snapshot' }),
+      msg('user', 'Current plugin snapshot', { kind: 'plugin:other', form: 'snapshot' }),
+      msg('user', 'Report from Ada', { kind: 'plugin:agent-message' }),
+      msg('user', 'Report from Jin', { kind: 'team-message' }),
+    ]
+    for (const [account, warm] of [['a', false], ['a', true], ['b', false]] as const) {
+      if (warm) store.set(key + ':a', { conversationId: 'warm-a', lastMessageCount: 2, updatedAt: Date.now(), model: 'gemini-4-neon-high' })
+      const plan = await buildPromptPlan({
+        cfg, ctx, policy: purposePolicy(ctx), options: { messages, sessionId: key } as never,
+        account: { id: account } as never, model: 'gemini-4-neon-high', activeModel: 'gemini-4-neon-high',
+        deps: { store, getActiveRun: () => undefined, recentlyCompactedSessions: new Map(), deliverContext: async d => d },
+      })
+      assert.ok(!plan.prompt.includes('Obsolete plugin snapshot'))
+      for (const text of ['Profile revision two', 'Lead, Reviewer', 'Memory revision two', 'Current plugin snapshot', 'Report from Ada', 'Report from Jin']) {
+        assert.equal(plan.prompt.split(text).length - 1, 1, text)
+      }
+    }
+  })
+})
+
+test('issue #207: finalizeAttempt detects parseModelNotRecognized on Err.PROCESS_EXIT and Err.AGY_ERROR', async () => {
+  await withTempDshHome(async (dir) => {
+    const store = new SessionStore(join(dir, 'sessions.json'))
+    for (const code of [Err.PROCESS_EXIT, Err.AGY_ERROR] as const) {
+      const calls: Array<[string, ...unknown[]]> = []
+      const pool = {
+        markModelUnsupported: (...a: unknown[]) => calls.push(['markModelUnsupported', ...a]),
+        advanceAccount: (...a: unknown[]) => { calls.push(['advanceAccount', ...a]); return null },
+      } as never
+      const acc = { id: 'acc-model', dir, enabled: true, alias: 'acc-model', createdAt: 0, cooldowns: {}, quotas: {} } as never
+      await finalizeAttempt({
+        rec: new RunRecording('r-unrecog'),
+        outcome: { code: 1, signal: null, timedOut: false, aborted: false, capped: false, stdout: '', stderrTail: '', durationMs: 10 },
+        store,
+        pool,
+        account: acc,
+        family: 'google',
+        persistBinding: false,
+        sessionAccountKey: 'sess-unrecog:acc-model',
+        conversationId: 'c1',
+        cwd: dir,
+        messages: [msg('user', 'hi')],
+        model: 'gemini-99-unknown',
+        activeModel: 'gemini-99-unknown',
+        superseded: false,
+        newlySentImageIds: [],
+        rawErrText: '',
+        runLogText: '',
+        silentTimeout: false,
+        sessionKey: 'sess-unrecog',
+        clearNetworkStreak: () => undefined,
+        dropFailoverBudget: () => undefined,
+        clearRateLimitFailover: () => undefined,
+        sharesSingleEgress: () => false,
+        failure: { kind: 'error', code, message: 'model "gemini-99-unknown" is not recognized as a known model' },
+      })
+      assert.deepEqual(calls, [
+        ['markModelUnsupported', 'acc-model', 'gemini-99-unknown'],
+        ['advanceAccount', 'acc-model', 'google', 'gemini-99-unknown'],
+      ], `code=${code} must mark unsupported and advance account`)
+    }
   })
 })

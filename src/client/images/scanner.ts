@@ -240,6 +240,13 @@ function refreshChangedAltContainers(): void {
   for (let i = 0; i < tracked.length; i++) {
     const container = tracked[i];
     if (!container) continue;
+    const unenhanced = container.querySelector(
+      'span[class*="imageAlt"]:not([data-agy-enhanced="true"]), span[class*="_imageAlt_"]:not([data-agy-enhanced="true"])',
+    );
+    if (!unenhanced) {
+      container.removeAttribute(ALT_MD_ATTR);
+      continue;
+    }
     const next = altFingerprint(markdownTextOf(container));
     if (container.getAttribute(ALT_MD_ATTR) === next) continue;
     container.setAttribute(ALT_MD_ATTR, next);
@@ -340,6 +347,10 @@ function enhanceAltSpans(): void {
       span.style.display = 'none';
       span.parentNode?.insertBefore(card, span);
     }
+    const stillUnenhanced = container.querySelector(
+      'span[class*="imageAlt"]:not([data-agy-enhanced="true"]), span[class*="_imageAlt_"]:not([data-agy-enhanced="true"])',
+    );
+    if (!stillUnenhanced) container.removeAttribute(ALT_MD_ATTR);
   }
 }
 

@@ -6,7 +6,7 @@
 // are retried via source signatures.
 
 import { isInteractionLocked } from './scroll-guard.ts'
-import { isMermaidBlock, isMermaidLang } from './mermaid-config.ts'
+import { isKnownNonMermaidLang, isMermaidBlock, isMermaidLang } from './mermaid-config.ts'
 import { loadMermaid } from './mermaid-loader.ts'
 import { translateOr } from './i18n-bridge.ts';
 
@@ -343,14 +343,21 @@ export function scan(): void {
 	if (typeof document === 'undefined') return
 	if (isInteractionLocked()) return
 	cleanupTempElements()
-	const blocks = document.querySelectorAll<HTMLElement>('.md-code-block')
+	const blocks = document.querySelectorAll<HTMLElement>('.md-code-block:not([data-agy-mermaid-skip="true"])')
 	for (let i = 0; i < blocks.length; i++) {
 		const block = blocks[i]
 		if (!block) continue
 		const lang = fenceLang(block)
+		if (isKnownNonMermaidLang(lang)) {
+			block.setAttribute('data-agy-mermaid-skip', 'true')
+			continue
+		}
 		const source = readSource(block)
 		if (source === '') continue
-		if (!isMermaidBlock(lang, source)) continue
+		if (!isMermaidBlock(lang, source)) {
+			if (source.includes('\n')) block.setAttribute('data-agy-mermaid-skip', 'true')
+			continue
+		}
 		const state = block.getAttribute('data-agy-mermaid')
 		const sig = sourceSignature(source)
 		const action = mermaidScanAction(

@@ -498,12 +498,12 @@ export class QuotaService {
    * public signature and every override point stay unchanged.
    */
   async refreshAccountQuota(account: ManagedAccount, force = false): Promise<Partial<Record<ModelFamily, FamilyQuotaInfo>> | null> {
-    this.refreshingIds.add(account.id)
+    if (force) this.refreshingIds.add(account.id)
     this.summaryFailures.delete(account.id)
     try {
       return await this.runQuotaPipeline(account, force)
     } finally {
-      this.refreshingIds.delete(account.id)
+      if (force) this.refreshingIds.delete(account.id)
     }
   }
 

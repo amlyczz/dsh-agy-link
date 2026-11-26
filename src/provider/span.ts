@@ -207,6 +207,7 @@ export async function* driveSpan(
   sessionId?: string,
 ): AsyncIterable<StreamChunk> {
   if (signal?.aborted) {
+    rec.markAbortRequested()
     rec.requestAbort?.()
     yield {
       type: 'finish',
@@ -248,6 +249,7 @@ export async function* driveSpanBody(
   let abortedLocally = false
   const onAbort = () => {
     abortedLocally = true
+    rec.markAbortRequested()
     rec.requestAbort?.()
     queue.push({
       type: 'finish',

@@ -42,7 +42,7 @@ type El = {
 }
 
 const KNOWN_SELECTORS = [
-	'div[class*="_markdown_"], [data-markdown-variant]',
+	'div[class*="_markdown_"]:not([data-agy-decisions-scanned="true"]), [data-markdown-variant]:not([data-agy-decisions-scanned="true"])',
 	'h2, h3, h4, p > strong',
 	'li',
 	'.agy-decision-container',
@@ -105,8 +105,8 @@ function makeEl(tagName: string, className = ''): El {
 
 function selects(el: El, sel: string): boolean {
 	switch (sel) {
-		case 'div[class*="_markdown_"], [data-markdown-variant]':
-			return el.className.includes('_markdown_') || el.dataset.markdownVariant !== undefined
+		case 'div[class*="_markdown_"]:not([data-agy-decisions-scanned="true"]), [data-markdown-variant]:not([data-agy-decisions-scanned="true"])':
+			return el.dataset.agyDecisionsScanned !== 'true' && (el.className.includes('_markdown_') || el.dataset.markdownVariant !== undefined)
 		case 'h2, h3, h4, p > strong':
 			return ['H2', 'H3', 'H4', 'STRONG'].includes(el.tagName)
 		case 'li':

@@ -184,3 +184,25 @@ test('issue #201: btwEnabled is settable (boolean) and reported by status', asyn
   const status = await s.call('/plugins/agy-link/status', fakeReq('GET', '/plugins/agy-link/status'))
   assert.ok('btwEnabled' in (status.json() as Record<string, unknown>), 'status must expose btwEnabled')
 })
+
+test('router CSRF gate blocks cross-origin POST to /config and /pool/* while allowing dsh-app://', async () => {
+  const writes: Array<[string, unknown]> = []
+  const s = setup({ setOverride: (k: string, v: unknown) => { writes.push([k, v]) } })
+  const withOrigin = (origin: string, body: unknown) =>
+    Object.assign(fakeReq('POST', '/', body) as Record<string, unknown>, { headers: { origin } })
+
+  for (const blockedOrigin of ['https://evil.example', 'null', 'file:///tmp/x.html']) {
+    const cfgRes = await invoke(s.route('/plugins/agy-link/config'), withOrigin(blockedOrigin, { key: 'btwEnabled', value: false }))
+    assert.equal(cfgRes.status(), 403, `POST /config from ${blockedOrigin} must be blocked`)
+    assert.deepEqual(cfgRes.json(), { ok: false, error: 'cross-origin request denied' })
+
+    const poolRes = await invoke(s.route('/plugins/agy-link/pool/mode'), withOrigin(blockedOrigin, { parallel: true }))
+    assert.equal(poolRes.status(), 403, `POST /pool/mode from ${blockedOrigin} must be blocked`)
+    assert.deepEqual(poolRes.json(), { ok: false, error: 'cross-origin request denied' })
+  }
+  assert.equal(writes.length, 0, 'blocked CSRF requests must not reach route handler')
+
+  const allowed = await invoke(s.route('/plugins/agy-link/config'), withOrigin('dsh-app://desktop', { key: 'btwEnabled', value: true }))
+  assert.equal(allowed.status(), 200)
+  assert.deepEqual(writes, [['btwEnabled', true]])
+})

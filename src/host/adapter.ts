@@ -3,7 +3,8 @@
 // conversations for multi-turn continuity (spec §3, ADR-4/ADR-7).
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { AgyGenerateOptions } from '../common/protocol.ts'
+import { withBridgeStep } from './bridge-steps.ts'
+import type { AgyGenerateOptions, BridgeLease } from '../common/protocol.ts'
 import { resolveCallContext, effectivePermissionMode } from '../provider/call-context.ts'
 import { purposePolicy } from '../provider/purpose-policy.ts'
 import { driveSpan as driveSpanImpl } from '../provider/span.ts'
@@ -193,7 +194,6 @@ export class AgyAdapter extends LlmAdapter {
     }
   }
 
-  /** Build the agy argv for one call. Exported for tests. */
   buildArgs(opts: Parameters<typeof buildAgyArgs>[0]): string[] {
     return buildAgyArgs(opts)
   }
@@ -208,7 +208,8 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     yield* streamWithEffortRetry({
-      streamAttempt: (opts, suppressEffort) => this.streamAttempt(opts, suppressEffort),
+      streamAttempt: (opts, suppressEffort) => withBridgeStep(this.deps.enterBridgeStep?.(opts),
+        lease => this.streamAttempt(opts, suppressEffort, lease)),
       learnEffortUnsupported: (model) => this.learnEffortUnsupported(model),
       catalogAdvertisesEffort: (model) => this.deps.catalog.advertisedEfforts(model).length > 0,
       pool: this.deps.pool,
@@ -216,14 +217,12 @@ export class AgyAdapter extends LlmAdapter {
     }, effective)
   }
 
-  private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false): AsyncIterable<StreamChunk> {
+  private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false, lease?: BridgeLease): AsyncIterable<StreamChunk> {
     const ctx = resolveCallContext({
       options,
       cfg: this.deps.getConfig(),
       bin: this.deps.bin(),
-      ...(this.deps.sessionCwd === undefined
-        ? {}
-        : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
+      ...(this.deps.sessionCwd === undefined ? {} : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
       warnOnce: (key: string, message: string) => this.warnOnce(key, message),
     })
     const { cfg, bin, isReview, isTitle, isCompaction, isTranslate, isImage, isAux } = ctx
@@ -263,6 +262,7 @@ export class AgyAdapter extends LlmAdapter {
       const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, mirrorLive)
       const deadRevivable = deadFailure !== null && isRevivableFailure(deadFailure.code)
       if (rec !== undefined && !deadNoResult && !deadRevivable && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
+        lease?.resume()
         yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
         return
       }
@@ -373,6 +373,7 @@ export class AgyAdapter extends LlmAdapter {
     }
 
     const plan = await buildPromptPlan({
+      bridgeServer: lease?.serverName,
       options,
       cfg,
       ctx,
@@ -407,11 +408,6 @@ export class AgyAdapter extends LlmAdapter {
     const newlySentImageIds = plan.newlySentImageIds
     const lastAssistantIdx = plan.lastAssistantIdx
 
-    // Intentionally no prompt-side "recovery boundary" injection: keyword
-    // matching on user text (missing/not found/enoent) false-positives and
-    // is a plugin-side prompt injection. Guidance for missing_file lives in
-    // /agy status via classifyToolError (commands.ts).
-
     // Session ownership: steer preemption + duplicate-submission debounce.
     //
     // - Identical prompt while a live run owns the session → BUSY. Never
@@ -431,10 +427,9 @@ export class AgyAdapter extends LlmAdapter {
       }
       const prevPrompt = this.activeSessionPrompts.get(sessionKey)
       const liveRun = this.activeRuns.get(sessionKey)
-      const runLive = liveRun !== undefined && !liveRun.isSettled
-      // Compare the CANONICAL prompt: the interruption notice injected below is
-      // transport metadata and used to poison the stored baseline, so every
-      // continuation replay looked like a steer and aborted its own live run
+      const runLive = liveRun !== undefined && !liveRun.isSettled && !liveRun.isAbortRequested
+      // Compare the CANONICAL prompt: the interruption notice injected below is transport metadata
+      // and used to poison the stored baseline, so continuation replays used to look like steers.
       // (issue #205).
       const identity = promptIdentity(prompt)
       // A harness lifecycle hop (tool result / context append, no new typed
@@ -452,6 +447,7 @@ export class AgyAdapter extends LlmAdapter {
               + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
           )
           this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
+          lease?.resume()
           yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
           return
         }
@@ -507,6 +503,7 @@ export class AgyAdapter extends LlmAdapter {
               binding.interrupted = true
             }
           }
+          liveRun.markAbortRequested()
           liveRun.requestAbort?.()
           const exited = await waitForRunSettle(liveRun, 3_500)
           if (!exited) {
@@ -521,6 +518,7 @@ export class AgyAdapter extends LlmAdapter {
           }
         }
       }
+      if (liveRun !== undefined && !liveRun.isSettled && liveRun.isAbortRequested) await waitForRunSettle(liveRun, 1_500)
       this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
     }
 
@@ -564,6 +562,7 @@ export class AgyAdapter extends LlmAdapter {
       ...(this.deps.reinstallCredentialSlot === undefined ? {} : { reinstallCredentialSlot: this.deps.reinstallCredentialSlot }),
     }
     const attemptInput: AttemptInput = {
+      bridgeRoute: lease?.bind(JSON.stringify([account?.id, permissionMode, options.agyTransport ?? cfg.transport, options.agySandbox ?? cfg.sandbox, options.agyAgent ?? cfg.agent])),
       cfg,
       bin,
       permissionMode: agyPermissionMode,

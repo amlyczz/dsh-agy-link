@@ -65,6 +65,7 @@ export interface EventMapperOptions {
     noteStepUsage(raw: RawUsage, stepKey?: string): void
     finalUsage(resultRaw: RawUsage): RawUsage
     consumeSpanUsage?(resultRaw?: RawUsage): RawUsage | null
+    zeroDeltaUsageForCut?(): RawUsage | null
   }
   /**
    * Resolve FULL tool args for a recorded step from the agy conversation DB
@@ -463,6 +464,7 @@ export class EventMapper {
               ? this.opts.usage.consumeSpanUsage()
               : this.opts.usage?.finalUsage({})
           ),
+          zeroDeltaUsage: () => this.opts.usage?.zeroDeltaUsageForCut?.(),
         })
         for (const ch of block.chunks) yield ch
         this.blockIdx = block.nextBlockIdx

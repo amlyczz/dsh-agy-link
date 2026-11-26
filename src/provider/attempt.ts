@@ -122,6 +122,7 @@ export interface AcpSessionNotice {
 
 /** Everything one attempt needs. Values are produced by streamAttempt. */
 export interface AttemptInput {
+  bridgeRoute?: string
   cfg: PluginConfig
   bin: string
   permissionMode: PluginConfig['permissionMode']
