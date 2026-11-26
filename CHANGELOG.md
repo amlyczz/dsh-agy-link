@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.97 (2026-11-26)
+
+### English
+
+- **Fix(models): the offline lineup now mirrors agy 1.5.18 (33 models, cross-checked against the ACP `models.availableModels` payload).** The lineup is only read when discovery cannot run, so this drift was invisible on a signed-in machine — but a signed-out user would have been offered models agy retired and denied tiers agy now ships.
+  - **Retired:** `gemini-pro-orchestrator-neon`, `gemini-pro-orchestrator-argon`, `gpt-oss-120b-medium`, and the Hydrogen `xhigh` tier.
+  - **Back:** `gemini-3.7-flash`, `gemini-3.6-flash`, and `gemini-3.1-pro` (two tiers: `low` | `high`).
+  - **New:** a `max` tier on both Claude 5.5 lines.
+  - `PREFERRED_OPENAI` still names the GPT-OSS id: it is used only when a catalog offers that family and is validated against the live catalog first.
+- **Feat(pool): the narrowest-capability preference now works in real pools (merges PR #214 by @Ronnoc).** PR #211 scored each account from `quotas[family].models` — a field only the REST path fills. The default refresh is CLI-first (`agy -p /usage`), which reports per-group numbers and no model list, so every account scored 0 and the pinned account always won; the #211 tests passed only because their fixtures pre-filled `models`. When the quota breakdown lists no models, the score now falls back to the account's **own discovered catalog**. A generic `fallback` catalog is not evidence (it would be identical for every account), so it still scores 0.
+- **Feat(mcp): scope the reverse bridge and route tool-name collisions (merges PR #213 by @ZhangjiaxinGZS).**
+  - **`mcpBridgeScope`** (Settings → Runtime controls, default `all`): `host-only` leaves basic file and terminal tools to AGY, saving room under its 20,000-token toolbox limit. Applies to discovery, direct calls and PTC inner dispatch.
+  - **Collision routing.** When an exposed DSH tool has the same name as an AGY built-in (`send_message`, `read_file`, …), the prompt now names it and requires dispatch through this session's `dsh-tools-<port>` server. Previously `send_message` resolved to AGY's **own** tool, which does not know DSH agent ids and failed with `recipient not found`. Only affects sessions with the bridge enabled, and no routing hint is added when nothing is exposed.
+  - **Bridge diagnostic.** A chat step that advertises host-extension tools while `mcpBridge` or `forwardSystemPrompt` is off emits **one deduplicated warning** and records the tool names and disabled settings in `/status.bridgeDiagnostic` (cleared by the next healthy step). Note this is visible under the shipped defaults, where both switches are off: it is the plugin saying so, once, instead of leaving preset tools silently unreachable.
+  - The bridge is now closed if it comes up disabled, and step capture is skipped while no bridge exists.
+- **Tooling: `npm run lineup:check`.** Compares the offline lineup with `agy models` at slug level through the runtime's own parse/fold functions, so its verdict matches the test that pins "fallback == folded discovery". It reports retired, missing and reordered slugs, and exits `2` (not `1`) when agy lists nothing — an empty catalog is inconclusive, not drift.
+
+### 中文
+
+- **修复(模型)：离线模型列表已镜像 agy 1.5.18（33 个，与 ACP 的 `models.availableModels` 交叉核对）。** 这份列表只在无法发现时才被读取，所以登录状态下看不出漂移——但未登录的用户会被提供 agy 已退役的模型，也拿不到 agy 新增的档位。
+  - **退役：** `gemini-pro-orchestrator-neon`、`gemini-pro-orchestrator-argon`、`gpt-oss-120b-medium`，以及 Hydrogen 的 `xhigh` 档。
+  - **回归：** `gemini-3.7-flash`、`gemini-3.6-flash`、`gemini-3.1-pro`（两档：`low` | `high`）。
+  - **新增：** 两条 Claude 5.5 线路各增加 `max` 档。
+  - `PREFERRED_OPENAI` 仍指向 GPT-OSS：它只在目录提供该家族时才被使用，且先对照实时目录校验。
+- **特性(账号池)：最窄能力偏好现在在真实账号池里生效了（合并 PR #214，作者 @Ronnoc）。** PR #211 用 `quotas[family].models` 给账号打分，而该字段只有 REST 路径会填。默认刷新是 CLI 优先（`agy -p /usage`），只返回分组数字、没有模型列表，于是每个账号都是 0 分、置顶账号永远胜出；#211 的测试之所以通过，是因为 fixture 预填了 `models`。现在当配额明细没有模型时，分数回落到该账号**自己发现的目录**。通用的 `fallback` 目录不算证据（对所有账号都一样），仍记 0 分。
+- **特性(MCP)：限定反向桥范围，并路由同名工具冲突（合并 PR #213，作者 @ZhangjiaxinGZS）。**
+  - **`mcpBridgeScope`**（设置 → 运行时控制，默认 `all`）：`host-only` 把基础文件与终端工具留给 AGY，为它 20,000 token 的工具箱上限省出空间。作用于发现、直接调用与 PTC 内层派发。
+  - **冲突路由。** 当暴露的 DSH 工具与 AGY 内建工具同名（`send_message`、`read_file` 等），提示词现在会点名它，并要求经本会话的 `dsh-tools-<port>` 派发。此前 `send_message` 会落到 AGY **自己的**工具，它不认识 DSH 的 agent id，报 `recipient not found`。只影响启用桥的会话；没有可暴露工具时不加路由提示。
+  - **桥诊断。** 当某个对话步骤声明了宿主扩展工具，而 `mcpBridge` 或 `forwardSystemPrompt` 处于关闭时，发出**一条去重后的警告**，并把工具名与被关闭的设置记入 `/status.bridgeDiagnostic`（下一个健康步骤清除）。注意这在出厂默认下即可见，因为两个开关默认都关：这是插件把事实说一次，而不是让预设工具默默不可达。
+  - 桥在禁用状态下启动时会被关闭；没有桥时跳过步骤捕获。
+- **工具：`npm run lineup:check`。** 通过运行时自己的解析/折叠函数，在 slug 层面比对离线列表与 `agy models`，判定结果与"离线列表 == 折叠后的发现结果"那条测试一致。它会报告退役、缺失与顺序变化的 slug；当 agy 什么都没列出时退出码为 `2`（不是 `1`）——空目录是"无法判断"，不是漂移。
+
 ## 0.6.96 (2026-11-26)
 
 ### English
