@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.99 (2026-11-26)
+
+### English
+
+- **Fix(ecosystem): the settings panel now scans every active session's workspace, so it agrees with `/agy skills` (fixes #219).** The two share one inventory but answered differently: the command resolves a root for its session (configured `workspaceRoot`, else the session cwd), while `GET /ecosystem` called `inspect()` with no root and saw the global roots only. Skills installed in a project (e.g. `<cwd>/.agents/skills/`) were listed by the command and missing from the panel.
+  - A **pinned root is still the only root scanned** — an explicit argument, or the configured `workspaceRoot`. That is what the command scans for one session, so the panel must not widen it.
+  - When nothing is pinned, the panel covers every active session directory. `mergeEcosystemSnapshots` (a pure function) combines the single-root inventories and de-duplicates each kind by the key it is rendered by (skills and MCP servers by name within source/plugin, agents by `name:source` — the React key — plugins by id, rules by path); two workspaces exposing the same name are one item. The single-root scan itself is untouched.
+  - The snapshot reports `workspaceRoots`, every root that was actually scanned.
+- **Fix(mcp): the default-configuration bridge diagnostic is now an info line that says how to opt in (merges PR #218 by @ZhangjiaxinGZS).** Follow-up to #213. With both `mcpBridge` and `forwardSystemPrompt` at their factory defaults, a chat step that advertises host tools no longer raises a warning against shipped defaults: the first occurrence goes to the host's info logger and points to **Settings → Runtime → Reverse MCP bridge** and to `forwardSystemPrompt`. Enabling just one of the two is the half-configured case worth a warning, and that warning now names the capability that is still missing. Deduplication and `/status.bridgeDiagnostic` are unchanged.
+
+### 中文
+
+- **修复(生态)：设置面板现在会扫描每个活跃会话的工作区，与 `/agy skills` 的结果一致（修复 #219）。** 两者共用同一套发现逻辑，给出的答案却不同：命令为其会话解析一个根（配置的 `workspaceRoot`，否则会话 cwd），而 `GET /ecosystem` 调 `inspect()` 时不带根，只看得到全局根。于是装在项目里的技能（如 `<cwd>/.agents/skills/`）命令能列出、面板里却没有。
+  - **固定根仍然只扫这一个根**——显式参数，或配置的 `workspaceRoot`。命令为单个会话扫的就是它，面板不得擅自扩大。
+  - 没有固定根时，面板覆盖每个活跃会话目录。`mergeEcosystemSnapshots`（纯函数）把各单根清单合并，并按各类别的渲染键去重（技能与 MCP 按来源/插件内的名字，agent 按 `name:source`——即 React key——插件按 id，规则按路径）；两个工作区暴露同名项只算一个。单根扫描本身未改。
+  - 快照新增 `workspaceRoots`，列出实际扫描过的每个根。
+- **修复(MCP)：出厂默认配置下的桥诊断改为 info，并说明如何开启（合并 PR #218，作者 @ZhangjiaxinGZS）。** #213 的后续。当 `mcpBridge` 与 `forwardSystemPrompt` 都停在出厂默认值时，声明了宿主工具的对话步骤不再对"默认配置"发出警告：首次出现走宿主的 info 日志，并指向 **设置 → 运行时 → 反向 MCP 桥** 与 `forwardSystemPrompt`。只开启其中一项才是值得警告的"配了一半"，那条警告现在会点名仍缺的能力。去重与 `/status.bridgeDiagnostic` 不变。
+
 ## 0.6.98 (2026-11-26)
 
 ### English
