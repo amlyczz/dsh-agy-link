@@ -324,6 +324,9 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'ops_bash':
     case 'sh':
     case 'shell':
+    case 'pwsh':
+    case 'powershell':
+    case 'shell_command':
       return presentTerminalCall(input)
     case 'replace_file_content':
     case 'edit_file':
@@ -333,6 +336,7 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
     case 'write_to_file':
     case 'write_file':
     case 'create_file':
+    case 'write':
       return presentWriteCall(input)
     case 'read_file':
     case 'view_file':
@@ -352,6 +356,7 @@ export function presentMirrorCall(args: unknown): ToolCallView | undefined {
       return presentGrepCall(input)
     case 'list_dir':
     case 'ls':
+    case 'list_directory':
       return presentListCall(input)
     case 'delete_file':
     case 'remove_file':

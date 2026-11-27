@@ -191,11 +191,25 @@ function backgroundRow(task: BackgroundTaskItem): unknown {
   )
 }
 
-function contextBar(context: OrchestrationContext): unknown {
+function contextBar(context: OrchestrationContext, seats: OrchestrationSeat[]): unknown {
   const used = context.used
   const size = context.size
   const pct = contextPercent(used, size)
   const hot = pct !== undefined && pct >= 80
+  const owner = context.seat === undefined || context.seat === 'unknown'
+    ? '最近一次内部调用'
+    : (context.seat === 'planner' ? 'planner 最近一次调用' : 'executor 最近一次调用')
+  // Per-seat prompt occupancy: each seat reports its own context on every
+  // PLANNER_RESPONSE, which is the only per-seat figure that exists at all.
+  const rows = seats
+    .filter(seat => seat.contextTokens !== undefined && seat.contextTokens > 0)
+    .map(seat => h(
+      'div',
+      { style: { display: 'flex', alignItems: 'baseline', gap: '6px', fontSize: '11px', color: MUTED } },
+      h('span', { style: { color: seatColor(seat.role), fontWeight: 600 } }, label[seat.role]),
+      h('span', null, formatTokens(seat.contextTokens) + (seat.cacheReadTokens !== undefined && seat.cacheReadTokens > 0 ? '（命中 ' + formatTokens(seat.cacheReadTokens) + '）' : '')),
+      h('span', { style: { marginLeft: 'auto' } }, seat.short),
+    ))
   return h(
     'div',
     { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
@@ -211,6 +225,8 @@ function contextBar(context: OrchestrationContext): unknown {
       { style: { height: '4px', borderRadius: '2px', background: BORDER, overflow: 'hidden' } },
       h('div', { style: { width: (pct ?? 0) + '%', height: '100%', background: hot ? '#f59e0b' : EXECUTOR } }),
     ),
+    h('div', { style: { fontSize: '11px', color: MUTED } }, owner),
+    ...rows,
   )
 }
 
@@ -329,7 +345,7 @@ export function OrchestrationPanel(props: OrchestrationPanelProps): unknown {
       ? section('步骤流', h('span', { style: { fontSize: '10px' } }, String(steps.length)), steps.map((s, i) => stepRow(s, now, i === steps.length - 1)))
       : null,
     section('本轮用量', undefined, [
-      contextBar(snap.context),
+      contextBar(snap.context, snap.seats),
       h(
         'div',
         { style: { display: 'flex', flexWrap: 'wrap', gap: '10px', fontSize: '11px', color: MUTED } },

@@ -116,6 +116,18 @@ export function mirrorInfo(block: ToolBlock): { tool: string; input: Record<stri
 			server = parts[0];
 			tool = parts.slice(1).join('__');
 		}
+	} else {
+		// agy 1.5.x calls alwaysLoad bridged tools by a SINGLE-underscore name —
+		// `mcp_dsh-tools-<port>_<tool>`, `mcp_<server>_<tool>` — which the host
+		// path already unwraps (#200). Without the same unwrap here the card
+		// kept the compound name and fell through to the generic renderer, so
+		// every reverse-bridged DSH tool (pwsh / read / edit / grep) lost its
+		// terminal, file and diff cards.
+		const bridge = /^mcp_([A-Za-z0-9][A-Za-z0-9._-]*?)_([A-Za-z][A-Za-z0-9_:.-]*)$/.exec(tool);
+		if (bridge !== null && !tool.startsWith('mcp__')) {
+			server = bridge[1]!;
+			tool = bridge[2]!;
+		}
 	}
 
 	return { tool, input, ...(server ? { server } : {}) };

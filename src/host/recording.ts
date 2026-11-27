@@ -23,12 +23,9 @@ import {
   isConsumableResult,
   mergeSpanUsage,
   mirrorCallId,
-  buildZeroDeltaUsage,
   isFinishableEvent,
   selectSpanUsage,
-  usageBucketsOf,
   parseMirrorCallId,
-  type EmittedUsageBuckets,
   type ToolErrorKind,
 } from './recording-helpers.ts'
 
@@ -79,7 +76,6 @@ export class RunRecording {
   private pendingSpanUsage: RawUsage | null = null
   private readonly pendingSpanStepGen = new Map<string, { output: number; thinking: number }>()
   private anyUsageEmitted = false
-  private lastEmittedUsageBuckets: EmittedUsageBuckets | null = null
   /**
    * Per-step generation timing for token-speed statistics: stepKey ->
    * { startedAt, lastAt, outputTokens }. The last usage sample of a step wins
@@ -279,16 +275,23 @@ export class RunRecording {
       this.pendingSpanStepGen.clear()
     }
     const out = selectSpanUsage(pending, resultRaw, this.anyUsageEmitted)
-    if (out !== null) {
-      this.anyUsageEmitted = true
-      this.lastEmittedUsageBuckets = usageBucketsOf(out)
-    }
+    if (out !== null) this.anyUsageEmitted = true
     return out
   }
 
-  /** Zero-delta bucket-preserving usage for concurrent tool cuts 2..N (#210). */
+  /**
+   * Usage for concurrent tool cuts 2..N (#210, revised).
+   *
+   * These used to emit an all-zero bucket-preserving sample so the turn's
+   * totals stayed 1x. DSH's `contextPressure` is last-wins over assistant
+   * messages, so that zero sample became the CURRENT occupancy and the footer
+   * ring fell to 0% between two real samples — it flickered between the real
+   * figure and 0% on every multi-tool step. Omitting the chunk keeps the totals
+   * exactly as 1x (a zero sample adds nothing) while leaving the last REAL
+   * sample in place as the occupancy reading.
+   */
   zeroDeltaUsageForCut(): RawUsage | null {
-    return this.anyUsageEmitted ? buildZeroDeltaUsage(this.lastEmittedUsageBuckets) : null
+    return null
   }
 
   /**

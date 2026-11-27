@@ -56,6 +56,12 @@ test('the ledger follows the seat hand-off a real Orchestrator session performs'
   assert.ok(snap.plan?.text.startsWith('目标'))
   assert.equal(snap.context.used, 211795)
   assert.equal(snap.context.size, 1_000_000)
+  // `usage_update` names no model, so the reading belongs to whichever seat
+  // spoke last — the executor here. Without this the panel had one unattributed
+  // number that jumped between seats mid-turn.
+  assert.equal(snap.context.seat, 'executor')
+  assert.equal(planner?.contextTokens, 26069)
+  assert.equal(executor?.contextTokens, 222908)
 
   ledger.settle()
   const settled = ledger.snapshot()

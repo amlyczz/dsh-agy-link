@@ -24,8 +24,22 @@ export function servicesContext(): unknown {
  * @returns the service, or undefined when this composition does not provide it.
  */
 export function serviceOf<T>(ctx: unknown, name: string): T | undefined {
-  const c = ctx as { get?: (key: string) => unknown } & Record<string, unknown>
+  const c = ctx as {
+    get?: (key: string) => unknown
+    reflect?: { get?: (key: string, strict?: boolean) => unknown }
+  } & Record<string, unknown>
   if (c === null || c === undefined) return undefined
+  // Cordis v4 resolves services through `ctx.reflect.get(name, strict)`: this is
+  // the ONLY lookup that reaches a service the plugin did not declare in
+  // `inject`. `ctx.get` does not exist on v4 and a plain property read answers
+  // for the injection store alone, so without this the right-Sidebar faces were
+  // "missing" and the 编排 page never registered (issue: page would not open).
+  try {
+    const fromReflect = c.reflect?.get?.(name, false)
+    if (fromReflect !== undefined && fromReflect !== null) return fromReflect as T
+  } catch {
+    // Older/other runtimes: fall through to the remaining lookups.
+  }
   try {
     const fromGet = c.get?.(name)
     if (fromGet !== undefined && fromGet !== null) return fromGet as T

@@ -79,6 +79,13 @@ export interface OrchestrationContext {
   used?: number
   /** agy's `usage_update.size`: the model's REAL window. */
   size?: number
+  /**
+   * The seat that reported it. `usage_update` carries no model, but agy only
+   * reports it from inside a call, so the seat that spoke last owns the number.
+   * Without this the panel showed one figure with no owner, and the value
+   * jumped between the planner's and the executor's prompts mid-turn.
+   */
+  seat?: SeatRole
   at: number
 }
 
@@ -227,6 +234,7 @@ export class OrchestrationLedger {
     this.context = {
       ...(used !== undefined ? { used } : this.context.used !== undefined ? { used: this.context.used } : {}),
       ...(size !== undefined ? { size } : this.context.size !== undefined ? { size: this.context.size } : {}),
+      seat: seatForModel(this.lastModel),
       at: Date.now(),
     }
     this.touch()

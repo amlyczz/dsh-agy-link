@@ -171,11 +171,12 @@ test('issue #161: parallel 3 tool calls emit usage ONLY once (1x, never 3x) and 
   assert.equal(u1[0]!.usage.inputTokens, 14655)
   assert.equal(u1[0]!.usage.outputTokens, 231)
 
-  // Tools 2 & 3 emit zero-delta bucket-preserving usage chunks (#210: no 3x duplication, keeps DSH footer consistent)
-  assert.equal(u2.length, 1)
-  assert.deepEqual(u2[0]!.usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0 })
-  assert.equal(u3.length, 1)
-  assert.deepEqual(u3[0]!.usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0 })
+  // Tools 2 & 3 are concurrent cuts of the SAME LLM call: they emit NO usage
+  // chunk at all. They used to re-emit an all-zero bucket-preserving sample,
+  // which DSH's last-wins contextPressure read as "0 tokens in context" and
+  // made the footer ring flicker between the real figure and 0%.
+  assert.equal(u2.length, 0)
+  assert.equal(u3.length, 0)
 
   // Final result consumes step-5 usage once
   assert.equal(u4.length, 1)
@@ -243,28 +244,25 @@ test('ACP status truth helper distinguishes live vs terminal tool statuses', () 
   assert.equal(isAcpTerminalStatus('cancelled'), true)
 })
 
-test('issue #210: concurrent tool cuts match prior cacheRead/cacheWrite buckets and never emit before first sample', () => {
-  // Case A: Prior usage carried both cacheRead and cacheWrite -> zero-delta carries both as 0.
+test('issue #210 (revised): concurrent tool cuts emit NO usage chunk at all', () => {
+  // A cut that belongs to an LLM call already billed must not re-state usage:
+  // an all-zero sample reset DSH's last-wins contextPressure to 0%.
   const recBoth = new RunRecording('r-210-both')
   recBoth.append({ kind: 'step', stepKey: '1', stepKind: 'text', text: '', state: 'DONE', usage: { input_tokens: 100, output_tokens: 20, cache_read_tokens: 50, cache_write_tokens: 10 } })
   recBoth.append({ kind: 'step', stepKey: '2', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'read_file', args: { Path: '1.ts' }, output: 'a' } })
   recBoth.append({ kind: 'step', stepKey: '3', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'read_file', args: { Path: '2.ts' }, output: 'b' } })
   const b1 = collectSpan(recBoth, 0)
   const b2 = collectSpan(recBoth, b1.next)
-  assert.deepEqual(b2.chunks.filter((c): c is UsageChunk => c.type === 'usage').map((c) => c.usage), [
-    { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-  ])
+  assert.deepEqual(b2.chunks.filter((c): c is UsageChunk => c.type === 'usage').map((c) => c.usage), [])
 
-  // Case B: Prior usage had neither cacheRead nor cacheWrite -> zero-delta omits both optional keys.
+  // Case B: same, with a sample that carried neither cache counter.
   const recNeither = new RunRecording('r-210-none')
   recNeither.append({ kind: 'step', stepKey: '1', stepKind: 'text', text: '', state: 'DONE', usage: { input_tokens: 100, output_tokens: 20 } })
   recNeither.append({ kind: 'step', stepKey: '2', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'read_file', args: { Path: '1.ts' }, output: 'a' } })
   recNeither.append({ kind: 'step', stepKey: '3', stepKind: 'tool', state: 'DONE', text: '', tool: { name: 'read_file', args: { Path: '2.ts' }, output: 'b' } })
   const n1 = collectSpan(recNeither, 0)
   const n2 = collectSpan(recNeither, n1.next)
-  assert.deepEqual(n2.chunks.filter((c): c is UsageChunk => c.type === 'usage').map((c) => c.usage), [
-    { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-  ])
+  assert.deepEqual(n2.chunks.filter((c): c is UsageChunk => c.type === 'usage').map((c) => c.usage), [])
 
   // Case C: No real usage has ever been emitted -> tool cuts must NOT fabricate 0/0 usage chunks.
   const recEmpty = new RunRecording('r-210-empty')

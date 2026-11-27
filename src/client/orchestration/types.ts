@@ -37,6 +37,8 @@ export interface OrchestrationTodo {
 export interface OrchestrationContext {
   used?: number
   size?: number
+  /** Which seat's call produced this reading; absent on older host builds. */
+  seat?: SeatRole
   at: number
 }
 

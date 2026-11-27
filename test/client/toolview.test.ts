@@ -323,3 +323,68 @@ test('mirrorCardModel: direct ops_bash tool classifies as terminal', () => {
   assert.equal(m.tool, 'ops_bash')
   assert.equal(m.command, 'npm run test')
 })
+test('mirrorCardModel: reverse-bridged DSH pwsh unwraps to a terminal card', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: {
+        run: 'r1',
+        step: 21,
+        tool: 'mcp_dsh-tools-14730_pwsh',
+        input: { command: 'Get-ChildItem', description: 'List files' },
+      },
+      content: ['a.txt'],
+    }),
+  )
+  assert.equal(m.kind, 'terminal')
+  assert.equal(m.tool, 'pwsh')
+  assert.equal(m.server, 'dsh-tools-14730')
+  assert.equal(m.command, 'Get-ChildItem')
+  assert.deepEqual(m.badges, [{ label: 'DSH', tone: 'accent' }])
+})
+
+test('mirrorCardModel: reverse-bridged DSH write unwraps to a diff card', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: {
+        run: 'r1',
+        step: 22,
+        tool: 'mcp_dsh-tools-14730_write',
+        input: { file_path: 'C:/w/a.txt', content: 'hello' },
+      },
+      content: ['ok'],
+    }),
+  )
+  assert.equal(m.kind, 'diff')
+  assert.equal(m.tool, 'write')
+  assert.equal(m.path, 'C:/w/a.txt')
+  assert.equal(m.newText, 'hello')
+  assert.deepEqual(m.badges, [{ label: 'DSH', tone: 'accent' }])
+})
+
+test('mirrorCardModel: reverse-bridged DSH read unwraps to a read card', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: {
+        run: 'r1',
+        step: 23,
+        tool: 'mcp_dsh-tools-14730_read',
+        input: { file_path: 'C:/w/a.txt', offset: 0 },
+      },
+      content: ['1: hello'],
+    }),
+  )
+  assert.equal(m.kind, 'read')
+  assert.equal(m.tool, 'read')
+  assert.equal(m.path, 'C:/w/a.txt')
+  assert.equal(m.location?.line, 1)
+})
+
+test('mirrorCardModel: agy-native tools carry no bridge badge', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: { run: 'r1', step: 24, tool: 'run_command', input: { CommandLine: 'ls' } },
+      content: ['a.txt'],
+    }),
+  )
+  assert.equal(m.badges, undefined)
+})
