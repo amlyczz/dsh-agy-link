@@ -248,7 +248,7 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
 - 只等非辅助调用：`isAux`（标题、压缩、翻译、审查）直接失败，不占这段等待预算。
 - 可中止：等待监听调用方的 `signal`（Stop），中止时抛 `ABORTED`，绝不 spawn。
 - 等待期必须对用户可见：`AgyAdapter` 用 `awaitWithNotices()` 以 reasoning-delta（`STATUS_NOTICE_BLOCK_INDEX = -1`，与凭据槽等待同一机制）输出「号池暂时耗尽 / 剩余约 N 秒 / 上限 M 秒 / 已等 X 秒 / 按 Stop 可取消」，节奏 20s → 40s → 80s → 上限 120s；每个会话另记一条 WARN。
-- 边界：等待期间不刷新配额快照；reset 迟到时在同一 deadline 内再轮询，不会把 cap 再等一遍（`src/provider/account-selection.ts` 的 `waitForPoolReset()`）。
+- 边界：等待期间不刷新配额快照；reset 迟到时在同一 deadline 内再轮询，不会把 cap 再等一遍。快照不前进（倒计时跨过一轮等待后没有变小，说明 reset 早已落地却没刷新，或池里根本没有可用号）时一轮即失败，不把同一个倒计时重播到上限（`src/provider/account-selection.ts` 的 `waitForPoolReset()`）。等待结束后重新选号必须重走调用方的同一套门槛（`quotaModel` 的 `findAccount`、`avoidAccountIds`、模型配额门槛），不允许「用时间把不合格的账号洗白」。
 - 验证锚点：`test/provider/pool-reset-wait.test.ts`。
 
 ## CLI 配额轮询不得使用即将失效的 token（PR #160）
