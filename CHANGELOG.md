@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.101 (2026-11-27)
+
+### English
+
+- **Feat(prompt): the single-message budget is now a setting — `promptMaxBytes` (issue #223). Default unchanged (180,000).** agy truncates a prompt above its ceiling silently, and its own system prompt, tool schemas and skills are counted against the same ceiling on top of this plugin's prompt. How much room that leaves varies per installation (about 27 KB in the reporter's), so the 12 KB between the plugin's budget and agy's 192,000-byte ceiling is not always enough: a request inside the budget could still be cut from the tail, with nothing downstream to show for it.
+  - Lowering `promptMaxBytes` (env `DSH_AGY_PROMPT_MAX_BYTES`) moves more history into the plugin's own digest / archive path — which is visible — instead of agy's silent cut. `150000` is a reasonable first value when the model reports truncation inside the default budget.
+  - **Bounds are part of the setting.** One resolver (`promptBudgetBytes`) accepts a whole number in **[16,000, 192,000]** and otherwise falls back to the default: above agy's ceiling the silent cut would simply return, and below the floor there is no room for a policy, an environment and a request. The config route validates the same range.
+  - Every place that applied the old constant now shares the resolver: the final tail trim, context delivery (inline versus archive), the compaction prompt and the live-last guard.
+- **Fix(prompt): the live-last guard scales its head reserve with the budget.** `protectTrailingRequest` reserved a fixed 24,000 bytes for the head. Under any budget that leaves less room than that beside the final message, it took its "request nearly fills the budget" branch and returned the head alone — dropping the very message it exists to keep, although that message fit easily. The reserve is now `min(24,000, budget / 4)`. Unreachable while the budget was a constant; exposed by the first test of the new setting.
+- **Docs.** `promptMaxBytes` in `docs/CONFIGURATION.md`; the #223 entry in `docs/KNOWN-GAPS.md` now names it as the precise workaround and explains why it is preferable to making every session compact sooner.
+
+### 中文
+
+- **特性(提示词)：单条消息预算成为可配置项——`promptMaxBytes`（issue #223）。默认值不变（180,000）。** agy 会对超过上限的提示词静默截断，而它自己的系统提示词、工具 schema 与技能会和本插件的提示词共用这份上限。余量因环境而异（报告者处约 27 KB），所以插件预算与 agy 的 192,000 字节上限之间的 12 KB 并不总是够用：一份在预算之内的请求仍可能被从尾部截掉，而下游毫无迹象。
+  - 调低 `promptMaxBytes`（环境变量 `DSH_AGY_PROMPT_MAX_BYTES`）会把更多历史移入插件自己的摘要 / 归档路径——那是可见的——而不是 agy 的静默截断。当模型报告在默认预算内仍被截断时，`150000` 是一个合理的第一步。
+  - **边界是设置的一部分。** 唯一的解析函数（`promptBudgetBytes`）只接受 **[16,000, 192,000]** 内的整数，否则回落到默认值：超过 agy 的上限只会让静默截断回来，低于下限则放不下策略、环境与一条请求。配置路由校验同一区间。
+  - 原先使用那个常数的每一处现在共用同一个解析函数：最终的尾部截断、上下文转交（内联还是归档）、压缩提示词，以及"保尾"保护。
+- **修复(提示词)："保尾"保护的头部预留随预算缩放。** `protectTrailingRequest` 原先为头部固定预留 24,000 字节。只要预算在待保消息旁留不出这么多，它就会走进"请求几乎占满预算"的分支、只返回头部——把它本要保护的那条消息整个丢掉，尽管那条消息明明放得下。现在预留为 `min(24,000, 预算 / 4)`。在预算还是常数时不可达；是新设置的第一个测试把它暴露出来的。
+- **文档。** `promptMaxBytes` 写入 `docs/CONFIGURATION.md`；`docs/KNOWN-GAPS.md` 的 #223 条目把它列为精确的缓解办法，并说明为什么它优于让所有会话更早压缩。
+
 ## 0.6.100 (2026-11-27)
 
 ### English
