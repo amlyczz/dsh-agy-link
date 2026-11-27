@@ -2,6 +2,7 @@
 // first-contact ordering, system-prompt forwarding (review / title /
 // opt-in), plan-mode argv, and the prompt-side helper predicates.
 import { test } from 'node:test'
+import { AGY_PROMPT_SAFE_BYTES } from '../../src/provider/prompt-text.ts'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -106,7 +107,7 @@ test('first-contact prompt leads with the live request (agy cuts the tail)', asy
     prompt.indexOf('THE-LIVE-QUESTION') < prompt.indexOf('[conversation so far]'),
     'the live question must come before the digest',
   )
-  assert.ok(Buffer.byteLength(prompt, 'utf8') <= 180_000, 'prompt must stay under agy single-message ceiling')
+  assert.ok(Buffer.byteLength(prompt, 'utf8') <= AGY_PROMPT_SAFE_BYTES, 'prompt must stay inside the single-message budget')
 })
 
 test('forwardSystemPrompt falls back to role: system message when options.system is omitted', async () => {

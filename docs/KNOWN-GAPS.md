@@ -227,14 +227,14 @@ reference-counted slot is the strongest isolation the plugin can provide.
   - There is no detection yet, and the advertised `contextWindowDefault`
     (1,048,576 tokens) is a context *window*, not this byte budget — DSH
     therefore compacts much later than agy truncates.
-  - **Workaround (v0.6.101+): `promptMaxBytes`.** The budget the plugin keeps
-    is a setting, so an installation with a large agy overhead can leave room
-    for it directly: lowering it moves more history into the plugin's own
-    digest / archive path, which is visible, instead of agy's silent cut. Try
-    `150000` and lower it further while the model still reports truncation
-    (16,000 is the floor; 192,000 the ceiling, since above it the cut returns).
-    The default stays 180,000 until the typical overhead has been measured.
-    Making DSH compact sooner (`contextWindowDefault` 262144 and
+  - **Since v0.6.103 the default budget is 150,000 B, leaving 42 KB for agy's
+    own overhead** (it was 180,000, which left 12 KB — less than the 27 KB
+    measured in the reporter's installation). What the plugin gives up goes
+    into its own digest / archive path, which is visible, instead of agy's
+    silent cut.
+  - **If the model still reports truncation, lower `promptMaxBytes` further**
+    (16,000 is the floor; 192,000 the ceiling, since above it the cut
+    returns). Making DSH compact sooner (`contextWindowDefault` 262144 and
     `compactionMaxChars` 60000 is one configuration the reporter verified)
     also works, but it is blunter: it changes every session's compaction.
 - **A third-party MCP server registered directly in agy used to kill every

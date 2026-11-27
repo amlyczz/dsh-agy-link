@@ -388,10 +388,10 @@ export function collectUnsentImageRefs(
 
 /** agy 1.4.x silently truncates a single user message at 192,000 UTF-8 bytes
  * (measured: a 300 KB ASCII prompt kept exactly 192,000 B; a 490 KB CJK prompt
- * kept 191,998 B) and the cut lands on the TAIL. Every prompt we build must
- * stay under that with margin, and the live request must sit at the HEAD. */
+ * kept 191,998 B) and the cut lands on the TAIL. Every prompt must stay under
+ * that with margin (AGY_PROMPT_SAFE_BYTES; why that margin: prompt-budget.ts). */
 export const AGY_SINGLE_MESSAGE_MAX_BYTES = 192_000
-export const AGY_PROMPT_SAFE_BYTES = 180_000
+export const AGY_PROMPT_SAFE_BYTES = 150_000
 
 const QUOTED_AGY_SLASH_RE =
   /(?<![A-Za-z0-9_./:\\-])\/(goal|plan|compact|schedule|browser|grill-me|teamwork|learn|boost|swarm|btw|fork)(?![A-Za-z0-9_/-])/gi

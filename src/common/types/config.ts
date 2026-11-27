@@ -135,11 +135,12 @@ export interface PluginConfig {
    */
   contextTransferFileAboveBytes: number
   /**
-   * Byte budget the plugin keeps for one prompt (default 180,000; agy's own
+   * Byte budget the plugin keeps for one prompt (default 150,000; agy's own
    * ceiling is ~192,000 and its system prompt, tool schemas and skills count
-   * against it too). Lower it when agy still truncates a request that is inside
-   * the default budget (issue #223). Range 16,000–192,000; other values fall
-   * back to the default.
+   * against it too — about 27 KB in the installation that reported issue #223,
+   * which is why the default leaves 42 KB of room). Lower it further when agy
+   * still truncates a request that is inside the default budget. Range
+   * 16,000–192,000; other values fall back to the default.
    */
   promptMaxBytes: number
   /** Byte cap for the file-backed digest (not bounded by agy's message cap). */
@@ -420,7 +421,7 @@ export function defaultConfig(): PluginConfig {
     contextTransferMaxChars: 660_000,
     contextTransferMaxBytes: 150_000,
     contextTransferFileAboveBytes: 150_000,
-    promptMaxBytes: 180_000,
+    promptMaxBytes: 150_000,
     contextTransferFileMaxBytes: 2_000_000,
     modelsCacheTtlMs: 300_000,
     allowAuxiliary: true,

@@ -64,7 +64,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `contextTransferMaxBytes` | `—` | `150000` | Byte cap for the transferred context block |
 | `contextTransferFileAboveBytes` | `—` | `150000` | Files larger than this are elided in the context block |
 | `contextTransferFileMaxBytes` | `—` | `2000000` | Hard cap for an inlined file |
-| `promptMaxBytes` | `DSH_AGY_PROMPT_MAX_BYTES` | `180000` | Byte budget kept for one prompt. agy's own ceiling is ~192000 and its system prompt, tool schemas and skills count against it too, so lower this (min `16000`) when agy still truncates requests inside the default budget |
+| `promptMaxBytes` | `DSH_AGY_PROMPT_MAX_BYTES` | `150000` | Byte budget kept for one prompt (v0.6.103+; was 180000). agy's own ceiling is ~192000 and its system prompt, tool schemas and skills count against it too, so the default leaves 42 KB for them. Lower this further (min `16000`) if agy still truncates requests inside the default budget |
 | `compactionMaxChars` | `—` | `800000` | Character budget for compaction input |
 | `allowAuxiliary` | `—` | `true` | Allow auxiliary calls (titles, goal derivation) through the adapter |
 

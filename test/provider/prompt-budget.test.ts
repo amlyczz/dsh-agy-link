@@ -59,3 +59,14 @@ test('the compaction prompt and live-last protection share the same configured b
   assert.ok(utf8Bytes(out) <= 20_000, `live-last prompt is ${utf8Bytes(out)} B`)
   assert.ok(out.endsWith(last), 'the final message still survives')
 })
+
+test('the shipped default leaves more room than the largest agy overhead measured', () => {
+  // agy's own system prompt, tool schemas and skills share its ceiling with our
+  // prompt. The largest overhead measured is about 27 KB (issue #223): a 180 KB
+  // default left 12 KB and let agy cut the tail of a request that was inside
+  // our budget. The default was lowered to leave more than that overhead.
+  assert.equal(AGY_PROMPT_SAFE_BYTES, 150_000)
+  assert.equal(defaultConfig().promptMaxBytes, 150_000, 'the config default and the fallback agree')
+  const margin = AGY_SINGLE_MESSAGE_MAX_BYTES - AGY_PROMPT_SAFE_BYTES
+  assert.ok(margin >= 30_000, `the margin must exceed the largest overhead measured; it is ${margin} B`)
+})
