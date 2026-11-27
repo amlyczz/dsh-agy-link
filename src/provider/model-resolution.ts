@@ -5,13 +5,16 @@
 // behaviour (union catalog across enabled pool accounts, hidden-model filter,
 // advisory effort levels minus learned refusals) is unchanged.
 import type { LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
-import { PROVIDER_ID, type PluginConfig } from '../common/types.ts'
+import { PROVIDER_ID, type PluginConfig, defaultConfig } from '../common/types.ts'
 import { accountSupportsModel, modelMatches, type ManagedAccount } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import { defaultEffortFor, findEntry, sanitizeCatalogEntries, type CatalogEntry, type ModelCatalog } from '../host/models.ts'
 import { effortLabel, normalizeEfforts } from '../common/reasoning.ts'
 import { mergeCatalogWithQuotaModels, quotaCatalogForAccount } from '../domain/models/quota-catalog.ts'
 import { learnedContextWindow } from '../features/acp/context-window.ts'
+
+/** `contextWindowDefault` as shipped: the value that means "no preference". */
+const SHIPPED_DEFAULT_CONTEXT_WINDOW = defaultConfig().contextWindowDefault
 
 /** One picker row after sanitizing (efforts are always a concrete array). */
 type SanitizedEntry = { id: string; name: string; efforts: string[] }
@@ -168,10 +171,16 @@ export function resolveModelInfo(deps: ModelResolutionDeps, model: string): LlmR
     ?? quotaCatalogForAccounts(quotaScopeAccounts(pool, accounts, activeAcc, cfg.poolWideCatalog)).find((m) => m.id === cleanId)
   const rawName = entry ? entry.name : cleanId
   const name = (typeof rawName === 'string' && rawName.trim() !== '') ? rawName.trim() : cleanId
-  // Prefer the window the model was actually started with (ACP `usage_update.size`,
-  // learned per slug) over one global number for every agy model.
-  const contextWindow = learnedContextWindow(cleanId)
-    ?? (typeof cfg.contextWindowDefault === 'number' && cfg.contextWindowDefault > 0 ? cfg.contextWindowDefault : 200_000)
+  const configuredWindow = typeof cfg.contextWindowDefault === 'number' && cfg.contextWindowDefault > 0 ? cfg.contextWindowDefault : 200_000
+  // The window a model was actually started with (ACP `usage_update.size`,
+  // learned per slug) is the truth for THAT model, where the shipped default is
+  // one number for every agy model — so it replaces the default. It does not
+  // replace a window the user set by hand: that is an explicit instruction, and
+  // the documented workaround for the byte-level truncation of issue #223 is
+  // exactly such a setting.
+  const contextWindow = configuredWindow === SHIPPED_DEFAULT_CONTEXT_WINDOW
+    ? (learnedContextWindow(cleanId) ?? configuredWindow)
+    : configuredWindow
   const resolved: LlmResolvedModelInfo = {
     provider: PROVIDER_ID,
     id: cleanId,
