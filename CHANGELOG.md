@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.104 (2026-11-27)
+
+### English
+
+- **Feat(media): native DSH right-sidebar media previewers, Cloudflare Tunnel authorization, RFC 9110 Range/HEAD streaming, transparent FFmpeg compatibility transcoding, and remote-safe UI.**
+  - **Cloudflare Tunnel & remote-browser auth:** plugin HTTP routes now delegate request authorization to DSH's `connection.requestRejection` (with a same-origin `Host`/`X-Forwarded-Host` fallback) so authenticated remote DSH browsers can load media and settings seamlessly while cross-site, `null`, `file://`, and unauthenticated callers remain rejected (`401`/`403`).
+  - **Full RFC 9110 media streaming:** `/plugins/agy-link/media` now supports `HEAD`, suffix/open-ended/clamped byte ranges (`206` / `416`), `ETag`/`Last-Modified` (`304 Not Modified`), and `?download=1` (`Content-Disposition: attachment`). Persisted session `cwd`s are included as read-only media workspace roots.
+  - **Transparent FFmpeg/FFprobe compatibility cache:** non-browser-playable videos (`yuvj420p`/`yuv444p`/10-bit/HEVC/AVI/MOV/non-faststart MP4s) and extended images (`.tif/.tiff/.heic/.heif`) are inspected lazily, passed through at zero cost when already compliant, losslessly faststart-remuxed or transcoded to `H.264 + yuv420p + even dimensions + AAC + faststart` (or PNG for images) into a bounded content-addressed disk cache (`512 MiB` / 7-day LRU/TTL) with in-flight deduplication and `?raw=1` bypass.
+  - **Native right-sidebar previews & remote-safe controls:** registers `dsh-agy-link/video`, `dsh-agy-link/audio`, and `dsh-agy-link/image-compat` with DSH's `documentPreviews` and `sidebar.right.tab.document` slots, adds `?compat=1` auto-retry and real HTTP error diagnostics in both Lightbox and Sidebar previews, adds the `builtInMediaPreviewOnly` (`DSH_AGY_BUILTIN_MEDIA_ONLY`) setting, and automatically hides/refuses host OS `/open` launches from remote browsers.
+- **Fix(acp): persist ACP session binding on first real output and surface background-task waiting state.**
+  - `runAcpAttempt()` now writes an interim `conversationId` binding on first real output (preserving existing `lastMessageCount`, `sentImageIds`, and `lastInputTokens` until final settlement), preventing manual stops or host restarts during long background jobs from losing ACP continuity and triggering a cold 400k+ token re-compaction.
+  - `TaskActivityTracker` merges newly created `task-*.log` runs into `SubagentTracker.snapshot()` so the header pill shows active background tasks, and `BackgroundWaitMonitor` emits a one-shot bilingual `[Background wait]` notice after 12s of post-reply quiet time explaining that agy is waiting on named background task(s) and stopping will cancel them.
+- **Fix(pool): enforce strict single-account-per-family lock and drop narrow-account splitting.** Concurrent turns in the same model family (including Gemini + shared-group Argon) stay locked onto the family's single active account and never split to narrower accounts or resurrect rotated-away accounts from stale session bindings.
+- **Perf(boot): non-blocking async boot maintenance, async ecosystem sync with skip-list, and client DOM mutation filtering.** Deferred boot maintenance, orphan MCP process-table inspection, and account ecosystem mirroring now run asynchronously without blocking the host event loop, skip dependency/VCS/cache directories while preserving mtimes, and filter irrelevant DOM mutations before scheduling client image/link scans.
+
+### 中文
+
+- **特性(媒体)：接入 DSH 原生右侧栏媒体预览、修复 Cloudflare Tunnel 鉴权、补齐 RFC 9110 Range/HEAD 协议、增加 FFmpeg 透明兼容转码缓存，以及远程/纯内置安全模式。**
+  - **Cloudflare Tunnel 与远程浏览器鉴权**：插件 HTTP 路由优先委托 DSH 宿主 `connection.requestRejection`（附 `Host`/`X-Forwarded-Host` 同源回退），远程访问不再因硬编码回环校验被拦，同时继续拦截跨站、`null`、`file://` 与未登录请求（`401`/`403`）。
+  - **完整 RFC 9110 媒体传输**：`/plugins/agy-link/media` 补齐 `HEAD`、后缀/开放/越界钳位 `Range`（`206`/`416`）、`ETag`/`Last-Modified`（`304`）与 `?download=1`（`Content-Disposition: attachment`），并将持久化会话的 `cwd` 纳入只读媒体工作区根目录。
+  - **FFmpeg/FFprobe 透明兼容转码与缓存**：惰性探测本地视频与扩展图片；标准 H.264/yuv420p+faststart MP4 与 WebM 零开销直出，非 faststart/MOV 无损重封装，不兼容像素格式或编码（`yuvj420p`/`yuv444p`/HEVC/AVI 等）与 TIFF/HEIC 透明转码为浏览器通用 `H.264 + yuv420p + 偶数分辨率 + AAC + faststart`（或 PNG），落盘内容寻址有界缓存（512 MiB / 7 天定期清理）并支持并发去重与 `?raw=1` 旁路。
+  - **原生右侧栏预览与零宿主机弹窗**：向 DSH `documentPreviews` 与 `sidebar.right.tab.document` 注册视频、音频与扩展图片预览器；Lightbox 与右侧栏均支持视频 `?compat=1` 自动重试与真实 HTTP 错误诊断；新增「仅使用内置媒体预览（`builtInMediaPreviewOnly` / `DSH_AGY_BUILTIN_MEDIA_ONLY`）」开关，远程浏览器默认自动隐藏并拒止宿主机 `/open` 弹窗。
+- **修复(ACP)：首帧真实输出即持久化会话绑定，并暴露后台任务等待状态。**
+  - `runAcpAttempt()` 在收到首帧真实输出时立即落盘临时 `conversationId` 绑定（保留原 `lastMessageCount`/`sentImageIds`/`lastInputTokens` 直至回合结算），避免长后台任务期间用户手动停止或宿主重启丢失 ACP 会话而触发冷启动重压。
+  - `TaskActivityTracker` 将本轮新建的 `task-*.log` 纳入 `SubagentTracker.snapshot()` 头部运行胶囊；`BackgroundWaitMonitor` 在主回复输出完毕并静默等待后台任务超过 12 秒时发出单次双语 `[后台等待]` 提示，明确说明正在等待的具体任务 ID 以及此时停止会一并中止后台任务。
+- **修复(账号池)：严格执行同模型族单账号锁定，移除窄账号拆分。** 同一模型族（含 Gemini 与共享组 Argon）下的并发会话始终收敛到单一活跃账号，不再因存在窄能力账号或陈旧会话绑定而切号或复活已轮换账号。
+- **性能(启动与客户端)：启动维护与生态同步全面异步化，客户端 DOM 变更前置过滤。** 延迟启动维护、孤儿 MCP 进程表巡检与多账号生态镜像改为非阻塞异步执行，同步跳过依赖/VCS/缓存目录并保留时间戳；客户端 `MutationObserver` 先过滤无关节点变化再调度扫描。
+
 ## 0.6.103 (2026-11-27)
 
 ### English
