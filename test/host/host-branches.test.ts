@@ -496,7 +496,8 @@ test('account-selection: error reasons — all detail counters + wait string', a
     countdown: 25_000,
     explain: (a) => reasons[a.id] ?? null,
   })
-  const { message, code } = await expectUnavailable(pool)
+  // cap 0: this test pins the message shape, not the (now bounded) reset wait.
+  const { message, code } = await expectUnavailable(pool, cfgSelect({ poolResetWaitMs: 0 }))
   assert.equal(code, 'AGY_ERROR')
   assert.match(message, /1 in cooldown/)
   assert.match(message, /1 quota-exhausted/)
@@ -544,11 +545,11 @@ test('account-selection: error reasons — explainIneligibility fallback and lon
     select: () => null,
     eligible: () => false,
     withExplain: false,
-    countdown: 30_000, // > 20s: waitForShortReset bails immediately
+    countdown: 30_000, // > the 5s cap below: the wait bails immediately
     withAvailable: false, // forces the getEarliestResetCountdown fallback
     resetCountdown: null,
   })
-  const { message } = await expectUnavailable(pool)
+  const { message } = await expectUnavailable(pool, cfgSelect({ poolResetWaitMs: 5_000 }))
   assert.match(message, /1 in cooldown/)
   assert.doesNotMatch(message, /earliest reset/)
 })

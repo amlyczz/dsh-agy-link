@@ -34,6 +34,11 @@ export interface AccountSelectionDeps {
    * the pool is genuinely incapable (issue #125).
    */
   refreshQuota?: () => Promise<void>
+  /**
+   * Called once per wait step with the countdown being waited out and the cap
+   * it stays under, so the adapter can log and stream a progress notice.
+   */
+  poolWaitNotice?: (countdownMs: number, capMs: number) => void
 }
 
 /** Upper bound on the self-heal refresh so a slow network cannot stall a turn. */
@@ -56,6 +61,8 @@ export interface AccountSelectionInput {
   avoidAccountIds?: readonly string[]
   /** Allow switching to a widely-supported model when zero accounts can serve a scarce model (compaction / session-title). */
   allowAuxModelFallback?: boolean
+  /** Caller's abort signal; a pool-reset wait must give up immediately when it fires. */
+  signal?: AbortSignal
 }
 
 export interface AccountSelectionResult {
@@ -188,12 +195,92 @@ function crossFamilyFallback(
   return null
 }
 
-/** Wait out a reset that is only seconds away, then re-pick. */
-async function waitForShortReset(pool: AccountPoolManager, family: ModelFamily, model?: string): Promise<ManagedAccount | undefined> {
-  const countdown = pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
-  if (countdown === null || countdown <= 0 || countdown > 20_000) return undefined
-  await new Promise((r) => setTimeout(r, countdown + 250))
-  return pool.selectAccount(family, model) ?? undefined
+/** Abort-aware sleep for {@link waitForPoolReset}. */
+function resetDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(new LlmError('aborted while waiting for the Antigravity pool reset', 'ABORTED'))
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(new LlmError('aborted while waiting for the Antigravity pool reset', 'ABORTED'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * True when a reset is what the pool is actually waiting for.
+ *
+ * Every enabled account must be held back by quota or a 429 cooldown — the two
+ * states the next reset repairs. A missing plan, a model absent from the
+ * catalog, or a signed-out account stays that way after the reset, so parking
+ * the turn on one would only delay the real error (a chat turn asking for a
+ * model only a cooling account has must fail now, not in 15 minutes). A pool
+ * with no enabled account has nothing to wait for; one without
+ * `explainIneligibility` cannot be judged and keeps the wait.
+ */
+function resetCanUnblockPool(pool: AccountPoolManager, family: ModelFamily, model: string): boolean {
+  if (typeof pool.explainIneligibility !== 'function') return true
+  const accounts = pool.getAccounts().filter((a) => a.enabled)
+  if (accounts.length === 0) return false
+  const now = Date.now()
+  return accounts.every((a) => {
+    const reason = pool.explainIneligibility?.(a, family, now, model) ?? null
+    // `null` means the pool reports the account as eligible even though it
+    // handed us nothing; that is not provably a non-reset blocker, and the
+    // bounded wait is cheap, so it keeps the wait.
+    return reason === 'cooldown' || reason === 'quota' || reason === null
+  })
+}
+
+/**
+ * Wait out a finite pool reset (quota window or cooldown) before giving up.
+ *
+ * A near-drained 5h window is benched by the low-quota guard (LOW_QUOTA_5H) well
+ * before it resets, and the former 20s cap failed the whole turn while the reset
+ * was still minutes away (2026-11-27: 665s to reset, turn died in 63ms with
+ * AGY_ERROR and no assistant turn at all). The wait follows `poolResetWaitMs`,
+ * stays abort-aware, and re-runs `pick` once the reset lands — the same gated
+ * pick the caller used, so a cooled/quota-model-blocked candidate is never
+ * resurrected just because time passed. A deadline further away than the cap
+ * still fails fast with the real state and the earliest-reset time.
+ */
+async function waitForPoolReset(
+  deps: AccountSelectionDeps,
+  pool: AccountPoolManager,
+  family: ModelFamily,
+  model: string,
+  pick: () => ManagedAccount | undefined,
+  capMs: number,
+  signal?: AbortSignal,
+): Promise<ManagedAccount | undefined> {
+  if (!(capMs > 0)) return undefined
+  if (!resetCanUnblockPool(pool, family, model)) return undefined
+  const deadline = Date.now() + capMs
+  const countdownNow = (): number | null =>
+    pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
+  for (;;) {
+    const countdown = countdownNow()
+    if (countdown === null || countdown <= 0) return pick()
+    if (countdown > deadline - Date.now()) return undefined
+    deps.poolWaitNotice?.(countdown, capMs)
+    await resetDelay(countdown + 250, signal)
+    const account = pick()
+    if (account !== undefined) return account
+    // The reset we just waited for is behind us and the pool still offers
+    // nothing. A snapshot that did NOT advance across the wait is stale (or the
+    // pool simply has no usable account): re-arming the same countdown would
+    // replay it until the cap and park the turn for up to 15 minutes. A fresh
+    // snapshot always reports less than the countdown we slept on, and then the
+    // loop is waiting for a genuinely later reset.
+    const after = countdownNow()
+    if (after !== null && after >= countdown) return undefined
+  }
 }
 
 /**
@@ -232,7 +319,7 @@ async function healStaleModelSnapshot(
 }
 
 /** Build the "all accounts unavailable" error with the real reasons. */
-function unavailableError(pool: AccountPoolManager, family: ModelFamily, model?: string): LlmError {
+function unavailableError(pool: AccountPoolManager, family: ModelFamily, model?: string, waitCapMs?: number): LlmError {
   const allAccounts = pool.getAccounts()
   const accounts = allAccounts.filter((a) => a.enabled)
   const disabled = allAccounts.length - accounts.length
@@ -263,6 +350,11 @@ function unavailableError(pool: AccountPoolManager, family: ModelFamily, model?:
     why = `no account can serve ${family} right now${details.length > 0 ? ` (${details.join(', ')})` : ''}`
   }
   const waitStr = countdown !== null && countdown > 0 ? ` (earliest reset in ${Math.ceil(countdown / 1000)}s)` : ''
+  // The reset was further away than the cap: say so, otherwise the message looks
+  // identical to the cap=0 / no-wait case and the remedy is not discoverable.
+  const capHint = waitCapMs !== undefined && waitCapMs > 0 && countdown !== null && countdown > waitCapMs
+    ? ` The reset is beyond the ${Math.ceil(waitCapMs / 1000)}s wait cap (poolResetWaitMs); raise the cap to outlast it.`
+    : ''
   const hint = modelUnsupported > 0 && unsupported === 0 && quotaBlocked === 0 && cooling === 0
     ? `Requested model "${model ?? ''}" is not in any enabled account's catalog — refresh the model list (POST /plugins/agy-link/pool/refresh-quota) or pick a listed model. It is NOT a missing ${family} plan.`
     : unsupported > 0 && quotaBlocked === 0 && cooling === 0
@@ -270,11 +362,11 @@ function unavailableError(pool: AccountPoolManager, family: ModelFamily, model?:
     : quotaBlocked > 0 && cooling === 0
       ? 'Add an account, wait for the quota reset, or run /agy clear-cooldown to override the current quota snapshot.'
       : 'Add an account, wait for reset, or run /agy clear-cooldown.'
-  return new LlmError(`All Antigravity accounts are unavailable: ${why}${waitStr}. ${hint}`, Err.AGY_ERROR)
+  return new LlmError(`All Antigravity accounts are unavailable: ${why}${waitStr}. ${hint}${capHint}`, Err.AGY_ERROR)
 }
 
 export async function selectSessionAccount(input: AccountSelectionInput): Promise<AccountSelectionResult> {
-  const { deps, cfg, model, isAux, sessionKey, reasoningEffort } = input
+  const { deps, cfg, model, isAux, sessionKey, reasoningEffort, signal } = input
   let activeModel = model === '' ? cfg.defaultModel : model
   let family = modelFamilyOf(activeModel)
   if (model === '' && activeModel !== '' && !isAux && sessionKey !== '') {
@@ -289,6 +381,15 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
     acc !== undefined &&
     !avoid.has(acc.id) &&
     (quotaModel === '' || isModelQuotaClear(acc, family, quotaModel, Date.now()))
+  /** The pool's candidate for THIS call, passed through the caller's gates. */
+  const pick = (): ManagedAccount | undefined => {
+    if (pool === undefined) return undefined
+    const picked = quotaModel !== '' && typeof pool.findAccount === 'function'
+      // Image-style call: pick WITHOUT moving the family's sticky pointer.
+      ? pool.findAccount(family, activeModel, quotaModel, input.avoidAccountIds) ?? undefined
+      : pool.selectAccount(family, activeModel) ?? undefined
+    return quotaClear(picked) ? picked : undefined
+  }
   // Strict single-account-per-family invariant (anti-ban): every session in
   // the same quota family strictly locks onto the pool's active account for
   // that family. Old session bindings NEVER resurrect rotated-away accounts or
@@ -296,16 +397,7 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
   if (pool !== undefined && !isAux && sessionKey !== '') {
     pruneDeletedSessionBindings(deps, sessionKey)
   }
-  if (pool !== undefined) {
-    if (quotaModel !== '' && typeof pool.findAccount === 'function') {
-      // Image-style call: pick WITHOUT moving the family's sticky pointer.
-      const picked = pool.findAccount(family, activeModel, quotaModel, input.avoidAccountIds) ?? undefined
-      if (quotaClear(picked)) account = picked
-    } else {
-      const picked = pool.selectAccount(family, activeModel) ?? undefined
-      if (quotaClear(picked)) account = picked
-    }
-  }
+  if (pool !== undefined) account = pick()
   if (account !== undefined && pool !== undefined && quotaModel === '') {
     // Record the account actually serving this family, without stamping
     // manualPinAt. Family-scoped: an Argon pick must not rewrite the Gemini
@@ -335,9 +427,13 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
         if (!isAux && sessionKey !== '') deps.syncSessionModel?.(sessionKey, activeModel)
       }
     }
-    if (account === undefined) account = await waitForShortReset(pool, family, activeModel)
+    // Auxiliary calls (title / compaction / translate / review) never park on a
+    // pool reset: their latency budget belongs to the failed turn, not to them.
+    if (account === undefined && !isAux) {
+      account = await waitForPoolReset(deps, pool, family, activeModel, pick, cfg.poolResetWaitMs, signal)
+    }
     if (account === undefined) account = await healStaleModelSnapshot(deps, pool, family, activeModel)
-    if (account === undefined) throw unavailableError(pool, family, activeModel)
+    if (account === undefined) throw unavailableError(pool, family, activeModel, cfg.poolResetWaitMs)
   }
 
   return { account, family, activeModel }

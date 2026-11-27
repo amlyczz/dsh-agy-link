@@ -19,6 +19,20 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 export const STATUS_NOTICE_BLOCK_INDEX = -1
 
 /**
+ * Session-visible line for a pool-reset wait: the turn is parked until the next
+ * quota window / cooldown reset lands, which can be many minutes of otherwise
+ * silent `running`. Both languages, like the credential-slot notice below.
+ *
+ * The remaining time is derived from the pool's cached snapshot, so it is an
+ * estimate: a reset that lands late just re-arms the same line.
+ */
+export function describePoolResetWait(resetInMs: number, capMs: number, waitedMs: number): string {
+  const secs = (ms: number): number => Math.max(0, Math.ceil(ms / 1000))
+  return `[agy] 号池暂时耗尽：正在等待配额/冷却重置（剩余约 ${secs(resetInMs)}s，最多等 ${secs(capMs)}s，已等 ${secs(waitedMs)}s）。重置后会自动开始，按 Stop 可取消。\n`
+    + `[agy] Antigravity pool is drained: waiting for the next quota/cooldown reset (~${secs(resetInMs)}s left, cap ${secs(capMs)}s, waited ${secs(waitedMs)}s). It starts by itself after the reset; press Stop to cancel.`
+}
+
+/**
  * Await `work` while periodically yielding a SESSION-VISIBLE notice.
  *
  * Why this exists: Windows has ONE machine-global credential slot, so every

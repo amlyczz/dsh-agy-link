@@ -16,7 +16,7 @@ import { listAvailableModels, resolveModelInfo, type ModelResolutionDeps } from 
 import { providerRetryPolicyFor, streamWithEffortRetry, isRevivableFailure } from '../provider/retry-policy.ts'
 import { deliverContext } from '../provider/context-delivery.ts'
 export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
-import { selectSessionAccount } from '../provider/account-selection.ts'
+import { selectSessionAccountWithWait } from '../provider/session-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
 import { extractLeadingAgySlash, formatWithLeadingAgySlash } from '../provider/leading-slash.ts'
 import { INTERRUPTION_NOTICE, hasNewHumanTask, promptIdentity } from '../provider/prompt-identity.ts'
@@ -344,22 +344,18 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
 
-    const selection = await selectSessionAccount({
-      deps: {
-        ...(this.deps.pool === undefined ? {} : { pool: this.deps.pool }),
-        store: this.deps.store,
-        ...(this.deps.syncSessionModel === undefined ? {}
-          : { syncSessionModel: (id: string, m: string, effort?: string) => this.deps.syncSessionModel?.(id, m, effort) }),
-        ...(this.deps.refreshQuota === undefined ? {} : { refreshQuota: this.deps.refreshQuota }),  // #125 heal
-      },
+    // A drained pool can park this selection for up to `poolResetWaitMs`; the
+    // provider wrapper keeps that wait from looking like a freeze.
+    const selection = yield* selectSessionAccountWithWait({
+      deps: this.deps,
       cfg,
+      options,
       model,
       isAux,
-      allowAuxModelFallback: isCompaction || isTitle,
+      isCompaction,
+      isTitle,
       sessionKey,
-      ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: String(options.reasoningEffort) }),
-      ...(options.agyQuotaModel === undefined ? {} : { quotaModel: options.agyQuotaModel }),
-      ...(options.agyAvoidAccountIds === undefined ? {} : { avoidAccountIds: options.agyAvoidAccountIds }),
+      warnOnce: (key: string, message: string) => this.warnOnce(key, message),
     })
     const account = selection.account
     let family = selection.family

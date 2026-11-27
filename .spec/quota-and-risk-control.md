@@ -240,6 +240,18 @@ agy 1.5.12 起，普通 `Gemini Models` 组的 description 会**枚举成员**�
    - 当某族缓存配额的 `models` 列表包含匹配请求模型（`modelMatches`）的条目且**所有匹配条目**的剩馀比例均 `<= LOW_QUOTA_WEEKLY`（0.05）且处于有效重置窗口内时，即使该族宏观均值仍高于 `0.10`，预选阶段也直接判定该账号对该模型进入配额让路（`quotaGateClearedAt` 覆盖规则不变）。
 - **验证锚点**：`test/features/quota/quota-failover-alignment.test.ts`。
 
+## 号池暂时耗尽时的有界等待（2026-11-28）
+
+修复前 `selectSessionAccount()` 只在 `getEarliestAvailableCountdown() <= 20s` 时才等待，超过就直接构造 `AGY_ERROR`。单账号池的 5h 窗口被打到 `remainingFraction=0.04` 时会被 `LOW_QUOTA_5H` 主动 bench（这是正确的安全边界），但从 bench 到真实 reset 往往还有几分钟——20s 上限让整轮在本可自动恢复的情况下直接以错误收尾（2026-11-27 session-4735db50 第 257 轮：reset 还有 665s，step 开始 63ms 后即失败，没有任何 assistant 输出）。
+
+- 规则：全池因**配额窗口或冷却**暂时耗尽、且 `getEarliestAvailableCountdown()` 给出**有限**倒计时时，`selectSessionAccount()` 在 `poolResetWaitMs`（默认 `900000` = 15 分钟，`0` 恢复旧的立即失败）内等到 reset 再重新选号；倒计时超过剩余预算则走原失败路径，并在错误尾部追加 `The reset is beyond the Ns wait cap (poolResetWaitMs); raise the cap to outlast it.`（既有的 `earliest reset in Ns` 与恢复提示保留）。
+- 等待的前提是「reset 真能解锁」：只要有一个启用账号因**reset 修不好的原因**被挡（缺该族 plan、请求模型不在目录、未登录/被禁用），立即失败——等 15 分钟也不会变好，只是把真实错误推迟（`resetCanUnblockPool()`）。
+- 只等非辅助调用：`isAux`（标题、压缩、翻译、审查）直接失败，不占这段等待预算。
+- 可中止：等待监听调用方的 `signal`（Stop），中止时抛 `ABORTED`，绝不 spawn。
+- 等待期必须对用户可见：`provider/session-selection.ts` 用 `awaitWithNotices()` 以 reasoning-delta（`STATUS_NOTICE_BLOCK_INDEX = -1`，与凭据槽等待同一机制）输出「号池暂时耗尽 / 剩余约 N 秒 / 上限 M 秒 / 已等 X 秒 / 按 Stop 可取消」，节奏 20s → 40s → 80s → 上限 120s；每个会话另记一条 WARN。快速选号不产生任何 chunk。
+- 边界：等待期间不刷新配额快照；reset 迟到时在同一 deadline 内再轮询，不会把 cap 再等一遍。快照不前进（倒计时跨过一轮等待后没有变小，说明 reset 早已落地却没刷新，或池里根本没有可用号）时一轮即失败，不把同一个倒计时重播到上限（`src/provider/account-selection.ts` 的 `waitForPoolReset()`）。等待结束后重新选号必须重走调用方的同一套门槛（`quotaModel` 的 `findAccount`、`avoidAccountIds`、模型配额门槛），不允许「用时间把不合格的账号洗白」。
+- 验证锚点：`test/provider/pool-reset-wait.test.ts`。
+
 ## CLI 配额轮询不得使用即将失效的 token（PR #160）
 
 agy 启动时从凭证库取 token，该读取只有 10 秒预算。token 已过期或在该窗口内过期时，刷新会输掉竞争，agy 回退到**交互式 OAuth（弹浏览器等人）**。

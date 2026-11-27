@@ -99,6 +99,7 @@ When a chat step includes host tools and either `mcpBridge` or `forwardSystemPro
 | --- | --- | --- | --- |
 | `proxyUrl` | `DSH_AGY_PROXY_URL` | `''` | Global proxy for agy processes; per-account proxies take precedence |
 | `quotaPollIntervalMs` | `DSH_AGY_QUOTA_POLL_INTERVAL_MS` | `3600000` | Background quota poll interval (minimum 60 s) |
+| `poolResetWaitMs` | `—` | `900000` | Upper bound on waiting for a temporarily drained pool's next quota/cooldown reset before picking an account again. The wait is abortable (Stop) and streamed into the session; a reset further away still fails the call with the real state and earliest-reset time. `0` restores the old fail-fast behavior. Auxiliary calls (title / compaction / translation) never wait |
 | `quotaViaCli` | `DSH_AGY_QUOTA_VIA_CLI` | `true` | Prefer the agy CLI path for quota queries. The CLI is only spawned once the account's access token has at least two minutes of life left (refreshed up front when it does not); otherwise that round falls back to the REST quota endpoint |
 | `autoWarmup` | `DSH_AGY_AUTO_WARMUP` | `false` | Opt-in weekly-quota warmup |
 | `warmupModels` | `DSH_AGY_WARMUP_MODELS` | `gemini-3.8-flash,claude-sonnet-5-5` | Models used for warmup probes |

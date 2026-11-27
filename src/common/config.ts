@@ -198,6 +198,7 @@ export function resolveConfig(
     logRetentionDays: asNum(get('logRetentionDays')) ?? base.logRetentionDays,
     disableTelemetry: asBool(get('disableTelemetry')) ?? base.disableTelemetry,
     quotaPollIntervalMs: asNum(get('quotaPollIntervalMs')) ?? base.quotaPollIntervalMs,
+    poolResetWaitMs: asNum(get('poolResetWaitMs')) ?? base.poolResetWaitMs,
     quotaViaCli: asBool(get('quotaViaCli')) ?? base.quotaViaCli,
     proxyUrl: asString(get('proxyUrl')) ?? base.proxyUrl,
     suppressAgyAutoUpdate: asBool(get('suppressAgyAutoUpdate')) ?? base.suppressAgyAutoUpdate,
