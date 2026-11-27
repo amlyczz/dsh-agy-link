@@ -41,7 +41,9 @@ function handleSyncEcosystem(services: HostServices, req: unknown, res: unknown)
       return
     }
     await readBody(req)
-    const report = eco.syncAll({ force: true })
+    const report = typeof eco.syncAllAsync === 'function'
+      ? await eco.syncAllAsync({ force: true })
+      : eco.syncAll({ force: true })
     const snapshot = eco.inspect(undefined, panelWorkspaceRoots(services))
     sendJson(res as RawRes, 200, { ok: true, report, snapshot })
   })

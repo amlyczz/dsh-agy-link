@@ -20,7 +20,9 @@ import {
   describeStartupCost,
   pickOrphanMcpProcesses,
   presenceDirOf,
+  reapOrphanedMcpServersAsync,
   runMaintenancePass,
+  runMaintenancePassAsync,
   scheduleBootMaintenance,
   sweepStalePresenceLocks,
   type ProcessRow,
@@ -219,9 +221,79 @@ test('the plugin source wires deferred maintenance instead of doing it inline at
   assert.equal(/ecosystem\?\.syncAll\(\)/.test(hygiene), false, 'the ecosystem mirror must not run on the load path')
   const index = readFileSync(join(process.cwd(), 'src/index.ts'), 'utf8')
   assert.match(index, /scheduleBootMaintenance\(/)
+  assert.match(index, /syncAllAsync\(\)/)
   // The boot probe must not fan the model discovery out over the whole pool.
   assert.match(index, /if \(getConfig\(\)\.poolWideCatalog\)/)
   assert.match(index, /activeRunCount\(\) > 0/)
+})
+
+test('runMaintenancePassAsync awaits async syncEcosystem and isolates step failures', async () => {
+  await new Promise<void>((resolve, reject) => {
+    withTempDir((dir) => {
+      const isolated = join(dir, 'acc-a')
+      const systemHome = join(dir, 'acc-primary')
+      const presence = presenceDirOf(isolated)
+      mkdirSync(presence, { recursive: true })
+      const stale = join(presence, 'dead.lock')
+      writeFileSync(stale, '')
+      const old = new Date(Date.now() - PRESENCE_LOCK_MAX_AGE_MS - 60_000)
+      utimesSync(stale, old, old)
+      mkdirSync(presenceDirOf(systemHome), { recursive: true })
+      writeFileSync(join(presenceDirOf(systemHome), 'dead.lock'), '')
+
+      let synced = false
+      const logs: string[] = []
+      runMaintenancePassAsync({
+        accounts: () => [
+          { id: 'a', dir: isolated, enabled: true } as never,
+          { id: 'primary', dir: systemHome, systemHome: true, enabled: true } as never,
+        ],
+        sweepStaging: () => 1,
+        sweepLogs: () => { throw new Error('boom') },
+        syncEcosystem: async () => {
+          await new Promise((r) => setTimeout(r, 10))
+          synced = true
+        },
+        log: (m) => logs.push(m),
+        reapOrphans: false,
+      }).then((res) => {
+        assert.equal(synced, true, 'must await async syncEcosystem')
+        assert.equal(res.presence, 1)
+        assert.equal(res.staging, 1)
+        assert.equal(res.logs, 0)
+        assert.equal(typeof reapOrphanedMcpServersAsync, 'function')
+        resolve()
+      }, reject)
+    })
+  })
+})
+
+test('scheduleBootMaintenance prevents overlapping async passes', async () => {
+  let active = 0
+  let maxActive = 0
+  let calls = 0
+  const stop = scheduleBootMaintenance(
+    {
+      accounts: () => [],
+      sweepStaging: () => 0,
+      sweepLogs: () => 0,
+      syncEcosystem: async () => {
+        calls++
+        active++
+        maxActive = Math.max(maxActive, active)
+        await new Promise((r) => setTimeout(r, 45))
+        active--
+      },
+      log: () => {},
+      reapOrphans: false,
+    },
+    { initialDelayMs: 5, intervalMs: 10 },
+  )
+  await new Promise((r) => setTimeout(r, 85))
+  stop()
+  await new Promise((r) => setTimeout(r, 55))
+  assert.ok(calls >= 1)
+  assert.equal(maxActive, 1, 'in-flight guard must prevent concurrent overlapping passes')
 })
 
 test('parseCimDate reads both PowerShell JSON shapes and refuses to guess', () => {

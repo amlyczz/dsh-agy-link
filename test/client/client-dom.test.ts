@@ -17,6 +17,7 @@ const ReactDOMClient = nodeRequire('react-dom/client') as any;
 const testUtils = nodeRequire('react-dom/test-utils') as any;
 
 import { openLightbox } from '../../src/client/images/lightbox.ts';
+import { hasRelevantMutation } from '../../src/client/images/mutation-filter.ts';
 import { installImageEnhancer, openInRightSidebar, scanAndEnhanceImages, setClientContext } from '../../src/client/images/scanner.ts';
 import { installDecisionChips, insertTextIntoChatComposer, scanAndEnhanceDecisions } from '../../src/client/decisions.ts';
 import {
@@ -1203,4 +1204,59 @@ test('scanners stamp non-matching paragraphs, non-mermaid blocks, and settled al
 	document.body.removeChild(p);
 	document.body.removeChild(codeBlock);
 	document.body.removeChild(imgContainer);
+});
+
+test('image mutation filter: ignores self-injected overlays, removals outside tracked markdown, and timer ticks', () => {
+	const card = document.createElement('div');
+	card.className = 'agy-image-card';
+	const innerImg = document.createElement('img');
+	card.appendChild(innerImg);
+	document.body.appendChild(card);
+
+	const timerSpan = document.createElement('span');
+	timerSpan.className = 'timer';
+	const timerText = document.createTextNode('00:12');
+	timerSpan.appendChild(timerText);
+	document.body.appendChild(timerSpan);
+
+	const unrelatedDiv = document.createElement('div');
+	unrelatedDiv.textContent = 'plain status';
+
+	// 1. Self-injected card mutation & timer text update & unrelated removal -> false
+	assert.equal(
+		hasRelevantMutation([
+			{ type: 'childList', target: card, addedNodes: [innerImg] as any, removedNodes: [] as any },
+			{ type: 'characterData', target: timerText, addedNodes: [] as any, removedNodes: [] as any },
+			{ type: 'childList', target: document.body, addedNodes: [] as any, removedNodes: [unrelatedDiv] as any },
+			{ type: 'childList', target: document.body, addedNodes: [card] as any, removedNodes: [] as any },
+		] as unknown as MutationRecord[]),
+		false,
+	);
+
+	// 2. Adding an element containing a link / image / markdown container -> true
+	const msg = document.createElement('div');
+	msg.className = '_markdown_msg';
+	const link = document.createElement('a');
+	link.setAttribute('href', 'file:///tmp/x.png');
+	msg.appendChild(link);
+	assert.equal(
+		hasRelevantMutation([
+			{ type: 'childList', target: document.body, addedNodes: [msg] as any, removedNodes: [] as any },
+		] as unknown as MutationRecord[]),
+		true,
+	);
+
+	// 3. Streaming text inside a tracked [data-agy-alt-md] markdown container -> true
+	const trackedMd = document.createElement('div');
+	trackedMd.setAttribute('data-agy-alt-md', '10:123');
+	const span = document.createElement('span');
+	assert.equal(
+		hasRelevantMutation([
+			{ type: 'childList', target: trackedMd, addedNodes: [span] as any, removedNodes: [] as any },
+		] as unknown as MutationRecord[]),
+		true,
+	);
+
+	document.body.removeChild(card);
+	document.body.removeChild(timerSpan);
 });

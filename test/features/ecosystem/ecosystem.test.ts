@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -7,7 +7,7 @@ import { defaultConfig } from '../../../src/common/types.ts'
 import type { ManagedAccount } from '../../../src/common/pool-types.ts'
 import { EcosystemService } from '../../../src/features/ecosystem/index.ts'
 import { inspectEcosystem, parseMarkdownFrontmatter } from '../../../src/features/ecosystem/inventory.ts'
-import { syncEcosystemToPool } from '../../../src/features/ecosystem/sync.ts'
+import { syncEcosystemToPool, syncEcosystemToPoolAsync } from '../../../src/features/ecosystem/sync.ts'
 import { handleEcosystem } from '../../../src/host/commands/ecosystem.ts'
 import type { CommandDeps } from '../../../src/host/commands/shared.ts'
 
@@ -403,4 +403,102 @@ test('issue #219: inspect() covers additional workspace roots when no single roo
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('syncEcosystemToPool skips dependency/VCS/cache dirs and OS junk, prunes legacy mirrors, and preserves mtime', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-eco-skip-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+
+  const primary = join(root, 'primary')
+  const accDir = join(root, 'acc2')
+  const pSkill = join(primary, '.gemini', 'config', 'skills', 'motion-showreel')
+  const tSkill = join(accDir, '.gemini', 'config', 'skills', 'motion-showreel')
+
+  mkdirSync(join(pSkill, 'scripts', 'node_modules', 'pkg'), { recursive: true })
+  mkdirSync(join(pSkill, '.git', 'objects'), { recursive: true })
+  mkdirSync(join(pSkill, '.venv', 'lib'), { recursive: true })
+  mkdirSync(join(pSkill, '__pycache__'), { recursive: true })
+  writeFileSync(join(pSkill, 'SKILL.md'), '# motion')
+  writeFileSync(join(pSkill, 'scripts', 'node_modules', 'pkg', 'index.js'), 'big dep')
+  writeFileSync(join(pSkill, '.git', 'objects', 'abc'), 'git obj')
+  writeFileSync(join(pSkill, '.venv', 'lib', 'mod.py'), 'venv')
+  writeFileSync(join(pSkill, '__pycache__', 'a.pyc'), 'pyc')
+  writeFileSync(join(pSkill, '.DS_Store'), 'mac')
+  writeFileSync(join(pSkill, 'Thumbs.db'), 'win')
+
+  // Pre-existing legacy mirrored node_modules in target account must be pruned
+  mkdirSync(join(tSkill, 'scripts', 'node_modules', 'pkg'), { recursive: true })
+  writeFileSync(join(tSkill, 'scripts', 'node_modules', 'pkg', 'index.js'), 'stale mirror')
+
+  // Backdate SKILL.md beyond racy-mtime window (2s) so mtime preservation + stat skip can be verified
+  const oldTime = new Date(Date.now() - 10_000)
+  utimesSync(join(pSkill, 'SKILL.md'), oldTime, oldTime)
+
+  const report1 = syncEcosystemToPool({ primaryHome: primary, accounts: [makeAccount(accDir, 'acc_2')] })
+  assert.equal(report1.errors.length, 0)
+  assert.equal(existsSync(join(tSkill, 'SKILL.md')), true)
+  assert.equal(existsSync(join(tSkill, 'scripts', 'node_modules')), false, 'node_modules must not be mirrored and legacy copy must be pruned')
+  assert.equal(existsSync(join(tSkill, '.git')), false)
+  assert.equal(existsSync(join(tSkill, '.venv')), false)
+  assert.equal(existsSync(join(tSkill, '__pycache__')), false)
+  assert.equal(existsSync(join(tSkill, '.DS_Store')), false)
+  assert.equal(existsSync(join(tSkill, 'Thumbs.db')), false)
+  assert.ok(Math.abs(statSync(join(tSkill, 'SKILL.md')).mtimeMs - statSync(join(pSkill, 'SKILL.md')).mtimeMs) < 50)
+
+  // Immediate edit within racy-mtime window with SAME byte length must still propagate
+  writeFileSync(join(pSkill, 'SKILL.md'), '# MOTIO!')
+  const freshNow = new Date()
+  utimesSync(join(pSkill, 'SKILL.md'), freshNow, freshNow)
+  utimesSync(join(tSkill, 'SKILL.md'), freshNow, freshNow)
+  const report2 = syncEcosystemToPool({ primaryHome: primary, accounts: [makeAccount(accDir, 'acc_2')] })
+  assert.equal(report2.copiedFiles, 1, 'same-length edit within racy mtime window must still copy')
+  assert.equal(readFileSync(join(tSkill, 'SKILL.md'), 'utf8'), '# MOTIO!')
+})
+
+test('syncEcosystemToPoolAsync & EcosystemService.syncAllAsync mirror asynchronously with allowlist, skip-list, and bridge preservation', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-eco-async-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+
+  const primary = join(root, 'primary')
+  const accDir = join(root, 'acc2')
+  const pCfg = join(primary, '.gemini', 'config')
+  const tCfg = join(accDir, '.gemini', 'config')
+
+  mkdirSync(join(pCfg, 'skills', 'demo', 'node_modules', 'dep'), { recursive: true })
+  mkdirSync(join(tCfg, 'skills', 'demo', 'node_modules', 'dep'), { recursive: true })
+  mkdirSync(join(tCfg, 'skills', 'obsolete'), { recursive: true })
+  writeFileSync(join(pCfg, 'skills', 'demo', 'SKILL.md'), '# async skill')
+  writeFileSync(join(pCfg, 'skills', 'demo', 'node_modules', 'dep', 'x.js'), 'dep')
+  writeFileSync(join(tCfg, 'skills', 'demo', 'node_modules', 'dep', 'x.js'), 'old dep')
+  writeFileSync(join(tCfg, 'skills', 'obsolete', 'SKILL.md'), 'gone')
+  writeFileSync(join(pCfg, 'mcp_config.json'), JSON.stringify({
+    mcpServers: { 'dsh-tools': { url: 'http://primary' }, ext: { command: 'node', args: ['a.js'] } },
+  }))
+  writeFileSync(join(tCfg, 'mcp_config.json'), JSON.stringify({
+    mcpServers: { 'dsh-tools': { url: 'http://acc2' }, old: { command: 'x' } },
+  }))
+
+  const report = await syncEcosystemToPoolAsync({
+    primaryHome: primary,
+    accounts: [makeAccount(primary, 'acc_primary', { systemHome: true }), makeAccount(accDir, 'acc_2')],
+  })
+  assert.deepEqual(report.syncedAccounts, ['acc_2'])
+  assert.deepEqual(report.skippedAccounts, ['acc_primary'])
+  assert.equal(report.errors.length, 0)
+  assert.equal(readFileSync(join(tCfg, 'skills', 'demo', 'SKILL.md'), 'utf8'), '# async skill')
+  assert.equal(existsSync(join(tCfg, 'skills', 'demo', 'node_modules')), false)
+  assert.equal(existsSync(join(tCfg, 'skills', 'obsolete')), false)
+  const mergedMcp = JSON.parse(readFileSync(join(tCfg, 'mcp_config.json'), 'utf8'))
+  assert.equal(mergedMcp.mcpServers['dsh-tools'].url, 'http://acc2')
+  assert.deepEqual(mergedMcp.mcpServers.ext, { command: 'node', args: ['a.js'] })
+  assert.equal(mergedMcp.mcpServers.old, undefined)
+
+  const cfg = defaultConfig()
+  const eco = new EcosystemService({
+    primaryHome: primary,
+    pool: { getAccounts: () => [makeAccount(accDir, 'acc_2')] },
+    getConfig: () => cfg,
+  })
+  const svcReport = await eco.syncAllAsync()
+  assert.deepEqual(svcReport.syncedAccounts, ['acc_2'])
 })

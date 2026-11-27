@@ -4,6 +4,7 @@
 // A pid + monotonic sequence + random suffix makes every temp unique so
 // concurrent writers never share one, while rename gives an atomic swap.
 import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 let seq = 0
@@ -24,6 +25,23 @@ export function writeFileAtomicSync(file: string, data: string | Uint8Array, mod
   } catch (err) {
     try {
       if (existsSync(tmp)) unlinkSync(tmp)
+    } catch {
+      /* best effort */
+    }
+    throw err
+  }
+}
+
+/** Write `data` to `file` atomically without blocking the event loop. */
+export async function writeFileAtomic(file: string, data: string | Uint8Array, mode = 0o600): Promise<void> {
+  const tmp = atomicTmpPath(file)
+  try {
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(tmp, data, typeof data === 'string' ? { encoding: 'utf8', mode } : { mode })
+    await rename(tmp, file)
+  } catch (err) {
+    try {
+      await unlink(tmp)
     } catch {
       /* best effort */
     }

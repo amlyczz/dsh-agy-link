@@ -14,11 +14,11 @@ import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { ManagedAccount } from '../common/pool-types.ts'
-import { parseCimDate, pidAlive, readProcessTable, type ProcessRow } from '../runtime/agy/process-table.ts'
+import { parseCimDate, pidAlive, readProcessTable, readProcessTableAsync, type ProcessRow } from '../runtime/agy/process-table.ts'
 
 // Re-exported so existing diagnostics/scripts keep one import site for the
 // machine process table.
-export { parseCimDate, pidAlive, readProcessTable, type ProcessRow }
+export { parseCimDate, pidAlive, readProcessTable, readProcessTableAsync, type ProcessRow }
 
 /** Presence locks older than this are certainly from finished conversations. */
 export const PRESENCE_LOCK_MAX_AGE_MS = 24 * 60 * 60 * 1000
@@ -121,6 +121,15 @@ export function reapOrphanedMcpServers(now = Date.now(), minAgeMs = MIN_ORPHAN_A
   return pids
 }
 
+/** Non-blocking variant of {@link reapOrphanedMcpServers} using async process table reads. */
+export async function reapOrphanedMcpServersAsync(now = Date.now(), minAgeMs = MIN_ORPHAN_AGE_MS): Promise<number[]> {
+  const rows = await readProcessTableAsync()
+  if (rows.length === 0) return []
+  const pids = pickOrphanMcpProcesses(rows, pidAlive, now, minAgeMs)
+  for (const pid of pids) killOrphan(pid)
+  return pids
+}
+
 /** Where the per-account presence locks live (exported for diagnostics). */
 export function presenceDirOf(accountDir: string): string {
   return join(accountDir, '.gemini', 'antigravity-cli', 'presence')
@@ -131,16 +140,17 @@ export interface MaintenanceDeps {
   accounts: () => readonly ManagedAccount[]
   sweepStaging: () => number
   sweepLogs: () => number
-  syncEcosystem?: () => void
+  syncEcosystem?: () => void | Promise<unknown>
   log: (msg: string) => void
   /** Opt-out for operators who do not want the plugin touching any process. */
   reapOrphans: boolean
   now?: () => number
 }
 
-/** One maintenance pass; each step is isolated so a failure cannot skip the rest. */
-export function runMaintenancePass(deps: MaintenanceDeps): { presence: number; staging: number; logs: number; reaped: number[] } {
-  const now = (deps.now ?? Date.now)()
+function collectMaintenanceSteps(
+  deps: MaintenanceDeps,
+  now: number,
+): { presence: number; staging: number; logs: number } {
   let presence = 0
   let accounts: readonly ManagedAccount[] = []
   try {
@@ -168,6 +178,25 @@ export function runMaintenancePass(deps: MaintenanceDeps): { presence: number; s
   } catch {
     // ignore
   }
+  return { presence, staging, logs }
+}
+
+function logMaintenanceSummary(
+  log: (msg: string) => void,
+  result: { presence: number; staging: number; logs: number; reaped: number[] },
+): void {
+  const parts: string[] = []
+  if (result.presence > 0) parts.push(result.presence + ' stale presence lock(s)')
+  if (result.staging > 0) parts.push(result.staging + ' staging dir(s)')
+  if (result.logs > 0) parts.push(result.logs + ' old log(s)')
+  if (result.reaped.length > 0) parts.push(result.reaped.length + ' orphaned MCP process(es)')
+  if (parts.length > 0) log('[agy-link] maintenance: swept ' + parts.join(', '))
+}
+
+/** One maintenance pass; each step is isolated so a failure cannot skip the rest. */
+export function runMaintenancePass(deps: MaintenanceDeps): { presence: number; staging: number; logs: number; reaped: number[] } {
+  const now = (deps.now ?? Date.now)()
+  const { presence, staging, logs } = collectMaintenanceSteps(deps, now)
   let reaped: number[] = []
   if (deps.reapOrphans) {
     try {
@@ -177,17 +206,37 @@ export function runMaintenancePass(deps: MaintenanceDeps): { presence: number; s
     }
   }
   try {
-    deps.syncEcosystem?.()
+    void deps.syncEcosystem?.()
   } catch {
     // ignore
   }
-  const parts: string[] = []
-  if (presence > 0) parts.push(presence + ' stale presence lock(s)')
-  if (staging > 0) parts.push(staging + ' staging dir(s)')
-  if (logs > 0) parts.push(logs + ' old log(s)')
-  if (reaped.length > 0) parts.push(reaped.length + ' orphaned MCP process(es)')
-  if (parts.length > 0) deps.log('[agy-link] maintenance: swept ' + parts.join(', '))
-  return { presence, staging, logs, reaped }
+  const result = { presence, staging, logs, reaped }
+  logMaintenanceSummary(deps.log, result)
+  return result
+}
+
+/** Non-blocking maintenance pass that awaits async process reaping and ecosystem sync. */
+export async function runMaintenancePassAsync(
+  deps: MaintenanceDeps,
+): Promise<{ presence: number; staging: number; logs: number; reaped: number[] }> {
+  const now = (deps.now ?? Date.now)()
+  const { presence, staging, logs } = collectMaintenanceSteps(deps, now)
+  let reaped: number[] = []
+  if (deps.reapOrphans) {
+    try {
+      reaped = await reapOrphanedMcpServersAsync(now)
+    } catch {
+      reaped = []
+    }
+  }
+  try {
+    await deps.syncEcosystem?.()
+  } catch {
+    // ignore
+  }
+  const result = { presence, staging, logs, reaped }
+  logMaintenanceSummary(deps.log, result)
+  return result
 }
 
 /**
@@ -202,13 +251,15 @@ export function scheduleBootMaintenance(
   const initial = options.initialDelayMs ?? 12_000
   const interval = options.intervalMs ?? 30 * 60_000
   let stopped = false
+  let running = false
   const pass = (): void => {
-    if (stopped) return
-    try {
-      runMaintenancePass(deps)
-    } catch {
-      // never let housekeeping break the host
-    }
+    if (stopped || running) return
+    running = true
+    void runMaintenancePassAsync(deps)
+      .catch(() => undefined)
+      .finally(() => {
+        running = false
+      })
   }
   const first = setTimeout(pass, initial)
   first.unref?.()

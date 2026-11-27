@@ -3,7 +3,7 @@
 //
 // The readers never throw: a machine where `ps` is unavailable must degrade to
 // "no rows" (callers then skip the sweep), never to a crash on the boot path.
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 
 /** One row of the machine's process table. */
 export interface ProcessRow {
@@ -21,6 +21,16 @@ export interface ProcessRow {
  */
 const WIN_IMAGE_FILTER = "Name='node.exe' OR Name='cmd.exe' OR Name='npx.exe' OR Name='agy.exe' OR Name='agy'"
 
+function winProcessArgs(): string[] {
+  return [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    `Get-CimInstance Win32_Process -Filter "${WIN_IMAGE_FILTER}" | ` +
+      'Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress',
+  ]
+}
+
 /** Parse the shapes `ConvertTo-Json` emits for a CIM DateTime. */
 export function parseCimDate(value: unknown): number {
   if (typeof value !== 'string' || value === '') return 0
@@ -33,59 +43,82 @@ export function parseCimDate(value: unknown): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
 }
 
+function parseWinProcessOutput(out: string): ProcessRow[] {
+  const trimmed = out.trim()
+  if (trimmed === '') return []
+  const parsed = JSON.parse(trimmed) as unknown
+  const list = Array.isArray(parsed) ? parsed : [parsed]
+  const rows: ProcessRow[] = []
+  for (const item of list) {
+    const rec = item as Record<string, unknown>
+    const pid = Number(rec.ProcessId)
+    const parentPid = Number(rec.ParentProcessId)
+    if (!Number.isInteger(pid) || !Number.isInteger(parentPid)) continue
+    rows.push({
+      pid,
+      parentPid,
+      startedAtMs: parseCimDate(rec.CreationDate),
+      commandLine: typeof rec.CommandLine === 'string' ? rec.CommandLine : '',
+    })
+  }
+  return rows
+}
+
+function parsePosixProcessOutput(out: string): ProcessRow[] {
+  const rows: ProcessRow[] = []
+  for (const line of out.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.{24})\s(.*)$/)
+    if (!m) continue
+    const started = Date.parse(m[3]!.trim())
+    rows.push({
+      pid: Number(m[1]),
+      parentPid: Number(m[2]),
+      startedAtMs: Number.isFinite(started) ? started : 0,
+      commandLine: m[4] ?? '',
+    })
+  }
+  return rows
+}
+
 /** Read this machine's process table (Windows via CIM, POSIX via `ps`). Never throws. */
 export function readProcessTable(timeoutMs = 8_000): ProcessRow[] {
   try {
     if (process.platform === 'win32') {
-      const out = execFileSync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `Get-CimInstance Win32_Process -Filter "${WIN_IMAGE_FILTER}" | ` +
-            'Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress',
-        ],
-        { encoding: 'utf8', timeout: timeoutMs, windowsHide: true },
-      ).trim()
-      if (out === '') return []
-      const parsed = JSON.parse(out) as unknown
-      const list = Array.isArray(parsed) ? parsed : [parsed]
-      const rows: ProcessRow[] = []
-      for (const item of list) {
-        const rec = item as Record<string, unknown>
-        const pid = Number(rec.ProcessId)
-        const parentPid = Number(rec.ParentProcessId)
-        if (!Number.isInteger(pid) || !Number.isInteger(parentPid)) continue
-        rows.push({
-          pid,
-          parentPid,
-          startedAtMs: parseCimDate(rec.CreationDate),
-          commandLine: typeof rec.CommandLine === 'string' ? rec.CommandLine : '',
-        })
-      }
-      return rows
+      const out = execFileSync('powershell.exe', winProcessArgs(), {
+        encoding: 'utf8',
+        timeout: timeoutMs,
+        windowsHide: true,
+      })
+      return parseWinProcessOutput(out)
     }
     const out = execFileSync('ps', ['-eo', 'pid=,ppid=,lstart=,command='], {
       encoding: 'utf8',
       timeout: timeoutMs,
     })
-    const rows: ProcessRow[] = []
-    for (const line of out.split('\n')) {
-      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.{24})\s(.*)$/)
-      if (!m) continue
-      const started = Date.parse(m[3]!.trim())
-      rows.push({
-        pid: Number(m[1]),
-        parentPid: Number(m[2]),
-        startedAtMs: Number.isFinite(started) ? started : 0,
-        commandLine: m[4] ?? '',
-      })
-    }
-    return rows
+    return parsePosixProcessOutput(out)
   } catch {
     return []
   }
+}
+
+/** Asynchronous variant of {@link readProcessTable} so background maintenance never blocks the event loop. */
+export function readProcessTableAsync(timeoutMs = 8_000): Promise<ProcessRow[]> {
+  const isWin = process.platform === 'win32'
+  const file = isWin ? 'powershell.exe' : 'ps'
+  const args = isWin ? winProcessArgs() : ['-eo', 'pid=,ppid=,lstart=,command=']
+  return new Promise((resolve) => {
+    execFile(file, args, { encoding: 'utf8', timeout: timeoutMs, windowsHide: true }, (err, stdout) => {
+      if (err) {
+        resolve([])
+        return
+      }
+      try {
+        resolve(isWin ? parseWinProcessOutput(stdout) : parsePosixProcessOutput(stdout))
+      } catch {
+        resolve([])
+      }
+    })
+  })
 }
 
 /** Whether `pid` exists and is signalable (EPERM still means alive). */

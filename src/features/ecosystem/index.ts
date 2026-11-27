@@ -9,7 +9,7 @@ import type { PluginConfig } from '../../common/types.ts'
 import type { AccountPoolManager } from '../../host/pool.ts'
 import { inspectEcosystem } from './inventory.ts'
 import { mergeEcosystemSnapshots } from './merge.ts'
-import { syncEcosystemToPool } from './sync.ts'
+import { syncEcosystemToPool, syncEcosystemToPoolAsync } from './sync.ts'
 
 export interface EcosystemServiceOpts {
   pool: Pick<AccountPoolManager, 'getAccounts'>
@@ -60,27 +60,38 @@ export class EcosystemService {
   }
 
   syncAll(req: { force?: boolean; accountIds?: readonly string[] } = {}): EcosystemSyncReport {
-    const cfg = this.opts.getConfig()
-    if (!req.force && !cfg.syncAccountCustomizations) {
-      return {
-        primaryHome: this.primaryHome,
-        syncedAccounts: [],
-        skippedAccounts: this.opts.pool.getAccounts().map((a) => a.id),
-        copiedFiles: 0,
-        removedFiles: 0,
-        errors: [],
-        syncedAt: Date.now(),
-      }
-    }
+    const targetAccounts = this.resolveSyncTargets(req)
+    if (targetAccounts === null) return this.skippedSyncReport()
+    const report = syncEcosystemToPool({ primaryHome: this.primaryHome, accounts: targetAccounts, log: this.opts.log })
+    return this.recordSyncReport(report, req)
+  }
+
+  async syncAllAsync(req: { force?: boolean; accountIds?: readonly string[] } = {}): Promise<EcosystemSyncReport> {
+    const targetAccounts = this.resolveSyncTargets(req)
+    if (targetAccounts === null) return this.skippedSyncReport()
+    const report = await syncEcosystemToPoolAsync({ primaryHome: this.primaryHome, accounts: targetAccounts, log: this.opts.log })
+    return this.recordSyncReport(report, req)
+  }
+
+  private resolveSyncTargets(req: { force?: boolean; accountIds?: readonly string[] }): readonly ManagedAccount[] | null {
+    if (!req.force && !this.opts.getConfig().syncAccountCustomizations) return null
     const all = this.opts.pool.getAccounts()
-    const targetAccounts = req.accountIds && req.accountIds.length > 0
-      ? all.filter((a) => req.accountIds!.includes(a.id))
-      : all
-    const report = syncEcosystemToPool({
+    return req.accountIds && req.accountIds.length > 0 ? all.filter((a) => req.accountIds!.includes(a.id)) : all
+  }
+
+  private skippedSyncReport(): EcosystemSyncReport {
+    return {
       primaryHome: this.primaryHome,
-      accounts: targetAccounts,
-      log: this.opts.log,
-    })
+      syncedAccounts: [],
+      skippedAccounts: this.opts.pool.getAccounts().map((a) => a.id),
+      copiedFiles: 0,
+      removedFiles: 0,
+      errors: [],
+      syncedAt: Date.now(),
+    }
+  }
+
+  private recordSyncReport(report: EcosystemSyncReport, req: { accountIds?: readonly string[] }): EcosystemSyncReport {
     this.lastSyncAt = report.syncedAt
     if (!req.accountIds || req.accountIds.length === 0) {
       this.syncedAccountCount = report.syncedAccounts.length

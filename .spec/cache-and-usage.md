@@ -45,7 +45,7 @@ DSH 的 `normalizeUsage()`（宿主 `dsh-token-meter`）要求：`totalTokens` �
 - **原子切模型**：会话响应带 `models.availableModels` 且存在 `${model}-${effort}` 时，用一次 `session/set_model` 完成切换；否则回退 `set_config_option(model) → thought_level` 两步。失败即回退。
 - **每轮缓存日志**：`[cache] hit=..% ctx=.. in=.. cr=.. cw=.. out=.. reason=<none|new-session|resume|rebuild|account-switch|model-switch|idle|retry|aux>`，reason 由 `cache-stats.ts` 纯函数判定，优先级见 `classifyCacheReason`。
 - **报表出口**：内存按本地日聚合（保留 14 天，`host/cache-metrics.ts`）。`GET /plugins/agy-link/status` 返回 `cacheStats`（today / days / last / lastBySession）；`/agy cache-stats`（别名 `/agy cache`）打印逐日命中率与原因占比；`/agy status` 附一行今日摘要。只在进程内，不落盘、不计费。
-- **会话粘性**：`selectSessionAccount` 已经优先复用同族同会话账号（`stickyAccount`）；只有该账号不可用时才换号。换号等于一次 20 万 token 级冷 prefill，日志会标 `account-switch`。
+- **会话粘性**：`selectSessionAccount` 严格跟随同模型族当前的单一活跃账号（`activeAccountIds[family]`）：多轮会话在族指针未移动时自动复用原账号及其原生对话；一旦该族因 429、低配额让路或手动切号轮换，全族会话统一收敛到新活跃账号并通过上下文摘要交接（`account-switch`），绝不因旧会话绑定而复活旧号拆散并发账号。
 
 ## 5. 已知取舍（明确不做）
 
