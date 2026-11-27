@@ -275,3 +275,29 @@ test('/pool/open-terminal still rejects an existing account without a dir', asyn
   const captured = await invoke(s.route('/plugins/agy-link/pool/open-terminal'), fakeReq('POST', '/', { id: 'no-dir' }))
   assert.equal(captured.status(), 400)
 })
+
+test('/pool/import falls back to the configured proxy and trims the body value', async () => {
+  const imported: unknown[][] = []
+  const s = setup({
+    getConfig: () => ({ ...BASE_CONFIG, proxyUrl: ' http://cfg-proxy:9 ' }),
+    poolAuth: {
+      status: () => ({ phase: 'idle' }),
+      importRefreshToken: async (...args: unknown[]) => {
+        imported.push(args)
+        return { ok: true, isNew: true, email: 'a@b.c' }
+      },
+    },
+  })
+
+  // The panel omits the proxy field by default: the import must still use the
+  // configured proxy, otherwise the token exchange falls back to a direct
+  // connection and fails on every restricted network.
+  const withoutBodyProxy = await invoke(s.route('/plugins/agy-link/pool/import'), fakeReq('POST', '/', { token: '1//rt' }))
+  assert.equal(withoutBodyProxy.status(), 200)
+  assert.deepEqual(imported.at(-1), ['1//rt', undefined, 'http://cfg-proxy:9'])
+
+  // An explicit proxy in the request body still wins over the configuration.
+  const withBodyProxy = await invoke(s.route('/plugins/agy-link/pool/import'), fakeReq('POST', '/', { token: '1//rt', alias: 'x', proxyUrl: '  http://body-proxy:1  ' }))
+  assert.equal(withBodyProxy.status(), 200)
+  assert.deepEqual(imported.at(-1), ['1//rt', 'x', 'http://body-proxy:1'])
+})

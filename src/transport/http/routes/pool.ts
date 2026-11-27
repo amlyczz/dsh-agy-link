@@ -497,7 +497,7 @@ function handlePoolReorder(services: HostServices, req: unknown, res: unknown): 
 }
 
 function handlePoolImport(services: HostServices, req: unknown, res: unknown): void {
-  const { poolAuth, pool, notifyPicker } = services
+  const { getConfig, poolAuth, pool, notifyPicker } = services
   runRoute(res, async () => {
     if (methodOf(req) !== 'POST') {
       sendJson(res as RawRes, 405, { error: 'POST only' })
@@ -506,7 +506,11 @@ function handlePoolImport(services: HostServices, req: unknown, res: unknown): v
     const body = await readBody(req)
     const token = typeof body.token === 'string' ? body.token.trim() : ''
     const alias = typeof body.alias === 'string' ? body.alias.trim() : undefined
-    const proxyUrl = typeof body.proxyUrl === 'string' ? body.proxyUrl.trim() : undefined
+    const bodyProxy = typeof body.proxyUrl === 'string' && body.proxyUrl.trim() !== '' ? body.proxyUrl.trim() : ''
+    // 导入凭据也要走配置的代理：请求体没填 proxyUrl 时回落到 config.proxyUrl，
+    // 否则只剩 detectSystemProxy()（多数宿主进程没有 HTTP(S)_PROXY，会退化成直连），
+    // 而 token 端点在受限网络下直连必然失败。行为与本文件的 begin-add 路由保持一致。
+    const proxyUrl = bodyProxy || getConfig().proxyUrl.trim() || detectSystemProxy() || undefined
     if (!token) {
       sendJson(res as RawRes, 400, { ok: false, error: 'Token is required' })
       return
