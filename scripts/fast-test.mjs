@@ -21,6 +21,7 @@ const COMPONENT_TEST_MAP = {
   'src/host/active-runs.ts': ['test/host/session-view.test.ts'],
   'src/host/session-view.ts': ['test/host/session-view.test.ts', 'test/transport/http-contract-status-routes.test.ts'],
   'src/provider/prompt.ts': ['test/provider/adapter-*.test.ts', 'test/provider/model-switch-stale-bindings.test.ts'],
+  'src/provider/prompt-binding.ts': ['test/provider/adapter-prompt.test.ts', 'test/provider/model-switch-stale-bindings.test.ts', 'test/provider/context-transfer-handover.test.ts'],
   'src/provider/stale-model-bindings.ts': ['test/provider/model-switch-stale-bindings.test.ts'],
   'src/provider/live-last-request.ts': ['test/provider/review-prompt-truncation.test.ts'],
   'src/provider/prompt-budget.ts': ['test/provider/prompt-budget.test.ts'],

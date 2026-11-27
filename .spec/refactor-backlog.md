@@ -50,5 +50,5 @@
 
 ## 2026-11-27 新增
 
-- `src/provider/prompt.ts`（596 → 578）：为给 #221 的保护逻辑腾出预算，抽出 `clearStaleFamilyModelBindings` → `stale-model-bindings.ts`。**更大的那一步未做**：`resolvePromptBinding` + `ResolveBindingInput`（约 160 行，绑定生命周期）与提示词组装是两个职责，应整体抽成 `prompt-binding.ts`；当时为控制单次改动范围只动了最小的一块。
+- `src/provider/prompt.ts`（596 → 578 → **420**）：先抽出 `clearStaleFamilyModelBindings` → `stale-model-bindings.ts`，随后把绑定解析整体抽成 `prompt-binding.ts`（`resolvePromptBinding` / `ResolveBindingInput` / `ResolvedPromptBinding`，以及计划依赖契约 `PromptPlanDeps`、`ActiveRunView`——后者由 `prompt.ts` 再导出，依赖只朝一个方向，避免成环）。提示词组装与绑定生命周期自此是两个模块。
 - 教训（本轮连踩两次）：`prompt.ts` 与 `prompt-text.ts` 都贴在 599/596 行，**往这两个文件里加任何逻辑之前先看行数**，新职责直接另起模块。
