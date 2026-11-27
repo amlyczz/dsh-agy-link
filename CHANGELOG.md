@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.102 (2026-11-27)
+
+### English
+
+- **Fix(release): the publish verification window is fifteen minutes, up from six.** No user-facing change; this release exists to exercise the fix on the real pipeline. Under strict verification the six-minute window turned three healthy publishes red — v0.6.76, v0.6.93 and v0.6.101 each exited 0, stayed unreadable just past the window, and appeared on the registry about a minute later. A red run for a publish that worked is as misleading as a silent skip. The default window had no test, which is how it stayed too short; two now pin it.
+
+### 中文
+
+- **修复(发布)：发布后的注册表验证窗口从 6 分钟延长到 15 分钟。** 无面向用户的变化；这个版本的存在就是为了在真实流水线上验证这处修复。在严格验证模式下，6 分钟的窗口让三次健康的发布显示为失败——v0.6.76、v0.6.93 与 v0.6.101 都是 `npm publish` 以 0 退出、在窗口尽头仍不可读、约一分钟后出现在注册表上。一次其实成功的发布显示为红色，和静默跳过一样有误导性。默认窗口此前没有测试，所以一直偏短；现在有两个用例钉住它。
+
 ## 0.6.101 (2026-11-27)
 
 ### English
