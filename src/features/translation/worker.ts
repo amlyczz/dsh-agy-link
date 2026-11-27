@@ -364,8 +364,16 @@ export class TranslationWorkerPool {
     }
     const env = withAgyQuietEnv(buildAgyEnv({ account, cfg, telemetryFlags: cfg.disableTelemetry }))
     if (cfg.suppressAgyAutoUpdate !== false) preemptAgyAutoUpdate(env, this.now())
+    // `-p=` — the flag must carry its (empty) value itself (issue #220). The
+    // worker has no first prompt: its turns arrive over stdin as NDJSON. But agy
+    // 1.5.18 takes the token right after a bare `-p` as the prompt, so `-p
+    // --output-format …` exited 2 before the first input and every translation
+    // entry point failed. A separate empty argument (`-p ""`) or no `-p` at all
+    // is worse: agy sends an EMPTY first turn, fails with "backend returned an
+    // empty conversation id" and exits 1. `-p=` is the only spelling verified
+    // live to start a session that then answers consecutive stdin turns.
     const args = [
-      '-p',
+      '-p=',
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--mode', 'plan',

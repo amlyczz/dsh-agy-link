@@ -408,3 +408,41 @@ test('TranslationWorkerPool covers empty response, validation/overloaded/eligibi
   now += 100
   assert.equal((await workers.tryTranslate({ prompt: 'p', model: 'gemini-3.8-flash', effort: 'low', maxTokens: 64, timeoutMs: 2_000 }))?.code, Err.QUOTA)
 })
+
+
+// issue #220: agy 1.5.18 takes the token right after a bare `-p` as the prompt.
+// The worker starts with no prompt and feeds its turns over stdin, so `-p` was
+// followed by `--output-format`: agy read THAT as the prompt and exited 2, and
+// every translation entry point (button, /tsl, auto-translate) failed.
+test('issue #220: the worker attaches -p to an empty value instead of leaving it bare', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-worker-p-flag-'))
+  const pool = new AccountPoolManager(dir)
+  const acc = pool.createAccountSlot('w2')
+  pool.setActiveAccount(acc.id)
+  const h = makeHarness((_turn, _line, child) => {
+    queueMicrotask(() => child.emitResult('ok', { deltas: ['ok'] }))
+  })
+  const workers = new TranslationWorkerPool({
+    cfg: defaultConfig,
+    bin: () => '/usr/local/bin/agy',
+    pool,
+    log: () => {},
+    platform: 'darwin',
+    spawn: h.spawn,
+  })
+  t.after(() => {
+    workers.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const r = await workers.tryTranslate({ prompt: 'hello', model: 'gemini-3.8-flash', effort: 'low', maxTokens: 512, timeoutMs: 10_000 })
+  assert.equal(r?.ok, true)
+  const args = h.spawns[0]!.args
+  // Verified live on agy 1.5.18: `-p=` starts a session that reads its turns
+  // from stdin (two consecutive turns answered, process alive). A separate
+  // empty argument (`-p ""`) and omitting `-p` both send an EMPTY first turn,
+  // fail with "backend returned an empty conversation id" and exit 1 — the
+  // worker would die before its first input.
+  assert.deepEqual(args.slice(0, 2), ['-p=', '--output-format'], '-p must carry its (empty) value on the flag itself')
+  assert.equal(args.includes(''), false, 'a separate empty argv element is an empty prompt, not "no prompt"')
+})
