@@ -218,10 +218,11 @@ function resetDelay(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * Every enabled account must be held back by quota or a 429 cooldown — the two
  * states the next reset repairs. A missing plan, a model absent from the
- * catalog, a signed-out or disabled account is still true after the reset, so
- * parking the turn on one would just delay the real error (a chat turn asking
- * for a model only a cooling account has must fail now, not in 15 minutes).
- * A pool without `explainIneligibility` cannot be judged and keeps the wait.
+ * catalog, or a signed-out account stays that way after the reset, so parking
+ * the turn on one would only delay the real error (a chat turn asking for a
+ * model only a cooling account has must fail now, not in 15 minutes). A pool
+ * with no enabled account has nothing to wait for; one without
+ * `explainIneligibility` cannot be judged and keeps the wait.
  */
 function resetCanUnblockPool(pool: AccountPoolManager, family: ModelFamily, model: string): boolean {
   if (typeof pool.explainIneligibility !== 'function') return true
