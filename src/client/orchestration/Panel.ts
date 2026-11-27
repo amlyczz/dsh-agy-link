@@ -8,6 +8,7 @@
 // planned, the agent's own checklist, the subagents (merged out of the header
 // popover), the tool flow stamped with its seat, and the real context window.
 
+import { renderInline, renderMarkdown } from '../markdown.ts'
 import { h, useEffect, useState } from '../react.ts'
 import { useOrchestration } from './data.ts'
 import { contextPercent, formatDuration, formatTokens } from './format.ts'
@@ -117,7 +118,7 @@ function todoRow(todo: OrchestrationTodo): unknown {
     'div',
     { style: { display: 'flex', gap: '6px', fontSize: '12px', alignItems: 'baseline', color: todo.state === 'done' ? MUTED : TEXT } },
     h('span', { style: { color, width: '12px', flex: '0 0 12px' } }, glyph),
-    h('span', { style: { textDecoration: todo.state === 'done' ? 'line-through' : 'none' } }, todo.text),
+    h('span', { style: { textDecoration: todo.state === 'done' ? 'line-through' : 'none', minWidth: 0 } }, renderInline(todo.text)),
   )
 }
 
@@ -230,33 +231,34 @@ function contextBar(context: OrchestrationContext, seats: OrchestrationSeat[]): 
   )
 }
 
-/** Plan text with a three-line preview. A real component: it owns hook state. */
+/**
+ * The planner's own Markdown, clipped to a few lines until expanded.
+ *
+ * A real component because it owns hook state; the Markdown itself comes from
+ * the shared renderer, so headings, lists and code fences read like the chat.
+ */
 function PlanText(props: { plan: string }): unknown {
   const plan = props.plan
   const [open, setOpen] = useState(false)
   const lines = plan.split(/\r?\n/)
-  const preview = lines.slice(0, 3).join('\n')
   return h(
     'div',
     { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
     h(
-      'pre',
+      'div',
       {
         style: {
-          margin: 0,
           padding: '6px 8px',
           borderRadius: '6px',
           background: CARD,
           border: '1px solid ' + BORDER,
-          color: TEXT,
-          fontSize: '11.5px',
-          lineHeight: 1.5,
-          whiteSpace: 'pre-wrap',
-          maxHeight: open ? '420px' : '62px',
+          // Collapsed shows the plan's first lines the way it will read when
+          // open; expanding only lifts the clip.
+          maxHeight: open ? '440px' : '72px',
           overflow: 'auto',
         },
       },
-      open ? plan : preview + (lines.length > 3 ? '\n…' : ''),
+      renderMarkdown(plan),
     ),
     lines.length > 3
       ? h(

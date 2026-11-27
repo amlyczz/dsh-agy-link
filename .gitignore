@@ -16,3 +16,5 @@ Microsoft/
 tmp-asar-out/
 tmp-*.cjs
 tmp-*.ts
+
+tmp-*.mjs
