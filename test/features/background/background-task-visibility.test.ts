@@ -372,7 +372,11 @@ const fakeBin = FAKE_AGY
         const ev = rec.eventAt(i)
         if (ev) recorded.push(ev)
       }
-      assert.ok(recorded.some((e) => e.kind === 'step' && e.stepKind === 'subagent' && e.text.includes('[后台任务 · task-55] acp background line')))
+      // The tracker still emits these lines, but the transport no longer files
+      // them as conversation steps: they are tail-of-file chatter, and writing
+      // them into the reasoning block cut the assistant's text block at every
+      // burst (which is what broke Markdown rendering).
+      assert.equal(recorded.some((e) => e.kind === 'step' && e.text.includes('[后台任务 · task-55]')), false)
       pool.dispose()
     } finally {
       if (prevHome === undefined) delete process.env.HOME

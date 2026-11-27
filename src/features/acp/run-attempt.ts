@@ -35,6 +35,7 @@ import {
   type LiveQuotaFailoverState,
 } from '../../provider/quota-failover.ts'
 import { SubagentTracker } from '../subagent/tracker.ts'
+import { appendConversationEvent } from '../subagent/task-activity.ts'
 import type { AcpProcess } from './client.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
@@ -101,7 +102,7 @@ async function runAcpPrompt(opts: {
         resumed: Boolean(input.binding?.conversationId),
         accountHome: recorder.rec.accountHome,
         log: deps.log,
-        onEvent: (ev) => recorder.rec.append(ev),
+        onEvent: (ev) => appendConversationEvent(recorder.rec, ev),
         onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info),
       })
     : null
