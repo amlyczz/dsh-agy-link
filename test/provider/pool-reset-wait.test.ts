@@ -114,6 +114,21 @@ test('pool-reset wait: a reset beyond the cap fails fast, names the cap and keep
   assert.ok(Date.now() - started < 1_000, 'a reset outside the cap must not be slept on')
 })
 
+test('pool-reset wait: a snapshot that never advances fails after one round instead of parking to the cap', async () => {
+  // A stale quota row (or a reset that already landed but was never refreshed)
+  // keeps reporting the same countdown. Re-arming it would sleep until the
+  // 15-minute cap and park the turn; one round must settle it.
+  const { pool, selects } = fakePool({ countdownMs: 120 })
+  const started = Date.now()
+  await assert.rejects(run(pool, { poolResetWaitMs: 900_000 }), (error: { code?: string }) => {
+    assert.equal(error.code, 'AGY_ERROR')
+    return true
+  })
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 3_000, 'one round only, took ' + elapsed + 'ms')
+  assert.equal(selects(), 2, 'one pick, one post-wait re-pick')
+})
+
 test('pool-reset wait: a healthy account never enters the wait', async () => {
   const { pool, selects } = fakePool({ releaseAfterSelects: 0 })
   const out = await run(pool, { poolResetWaitMs: 900_000 })
@@ -220,9 +235,9 @@ test('pool-reset wait: awaitWithNotices streams those notice lines on the reserv
 })
 
 test('pool-reset wait: the adapter streams the notice into the transcript while the selection is parked', async () => {
-  // Three selections: the first two miss (pool drained), the third one releases,
-  // so the parked selection settles on its own instead of leaking a timer.
-  const { pool } = fakePool({ countdownMs: 8_000, releaseAfterSelects: 3 })
+  // The pool stays drained until its reset (60ms away), so the parked selection
+  // settles on its own instead of leaking a timer.
+  const { pool } = fakePool({ releaseAfterMs: 60 })
   const { adapter } = makeAdapter({ poolResetWaitMs: 60_000 }, { pool })
   const realSetTimeout = globalThis.setTimeout
   // Compress the two cadences under test (20s notice interval, 8s reset sleep):

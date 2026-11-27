@@ -235,14 +235,24 @@ async function waitForPoolReset(
 ): Promise<ManagedAccount | undefined> {
   if (!(capMs > 0)) return undefined
   const deadline = Date.now() + capMs
+  const countdownNow = (): number | null =>
+    pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
   for (;;) {
-    const countdown = pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
+    const countdown = countdownNow()
     if (countdown === null || countdown <= 0) return pick()
     if (countdown > deadline - Date.now()) return undefined
     deps.poolWaitNotice?.(countdown, capMs)
     await resetDelay(countdown + 250, signal)
     const account = pick()
     if (account !== undefined) return account
+    // The reset we just waited for is behind us and the pool still offers
+    // nothing. A snapshot that did NOT advance across the wait is stale (or the
+    // pool simply has no usable account): re-arming the same countdown would
+    // replay it until the cap and park the turn for up to 15 minutes. A fresh
+    // snapshot always reports less than the countdown we slept on, and then the
+    // loop is waiting for a genuinely later reset.
+    const after = countdownNow()
+    if (after !== null && after >= countdown) return undefined
   }
 }
 

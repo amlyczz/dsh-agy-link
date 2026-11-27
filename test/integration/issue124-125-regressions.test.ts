@@ -221,7 +221,9 @@ test('issue #125: the self-heal does not run for a quota/auth blocker', async ()
   } as never
   await assert.rejects(() => selectSessionAccount({
     deps: { pool, store: { all: () => ({}), delete: () => {} } as never, refreshQuota: async () => { refreshed += 1 } },
-    cfg: { ...defaultConfig(), autoFallbackModel: false },
+    // poolResetWaitMs: this test pins the self-heal policy, not the bounded
+    // reset wait (the constant countdown above would otherwise be slept on).
+    cfg: { ...defaultConfig(), autoFallbackModel: false, poolResetWaitMs: 0 },
     model: 'gemini-4-hydrogen',
     isAux: false,
     sessionKey: 's1',
