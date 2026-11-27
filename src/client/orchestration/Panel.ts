@@ -279,10 +279,31 @@ export interface OrchestrationPanelProps {
   t?: (key: string, params?: Record<string, unknown>) => string
 }
 
+/** First-load failure: the host never answered the route, so say so instead of spinning. */
+export function OrchestrationUnavailable(props: { onRetry?: () => void } = {}): unknown {
+  return h(
+    'div',
+    { style: { color: MUTED, fontSize: '12px', padding: '16px 12px', lineHeight: 1.6 } },
+    '读取编排状态失败：当前运行中的 DSH 宿主没有提供 /plugins/agy-link/orchestration 路由。',
+    h('br'),
+    '这通常是插件已更新但 DSH 宿主进程仍是旧版本（前端新、宿主旧）。请重启 DSH 或重新加载插件后再打开此页。',
+    props.onRetry === undefined
+      ? null
+      : h('div', { style: { marginTop: '10px' } },
+          h('button', {
+            type: 'button',
+            className: 'agy-btn',
+            style: { fontSize: '11px', padding: '2px 10px', cursor: 'pointer' },
+            onClick: props.onRetry,
+          }, '重试'),
+        ),
+  )
+}
+
 /** The panel body: one session's orchestration, live while a turn streams. */
 export function OrchestrationPanel(props: OrchestrationPanelProps): unknown {
   const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
-  const { snapshot, loaded } = useOrchestration(sessionId)
+  const { snapshot, loaded, unavailable, refresh } = useOrchestration(sessionId)
   const [now, setNow] = useState(Date.now())
   const live = snapshot?.live === true
 
@@ -313,6 +334,7 @@ export function OrchestrationPanel(props: OrchestrationPanelProps): unknown {
   )
 
   if (!loaded) {
+    if (unavailable) return OrchestrationUnavailable({ onRetry: refresh })
     return h('div', { style: { color: MUTED, fontSize: '12px', padding: '16px 12px' } }, '正在读取编排状态…')
   }
   if (snap === null) {

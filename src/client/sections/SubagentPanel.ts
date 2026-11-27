@@ -12,7 +12,7 @@ import { h, useEffect, useRef, useState } from '../react.ts';
 import { win } from '../api.ts';
 import { Button } from '../ui/Button.ts';
 import { portalToBody } from '../ui/Modal.ts';
-import { openOrchestrationTab } from '../orchestration/tab.ts';
+import { canOpenOrchestrationTab, openOrchestrationTab } from '../orchestration/tab.ts';
 
 export interface SubagentItem {
 	conversationId: string
@@ -163,6 +163,12 @@ export function SubagentControl(props: {
 			doc?.removeEventListener?.('mousedown', onDown)
 		}
 	}, [open])
+
+	// One door per header: on a host that can open the 编排 page, that page's own
+	// chip already carries the live count (`OrchestrationButton`), so this pill
+	// would only be a second button leading to the same place (v0.6.107 showed
+	// both). The popover stays for hosts without a right Sidebar.
+	if (canOpenOrchestrationTab()) return null
 
 	// Idle sessions must not show a count pill at all: agy's descriptor files
 	// outlive the run, so "finished" history is not a reason to occupy the header.

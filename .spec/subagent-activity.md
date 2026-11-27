@@ -24,6 +24,8 @@ createAttemptRecorder(deps, cfg, account, initialConversationId)   src/provider/
 ## 表头可见性（2026-11-23）
 
 - 表头只展示**正在运行**的子代理：`SubagentControl` 在 `running.length === 0` 时返回 `null`，会话空闲时表头不出现计数胶囊。
+- **表头只保留一个入口（2026-11-28）**：在能打开右侧栏「编排」页的宿主上（`canOpenOrchestrationTab()`），`SubagentControl` 直接返回 `null`——`OrchestrationButton`（编排胶囊）就是唯一入口，并且它的运行计数改取 `/status.subagents` 的实时数字（`liveRunning`），即便 `/orchestration` 快照尚不可用也能显示 `编排 · N`；只有在没有右侧栏的宿主上才保留 `● N` 计数胶囊与其弹层。v0.6.107 曾把「编排」与「● N」并排渲染且两者指向同一页，属冗余。
+- **编排页加载失败要说出原因，不能永久转圈**：`useOrchestration` 连续 `UNAVAILABLE_AFTER_FAILURES`（3）次读不到快照且从未成功过时置 `unavailable`，面板改为显示「宿主未提供 `/plugins/agy-link/orchestration` 路由（前端新、宿主旧），请重启 DSH 或重新加载插件」并提供「重试」；成功一次即清除。典型成因是 DSH 宿主进程在插件更新前启动（前端 bundle 已更新、宿主仍是旧 bundle）。锚点：`test/client/orchestration-header.test.ts`。
 - 面板只列运行中的行；**不再有「已结束 N / 展开已结束」**。agy 的子代理描述符会长期保留且状态永远是 `SUBAGENT_STATE_ALIVE`，按描述符做历史列表会让空闲会话永久挂着一个「已结束 45」的面板。
 - 计数格式与 DSH 自带后台任务对齐：`● N`（仅运行数，不含历史总数）；面板标题 `子代理 · N`。
 - 为什么不直接注册成 DSH job：job registry 的 `running + stopping` 上限与 bash 后台任务共享（默认 10），每次结算还会通知 owner（这里是 agy），会注入 agy 从未发起的「后台任务完成」。agy 一轮可起 10+ 子代理，注册会撞 `JOB_LIMIT_REACHED` 并污染模型上下文；因此只复用观感，不共用账本。

@@ -194,7 +194,7 @@ function HeaderBadge({ hostId, sessionId, t }: { hostId: string; sessionId: stri
 	);
 	return h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
 		badge,
-		h(OrchestrationButton, { t, sessionId }),
+		h(OrchestrationButton, { t, sessionId, liveRunning: subItems.filter((i) => i.running).length }),
 		h(SubagentControl, { t, items: subItems }),
 	);
 }
