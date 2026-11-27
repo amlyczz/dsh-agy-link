@@ -53,6 +53,7 @@ export { isAgyFailureBanner, shouldSelfHealAcpResult } from './settle.ts'
 import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
 import { reportAcpCacheTurn } from './cache-turn.ts'
 import { FIRST_OUTPUT_GATE_MS, firstLine } from './turn-format.ts'
+import { createBackgroundWaitMonitor, persistInterimAcpBinding } from './bg-wait-notice.ts'
 
 /** Drive one prompt and classify what happened. Never settles, never cleans up. */
 async function runAcpPrompt(opts: {
@@ -108,6 +109,7 @@ async function runAcpPrompt(opts: {
   const usageTailer = !input.isAux && sid !== ''
     ? new AcpTranscriptUsageTailer(sid, recorder.rec.accountHome)
     : null
+  const bgWait = createBackgroundWaitMonitor(subTracker, recorder)
   const flushTranscriptUsage = (): number => {
     if (!usageTailer) return 0
     const samples = usageTailer.poll()
@@ -127,6 +129,7 @@ async function runAcpPrompt(opts: {
 
   try {
     subTracker?.start()
+    bgWait?.start()
     // Align ACP's generation idle floor with the CLI watchdog (15m minimum when
     // configured timeout >= 60s) so large tool-argument generation never trips a
     // premature 600s idle timeout (#183).
@@ -178,6 +181,7 @@ async function runAcpPrompt(opts: {
               else if (ev.stepKind === 'tool') sawTools = true
             }
             recorder.rec.append(ev)
+            bgWait?.noteEvent(ev)
             input.agyOnEvent?.(ev)
             reportDirectToolQuota(quotaCtrl, ev)
           }
@@ -346,6 +350,7 @@ async function runAcpPrompt(opts: {
       keyringJitter: looksLikeAuthVerificationJitter(`${errText} ${logText}`),
     }
   } finally {
+    bgWait?.stop()
     // Subagents belong to this round: stopping detaches the tracker from the
     // live registry so the header stops reporting them the moment the turn ends.
     subTracker?.stop()
@@ -530,19 +535,16 @@ export async function runAcpAttempt(
     sid,
     prompt,
     sessionStatus: openedStatus,
-    onFirstOutput: () => settleGate('stream'),
-  }).finally(() => {
+    onFirstOutput: () => {
+      persistInterimAcpBinding({ deps, input, recorder, sid })
+      settleGate('stream')
+    },
   })
-  promptPromise.then(
-    () => {
-      clearTimeout(gateTimer)
-      settleGate('done')
-    },
-    () => {
-      clearTimeout(gateTimer)
-      settleGate('done')
-    },
-  )
+  const finishGate = (): void => {
+    clearTimeout(gateTimer)
+    settleGate('done')
+  }
+  promptPromise.then(finishGate, finishGate)
 
   const started = await gate
   if (started === 'done') {

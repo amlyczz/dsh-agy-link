@@ -10,11 +10,13 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
+import type { SubagentSnapshotItem } from './live.ts'
 
 const MAX_READ_BYTES_PER_POLL = 128 * 1024
 const MAX_LINES_PER_POLL = 20
 const MAX_LINE_CHARS = 220
 const MAX_MESSAGE_CHARS = 240
+const TASK_DONE_RE = /\b(completed|finished|exited|done|succeeded|failed|crashed|cancelled|canceled|stopped|terminated|killed)\b|已完成|已结束|已退出|已中止|已取消|执行失败/i
 
 interface TrackedTaskLog {
   taskId: string
@@ -23,6 +25,18 @@ interface TrackedTaskLog {
   decoder: StringDecoder
   rest: string
   seq: number
+  sawActivity: boolean
+  completed: boolean
+  startedAt: number
+  lastAt: number
+  lastLine: string
+}
+
+export interface ActiveTaskLogSummary {
+  taskId: string
+  lastLine: string
+  startedAt: number
+  lastAt: number
 }
 
 export interface BackgroundActivityEvent {
@@ -91,7 +105,11 @@ export class TaskActivityTracker {
   private readonly seenMessageIds = new Set<string>()
   private baselined = false
 
-  constructor(private readonly log?: (msg: string) => void) {}
+  private readonly log?: (msg: string) => void
+
+  constructor(log?: (msg: string) => void) {
+    this.log = log
+  }
 
   reset(): void {
     this.logs.clear()
@@ -136,6 +154,7 @@ export class TaskActivityTracker {
             }
           }
         }
+        const now = Date.now()
         tracked = {
           taskId,
           filePath: fullPath,
@@ -143,12 +162,63 @@ export class TaskActivityTracker {
           decoder: new StringDecoder('utf8'),
           rest: '',
           seq: 0,
+          sawActivity: !baselineOnly,
+          completed: baselineOnly,
+          startedAt: now,
+          lastAt: now,
+          lastLine: '',
         }
         this.logs.set(file, tracked)
       }
       if (baselineOnly) continue
       this.pollSingleTaskLog(tracked, emit)
     }
+  }
+
+  /** Mark every tracked task finished when the enclosing turn settles. */
+  markAllStopped(now = Date.now()): void {
+    for (const t of this.logs.values()) {
+      if (!t.completed) {
+        t.completed = true
+        t.lastAt = now
+      }
+    }
+  }
+
+  /** Running background tasks observed during THIS turn (excluding baselined history). */
+  activeTasks(now: number, liveWindowMs: number): ActiveTaskLogSummary[] {
+    const out: ActiveTaskLogSummary[] = []
+    for (const t of this.logs.values()) {
+      if (!t.sawActivity || t.completed) continue
+      if (now - t.lastAt > liveWindowMs) continue
+      out.push({
+        taskId: t.taskId,
+        lastLine: t.lastLine,
+        startedAt: t.startedAt,
+        lastAt: t.lastAt,
+      })
+    }
+    return out
+  }
+
+  /** Header-badge snapshot entries for active background tasks observed in this turn. */
+  snapshotItems(now: number, liveWindowMs: number): SubagentSnapshotItem[] {
+    const items: SubagentSnapshotItem[] = []
+    for (const t of this.logs.values()) {
+      if (!t.sawActivity) continue
+      const running = !t.completed && now - t.lastAt <= liveWindowMs
+      items.push({
+        conversationId: `task:${t.taskId}`,
+        role: t.taskId,
+        typeName: 'Background Task',
+        state: running ? 'RUNNING' : 'COMPLETED',
+        running,
+        lastAction: t.lastLine !== '' ? t.lastLine : '后台任务运行中…',
+        startedAt: t.startedAt,
+        lastAt: t.lastAt,
+      })
+    }
+    return items
   }
 
   private pollSingleTaskLog(tracked: TrackedTaskLog, emit: (ev: BackgroundActivityEvent) => void): void {
@@ -182,6 +252,11 @@ export class TaskActivityTracker {
     }
     if (bytesRead <= 0) return
     tracked.offset += bytesRead
+    const now = Date.now()
+    if (!tracked.sawActivity) tracked.startedAt = now
+    tracked.sawActivity = true
+    tracked.completed = false
+    tracked.lastAt = now
 
     const chunk = tracked.rest + tracked.decoder.write(buffer.subarray(0, bytesRead))
     const parts = chunk.split('\n')
@@ -193,6 +268,7 @@ export class TaskActivityTracker {
     }
     const lines = parts.map((l) => l.trim()).filter((l) => l !== '')
     if (lines.length === 0) return
+    tracked.lastLine = clipSingleLine(lines[lines.length - 1] ?? '', MAX_LINE_CHARS)
 
     const skipped = Math.max(0, lines.length - MAX_LINES_PER_POLL)
     const visible = skipped > 0 ? lines.slice(-MAX_LINES_PER_POLL) : lines
@@ -238,6 +314,17 @@ export class TaskActivityTracker {
         if (this.seenMessageIds.has(summary.dedupKey)) continue
         this.seenMessageIds.add(summary.dedupKey)
         if (baselineOnly) continue
+
+        if (TASK_DONE_RE.test(summary.text)) {
+          const doneAt = Date.now()
+          for (const t of this.logs.values()) {
+            if (summary.text.includes(t.taskId)) {
+              t.completed = true
+              t.lastAt = doneAt
+              t.lastLine = clipSingleLine(summary.text, MAX_LINE_CHARS)
+            }
+          }
+        }
 
         emit({
           stepKey: `task-msg-${summary.dedupKey}`,

@@ -1,9 +1,8 @@
 // Subagent Activity Tracker: monitors background subagents and task transcripts
 // in agy's brain directory, streaming real-time progress events into DSH's
 // reasoning channel so the user sees 1:1 what agy and its workers are doing.
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { StringDecoder } from 'node:string_decoder'
 import {
   extractQuotaErrorModel,
   isTransientBurstRateLimit,
@@ -16,6 +15,7 @@ import { findBrainDir } from '../../runtime/agy/db/paths.ts'
 import { TaskActivityTracker } from './task-activity.ts'
 import { ParentQuotaMonitor, type SubagentQuotaExhaustedInfo } from './parent-quota.ts'
 import { attachSubagentTracker, detachSubagentTracker, SUBAGENT_LIVE_WINDOW_MS, type SubagentSnapshot, type SubagentSnapshotItem } from './live.ts'
+import { createTranscriptCursor, fileSizeOrZero, readTranscriptDelta, type TranscriptCursor } from './transcript-cursor.ts'
 
 export type { SubagentQuotaExhaustedInfo }
 
@@ -48,66 +48,6 @@ function noteFailure(log: ((message: string) => void) | undefined, what: string,
   const code = (err as { code?: unknown } | null)?.code
   if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM' || code === 'EBUSY') return
   log?.(`subagent tracker: ${what} — ${String(err)}`)
-}
-
-interface TranscriptCursor {
-  /** Bytes of `transcript.jsonl` already consumed. */
-  offset: number
-  /** Incremental UTF-8 decoder so split multi-byte characters never corrupt. */
-  decoder: StringDecoder
-  /** Trailing partial line from the last read (the file ends without a newline). */
-  rest: string
-}
-
-function createTranscriptCursor(offset = 0): TranscriptCursor {
-  return { offset, decoder: new StringDecoder('utf8'), rest: '' }
-}
-
-function fileSizeOrZero(logPath: string): number {
-  try {
-    const st = statSync(logPath)
-    return st.isFile() ? st.size : 0
-  } catch {
-    return 0
-  }
-}
-
-function readTranscriptDelta(logPath: string, cursor: TranscriptCursor): string[] {
-  let size: number
-  try {
-    const st = statSync(logPath)
-    if (!st.isFile()) return []
-    size = st.size
-  } catch {
-    return []
-  }
-  if (size < cursor.offset) {
-    cursor.offset = 0
-    cursor.decoder = new StringDecoder('utf8')
-    cursor.rest = ''
-  }
-  if (size === cursor.offset) return []
-
-  const length = size - cursor.offset
-  const buffer = Buffer.allocUnsafe(length)
-  let bytesRead = 0
-  try {
-    const fd = openSync(logPath, 'r')
-    try {
-      bytesRead = readSync(fd, buffer, 0, length, cursor.offset)
-    } finally {
-      closeSync(fd)
-    }
-  } catch {
-    return []
-  }
-  if (bytesRead <= 0) return []
-  cursor.offset += bytesRead
-
-  const chunk = cursor.rest + cursor.decoder.write(buffer.subarray(0, bytesRead))
-  const parts = chunk.split('\n')
-  cursor.rest = parts.pop() ?? ''
-  return parts.filter((line) => line.trim() !== '')
 }
 
 export function extractAuthoritativeSubagentQuotaError(text: string, fromParentSystemMessage: boolean): boolean {
@@ -325,13 +265,12 @@ export class SubagentTracker {
       }
     } finally {
       this.active = false
+      const stoppedAt = Date.now()
       // agy keeps a finished descriptor at ALIVE, so only the round ending proves it stopped.
-      for (const s of this.trackedSubagents.values()) if (!s.terminal) { s.terminal = true; s.lastAt = Date.now(); s.lastAction = '已结束（回合结束）' }
+      for (const s of this.trackedSubagents.values()) if (!s.terminal) { s.terminal = true; s.lastAt = stoppedAt; s.lastAction = '已结束（回合结束）' }
+      this.taskActivity.markAllStopped(stoppedAt)
       detachSubagentTracker(this.sessionKey, this)
-      if (this.timer) {
-        clearInterval(this.timer)
-        this.timer = null
-      }
+      if (this.timer) { clearInterval(this.timer); this.timer = null }
     }
   }
 
@@ -588,12 +527,20 @@ export class SubagentTracker {
     }
   }
 
+  activeBackgroundTasks(now = Date.now()) {
+    return this.taskActivity.activeTasks(now, SUBAGENT_LIVE_WINDOW_MS)
+  }
+
   snapshot(): SubagentSnapshot {
-    const items: SubagentSnapshotItem[] = [...this.trackedSubagents.values()].map((s) => ({
-      conversationId: s.conversationId, role: s.role, typeName: s.typeName,
-      ...(s.state === undefined ? {} : { state: s.state }),
-      running: !s.terminal && Date.now() - s.lastAt <= SUBAGENT_LIVE_WINDOW_MS, lastAction: s.lastAction, startedAt: s.startedAt, lastAt: s.lastAt,
-    }))
+    const now = Date.now()
+    const items: SubagentSnapshotItem[] = [
+      ...[...this.trackedSubagents.values()].map((s) => ({
+        conversationId: s.conversationId, role: s.role, typeName: s.typeName,
+        ...(s.state === undefined ? {} : { state: s.state }),
+        running: !s.terminal && now - s.lastAt <= SUBAGENT_LIVE_WINDOW_MS, lastAction: s.lastAction, startedAt: s.startedAt, lastAt: s.lastAt,
+      })),
+      ...this.taskActivity.snapshotItems(now, SUBAGENT_LIVE_WINDOW_MS),
+    ]
     return { total: items.length, running: items.filter((i) => i.running).length, items }
   }
 }
