@@ -31,7 +31,8 @@ export function protectTrailingRequest(prompt: string, messages: readonly Messag
   if (utf8Bytes(prompt) <= maxBytes) return prompt
   let live = ''
   for (let i = messages.length - 1; i >= 0; i--) {
-    const text = textOf(messages[i] as Message).trim()
+    const raw = textOf(messages[i] as Message)
+    const text = raw.trim() && prompt.endsWith(raw) ? raw : raw.trim()
     if (text !== '' && prompt.endsWith(text)) {
       live = text
       break

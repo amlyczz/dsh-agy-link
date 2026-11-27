@@ -11,8 +11,10 @@
 // `promptIdentity` is the canonical form used for every comparison;
 // `hasNewHumanTask` is the other half of the same decision — a hop with no new
 // typed turn must never preempt the run that produced it.
+import { extractLeadingAgySlash, formatWithLeadingAgySlash } from './leading-slash.ts'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import {
+  utf8Bytes,
   collectMediaRefs,
   isMemorySnapshotMessage,
   isSyntheticHarnessMessage,
@@ -24,6 +26,12 @@ import {
 /** The boundary notice injected when a live agy run is preempted by a steer. */
 export const INTERRUPTION_NOTICE =
   '[the previous turn was interrupted before it finished — do not continue or answer that unfinished work; respond only to the newest request below]'
+
+export function withInterruptionNotice(prompt: string, budget: number): string {
+  const slash = extractLeadingAgySlash(prompt)
+  const framed = slash ? formatWithLeadingAgySlash(slash, INTERRUPTION_NOTICE) : INTERRUPTION_NOTICE + '\n\n' + prompt
+  return utf8Bytes(framed) <= budget ? framed : prompt
+}
 
 /**
  * Canonical prompt identity: the prompt with the interruption notice removed

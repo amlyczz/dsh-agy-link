@@ -13,6 +13,7 @@
 //    clicking Stop then sent `session/cancel` and killed the background work.
 //    `BackgroundWaitMonitor` detects that quiet window once and emits a clear
 //    live notice naming the running task(s).
+import { confirmedPrefix } from '../../provider/system-budget.ts'
 import type { AgyEvent } from '../../common/types.ts'
 import type { createAttemptRecorder, AttemptDeps, AttemptInput } from '../../provider/attempt.ts'
 import { mergeSentImageIds } from '../../provider/finalize.ts'
@@ -53,6 +54,7 @@ export function persistInterimAcpBinding(opts: {
     lastMessageCount: input.binding?.lastMessageCount ?? existing?.lastMessageCount ?? 0,
     updatedAt: Date.now(),
     model: input.activeModel,
+    ...confirmedPrefix(input.binding, sid),
     sentImageIds: mergeSentImageIds(input.binding?.sentImageIds ?? existing?.sentImageIds, []),
     ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
     ...(resolvedCwd ? { cwd: resolvedCwd } : {}),

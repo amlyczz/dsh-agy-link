@@ -17,9 +17,10 @@ import { providerRetryPolicyFor, streamWithEffortRetry, isRevivableFailure } fro
 import { deliverContext } from '../provider/context-delivery.ts'
 export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccountWithWait } from '../provider/session-selection.ts'
+import { plannedWatermarks } from '../provider/system-budget.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
-import { extractLeadingAgySlash, formatWithLeadingAgySlash } from '../provider/leading-slash.ts'
-import { INTERRUPTION_NOTICE, hasNewHumanTask, promptIdentity } from '../provider/prompt-identity.ts'
+import { promptBudgetBytes } from '../provider/prompt-budget.ts'
+import { INTERRUPTION_NOTICE, hasNewHumanTask, promptIdentity, withInterruptionNotice } from '../provider/prompt-identity.ts'
 import { logOnce } from '../provider/log-once.ts'
 export { hasNewHumanTask } from '../provider/prompt-identity.ts'
 import { buildAgyArgs, resolveAttemptOverrides, waitForRunSettle, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
@@ -375,7 +376,7 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
 
-    const plan = await buildPromptPlan({
+    const planPrompt = (fresh = false) => buildPromptPlan({
       bridgeServer: lease?.serverName,
       options,
       cfg,
@@ -392,16 +393,14 @@ export class AgyAdapter extends LlmAdapter {
         deliverContext: (digest: string, key: string, extraAddDirs: string[], opts?: import('../provider/context-delivery.ts').DeliverContextOptions) =>
           deliverContext(digest, key, extraAddDirs, cfg, opts),
       },
-    })
+    }, fresh)
+    const plan = await planPrompt()
     let prompt = plan.prompt
     let binding = plan.binding
     const bindingKey = plan.bindingKey
     const persistBinding = plan.persistBinding
     const sessionAccountKey = plan.sessionAccountKey
-    const currentModel = plan.currentModel
     const compactionNotice = plan.compactionNotice
-    const newlySentImageIds = plan.newlySentImageIds
-    const lastAssistantIdx = plan.lastAssistantIdx
 
     // Session ownership: steer preemption + duplicate-submission debounce.
     //
@@ -489,9 +488,9 @@ export class AgyAdapter extends LlmAdapter {
             ) {
               binding = {
                 conversationId: liveCid,
-                lastMessageCount: Math.max(0, lastAssistantIdx + 1),
+                lastMessageCount: Math.max(0, plan.lastAssistantIdx + 1),
                 updatedAt: Date.now(),
-                model: currentModel,
+                model: plan.currentModel,
                 interrupted: true,
               }
             } else if (binding !== undefined) {
@@ -508,8 +507,7 @@ export class AgyAdapter extends LlmAdapter {
             )
           }
           if (!wasConsumable && !prompt.includes(INTERRUPTION_NOTICE)) {
-            const slash = extractLeadingAgySlash(prompt)
-            prompt = slash ? formatWithLeadingAgySlash(slash, INTERRUPTION_NOTICE) : `${INTERRUPTION_NOTICE}\n\n${prompt}`
+            prompt = withInterruptionNotice(prompt, promptBudgetBytes(cfg))
           }
         }
       }
@@ -569,7 +567,8 @@ export class AgyAdapter extends LlmAdapter {
       persistBinding,
       binding,
       messages,
-      newlySentImageIds,
+      newlySentImageIds: plan.newlySentImageIds, systemWatermarks: plannedWatermarks(plan),
+      freshPromptPlan: cfg.forwardSystemPrompt ? () => planPrompt(true) : undefined,
       ...(plan.stagedImages.length > 0 ? { stagedImages: plan.stagedImages } : {}),
       sessionAccountKey,
       family,

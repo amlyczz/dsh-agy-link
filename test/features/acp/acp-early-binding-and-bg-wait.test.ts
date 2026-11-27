@@ -14,6 +14,7 @@ test('acp early binding: persists conversationId on first output while preservin
   const storeMap = new Map<string, any>()
   storeMap.set('sess-1:acc-a', {
     conversationId: 'old-conv-id',
+    sentSystemHash: 'old system',
     lastMessageCount: 42,
     updatedAt: 1000,
     model: 'gemini-4-neon',
@@ -43,6 +44,7 @@ test('acp early binding: persists conversationId on first output while preservin
       activeModel: 'gemini-4-neon',
       workspaceRoot: 'D:\\proj\\rabbit',
       binding: storeMap.get('sess-1:acc-a'),
+      systemWatermarks: { nextSystemHash: 'pending system' },
     } as any,
     recorder,
     sid: 'new-acp-sid-999',
@@ -50,6 +52,7 @@ test('acp early binding: persists conversationId on first output while preservin
   assert.equal(wrote, true)
   const saved = storeMap.get('sess-1:acc-a')
   assert.equal(saved.conversationId, 'new-acp-sid-999')
+  assert.equal(saved.sentSystemHash, undefined, 'early output cannot acknowledge system delivery or inherit a different session receipt')
   assert.equal(saved.lastMessageCount, 42, 'watermark stays untouched until final settlement')
   assert.deepEqual(saved.sentImageIds, ['img-1', 'img-2'])
   assert.equal(saved.lastInputTokens, 120000)

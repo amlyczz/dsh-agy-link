@@ -58,7 +58,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | Context window advertised when agy does not report one |
 | `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | Max output tokens advertised when agy does not report one |
-| `forwardSystemPrompt` | `—` | `false` | Forward the current DSH system prompt and latest producer snapshots to agy on each chat turn, including resumed sessions |
+| `forwardSystemPrompt` | `—` | `false` | Forward system instructions and the latest snapshot per producer. Resumed conversations receive changed sections after the previous turn succeeds. A sharp drop in measured context usage triggers a fresh copy of the system instructions. Oversized tool declarations travel in a read-only file so the live request fits. |
 | `digestMaxChars` | `—` | `8000` | Budget for the history digest sent each turn |
 | `contextTransferMaxChars` | `—` | `660000` | Character cap for the transferred context block |
 | `contextTransferMaxBytes` | `—` | `150000` | Byte cap for the transferred context block |
