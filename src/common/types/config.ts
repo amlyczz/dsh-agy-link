@@ -196,6 +196,13 @@ export interface PluginConfig {
   /** Background quota polling interval in ms (default 60 min; clamped >= 60s). Lower = more risk-control exposure. */
   quotaPollIntervalMs: number
   /**
+   * Upper bound (ms) on waiting for a temporarily drained pool's next reset
+   * (quota window or cooldown) before an account is picked again. A reset
+   * further away than this still fails the call, reporting the real state and
+   * the earliest-reset time. 0 restores the legacy fail-fast path.
+   */
+  poolResetWaitMs: number
+  /**
    * Fetch quota statistics via official `agy -p /usage` CLI execution instead
    * of direct Node.js REST calls to Google internal endpoints (default: true).
    */
@@ -452,6 +459,12 @@ export function defaultConfig(): PluginConfig {
     logRetentionDays: 7,
     disableTelemetry: true,
     quotaPollIntervalMs: 60 * 60_000,
+    // A 5h quota window that is nearly drained gets benched by the low-quota
+    // guard well before its reset (LOW_QUOTA_5H), and the old 20s cap failed
+    // the whole turn while the reset was still minutes away (2026-11-27: 665s).
+    // Waiting is bounded, abort-aware and announced in the transcript; a reset
+    // beyond the cap still fails fast.
+    poolResetWaitMs: 15 * 60_000,
     quotaViaCli: true,
     proxyUrl: '',
     // Windows is where agy's `--bg-updater` grandchild flashes a console
