@@ -101,7 +101,10 @@ Google Cloud Code PA 使用 Proto3 JSON 序列化：当配额耗尽（`remaining
 2. **`TOS_VIOLATION` 终态识别与防级联传染熔断**：
    - 同时在 CLI 输出流（如 `[warning] This service has been disabled in this account for violation of Terms of Service`）与 HTTP 错误体中识别 `TOS_VIOLATION`（提取 `appeal_url`）和 `VALIDATION_REQUIRED`（提取 `validation_url`）。
    - 一旦某轮请求命中 `TOS_VIOLATION`，立即将该账号标记为终态隔离，且**本轮立即终止自动跨号重放（不消耗 failover 预算去连坐池内其余健康账号）**，向用户明确提示封禁原因与申诉链接。
-3. **上游 Prompt WAF 瞬时裸 429 识别**：
+3. **同模型族严格单一活跃账号锁死（防同出口多号并发与乒乓切号）**：
+   - 同一个配额族（含 `argonSharesGoogleGroup(acc)` 共享组下的 `google` ↔ `argon`）在同一时刻全池严格只使用一个活跃账号（`activeAccountIds[family]`）；只有不可用或明确不支持当前请求模型时才按顺序轮换。
+   - 禁止 `stickyAccount()` 越过当前族活跃账号复活已轮换走的旧账号（旧账号 5h 配额恢复后必须留在待命池，直到新活跃号耗尽才轮换），禁止 `isInNarrowestTier` 在同族内按模型能力拆号；除跨模型族与生图单请求局部轮换（`quotaModel` + `findAccount`）外，严禁同代理出口下同族多号同时运行。
+4. **上游 Prompt WAF 瞬时裸 429 识别**：
    - 当账号缓存额度健康（`> 50%`），而请求在极短时间内返回无 `resetTime` 的裸 429（常见于上游系统提示词/工具描述 WAF 拦截），不对其施加长冷却并避免无意义轮转污染全池账号。
 
 ## 5. 验证锚点

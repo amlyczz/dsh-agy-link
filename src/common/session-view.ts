@@ -17,6 +17,7 @@
 import {
   argonSharesGoogleGroup,
   modelFamilyOf,
+  resolveFamilyPinnedId,
   type AccountPoolData,
   type ManagedAccount,
   type ModelFamily,
@@ -133,7 +134,7 @@ export function buildSessionView(input: {
   if (family === null) return { ...EMPTY_SESSION_VIEW, model }
   const now = input.now ?? Date.now()
   const poolData = input.poolData
-  const pinnedId = poolData?.activeAccountIds?.[family]
+  const pinnedId = resolveFamilyPinnedId(input.accounts, poolData?.activeAccountIds, family)
   const resolvedId = poolData?.resolvedActiveAccountIds?.[family] ?? pinnedId
   const sticky = input.stickyAccountId !== undefined && input.stickyAccountId !== ''
     ? input.accounts.find((a) => a.id === input.stickyAccountId)

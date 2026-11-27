@@ -1106,7 +1106,7 @@ test('concurrent sessions isolate google (Neon) vs argon rotation, cooling, and 
     sessionKey: 'sessionA',
   })
   assert.equal(resA.family, 'google')
-  assert.equal(resA.account?.id, acc2.id, 'Session A (Neon/google) keeps its sticky binding even when manualPinAtByFamily.argon > sessionA.updatedAt')
+  assert.equal(resA.account?.id, acc1.id, 'Session A (Neon/google) follows activeAccountIds.google (acc1) even with stale acc2 binding and argon pinned to acc2')
 
   // Move argon active pointer back to acc1; Session A requesting Argon ignores its google binding on acc2.
   assert.equal(pool.setActiveAccount(acc1.id, 'argon'), true)

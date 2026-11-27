@@ -295,14 +295,14 @@ test('account-selection: no pool returns an undefined account but a resolved fam
   assert.equal(out.activeModel, 'gemini-3.8-flash')
 })
 
-test('account-selection: sticky affinity reuses the session account and pins it active', async () => {
+test('account-selection: selects the pool account and marks it active', async () => {
   const a = account('acc_x')
-  const { pool, calls } = selPool({ accounts: [a], select: () => null, lastActive: undefined })
+  const { pool, calls } = selPool({ accounts: [a], select: () => a, lastActive: undefined })
   const { deps } = selectionDeps(pool, { 's1:acc_x': { conversationId: 'c', lastMessageCount: 0, updatedAt: 5 } })
   const out = await selectSessionAccount({ deps, cfg: cfgSelect(), model: 'gemini-3.8-flash', isAux: false, sessionKey: 's1' })
   assert.equal(out.account?.id, 'acc_x')
   assert.deepEqual(calls.setActive, [['acc_x', 'google']])
-  assert.deepEqual(calls.select, []) // sticky hit short-circuits selectAccount
+  assert.deepEqual(calls.select, ['google'])
 })
 
 test('account-selection: a stale binding to a deleted account is dropped', async () => {
@@ -322,11 +322,7 @@ test('account-selection: ineligible sticky account falls through to selectAccoun
   assert.equal(out.account?.id, 'acc_x')
 })
 
-test('account-selection: win32 + parallelSameAccount still honours a bound session over the pool pointer', async () => {
-  // The pack-share rule exists so sessions with NO binding converge on one
-  // credential slot. It must not override a session that already ran on an
-  // account: that silently hops a live conversation between accounts (the
-  // adapter-level regression is 'session sticks to current account').
+test('account-selection: win32 + parallelSameAccount converges a stale bound session onto the pool pointer', async () => {
   const stickyAcc = account('acc_sticky')
   const poolAcc = account('acc_pool')
   const { pool, calls } = selPool({ accounts: [stickyAcc, poolAcc], select: () => poolAcc, lastActive: 'acc_pool' })
@@ -340,8 +336,8 @@ test('account-selection: win32 + parallelSameAccount still honours a bound sessi
       isAux: false,
       sessionKey: 's1',
     })
-    assert.equal(out.account?.id, 'acc_sticky', 'the session keeps the account it already ran on')
-    assert.deepEqual(calls.select, [], 'the pool candidate is not consulted when a binding is usable')
+    assert.equal(out.account?.id, 'acc_pool', 'stale session binding must converge onto the active family account')
+    assert.deepEqual(calls.select, ['google'])
   } finally {
     restore()
   }

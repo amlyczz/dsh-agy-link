@@ -51,7 +51,7 @@ const COMPONENT_TEST_MAP = {
 
 const PREFIX_TEST_MAP = [
   ['src/common/types/', ['test/provider/failure-classifier.test.ts', 'test/common/rate-limit-classify.test.ts', 'test/common/network-backoff.test.ts']],
-  ['src/domain/accounts/', ['test/domain/pool.test.ts', 'test/domain/model-support-ineligibility.test.ts', 'test/domain/narrow-account-preference.test.ts']],
+  ['src/domain/accounts/', ['test/domain/pool.test.ts', 'test/domain/model-support-ineligibility.test.ts', 'test/domain/single-account-per-family.test.ts']],
   ['src/domain/credentials/', ['test/host/credential-slot.test.ts', 'test/host/credential-backup.test.ts', 'test/provider/issue101-slot-failover.test.ts']],
   ['src/domain/quota/', ['test/domain/domain-quota.test.ts', 'test/features/quota/quota-*.test.ts', 'test/transport/status-argon-filter.test.ts']],
   ['src/features/quota/', ['test/features/quota/quota-*.test.ts', 'test/domain/domain-quota.test.ts']],

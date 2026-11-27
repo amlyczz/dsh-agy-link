@@ -4,9 +4,15 @@
 // (markAccountActive / agyOnAccount).
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { Err, type PluginConfig } from '../common/types.ts'
-import { modelFamilyOf, sharedArgonPeerFamily, type ManagedAccount, type ModelFamily } from '../common/pool-types.ts'
+import {
+  modelFamilyOf,
+  resolveFamilyPinnedId,
+  sharedArgonPeerFamily,
+  type ManagedAccount,
+  type ModelFamily,
+} from '../common/pool-types.ts'
 import { resolveModelSlug } from '../domain/models/parse.ts'
-import { isModelQuotaClear } from '../domain/accounts/selection.ts'
+import { isModelQuotaClear, resolveEligibleActiveAccountId } from '../domain/accounts/selection.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
 import type { SessionStore } from '../host/sessions.ts'
 import {
@@ -58,12 +64,24 @@ export interface AccountSelectionResult {
   activeModel: string
 }
 
+/** Drop bindings under `sessionKey:` that point to accounts removed from the pool. */
+function pruneDeletedSessionBindings(deps: AccountSelectionDeps, sessionKey: string): void {
+  const pool = deps.pool
+  if (pool === undefined || sessionKey === '') return
+  const prefix = `${sessionKey}:`
+  for (const k of Object.keys(deps.store.all())) {
+    if (!k.startsWith(prefix)) continue
+    if (pool.getAccount(k.slice(prefix.length)) === undefined) {
+      deps.store.delete(k)
+    }
+  }
+}
+
 /**
- * Session affinity: reuse the account this session last ran for THIS family, if eligible and not superseded by a manual switch.
- *
- * Exported because the header badge must describe the SAME account the
- * scheduler would pick. A second, badge-local copy of this rule is exactly how
- * the readout drifted from reality (reported 2026-11-23).
+ * Session affinity: check whether the session's last-used account for THIS
+ * family is still the pool's single active account for the family (used for
+ * header readout consistency and native conversation reuse, never to resurrect
+ * a rotated-away account).
  */
 export function stickyAccount(
   deps: AccountSelectionDeps,
@@ -90,8 +108,6 @@ export function stickyAccount(
       const bFam = modelFamilyOf(b.model)
       if (bFam !== family && bFam !== peerFam) continue
     }
-    // If the user explicitly switched/reordered accounts in the UI or CLI after
-    // this binding was written, honor the user's explicit choice immediately.
     const effectivePinAt = Math.max(familyPinAt, peerFam ? (poolData.manualPinAtByFamily?.[peerFam] ?? 0) : 0)
     if (effectivePinAt > 0 && b.updatedAt < effectivePinAt) continue
     if (b.updatedAt > latestUpdated) {
@@ -99,12 +115,17 @@ export function stickyAccount(
       latestUpdated = b.updatedAt
     }
   }
-  return mostRecent !== undefined
-    && (typeof pool.isAccountEligibleForModel === 'function'
-      ? pool.isAccountEligibleForModel(mostRecent, family, model)
-      : pool.isAccountEligible(mostRecent, family))
-    ? mostRecent
-    : undefined
+  if (mostRecent === undefined) return undefined
+  const eligible = typeof pool.isAccountEligibleForModel === 'function'
+    ? pool.isAccountEligibleForModel(mostRecent, family, model)
+    : pool.isAccountEligible(mostRecent, family)
+  if (!eligible) return undefined
+  const accounts = typeof pool.getAccounts === 'function' ? pool.getAccounts() : []
+  const expectedId = accounts.length > 0
+    ? resolveEligibleActiveAccountId(accounts, poolData.activeAccountIds, family, pool, Date.now(), model)
+    : (resolveFamilyPinnedId(accounts, poolData.activeAccountIds, family) ?? (family === 'google' ? poolData.lastActiveAccountId : undefined))
+  if (expectedId !== undefined && mostRecent.id !== expectedId) return undefined
+  return mostRecent
 }
 
 /**
@@ -268,19 +289,14 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
     acc !== undefined &&
     !avoid.has(acc.id) &&
     (quotaModel === '' || isModelQuotaClear(acc, family, quotaModel, Date.now()))
-  // Session affinity comes FIRST on every platform: the account this session
-  // already ran on is the one its credential slot most likely still holds, and
-  // hopping accounts mid-conversation swaps that slot and the quota the user is
-  // watching (spec: "Turn 2 MUST stay on Turn 1's account while it has quota").
-  // The Windows pack-share below therefore only decides for sessions that have
-  // no usable binding — a fresh session still follows the pool's candidate so
-  // concurrent runs keep sharing one credential slot.
+  // Strict single-account-per-family invariant (anti-ban): every session in
+  // the same quota family strictly locks onto the pool's active account for
+  // that family. Old session bindings NEVER resurrect rotated-away accounts or
+  // ping-pong activeAccountIds; context is handed off via applyContextDigest.
   if (pool !== undefined && !isAux && sessionKey !== '') {
-    const sticky = stickyAccount(deps, family, sessionKey, activeModel)
-    if (quotaClear(sticky)) account = sticky
+    pruneDeletedSessionBindings(deps, sessionKey)
   }
-  if (account === undefined && pool !== undefined) {
-    // Applies uniformly including win32 + parallelSameAccount: honour quotaModel/avoidAccountIds and quotaClear.
+  if (pool !== undefined) {
     if (quotaModel !== '' && typeof pool.findAccount === 'function') {
       // Image-style call: pick WITHOUT moving the family's sticky pointer.
       const picked = pool.findAccount(family, activeModel, quotaModel, input.avoidAccountIds) ?? undefined
@@ -290,7 +306,7 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
       if (quotaClear(picked)) account = picked
     }
   }
-  if (account !== undefined && pool !== undefined) {
+  if (account !== undefined && pool !== undefined && quotaModel === '') {
     // Record the account actually serving this family, without stamping
     // manualPinAt. Family-scoped: an Argon pick must not rewrite the Gemini
     // pointer, but it MUST make the Argon row truthful.

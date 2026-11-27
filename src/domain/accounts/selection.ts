@@ -12,7 +12,7 @@ import {
   argonSharesGoogleGroup,
   baseModelSlug,
   effectiveFamilyCooldown,
-  modelFamilyOf,
+  resolveFamilyPinnedId,
   type FamilyQuotaInfo,
   type ManagedAccount,
   type ModelFamily,
@@ -25,7 +25,7 @@ import {
 } from '../../common/quota-bench.ts'
 import { computeQuotaPacing, FIVE_HOUR_WINDOW_MS, WEEKLY_WINDOW_MS } from '../../common/quota-pacing.ts'
 
-export { isQuotaBenched, LOW_QUOTA_5H, LOW_QUOTA_WEEKLY }
+export { isQuotaBenched, LOW_QUOTA_5H, LOW_QUOTA_WEEKLY, resolveFamilyPinnedId }
 
 /** Why a pool account cannot serve a family right now (diagnostics only). */
 export type AccountIneligibilityReason = 'disabled' | 'auth' | 'cooldown' | 'quota' | 'unsupported' | 'model-unsupported' | 'model-cooldown'
@@ -76,6 +76,28 @@ export function explainIneligibility(
 }
 
 /**
+ * Find the pinned candidate in `candidates` for `family`, honouring the
+ * shared-group `google` <-> `argon` peer pointer when `family`'s own pointer
+ * is absent or points elsewhere.
+ */
+export function findPinnedCandidate(
+  candidates: readonly ManagedAccount[],
+  activeAccountIds: Partial<Record<ModelFamily, string>> | undefined,
+  family: ModelFamily,
+): ManagedAccount | undefined {
+  const directId = activeAccountIds?.[family]
+  if (directId) {
+    const direct = candidates.find((a) => a.id === directId)
+    if (direct) return direct
+  }
+  const peerFam = family === 'argon' ? 'google' : family === 'google' ? 'argon' : undefined
+  const peerId = peerFam ? activeAccountIds?.[peerFam] : undefined
+  if (!peerId) return undefined
+  const peer = candidates.find((a) => a.id === peerId)
+  return peer && argonSharesGoogleGroup(peer) ? peer : undefined
+}
+
+/**
  * Pick an eligible account WITHOUT mutating any active pointer.
  *
  * Used by cross-model requests (image generation): rotating a model-scoped
@@ -103,12 +125,7 @@ export function pickEligibleAccount(
   )
   if (candidates.length === 0) return null
   const active = candidates.find((acc) => acc.id === input.activeId)
-  const catalogFor = poolCatalog(pool)
-  return (
-    (active && isInNarrowestTier(active, candidates, input.family, catalogFor) ? active : undefined) ??
-    orderByExpiry(accounts, candidates, input.family, input.activeId, input.now, catalogFor)[0] ??
-    null
-  )
+  return active ?? orderByExpiry(accounts, candidates, input.family, input.activeId, input.now)[0] ?? null
 }
 
 /**
@@ -145,68 +162,6 @@ function effectiveFamilyQuota(acc: ManagedAccount, family: ModelFamily): FamilyQ
     return acc.quotas?.google
   }
   return acc.quotas?.[family]
-}
-
-/** Account-scoped discovered catalog lookup (`AccountPoolManager.catalogForAccount`). */
-export type CatalogLookup = (id: string) => { source?: string; models?: readonly { id: string }[] } | undefined
-
-/**
- * Capability set an account reports for one family: base slugs of the models
- * in its quota breakdown, else of the models in its own discovered catalog.
- * Undefined when neither source lists any.
- *
- * The catalog fallback matters because the default CLI-first quota refresh
- * (`agy -p /usage`) reports per-group numbers only and never fills
- * `quotas[family].models`; without it every account scored 0 and the
- * narrowest-capability preference never applied.
- */
-function familyCapabilities(acc: ManagedAccount, family: ModelFamily, catalogFor?: CatalogLookup): Set<string> | undefined {
-  const models = effectiveFamilyQuota(acc, family)?.models
-  if (Array.isArray(models) && models.length > 0) {
-    return new Set(models.map((m) => baseModelSlug(m.modelId)))
-  }
-  const cat = catalogFor?.(acc.id)
-  if (cat?.source !== 'discovered' || !Array.isArray(cat.models)) return undefined
-  const ids = cat.models.map((m) => m.id).filter((id) => modelFamilyOf(id) === family)
-  return ids.length === 0 ? undefined : new Set(ids.map(baseModelSlug))
-}
-
-/**
- * "Exclusive capability" of each candidate: how many models it can serve that
- * NOT every candidate can. All candidates already serve the requested model,
- * so this counts what an account would be uniquely needed for later.
- *
- * A request should go to the account the other models need least: when a
- * cheaper model shares a quota bucket with a scarcer one (e.g. Hydrogen and
- * Neon on the same account), spending a Hydrogen-only account first keeps the
- * dual-capable account's bucket for Neon. Models every candidate supports
- * cancel out, so catalog noise common to all accounts never matters. Accounts
- * with no reported model list score 0 (no evidence of extra capability).
- */
-export function exclusiveCapabilityScores(
-  candidates: readonly ManagedAccount[],
-  family: ModelFamily,
-  catalogFor?: CatalogLookup,
-): Map<string, number> {
-  const caps = candidates.map((acc) => [acc.id, familyCapabilities(acc, family, catalogFor)] as const)
-  const known = caps.flatMap(([, c]) => (c ? [c] : []))
-  const shared = known.length === 0 ? new Set<string>() : new Set([...known[0]!].filter((m) => known.every((c) => c.has(m))))
-  return new Map(caps.map(([id, c]) => [id, c ? [...c].filter((m) => !shared.has(m)).length : 0]))
-}
-
-/**
- * True when `acc` is among the candidates with the fewest exclusive
- * capabilities. A sticky account outside that tier should yield, so a
- * narrower account that comes back from cooldown is picked up again.
- */
-export function isInNarrowestTier(
-  acc: ManagedAccount,
-  candidates: readonly ManagedAccount[],
-  family: ModelFamily,
-  catalogFor?: CatalogLookup,
-): boolean {
-  const scores = exclusiveCapabilityScores(candidates, family, catalogFor)
-  return (scores.get(acc.id) ?? 0) <= Math.min(...scores.values())
 }
 
 /** Reset timestamps within 5m belong to the same reset cohort (avoids 1-60s clock jitter). */
@@ -254,7 +209,6 @@ function candidateSurplusScore(q: FamilyQuotaInfo | undefined, now: number): num
 
 /**
  * "Use it or lose it" rotation order with cohort burn-rate surplus tie-breaking.
- * Priority 0: Fewest exclusive capabilities (see exclusiveCapabilityScores).
  * Priority 1: Weekly quota expiring soonest (>5m difference).
  * Priority 2: 5-hour quota expiring soonest (>5m difference).
  * Priority 3: Within the same reset cohort, fewest consecutive failures, then
@@ -267,9 +221,7 @@ export function orderByExpiry(
   family: ModelFamily,
   fromId: string | undefined,
   now: number,
-  catalogFor?: CatalogLookup,
 ): ManagedAccount[] {
-  const exclusive = exclusiveCapabilityScores(candidates, family, catalogFor)
   return candidates
     .map((acc, index) => {
       const q = effectiveFamilyQuota(acc, family)
@@ -286,13 +238,9 @@ export function orderByExpiry(
         fiveHourKnown: Number.isFinite(fiveHourRemaining),
         failures: effectiveFamilyCooldown(acc, family)?.consecutiveFailures ?? 0,
         surplus: candidateSurplusScore(q, now),
-        exclusive: exclusive.get(acc.id) ?? 0,
       }
     })
     .sort((a, b) => {
-      // Priority 0: Keep scarce capabilities in reserve
-      if (a.exclusive !== b.exclusive) return a.exclusive - b.exclusive
-
       // Priority 1: Weekly quota reset time (outside cohort jitter tolerance)
       if (a.weeklyKnown && b.weeklyKnown) {
         if (Math.abs(a.weeklyRemaining - b.weeklyRemaining) > RESET_COHORT_TOLERANCE_MS) {
@@ -329,14 +277,9 @@ export function orderByExpiry(
 
 /**
  * Pure, side-effect-free lookup of the active eligible account ID for a given
- * family. Honors a still-eligible family pin first, then falls back to the
- * first eligible candidate in rotation order without mutating pool state.
- *
- * The narrowest-capability preference only applies when `model` is known: it
- * ranks accounts that can all serve that model. Without a model the candidate
- * set spans the whole family, so "narrowest" may be an account that cannot
- * serve the session's model at all (a Hydrogen-only account displacing the
- * pinned Neon-capable one in the header) — the pin is kept instead.
+ * family. Honors a still-eligible family pin (or shared google<->argon peer)
+ * first, then falls back to the first eligible candidate in rotation order
+ * without mutating pool state.
  */
 export function resolveEligibleActiveAccountId(
   accounts: readonly ManagedAccount[],
@@ -346,18 +289,10 @@ export function resolveEligibleActiveAccountId(
   now = Date.now(),
   model?: string,
 ): string | undefined {
-  const pinnedId = activeAccountIds?.[family]
   const candidates = accounts.filter((acc) => isAccountEligible(acc, family, now, pool, model))
   if (candidates.length === 0) return undefined
-  const pinned = candidates.find((a) => a.id === pinnedId)
-  const catalogFor = poolCatalog(pool)
-  const modelKnown = model !== undefined && model.trim() !== ''
-  if (pinned && (!modelKnown || isInNarrowestTier(pinned, candidates, family, catalogFor))) return pinned.id
-  return orderByExpiry(accounts, candidates, family, pinnedId, now, catalogFor)[0]?.id
-}
-
-/** The pool's catalog lookup, bound so `this` survives the method extraction. */
-function poolCatalog(pool: DedicatedGroupSource | null | undefined): CatalogLookup | undefined {
-  const fn = pool?.catalogForAccount
-  return fn ? (id) => fn.call(pool, id) : undefined
+  const pinned = findPinnedCandidate(candidates, activeAccountIds, family)
+  if (pinned) return pinned.id
+  const fromId = resolveFamilyPinnedId(accounts, activeAccountIds, family)
+  return orderByExpiry(accounts, candidates, family, fromId, now)[0]?.id
 }

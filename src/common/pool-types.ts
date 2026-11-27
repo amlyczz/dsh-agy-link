@@ -76,6 +76,24 @@ export function effectiveFamilyCooldown(
   return peer.cooldownUntil > direct.cooldownUntil ? peer : direct
 }
 
+/**
+ * Resolve the pinned account ID for `family`, falling back to the shared-group
+ * peer (`google` <-> `argon`) when that peer names a merged Gemini account.
+ */
+export function resolveFamilyPinnedId(
+  accounts: readonly ManagedAccount[],
+  activeAccountIds: Partial<Record<ModelFamily, string>> | undefined,
+  family: ModelFamily,
+): string | undefined {
+  const direct = activeAccountIds?.[family]
+  if (direct) return direct
+  const peerFam = family === 'argon' ? 'google' : family === 'google' ? 'argon' : undefined
+  const peerId = peerFam ? activeAccountIds?.[peerFam] : undefined
+  if (!peerId) return undefined
+  const peer = accounts.find((a) => a.id === peerId)
+  return peer && argonSharesGoogleGroup(peer) ? peer.id : undefined
+}
+
 export interface ModelQuotaInfo {
   modelId: string
   displayName?: string

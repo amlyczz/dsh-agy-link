@@ -30,13 +30,13 @@ function acc(id: string, models: string[]): ManagedAccount {
   } as ManagedAccount
 }
 
-function services(model: string): HostServices {
+function services(model: string, activeGoogle = 'h-only'): HostServices {
   const accounts = [acc('h-only', ['gemini-4-hydrogen']), acc('dual', ['gemini-4-hydrogen', 'gemini-4-neon'])]
   const pool = {
     getAccounts: () => accounts,
     getAccount: (id: string) => accounts.find((a) => a.id === id),
     // Family-level prediction (no model) is what the pool snapshot carries.
-    getPoolData: () => ({ accounts, activeAccountIds: { google: 'dual' }, resolvedActiveAccountIds: { google: 'h-only' } }),
+    getPoolData: () => ({ accounts, activeAccountIds: { google: activeGoogle }, resolvedActiveAccountIds: { google: activeGoogle } }),
     isModelSupported: (a: ManagedAccount, m: string) => a.id === 'dual' || !m.startsWith('gemini-4-neon'),
   }
   return {
@@ -47,12 +47,12 @@ function services(model: string): HostServices {
   } as unknown as HostServices
 }
 
-test('Neon session header names the Neon-capable account, not a Hydrogen-only one', () => {
-  const view = resolveSessionView(services('gemini-4-neon'), '')
+test('Neon session header names the Neon-capable account, not a Hydrogen-only pin', () => {
+  const view = resolveSessionView(services('gemini-4-neon', 'h-only'), '')
   assert.equal(view.model, 'gemini-4-neon')
   assert.equal(view.accountId, 'dual')
 })
 
-test('Hydrogen session header still prefers the narrower account', () => {
-  assert.equal(resolveSessionView(services('gemini-4-hydrogen'), '').accountId, 'h-only')
+test('Hydrogen session header stays locked on the pinned account instead of splitting to a narrower one', () => {
+  assert.equal(resolveSessionView(services('gemini-4-hydrogen', 'dual'), '').accountId, 'dual')
 })

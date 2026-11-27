@@ -430,7 +430,7 @@ test('sliding-window rate limit enforces request throttling per minute', async (
   assert.ok(elapsed < 15_000, `elapsed ${elapsed}ms exceeded 15000ms`)
 })
 
-test('session sticks to current account across multiple turns and only switches when quota is exhausted', async () => {
+test('session follows family active account across turns and never resurrects rotated-away account', async () => {
   const pool = new AccountPoolManager(join(workDir, `pool-session-sticky-${Date.now()}`))
   const first = pool.getAccounts()[0]!
   const second = pool.createAccountSlot('Account B')
@@ -438,26 +438,22 @@ test('session sticks to current account across multiple turns and only switches 
   const { adapter } = makeAdapter({}, { pool })
   const sessionId = 'sess-sticky-account-turns' as never
 
-  // Turn 1 on first account
+  // Turn 1 establishes first as the family active account
   const res1 = await runTurn(adapter, [msg('user', 'Hello turn 1')], { sessionId })
   assert.equal(res1.chunks[res1.chunks.length - 1]!.type, 'finish')
   assert.equal(pool.getPoolData().lastActiveAccountId, first.id)
 
-  // Even if another account exists or was marked active by background or another session,
-  // Turn 2 MUST stay on the first account because its quota is not exhausted!
-  pool.markAccountActive(second.id)
+  // Turn 2 stays on first while the family pointer remains on first
   const res2 = await runTurn(
     adapter,
     [msg('user', 'Hello turn 1'), msg('assistant', 'Reply 1'), msg('user', 'Hello turn 2')],
     { sessionId },
   )
   assert.equal(res2.chunks[res2.chunks.length - 1]!.type, 'finish')
-  assert.equal(pool.getPoolData().lastActiveAccountId, first.id, 'session must stick to first account while quota is healthy')
+  assert.equal(pool.getPoolData().lastActiveAccountId, first.id, 'session stays on family active account while healthy')
 
-  // Now first account quota is exhausted (hits 429)
-  pool.recordFailure(first.id, 'google', 'RESOURCE_EXHAUSTED (code 429): Individual quota reached.')
-
-  // Turn 3 must now switch to second account because first account quota is exhausted
+  // When the family pointer moves to second (e.g. another session rotated), the session converges onto second
+  pool.markAccountActive(second.id)
   const res3 = await runTurn(
     adapter,
     [
@@ -470,5 +466,26 @@ test('session sticks to current account across multiple turns and only switches 
     { sessionId },
   )
   assert.equal(res3.chunks[res3.chunks.length - 1]!.type, 'finish')
-  assert.equal(pool.getPoolData().lastActiveAccountId, second.id, 'session must switch to second account once quota is exhausted')
+  assert.equal(pool.getPoolData().lastActiveAccountId, second.id, 'session must converge onto the family active account instead of flipping back')
+
+  // Second hits 429 -> rotates to first; clearing second later must NOT resurrect second while first is active
+  pool.recordFailure(second.id, 'google', 'RESOURCE_EXHAUSTED (code 429): Individual quota reached.')
+  assert.equal(pool.getPoolData().activeAccountIds?.google, first.id)
+  pool.clearCooldown(second.id, 'google')
+
+  const res4 = await runTurn(
+    adapter,
+    [
+      msg('user', 'Hello turn 1'),
+      msg('assistant', 'Reply 1'),
+      msg('user', 'Hello turn 2'),
+      msg('assistant', 'Reply 2'),
+      msg('user', 'Hello turn 3'),
+      msg('assistant', 'Reply 3'),
+      msg('user', 'Hello turn 4'),
+    ],
+    { sessionId },
+  )
+  assert.equal(res4.chunks[res4.chunks.length - 1]!.type, 'finish')
+  assert.equal(pool.getPoolData().lastActiveAccountId, first.id, 'recovered old account must not override active family pointer')
 })

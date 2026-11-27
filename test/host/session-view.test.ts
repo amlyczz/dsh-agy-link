@@ -41,6 +41,7 @@ function makeAccount(id: string, alias: string, googleFrac: number, argonFrac = 
 function makeServices(opts: {
   accounts: ManagedAccount[]
   activeGoogle: string
+  activeArgon?: string
   sessionModel: string
   store: SessionStore
   adapter?: Partial<HostServices['adapter']>
@@ -50,8 +51,8 @@ function makeServices(opts: {
     mode: 'sequential',
     defaultCooldownMs: 900_000,
     maxCooldownMs: 3_600_000,
-    activeAccountIds: { google: opts.activeGoogle },
-    resolvedActiveAccountIds: { google: opts.activeGoogle },
+    activeAccountIds: { google: opts.activeGoogle, ...(opts.activeArgon ? { argon: opts.activeArgon } : {}) },
+    resolvedActiveAccountIds: { google: opts.activeGoogle, ...(opts.activeArgon ? { argon: opts.activeArgon } : {}) },
     lastActiveAccountId: opts.activeGoogle,
     accounts: opts.accounts,
   }
@@ -134,6 +135,7 @@ test('resolveSessionView ignores live run when the session switched to a differe
     const services = makeServices({
       accounts: [dao, god],
       activeGoogle: 'acc_god',
+      activeArgon: 'acc_dao',
       sessionModel: 'gemini-4-argon-high',
       store,
       adapter: {

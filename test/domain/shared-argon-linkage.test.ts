@@ -315,7 +315,8 @@ test('Gap 2: setActiveAccount, markAccountActive, isAux, and stickyAccount link 
     })
     assert.equal(auxRes.account?.id, acc1.id)
 
-    // 3. stickyAccount shares affinity across argon and google models, and respects a newer manual pin on either side
+    // 3. stickyAccount matches when acc2 is active for shared group, and invalidates immediately on runtime or manual switch to acc1
+    pool.markAccountActive(acc2.id, 'argon')
     const bindTs = Date.now()
     store.set(`sess-shared:${acc2.id}`, {
       conversationId: 'conv-shared',
@@ -326,6 +327,10 @@ test('Gap 2: setActiveAccount, markAccountActive, isAux, and stickyAccount link 
     assert.equal(stickyAccount({ pool, store }, 'google', 'sess-shared', 'gemini-4-hydrogen')?.id, acc2.id)
     assert.equal(stickyAccount({ pool, store }, 'argon', 'sess-shared', 'gemini-pro-orchestrator-argon')?.id, acc2.id)
 
+    pool.markAccountActive(acc1.id, 'google')
+    assert.equal(stickyAccount({ pool, store }, 'argon', 'sess-shared', 'gemini-pro-orchestrator-argon'), undefined)
+
+    pool.markAccountActive(acc2.id, 'argon')
     await new Promise((r) => setTimeout(r, 10))
     assert.equal(pool.setActiveAccount(acc1.id, 'google'), true)
     assert.equal(stickyAccount({ pool, store }, 'argon', 'sess-shared', 'gemini-pro-orchestrator-argon'), undefined)

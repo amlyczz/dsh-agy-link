@@ -57,7 +57,8 @@ export class PoolAdmin {
   private canSyncSharedPeer(data: AccountPoolData, acc: ManagedAccount | undefined, fam: ModelFamily): ModelFamily | undefined {
     const peer = sharedArgonPeerFamily(acc, fam)
     if (!peer) return undefined
-    return peer === 'argon' && data.activeAccountIds?.argon && this.account(data.activeAccountIds.argon)?.quotas?.argon ? undefined : peer
+    const cur = peer === 'argon' && data.activeAccountIds?.argon ? this.account(data.activeAccountIds.argon) : undefined
+    return cur && cur.quotas?.argon !== undefined && !argonSharesGoogleGroup(cur) ? undefined : peer
   }
 
   /**
@@ -558,22 +559,16 @@ export class PoolAdmin {
     if (!data.activeAccountIds) data.activeAccountIds = {}
     data.activeAccountIds[family] = next.id
     const peer = this.canSyncSharedPeer(data, next, family)
-    if (peer && (data.activeAccountIds[peer] === fromId || data.activeAccountIds[peer] === undefined) && isAccountEligible(next, peer, now, this.deps.pool)) {
-      data.activeAccountIds[peer] = next.id
-    }
-    if (family === 'google' || (peer === 'google' && data.activeAccountIds.google === next.id) || !data.lastActiveAccountId) {
-      data.lastActiveAccountId = next.id
-    }
+    const peerCur = peer ? data.activeAccountIds[peer] : undefined
+    const peerAcc = peerCur ? this.account(peerCur) : undefined
+    const canSyncPeer = peerCur === fromId || peerCur === undefined || !peerAcc || argonSharesGoogleGroup(peerAcc) || peer === 'argon'
+    if (peer && canSyncPeer && isAccountEligible(next, peer, now, this.deps.pool)) data.activeAccountIds[peer] = next.id
+    if (family === 'google' || (peer === 'google' && data.activeAccountIds.google === next.id) || !data.lastActiveAccountId) data.lastActiveAccountId = next.id
     this.deps.persist()
     return next.id
   }
 
-  /**
-   * Returns the currently active and healthy account ID for `family`.
-   * Checks this family's active pointer first; only checks `lastActiveAccountId`
-   * when this family has no pointer yet, otherwise selects the next eligible
-   * candidate strictly within `family`.
-   */
+  /** Returns the active healthy account ID for `family` (checks family pin, then google fallback, else selects). */
   getActiveAccountId(family: ModelFamily = 'google', model?: string): string | undefined {
     const data = this.deps.getData()
     const now = Date.now()

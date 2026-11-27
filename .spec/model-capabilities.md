@@ -50,18 +50,18 @@ DSH 前端 `ModelCatalogDirectory.load()` 在首次加载（`status === 'ready'`
    - **OAuth 登录 / 重登 / 导入必刷新**：`PoolAuthFlow.finishWithCode`（全部三个分支：新账号、重认证、主账号）与 `importRefreshToken` 完成后均触发目录刷新与 `notifyPicker()`。
    - **配置与 CLI 命令同步**：`/config` 修改影响可见模型集合的键（`hiddenModels`、`poolWideCatalog`、`enabled`，其中 `enabled` 通过 `AdapterRegistrationHandle.replace()` 动态挂载/卸载路由）以及 `/agy` 账号管理子命令（含 `/agy use <id>`、`/agy effort`）均同步调用 `notifyPicker()`；不影响 `listModels()` 列表集合的键（如 `defaultEffort`、`translateModel`）保持静默（遵循 `test/transport/http-contract-*.test.ts` 与 `test/integration/lifecycle.test.ts` 契约）。
 
-### 4.3 按模型族作用域与手动切号优先于同族旧会话粘性（`manualPinAtByFamily`）
+### 4.3 按模型族作用域与同族严格单一活跃账号（防封号收敛）
 - 账号池活跃指针、冷却与预热严格按**模型族**（`google` Gemini / `argon` Argon / `anthropic` Claude / `openai` GPT-OSS）隔离：
   - `setActiveAccount(id, family)`、`markAccountActive(id, family)`、`advanceAccount`、`selectAccount` 与 `/pool/set-active` 默认严格按模型族作用域隔离，不越界覆写其他模型族的当前账号；`/agy use <id> [family]` 支持指定模型族（默认 `google`）。
-  - **共享组双向联动例外（`argonSharesGoogleGroup(acc)`）**：当 `acc.quotas?.argon` 缺省且 `acc.quotas?.google?.description` 显式列名 Argon（`agy 1.5.15+` 折叠进 `Gemini Models` 组）时，该账号上的 `google` ↔ `argon` 活跃指针、`manualPinAtByFamily`、冷却与 `stickyAccount` 双向同步（除非 `activeAccountIds.argon` 当前指向一个拥有独立 `quotas.argon` 的账号）；拥有独立 `quotas.argon` 的账号仍严格保持按族隔离。
+  - **共享组双向联动例外（`argonSharesGoogleGroup(acc)`）**：当 `acc.quotas?.google?.description` 显式列名 Argon（`agy 1.5.15+` 折叠进 `Gemini Models` 组，即使后端同时在 `quotas.argon` 下发镜像周行）时，该账号上的 `google` ↔ `argon` 活跃指针、`manualPinAtByFamily`、冷却与 `stickyAccount` 双向同步（除非 `activeAccountIds.argon` 当前指向一个拥有**独立**非共享 `quotas.argon` 的账号）；拥有独立 `quotas.argon` 的账号仍严格保持按族隔离。
   - `recordFailure()` / `advanceAccount()` / `updateAccountQuotas()` 对主动指针的轮换或自愈均按模型族边界校验（`lastActiveAccountId` 仅服务 `google` 族兜底，绝不跨族劫持 `argon` / `anthropic` / `openai`）。
   - `getPoolData().resolvedActiveAccountIds` 预计算每个模型族当前真正命中的可用账号 ID，UI 将「当前使用」「设为当前」「冷却中」「清除冷却」直接嵌入对应模型族分组内，消除账号级冗余状态标签与横幅。
-- `selectSessionAccount()` 中：
-  - `stickyAccount()` 仅在会话上次绑定模型属于同一 `modelFamilyOf(b.model)` 时复用同族粘性账号（例如会话 A 选 `gemini-pro-orchestrator-neon` 在 `google` 池内轮换，会话 B 选 `gemini-4-argon` 在 `argon` 池内独立轮换，互不串扰）。
-  - 若用户对该模型族显式切号发生在旧会话绑定更新时间之后（`Math.max(manualPinAt, manualPinAtByFamily[family]) > binding.updatedAt`），该同族会话**立即跟随用户新选账号**，不再被旧会话亲和拉回；且 `stickyAccount` 命中旧会话亲和时**绝不反向覆写全局其他族的 `activeAccountIds`**（`lastActiveAccountId` 亦受 `family === 'google' || !lastActiveAccountId` 守卫）。
+- `selectSessionAccount()` 与 `stickyAccount()` 中：
+  - 无论自动轮换（429 / 低配额让路）还是手动切号，只要 `activeAccountIds[family]`（或 `resolveEligibleActiveAccountId`）指向新账号，同族所有会话**立即收敛**到该单一活跃账号，禁止历史会话绑定越过当前活跃账号复活旧号或反向覆写 `activeAccountIds`；同族内亦不按窄能力拆号，锁定账号能服务请求模型即严格锁死。
+  - `stickyAccount()` 仅在会话上次绑定模型属于同一 `modelFamilyOf(b.model)`（或共享 Argon 组）、晚于该族 `manualPinAt`、**且绑定账号等于该族当前活跃可用账号**时返回绑定账号，供复核原生对话复用。
   - **实时在途回合与同族换模失效（`resolveSessionView` + `resolvePromptBinding`）**：
-    - `resolveSessionView()`（会话顶栏徽标数据源）按 **在途活跃运行（`adapter.activeAccountForSession()` / `getActiveRun()`，校验与当前模型族或共享 Argon 组兼容） > `stickyAccount()` > `resolvedActiveAccountIds[family]`** 顺序解析，避免长回合尚未写盘 `sessions.json`（或同族换模已删旧绑定）时顶栏误显示陈旧账号。
-    - `resolvePromptBinding()` 因模型 slug 变更使当前账号绑定失效时，同步清理同一 `bindingKey` 下属于目标模型族（及共享组）且模型 slug 不匹配的陈旧绑定（保留其他隔离族绑定），防止更早的旧账号（如已轮换走的账号）在 `stickyAccount()` 中复活。
+    - `resolveSessionView()`（会话顶栏徽标数据源）按 **在途活跃运行（`adapter.activeAccountForSession()` / `getActiveRun()`，校验与当前模型族或共享 Argon 组兼容） > 当前族活跃账号（匹配活跃账号的 `stickyAccount()` / 按会话模型精化的 `resolvedActiveAccountIds[family]`）** 顺序解析，确保顶栏展示与调度选号 100% 一致。
+    - `resolvePromptBinding()` 因模型 slug 变更使当前账号绑定失效时，同步清理同一 `bindingKey` 下属于目标模型族（及共享组）且模型 slug 不匹配的陈旧绑定（保留其他隔离族绑定），防止更早的旧账号在同号切模或绑定判断中残留。
 - `syncSessionModel()` 兼容 `dsh-agent` 真实接口 `(await ctx.agents.resolve(sessionId))?.model?.select(...)` 与持久事件追加。
 
 ## 5. `--effort` 档位拒绝自愈（issue #67 / #115）

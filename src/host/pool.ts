@@ -12,6 +12,7 @@ import {
   accountHasArgon,
   argonSharesGoogleGroup,
   baseModelSlug,
+  resolveFamilyPinnedId,
   sharedArgonPeerFamily,
   type AccountPlanTier,
   type AccountPoolData,
@@ -30,9 +31,9 @@ import {
   LOW_QUOTA_5H,
   LOW_QUOTA_WEEKLY,
   explainIneligibility,
+  findPinnedCandidate,
   isAccountEligible,
   isModelQuotaClear,
-  isInNarrowestTier,
   orderByExpiry,
   pickEligibleAccount,
   resolveEligibleActiveAccountId,
@@ -354,7 +355,7 @@ export class AccountPoolManager {
     family: ModelFamily,
     fromId?: string,
   ): ManagedAccount[] {
-    return orderByExpiry(this.data.accounts, candidates, family, fromId, Date.now(), (id) => this.catalogForAccount(id))
+    return orderByExpiry(this.data.accounts, candidates, family, fromId, Date.now())
   }
 
   /**
@@ -505,15 +506,18 @@ export class AccountPoolManager {
     this.admin.clearCooldown(id, family, includeQuotaBench)
   }
 
-  private syncSharedSelect(acc: ManagedAccount, family: ModelFamily, prevId?: string): boolean {
+  private syncSharedSelect(acc: ManagedAccount, family: ModelFamily): boolean {
     const peer = sharedArgonPeerFamily(acc, family)
     if (!peer) return false
     const curPeer = this.data.activeAccountIds?.[peer]
-    if (peer === 'argon' && curPeer && this.getAccount(curPeer)?.quotas?.argon) return false
+    const curPeerAcc = curPeer ? this.getAccount(curPeer) : undefined
+    if (peer === 'argon' && curPeerAcc && curPeerAcc.quotas?.argon !== undefined && !argonSharesGoogleGroup(curPeerAcc)) {
+      return false
+    }
     let changed = false
-    if ((curPeer === undefined || curPeer === prevId) && this.isAccountEligible(acc, peer)) {
+    if (curPeer !== acc.id && this.isAccountEligible(acc, peer)) {
       this.data.activeAccountIds![peer] = acc.id
-      changed = curPeer !== acc.id
+      changed = true
     }
     if (peer === 'google' && this.data.activeAccountIds?.google === acc.id && this.data.lastActiveAccountId !== acc.id) {
       this.data.lastActiveAccountId = acc.id
@@ -526,7 +530,7 @@ export class AccountPoolManager {
     if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
     this.data.activeAccountIds[family] = picked.id
     if (family === 'google' || !this.data.lastActiveAccountId) this.data.lastActiveAccountId = picked.id
-    this.syncSharedSelect(picked, family, prevId)
+    this.syncSharedSelect(picked, family)
     this.persist()
     if (prevId && prevId !== picked.id) this.onAccountSwitch?.(picked.id, family)
   }
@@ -539,37 +543,26 @@ export class AccountPoolManager {
         this.isAccountEligibleForModel(acc, family, model, now) &&
         (quotaModel === undefined || quotaModel === '' || isModelQuotaClear(acc, family, quotaModel, now)),
     )
-
     if (candidates.length === 0) return null
-
     if (this.data.mode === 'round-robin' && candidates.length > 1) {
-      // Pick least recently used candidate
-      const sorted = candidates.slice().sort((a, b) => (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0))
-      const picked = sorted[0] ?? null
+      const picked = candidates.slice().sort((a, b) => (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0))[0] ?? null
       if (picked) this.commitSelectedAccount(picked, family, this.data.activeAccountIds?.[family])
       return picked
     }
-
-    // Default 'sequential' (Sticky Sequential Drain):
-    // 1. If currently active account for this family is still healthy and has quota, STICK WITH IT!
-    const activeId = this.data.activeAccountIds?.[family]
-    if (activeId) {
-      const activeCandidate = candidates.find((a) => a.id === activeId)
-      // Stick only while no narrower account could serve this model instead.
-      if (activeCandidate && isInNarrowestTier(activeCandidate, candidates, family, (id) => this.catalogForAccount(id))) {
-        const peerMoved = this.syncSharedSelect(activeCandidate, family, activeId)
-        const needLast = (family === 'google' || !this.data.lastActiveAccountId) && this.data.lastActiveAccountId !== activeCandidate.id
-        if (needLast || peerMoved) {
-          if (needLast) this.data.lastActiveAccountId = activeCandidate.id
-          this.persist()
-        }
-        return activeCandidate
+    const activeId = resolveFamilyPinnedId(this.data.accounts, this.data.activeAccountIds, family)
+    const activeCandidate = findPinnedCandidate(candidates, this.data.activeAccountIds, family)
+    if (activeCandidate) {
+      if (!this.data.activeAccountIds) this.data.activeAccountIds = {}
+      const famChanged = this.data.activeAccountIds[family] !== activeCandidate.id
+      if (famChanged) this.data.activeAccountIds[family] = activeCandidate.id
+      const peerMoved = this.syncSharedSelect(activeCandidate, family)
+      const needLast = (family === 'google' || !this.data.lastActiveAccountId) && this.data.lastActiveAccountId !== activeCandidate.id
+      if (famChanged || needLast || peerMoved) {
+        if (needLast) this.data.lastActiveAccountId = activeCandidate.id
+        this.persist()
       }
+      return activeCandidate
     }
-
-    // 2. Active account is drained or unavailable -> rotate to the eligible
-    //    account whose quota expires SOONEST (Priority 1: weekly quota expiry,
-    //    Priority 2: 5h quota expiry, Priority 3: pool order).
     const nextAccount: ManagedAccount = this.orderByExpiry(candidates, family, activeId)[0]!
     this.commitSelectedAccount(nextAccount, family, activeId)
     return nextAccount
@@ -577,12 +570,13 @@ export class AccountPoolManager {
 
   /** Pick an eligible account WITHOUT mutating the active pointer (image rotation). */
   findAccount(family: ModelFamily, model?: string, quotaModel?: string, avoid?: readonly string[]): ManagedAccount | null {
+    const activeId = resolveFamilyPinnedId(this.data.accounts, this.data.activeAccountIds, family)
     return pickEligibleAccount(this.data.accounts, this, {
       family,
       ...(model === undefined ? {} : { model }),
       ...(quotaModel === undefined ? {} : { quotaModel }),
       ...(avoid === undefined ? {} : { avoid }),
-      ...(this.data.activeAccountIds?.[family] === undefined ? {} : { activeId: this.data.activeAccountIds[family] }),
+      ...(activeId === undefined ? {} : { activeId }),
       now: Date.now(),
     })
   }

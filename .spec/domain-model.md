@@ -25,9 +25,9 @@
 | **Quota Bench（主动让路）** | 剩余量过低时**主动**退出轮换：5h ≤10% 或周 ≤5%，到 reset 自动恢复；可被用户「清除冷却」覆盖。 | `LOW_QUOTA_5H`、`isQuotaBenched` |
 | **Eligibility（资格）** | 一个账号能否服务「某族 + 某模型」：`disabled` / `auth` / `model-unsupported` / `cooldown` / `model-cooldown` / `quota`。 | `explainIneligibility()` |
 | **Quota Model（第二配额维度）** | 生图请求同时受「驱动聊天模型」与「图片模型桶」约束；`quotaModel` 就是后者。 | `quotaModel`、`isModelQuotaClear()` |
-| **Sticky Pointer（粘性指针）** | 每族当前使用的账号；正常聊天尽量粘住，只有不可用才前进。 | `activeAccountIds[family]`、`lastActiveAccountId` |
+| **Sticky Pointer（粘性指针）** | 每族当前唯一使用的账号；同族全会话严格锁死在此指针上，只有不可用才前进。 | `activeAccountIds[family]`、`lastActiveAccountId` |
 | **Local Rotation（局部轮换）** | 一次生图请求内部的换号：用 `avoidAccountIds` + `findAccount()`，**不移动**粘性指针。 | `ImageService.runAttempts` |
-| **Session Binding（会话绑定）** | 某个 DSH 会话在某族上实际跑过的账号（`store` 的 `<sessionKey>:<accountId>`）。**仍可用时压过族粘性指针**：会话不应在对话中途悄悄换号。 | `stickyAccount()` |
+| **Session Binding（会话绑定）** | 某个 DSH 会话在某族上实际跑过的账号与 `agy` 对话映射（`store` 的 `<sessionKey>:<accountId>`）。**仅当该族当前活跃账号仍是该账号时**用于复用原生对话；**绝不**压过 `activeAccountIds[family]` 或在旧号额度恢复后复活切回。 | `stickyAccount()`、`applyContextDigest` |
 | **Quota Hops（换号预算）** | 一次请求内允许因配额再试的账号数上限（`min(启用账号数-1,16)`）。 | `poolQuotaHops` |
 | **Failover（失败接管）** | 冷却/暂停当前账号并切到下一个可用账号；TOS 终态**永不**跨账号。 | `quota-failover.ts` |
 
@@ -35,12 +35,12 @@
 
 1. **族冷却 ⇒ 全族不可用；模型冷却 ⇒ 仅该模型不可用。** 模型级 429 禁止写族冷却。
 2. **生图不得移动粘性指针**：图片桶耗尽只影响图片，不能打断并行的聊天回合。
-3. **Argon 与 Gemini 账本规则**：`google.description` 未列名 Argon 时，二者账本/冷却/指针完全独立（缺行是「未知」，绝不借用）；当且仅当 `argonSharesGoogleGroup(acc)` 为真（`agy 1.5.15+` 折叠共享组，判据只看 `description`，`quotas.argon` 行的存在不改变结论）时，`google` ↔ `argon` 双向共享配额门控、冷却（`effectiveFamilyCooldown`）、倒计时、活跃指针与会话粘性（`sharedArgonPeerFamily`），确保 Orchestrator (Argon) 规划、执行与内部子代理同账号运行并在任一侧 429/切号时同步切换。
+3. **Argon 与 Gemini 账本规则**：`google.description` 未列名 Argon 时，二者账本/冷却/指针完全独立（缺行是「未知」，绝不借用）；当且仅当 `argonSharesGoogleGroup(acc)` 为真（`agy 1.5.15+` 折叠共享组，判据只看 `description`，`quotas.argon` 行的存在不改变结论）时，`google` ↔ `argon` 双向共享配额门控、冷却（`effectiveFamilyCooldown`）、倒计时、活跃指针与会话粘性（`sharedArgonPeerFamily`），且 `resolveFamilyPinnedId` / `findPinnedCandidate` 在仅单侧有指针时仍将共享组 `google` 与 `argon` 锁在同一账号上，确保 Orchestrator (Argon) 规划、执行与内部子代理同账号运行并在任一侧 429/切号时同步切换。
 4. **`TOS_VIOLATION` 永不跨账号重试**，避免连坐封号。
 5. **无可用账号时必须显式报错**，严禁 `account = undefined` 回落系统主账号。
 6. **启动迁移**清掉历史遗留的「模型级 429 写出的族冷却」。
 7. **用户「清除冷却」** = 清该族冷却 + 该账号全部模型桶（`quotaGateClearedAt` 仅用于主动让路）。
-8. **会话绑定先于平台策略**：`selectSessionAccount()` 在所有平台都先走 `stickyAccount()`；Windows 的「同账号打包」（`parallelSameAccount`）只用于**没有可用绑定**的新会话，用来让并发回合共用一个凭据槽。绑定账号被烧掉/冷却后才落到 `selectAccount()`（该族账本正常前进）。
+8. **同模型族严格单一活跃账号（防封号最高优先级）**：所有平台上的 `selectSessionAccount()` 一律严格跟随目标模型族当前的单一活跃账号（`pool.selectAccount(family, activeModel)` / `activeAccountIds[family]`）。`sessions.json` 中的历史会话绑定**绝不**压过或反向覆写 `activeAccountIds[family]`，也**绝不**在旧账号 5h 配额恢复后复活旧号造成同出口多号并发或全池乒乓；一旦发生换号（自动 429 轮换、低配额让路或手动切号），同族全部会话立即统一收敛到新活跃账号，并通过 `applyContextDigest` 自动交接上下文。同族内（含共享 `google` ↔ `argon`）也不做按窄能力拆号（禁止 `isInNarrowestTier` 分流）：只要当前锁定账号能服务请求模型就严格锁死，直到该账号不可用或确实不支持该模型才轮换。仅**不同模型族**（`google` vs `anthropic` vs `openai` vs 独立 `argon`）或生图场景的**单请求局部轮换**（`quotaModel` + `findAccount` + `avoidAccountIds`，不移动 `activeAccountIds[family]`）允许使用不同账号。
 
 ## 3. 传输与上下文
 
