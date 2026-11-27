@@ -77,6 +77,57 @@ export function isAcpTerminalStatus(rawStatus: string | undefined): boolean {
   return ACP_TERMINAL_STATUSES.has(rawStatus)
 }
 
+/** Character budget for one ACP tool-content block rendered into text. */
+const ACP_CONTENT_MAX_CHARS = 20_000
+
+function clipContent(text: string): string {
+  const trimmed = text.replace(/\s+$/, '')
+  return trimmed.length > ACP_CONTENT_MAX_CHARS ? trimmed.slice(0, ACP_CONTENT_MAX_CHARS) + '\n…' : trimmed
+}
+
+/** Render one ACP `tool_call.content` entry (text/diff/terminal/resource_link). */
+function renderAcpContentBlock(item: unknown): string {
+  const it = asObj(item)
+  if (!it) return typeof item === 'string' ? item : ''
+  const type = typeof it.type === 'string' ? it.type : ''
+  // `{type:'content', content:{type:'text', text}}` — the shape agy uses for
+  // tool output blocks. Unwrap before dispatching on the inner type.
+  if (type === 'content') {
+    const inner = asObj(it.content)
+    if (inner) return renderAcpContentBlock(inner)
+  }
+  if (type === 'text' && typeof it.text === 'string') return it.text
+  if (type === 'diff') {
+    // ACP diff blocks carry the whole edit. A unified-ish rendering keeps it
+    // readable for both the card and the model without inventing line numbers.
+    const path = typeof it.path === 'string' ? it.path : ''
+    const oldText = typeof it.oldText === 'string' ? it.oldText : ''
+    const newText = typeof it.newText === 'string' ? it.newText : ''
+    const lines: string[] = [path === '' ? '--- diff ---' : '--- ' + path + ' ---']
+    if (oldText !== '') lines.push(...oldText.split('\n').map((l) => '-' + l))
+    if (newText !== '') lines.push(...newText.split('\n').map((l) => '+' + l))
+    return lines.join('\n')
+  }
+  if (type === 'terminal') {
+    const output = typeof it.output === 'string' ? it.output : ''
+    const exit = num(it.exitCode)
+    const head = exit !== undefined && exit !== 0 ? `[exit code ${exit}]\n` : ''
+    return head + output
+  }
+  if (type === 'resource_link' || type === 'resource') {
+    const name = typeof it.name === 'string' ? it.name : (typeof it.title === 'string' ? it.title : '')
+    const uri = typeof it.uri === 'string' ? it.uri : ''
+    return '[' + (name === '' ? 'resource' : name) + ']' + (uri === '' ? '' : ' ' + uri)
+  }
+  if (type === 'image') return '[image]'
+  // Unknown (or untyped) block: keep any text it carries rather than dropping
+  // it. agy has shipped `{content:{text}}` without a `type` marker.
+  const nested = asObj(it.content)
+  if (nested !== null && typeof nested.text === 'string') return nested.text
+  if (typeof it.text === 'string') return it.text
+  return ''
+}
+
 export function extractAcpToolOutput(update: Record<string, unknown>): string | undefined {
   const rawOutput = update.rawOutput
   if (typeof rawOutput === 'string') return rawOutput
@@ -90,10 +141,8 @@ export function extractAcpToolOutput(update: Record<string, unknown>): string | 
   if (Array.isArray(content)) {
     const parts: string[] = []
     for (const item of content) {
-      const it = asObj(item)
-      const inner = asObj(it?.content)
-      if (typeof inner?.text === 'string') parts.push(inner.text)
-      else if (typeof it?.text === 'string') parts.push(it.text)
+      const rendered = renderAcpContentBlock(item)
+      if (rendered !== '') parts.push(clipContent(rendered))
     }
     if (parts.length > 0) return parts.join('\n')
   }
