@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.103 (2026-11-27)
+
+### English
+
+- **Change(prompt): the default single-message budget is 150,000 bytes, down from 180,000 (resolves issue #223).** agy cuts a prompt above its ~192,000-byte ceiling silently, and its own system prompt, tool schemas and skills are counted against the same ceiling on top of this plugin's prompt. The largest overhead measured is about 27 KB; the old default left 12 KB of margin, so agy cut the tail off a request that was inside the plugin's budget — with nothing downstream to show for it. 150,000 leaves 42 KB.
+  - **What changes for you:** in a very long conversation, about 30 KB less history is carried inline per turn. Nothing is lost — it moves into the plugin's own digest / archive path, which the model can read and you can see.
+  - A test now pins that the margin exceeds the largest overhead measured, so raising the default back is a deliberate act rather than an accident.
+  - `promptMaxBytes` still overrides the default per installation (16,000–192,000).
+
+### 中文
+
+- **变更(提示词)：默认的单条消息预算从 180,000 字节降到 150,000（解决 issue #223）。** agy 会对超过约 192,000 字节上限的提示词静默截断，而它自己的系统提示词、工具 schema 与技能会和本插件的提示词共用这份上限。目前实测到的最大开销约 27 KB；旧默认值只留了 12 KB 余量，于是 agy 把一份在本插件预算之内的请求从尾部切掉了——而下游毫无迹象。150,000 留出 42 KB。
+  - **对用户的影响**：在很长的对话里，每回合内联携带的历史少约 30 KB。内容不会丢失——它移入插件自己的摘要 / 归档路径，模型可以读取，你也看得到。
+  - 现在有一个测试钉住"余量必须大于实测到的最大开销"，把默认值调回去只能是有意为之，不会是无意改动。
+  - `promptMaxBytes` 仍可按安装环境覆盖默认值（16,000–192,000）。
+
 ## 0.6.102 (2026-11-27)
 
 ### English
