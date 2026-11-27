@@ -11,6 +11,7 @@ import type { AccountPoolManager } from '../host/pool.ts'
 import { defaultEffortFor, findEntry, sanitizeCatalogEntries, type CatalogEntry, type ModelCatalog } from '../host/models.ts'
 import { effortLabel, normalizeEfforts } from '../common/reasoning.ts'
 import { mergeCatalogWithQuotaModels, quotaCatalogForAccount } from '../domain/models/quota-catalog.ts'
+import { learnedContextWindow } from '../features/acp/context-window.ts'
 
 /** One picker row after sanitizing (efforts are always a concrete array). */
 type SanitizedEntry = { id: string; name: string; efforts: string[] }
@@ -167,7 +168,10 @@ export function resolveModelInfo(deps: ModelResolutionDeps, model: string): LlmR
     ?? quotaCatalogForAccounts(quotaScopeAccounts(pool, accounts, activeAcc, cfg.poolWideCatalog)).find((m) => m.id === cleanId)
   const rawName = entry ? entry.name : cleanId
   const name = (typeof rawName === 'string' && rawName.trim() !== '') ? rawName.trim() : cleanId
-  const contextWindow = typeof cfg.contextWindowDefault === 'number' && cfg.contextWindowDefault > 0 ? cfg.contextWindowDefault : 200_000
+  // Prefer the window the model was actually started with (ACP `usage_update.size`,
+  // learned per slug) over one global number for every agy model.
+  const contextWindow = learnedContextWindow(cleanId)
+    ?? (typeof cfg.contextWindowDefault === 'number' && cfg.contextWindowDefault > 0 ? cfg.contextWindowDefault : 200_000)
   const resolved: LlmResolvedModelInfo = {
     provider: PROVIDER_ID,
     id: cleanId,

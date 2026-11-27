@@ -62,6 +62,8 @@ export const EXPECTED_ROUTES: ReadonlyArray<readonly [kind: string, path: string
   ['exact', '/plugins/agy-link/btw/ask'],
   ['exact', '/plugins/agy-link/btw/cancel'],
   ['exact', '/plugins/agy-link/btw/dismiss'],
+  ['exact', '/plugins/agy-link/orchestration'],
+  ['exact', '/plugins/agy-link/tool-seats'],
   ['exact', '/plugins/agy-link/btw/clear'],
   ['exact', '/plugins/agy-link/lease'],
   ['exact', '/plugins/agy-link/lease/acquire'],

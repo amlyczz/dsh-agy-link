@@ -9,8 +9,8 @@
 // stream alive during long background jobs without spawning extra agy turns.
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AgyEvent } from '../../common/types/events.ts'
 import { StringDecoder } from 'node:string_decoder'
+import type { AgyEvent } from '../../common/types/events.ts'
 import type { SubagentSnapshotItem } from './live.ts'
 
 const MAX_READ_BYTES_PER_POLL = 128 * 1024
@@ -383,8 +383,9 @@ export class TaskActivityTracker {
  * agy tails task-*.log 20 lines at a time and every burst used to become a
  * step, i.e. reasoning content: it filled the thinking block with
  * `[后台任务 · task-4] …` and CUT the assistant text block at every burst, which
- * split its markdown mid-sentence. Both transports share this filter so the
- * rule cannot drift between them.
+ * split its markdown mid-sentence. The ACP path files these lines under the
+ * orchestration ledger instead; the CLI path has no ledger and drops them.
+ * Both go through here so the rule cannot drift between the transports.
  */
 export function appendConversationEvent(target: { append(ev: AgyEvent): void }, ev: AgyEvent): void {
   if (backgroundLogOf(ev) === null) target.append(ev)

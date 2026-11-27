@@ -6,6 +6,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { checklistToDshTodos, formatChecklistMarkdown, parseChecklistSteps } from '../../common/checklist.ts'
 import type { RunRegistry } from '../../host/recording.ts'
 import { toolInput, unwrapMcpTool } from './args.ts'
+import { noteToolSeatFromRecording } from '../../features/orchestration/tool-seats.ts'
 import { toolStepBrief } from './brief.ts'
 import { MIRROR_TOOL_NAME } from './names.ts'
 import { presentMirrorCall, presentMirrorResult } from './present.ts'
@@ -115,11 +116,12 @@ export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
       const out = t.output
       let outStr = typeof out === 'string' ? out : ''
       const effTool = unwrapMcpTool(t.name, t.args).tool
+      // The card's seat badge is looked up by (run, step); attribution is
+      // cosmetic, so it never fails the step.
+      noteToolSeatFromRecording(rec, step, effTool)
       // agy's stream envelope carries no output for some steps (every
-      // `read_file` result is empty on stdout, which made the Read card say
-      // "(no output)"). The conversation DB still holds the rendered result, so
-      // recover it there; when the DB is gone (agy prunes conversations), a
-      // file read can still be answered from the file agy itself read.
+      // `read_file` result is empty on stdout), so fall back to the conversation
+      // DB and then to the file agy itself read.
       outStr = await recoverStepOutput(rec, step, effTool, t.args, outStr)
       if (effTool === 'update_steps' || effTool === 'todo_write') {
         const steps = parseChecklistSteps(t.args, outStr)

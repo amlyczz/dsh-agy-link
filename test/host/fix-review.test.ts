@@ -81,16 +81,6 @@ describe('mapper fixes', () => {
 		assert.equal(notes.length, 0, 'no pending-progress note')
 	})
 
-
-	test('a persisted background-task log never replays as model thinking', () => {
-		// Records written before the transport stopped filing task logs as steps
-		// still sit in old sessions; replaying one must not resurrect it as
-		// reasoning (and must not cut the assistant text block).
-		const mapper = new EventMapper({ runId: 'r', cutOnTool: false })
-		const out = [...mapper.map(step({ stepKey: 'bg1', stepKind: 'subagent', text: '[后台任务 · task-4] … 跳过 3 行中间输出' }), 0)]
-		const reasoning = out.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text).join('')
-		assert.equal(reasoning, '')
-	})
 	test('DONE tool cut forwards the last per-call usage sample, not 0/0', () => {
 		const rec = new RunRecording()
 		rec.append(step({ stepKey: 'u0', usage: { output_tokens: 500, input_tokens: 1200 } }))

@@ -51,6 +51,14 @@ export type AgyEvent =
       rawStatus?: string
       /** Per-step usage (agy ≥1.1.15 reports usage on agent_response steps). */
       usage?: RawUsage
+      /**
+       * Which model spoke in this step. Orchestrator sessions run two seats
+       * (planner + executor) inside one conversation and the ACP stream never
+       * says so; the bridge stamps the seat looked up from the transcript here
+       * so recorded events keep the attribution. Informational only — it is not
+       * part of what the model sees.
+       */
+      model?: string
       /** Conversation id carried directly on step_update when init hasn't been seen yet. */
       conversationId?: string
       raw?: unknown

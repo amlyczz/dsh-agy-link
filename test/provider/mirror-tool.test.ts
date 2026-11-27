@@ -554,3 +554,22 @@ test('unwrapMcpTool unwraps alwaysLoad bridge names (single underscore, issue #2
   assert.equal(other.isMcp, false)
   assert.equal(other.tool, 'some_other_tool')
 })
+
+test('presentMirrorCall maps reverse-bridged DSH tool names onto native cards', () => {
+  const shell = presentMirrorCall({
+    tool: 'mcp_dsh-tools-14730_pwsh',
+    input: { command: 'Get-ChildItem', description: 'list files' },
+  })
+  assert.equal(shell?.card, 'terminal')
+  if (shell?.card === 'terminal') assert.equal(shell.title, 'Get-ChildItem')
+
+  const write = presentMirrorCall({
+    tool: 'mcp_dsh-tools-14730_write',
+    input: { file_path: '/tmp/a.txt', content: 'hello' },
+  })
+  assert.equal(write?.card, 'diff')
+
+  const read = presentMirrorCall({ tool: 'mcp_dsh-tools-14730_read', input: { file_path: '/tmp/a.txt' } })
+  assert.equal(read?.card, 'generic')
+  if (read?.card === 'generic') assert.equal(read.title, 'Read /tmp/a.txt')
+})
