@@ -124,6 +124,28 @@ function inspectButton(inspect: (() => void) | undefined, t?: Translate): unknow
 		: null;
 }
 
+/** Inline images a bridged tool returned inside its payload. */
+function payloadImages(model: MirrorCardModel): unknown {
+	const images = model.images ?? [];
+	if (images.length === 0) return null;
+	return hx('div', { className: 'agy-tv-card-images' },
+		...images.map((src, i) => hx('img', {
+			key: 'img-' + i,
+			className: 'agy-tv-card-image',
+			src,
+			alt: '',
+			loading: 'lazy',
+		}))
+	);
+}
+
+/** The card's textual answer, preceded by any payload images. */
+function bodyWith(model: MirrorCardModel, text: string): unknown {
+	const images = payloadImages(model);
+	const pre = hx('pre', { className: 'agy-tv-card-content' }, text);
+	return images === null ? pre : hx('div', null, images, pre);
+}
+
 function terminalBody(model: MirrorCardModel, t: Translate | undefined, inspectNode: unknown): unknown {
 	const rawBody = model.output !== undefined && model.output !== '' ? trimTrailingBlankLines(model.output) : tr(t, 'tv.noOutput', '(no output)');
 	const copyText = model.output !== undefined && model.output !== '' ? model.output : (model.command ?? '');
@@ -131,7 +153,7 @@ function terminalBody(model: MirrorCardModel, t: Translate | undefined, inspectN
 		hx('span', { className: 'agy-tv-prompt-glyph' }, '❯'),
 		...(model.cwd ? [hx('span', { key: 'cwd', className: 'agy-tv-card-cwd' }, model.cwd)] : []),
 		hx('span', { className: 'agy-tv-card-cmd', title: model.command }, model.command ?? ''),
-	], hx(CopyButton, { text: copyText, t }), hx('pre', { className: 'agy-tv-card-content' }, clip(rawBody, 16000)), inspectNode);
+	], hx(CopyButton, { text: copyText, t }), bodyWith(model, clip(rawBody, 16000)), inspectNode);
 }
 
 function diffCard(
@@ -160,7 +182,7 @@ function readCard(model: MirrorCardModel, cwd: string | undefined, home: string 
 	return cardShell([
 		IconBrowseOutline16(13),
 		hx('span', { className: 'agy-tv-card-path' }, pathLabel),
-	], hx(CopyButton, { text: model.output ?? '', t }), hx('pre', { className: 'agy-tv-card-content' }, clip(rawBody, 16000)), inspectNode);
+	], hx(CopyButton, { text: model.output ?? '', t }), bodyWith(model, clip(rawBody, 16000)), inspectNode);
 }
 
 function searchCard(model: MirrorCardModel, t: Translate | undefined, inspectNode: unknown): unknown {
@@ -168,7 +190,7 @@ function searchCard(model: MirrorCardModel, t: Translate | undefined, inspectNod
 	return cardShell([
 		IconSearchOutline16(13),
 		hx('span', { className: 'agy-tv-card-path' }, model.title),
-	], hx(CopyButton, { text: model.output ?? '', t }), hx('pre', { className: 'agy-tv-card-content' }, clip(rawBody, 16000)), inspectNode);
+	], hx(CopyButton, { text: model.output ?? '', t }), bodyWith(model, clip(rawBody, 16000)), inspectNode);
 }
 
 function listCard(model: MirrorCardModel, t: Translate | undefined, inspectNode: unknown): unknown {
@@ -176,7 +198,7 @@ function listCard(model: MirrorCardModel, t: Translate | undefined, inspectNode:
 	return cardShell([
 		IconBrowseOutline16(13),
 		hx('span', { className: 'agy-tv-card-path' }, model.title),
-	], hx(CopyButton, { text: model.output ?? '', t }), hx('pre', { className: 'agy-tv-card-content' }, clip(rawBody, 16000)), inspectNode);
+	], hx(CopyButton, { text: model.output ?? '', t }), bodyWith(model, clip(rawBody, 16000)), inspectNode);
 }
 
 function questionCard(model: MirrorCardModel, inspectNode: unknown): unknown {
@@ -221,7 +243,7 @@ function genericCard(model: MirrorCardModel, t: Translate | undefined, inspectNo
 	return cardShell([
 		IconCodeOutline16(13),
 		hx('span', { className: 'agy-tv-card-path' }, model.server ? `${model.server}: ${model.tool}` : (model.title || model.tool || 'Tool')),
-	], hx(CopyButton, { text: copyText, t }), hx('pre', { className: 'agy-tv-card-content' }, clip(rawBody, 16000)), inspectNode);
+	], hx(CopyButton, { text: copyText, t }), bodyWith(model, clip(rawBody, 16000)), inspectNode);
 }
 
 export function CardBody({ model, openFile, cwd, home, inspect, t }: {
@@ -262,4 +284,5 @@ export function CardBody({ model, openFile, cwd, home, inspect, t }: {
 			return genericCard(model, t, inspectNode);
 	}
 }
+
 

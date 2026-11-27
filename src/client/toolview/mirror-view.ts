@@ -8,7 +8,36 @@ import { cls, diffStat, displaySummary, displayTitle, previewLine, tr } from './
 import { IconChevronDownOutline14, toolIconFor } from './icons.ts';
 import { hx } from './runtime.ts';
 import { useToggle } from './toggle.ts';
-import type { AgyToolViewProps } from './types.ts';
+import type { AgyToolViewProps, CardBadge } from './types.ts';
+
+// Small chips the card model attaches (e.g. "DSH" for a reverse-bridged tool).
+// Rendered inline in the collapsed row so a mixed run stays readable.
+function badgeNodes(badges: readonly CardBadge[] | undefined): unknown[] {
+	if (badges === undefined || badges.length === 0) return [];
+	const h = hx;
+	return badges.map((badge, i) => {
+		const tone = badge.tone ?? 'neutral';
+		const color = tone === 'ok' ? '#10b981' : tone === 'warn' ? '#f59e0b' : tone === 'accent' ? '#3b82f6' : '#94a3b8';
+		return h('span', {
+			key: 'badge-' + i,
+			className: 'agy-tv-badge',
+			style: {
+				display: 'inline-flex',
+				alignItems: 'center',
+				height: '15px',
+				padding: '0 5px',
+				borderRadius: '7px',
+				fontSize: '9.5px',
+				fontWeight: 700,
+				lineHeight: '15px',
+				flexShrink: 0,
+				color,
+				border: '1px solid ' + color,
+				whiteSpace: 'nowrap',
+			},
+		}, badge.label);
+	});
+}
 
 export function AgyMirrorToolView(props: AgyToolViewProps): unknown {
 	const h = hx;
@@ -85,6 +114,7 @@ export function AgyMirrorToolView(props: AgyToolViewProps): unknown {
 		h('span', { className: 'agy-tv-sep', 'aria-hidden': true }),
 		summaryNode,
 		...(stat !== null ? [h('span', { key: 'stat', className: 'agy-tv-diff-stat' }, stat)] : []),
+		...badgeNodes(model.badges),
 		...(preview !== undefined ? [h('span', { key: 'prev', className: 'agy-tv-preview', title: preview }, preview)] : []),
 	);
 

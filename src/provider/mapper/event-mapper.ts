@@ -367,6 +367,11 @@ export class EventMapper {
         return
       }
       if (ev.stepKind === 'thinking' || ev.stepKind === 'subagent') {
+        // Guard for recordings written before the tracker stopped feeding agy's
+        // detached task logs into the event stream: those lines are recognisable
+        // and re-rendering them would re-pollute the reasoning block (and cut the
+        // text block, which broke the assistant's markdown mid-sentence).
+        if (ev.stepKind === 'subagent' && ev.text.startsWith('[后台任务 · ')) return
         yield* this.ensureBlock('reasoning')
         if (ev.stepKind === 'thinking') {
           const dbThought = this.opts.resolvedThoughts?.get(absIndex)

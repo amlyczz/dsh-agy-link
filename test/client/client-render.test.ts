@@ -390,7 +390,7 @@ test('args: mirrorInfo unwraps MCP meta-tools and mcp__server__tool names', () =
 	assert.equal(mirrorInfo({ name: 'agy_tool', argsRaw: '{}' } as never), null);
 });
 
-test('args: resultText unwraps JSON content envelopes; settled/error detection', () => {
+test('args: resultText keeps the raw text so payload decoding can see everything; settled/error detection', () => {
 	const part1 = { kind: 'tool-result', call: { name: 'agy_tool', argsRaw: '{}' }, content: [{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }], isError: false };
 	assert.equal(resultText(part1 as never), 'one\ntwo');
 	const envelope = {
@@ -399,7 +399,9 @@ test('args: resultText unwraps JSON content envelopes; settled/error detection',
 		content: [{ type: 'text', text: JSON.stringify({ content: [{ type: 'text', text: 'inner' }] }) }],
 		isError: false,
 	};
-	assert.equal(resultText(envelope as never), 'inner');
+	// The MCP envelope is decoded by unwrapToolPayload(), which also recovers
+	// images and structured blocks; resultText must not flatten it first.
+	assert.equal(resultText(envelope as never), JSON.stringify({ content: [{ type: 'text', text: 'inner' }] }));
 	assert.equal(isSettled(part1 as never), true);
 	assert.equal(isSettled({ name: 'agy_tool', argsRaw: '{}' } as never), false);
 	assert.equal(isError(part1 as never), false);

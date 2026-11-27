@@ -3,31 +3,31 @@
 import { cleanToolOutput } from '../../common/tool-output.ts';
 import { isImageFile } from '../images.ts';
 import { extractImagePathsFromText, mirrorInfo, num, parsedArgsRaw, pick, resultText } from './args.ts';
+import { unwrapToolPayload, type ToolPayload } from './payload.ts';
 import { classifyExtendedCard } from './extended-model.ts';
 import { relativize } from './format.ts';
 import type { CardKind, MirrorCardModel, ToolBlock } from './types.ts';
 
-const TERMINAL_TOOLS = new Set(['run_command', 'bash', 'execute_command', 'ops_bash', 'sh', 'shell']);
-const DIFF_TOOLS = new Set(['replace_file_content', 'edit_file', 'replace_in_file', 'edit', 'write_to_file', 'write_file', 'create_file']);
+const TERMINAL_TOOLS = new Set(['run_command', 'bash', 'execute_command', 'ops_bash', 'sh', 'shell', 'pwsh', 'powershell', 'shell_command']);
+const DIFF_TOOLS = new Set(['replace_file_content', 'edit_file', 'replace_in_file', 'edit', 'write_to_file', 'write_file', 'create_file', 'write', 'apply_patch']);
 const READ_TOOLS = new Set(['read_file', 'view_file', 'read', 'open_file']);
 const SEARCH_TOOLS = new Set(['find_by_name', 'glob', 'ops_glob', 'search_files', 'grep_search', 'search', 'ops_grep', 'search_file_content', 'grep', 'search_web', 'web_search']);
-const LIST_TOOLS = new Set(['list_dir', 'ls']);
+const LIST_TOOLS = new Set(['list_dir', 'ls', 'list_directory']);
 const DELETE_TOOLS = new Set(['delete_file', 'remove_file', 'rm']);
 const QUESTION_TOOLS = new Set(['ask_question', 'ask', 'question']);
 const IMAGE_TOOLS = new Set(['generate_image', 'create_image', 'render_image']);
 
-export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): MirrorCardModel {
+function buildCardModel(block: ToolBlock, payload: ToolPayload, cwd?: string, home?: string): MirrorCardModel {
 	const info = mirrorInfo(block);
-	const rawOut = resultText(block);
 	if (info === null) {
-		return { kind: 'generic', title: 'agy_tool', output: cleanToolOutput('', rawOut).body, raw: parsedArgsRaw(block) };
+		return { kind: 'generic', title: 'agy_tool', output: payload.text, raw: parsedArgsRaw(block) };
 	}
 	const { tool, input } = info;
 	// agy wraps every result in a status envelope (Created At / Completed At /
 	// Command exited with code N / Command output:) and numbers file reads. The
 	// card must show the payload, not the envelope: the collapsed preview used
 	// to read "Created At: …" instead of the command's first real output line.
-	const out = cleanToolOutput(tool, rawOut).body;
+	const out = payload.text;
 	const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary', 'Instruction', 'instruction');
 
 	if (tool === 'invoke_subagent') {
@@ -151,3 +151,28 @@ export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): 
 	const title = desc ?? defaultTitle;
 	return { kind: 'generic', tool, server: info.server, title, output: out, raw: parsedArgsRaw(block) };
 }
+
+/**
+ * The reverse MCP bridge registers DSH's own tools inside agy as
+ * `mcp_dsh-tools-<port>_<tool>`. Once unwrapped they are ordinary names
+ * (`pwsh`, `read`, `edit`), so the card needs to SAY where the tool came from —
+ * otherwise a DSH `pwsh` call is indistinguishable from agy's own
+ * `run_command`, and the same run mixes two different execution engines.
+ */
+function bridgeBadge(server: string | undefined): readonly { label: string; tone: 'accent' }[] | undefined {
+	return server !== undefined && /^dsh(-tools)?(-\d+)?$/.test(server) ? [{ label: 'DSH', tone: 'accent' }] : undefined;
+}
+
+/**
+ * One render, one decode: the payload is parsed here so the builders see the
+ * tool's answer rather than the JSON envelope that carried it.
+ */
+export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): MirrorCardModel {
+	const info = mirrorInfo(block);
+	const payload = unwrapToolPayload(cleanToolOutput(info?.tool ?? '', resultText(block)).body);
+	const model = buildCardModel(block, payload, cwd, home);
+	const badge = bridgeBadge(model.server);
+	const withBadge = badge === undefined || model.badges !== undefined ? model : { ...model, badges: badge };
+	return payload.images.length > 0 ? { ...withBadge, images: payload.images } : withBadge;
+}
+

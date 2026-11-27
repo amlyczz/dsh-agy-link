@@ -59,25 +59,13 @@ export function parseInnerArgs(raw: unknown): Record<string, unknown> {
 	return { value: raw };
 }
 
+/**
+ * Kept as the projection the card model reads text through, but deliberately
+ * lossless: an MCP envelope carries images and structured blocks too, and this
+ * function used to keep only the `text` ones. Decoding now belongs to
+ * `unwrapToolPayload()`, which runs over the full text.
+ */
 export function cleanResultText(text: string): string {
-	const trimmed = text.trim();
-	if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-		try {
-			const obj = JSON.parse(trimmed) as { content?: unknown };
-			if (Array.isArray(obj?.content)) {
-				const parts: string[] = [];
-				for (const item of obj.content) {
-					const blk = item as { type?: string; text?: unknown };
-					if (blk?.type === 'text' && typeof blk.text === 'string') {
-						parts.push(blk.text);
-					}
-				}
-				if (parts.length > 0) return parts.join('\n');
-			}
-		} catch {
-			// not JSON
-		}
-	}
 	return text;
 }
 
@@ -115,6 +103,18 @@ export function mirrorInfo(block: ToolBlock): { tool: string; input: Record<stri
 		if (parts.length >= 2) {
 			server = parts[0];
 			tool = parts.slice(1).join('__');
+		}
+	} else {
+		// agy 1.5.x calls alwaysLoad bridged tools by a SINGLE-underscore name —
+		// `mcp_dsh-tools-<port>_<tool>`, `mcp_<server>_<tool>` — which the host
+		// path already unwraps (#200). Without the same unwrap here the card
+		// kept the compound name and fell through to the generic renderer, so
+		// every reverse-bridged DSH tool (pwsh / read / edit / grep) lost its
+		// terminal, file and diff cards.
+		const bridge = /^mcp_([A-Za-z0-9][A-Za-z0-9._-]*?)_([A-Za-z][A-Za-z0-9_:.-]*)$/.exec(tool);
+		if (bridge !== null && !tool.startsWith('mcp__')) {
+			server = bridge[1]!;
+			tool = bridge[2]!;
 		}
 	}
 

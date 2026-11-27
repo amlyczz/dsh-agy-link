@@ -40,6 +40,7 @@ import { buildOrchestratorSettingsObject, isOrchestratorModel, mergeOrchestrator
 import { resolveModelSlug } from '../host/models.ts'
 import { warnWatermarkDrop, type RunTelemetry } from './finalize.ts'
 import { SubagentTracker } from '../features/subagent/tracker.ts'
+import { appendConversationEvent } from '../features/subagent/task-activity.ts'
 import {
   createLiveQuotaController,
   reportDirectToolQuota,
@@ -390,7 +391,7 @@ export function createAttemptRecorder(
         resumed: Boolean(initialConversationId),
         accountHome: rec.accountHome,
         log: deps.log,
-        onEvent: (ev) => rec.append(ev),
+        onEvent: (ev) => appendConversationEvent(rec, ev),
         ...(quotaCtrl ? { onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info) } : {}),
         noteActivity: () => watchdog.markEvent(),
       })

@@ -9,6 +9,7 @@
 // stream alive during long background jobs without spawning extra agy turns.
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import type { AgyEvent } from '../../common/types/events.ts'
 import { StringDecoder } from 'node:string_decoder'
 import type { SubagentSnapshotItem } from './live.ts'
 
@@ -58,6 +59,45 @@ function clipSingleLine(text: string, maxChars: number): string {
 
 export function formatTaskLogLine(taskId: string, line: string): string {
   return `[后台任务 · ${taskId}] ${clipSingleLine(line, MAX_LINE_CHARS)}`
+}
+
+/** One detached task-log chunk, detached from the conversation stream. */
+export interface BackgroundLogChunk {
+  taskId: string
+  lines: string[]
+  skipped: number
+}
+
+/**
+ * Recognise a background-task log event emitted by {@link TaskActivityTracker}
+ * (raw.kind === 'task-log') and unwrap it into plain text for the orchestration
+ * panel. Returns null for anything else, including subagent lifecycle events.
+ *
+ * The text fallback matters for recordings written before raw carried a kind:
+ * those lines are exactly `[后台任务 · <id>] <line>` or the `… 跳过 N 行` marker.
+ */
+export function backgroundLogOf(ev: { kind?: string; stepKind?: string; text?: string; raw?: unknown }): BackgroundLogChunk | null {
+  if (ev.kind !== undefined && ev.kind !== 'step') return null
+  if (ev.stepKind !== undefined && ev.stepKind !== 'subagent') return null
+  const raw = ev.raw
+  if (raw !== null && typeof raw === 'object') {
+    const o = raw as { kind?: unknown; taskId?: unknown; line?: unknown; skipped?: unknown }
+    if (o.kind === 'task-log') {
+      const taskId = typeof o.taskId === 'string' ? o.taskId : ''
+      const skipped = typeof o.skipped === 'number' && Number.isFinite(o.skipped) ? o.skipped : 0
+      const line = typeof o.line === 'string' ? o.line : ''
+      return { taskId, lines: line === '' ? [] : [clipSingleLine(line, MAX_LINE_CHARS)], skipped }
+    }
+  }
+  const text = typeof ev.text === 'string' ? ev.text : ''
+  const m = text.match(/^\[后台任务 · ([^\]]+)\]\s*(.*)$/s)
+  if (!m) return null
+  const body = m[2] ?? ''
+  const taskId = m[1] ?? ''
+  const skipMatch = body.match(/^… 跳过 (\d+) 行中间输出/)
+  if (skipMatch) return { taskId, lines: [], skipped: Number(skipMatch[1]) }
+  const oneLine = body.split('\n')[0] ?? ''
+  return oneLine.trim() === '' ? null : { taskId, lines: [clipSingleLine(oneLine, MAX_LINE_CHARS)], skipped: 0 }
 }
 
 export function summarizeMessageJson(rawObj: unknown, fallbackName = 'message'): { dedupKey: string; text: string } | null {
@@ -334,4 +374,18 @@ export class TaskActivityTracker {
       }
     }
   }
+}
+
+/**
+ * Append one transport event to the transcript unless it is a detached
+ * background-task log.
+ *
+ * agy tails task-*.log 20 lines at a time and every burst used to become a
+ * step, i.e. reasoning content: it filled the thinking block with
+ * `[后台任务 · task-4] …` and CUT the assistant text block at every burst, which
+ * split its markdown mid-sentence. Both transports share this filter so the
+ * rule cannot drift between them.
+ */
+export function appendConversationEvent(target: { append(ev: AgyEvent): void }, ev: AgyEvent): void {
+  if (backgroundLogOf(ev) === null) target.append(ev)
 }
