@@ -263,49 +263,74 @@ test('pool-reset wait: awaitWithNotices streams those notice lines on the reserv
   assert.match(texts[0]!, /最多等 900s/)
 })
 
-test('pool-reset wait: a slow selection with nothing to report streams no empty chunk', async () => {
+test('pool-reset wait: a slow selection with nothing to report streams no empty chunk', async (t) => {
   // Aux calls and slow self-heals (healStaleModelSnapshot's refresh) never hand
   // a pool wait to the wrapper, so the notice renders nothing while the
   // selection still exceeds one cadence. Before the fix that tick wrote a bare
   // '\n' reasoning delta into the transcript.
-  let calls = 0
-  const work = new Promise<string>((resolve) => {
-    setTimeout(() => resolve('served'), 250)
-  })
-  const gen = awaitWithNotices(work, {
-    intervalMs: 10,
-    notice: () => {
-      calls++
-      return ''
-    },
-  })
-  const texts: string[] = []
-  for (;;) {
-    const step = await gen.next()
-    if (step.done === true) break
-    texts.push((step.value as { text: string }).text)
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let calls = 0
+    const work = new Promise<string>((resolve) => {
+      setTimeout(() => resolve('served'), 30)
+    })
+    const gen = awaitWithNotices(work, {
+      intervalMs: 10,
+      notice: () => {
+        calls++
+        return ''
+      },
+    })
+    const texts: string[] = []
+    const pump = (async () => {
+      for (;;) {
+        const step = await gen.next()
+        if (step.done === true) return
+        texts.push((step.value as { text: string }).text)
+      }
+    })()
+    // The generator needs a microtask turn between ticks to skip a blank notice
+    // and re-arm; the selection's own 30ms timer ends the wait on the third tick.
+    for (let tick = 0; tick < 3; tick++) {
+      t.mock.timers.tick(10)
+      await Promise.resolve()
+    }
+    await pump
+    assert.ok(calls >= 1, 'the cadence still fires while the selection runs, saw ' + calls)
+    assert.deepEqual(texts, [], 'a blank notice must not put an empty chunk into the transcript')
+  } finally {
+    t.mock.timers.reset()
   }
-  assert.ok(calls >= 1, 'the cadence still fires while the selection runs')
-  assert.deepEqual(texts, [], 'a blank notice must not put an empty chunk into the transcript')
 })
 
-test('pool-reset wait: a blank tick is skipped without losing the next real notice', async () => {
-  let calls = 0
-  const work = new Promise<string>((resolve) => {
-    setTimeout(() => resolve('served'), 250)
-  })
-  const gen = awaitWithNotices(work, {
-    intervalMs: 10,
-    notice: () => (++calls === 1 ? '' : 'now waiting'),
-  })
-  const texts: string[] = []
-  for (;;) {
-    const step = await gen.next()
-    if (step.done === true) break
-    texts.push((step.value as { text: string }).text)
+test('pool-reset wait: a blank tick is skipped without losing the next real notice', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let calls = 0
+    const work = new Promise<string>((resolve) => {
+      setTimeout(() => resolve('served'), 30)
+    })
+    const gen = awaitWithNotices(work, {
+      intervalMs: 10,
+      notice: () => (++calls === 1 ? '' : 'now waiting'),
+    })
+    const texts: string[] = []
+    const pump = (async () => {
+      for (;;) {
+        const step = await gen.next()
+        if (step.done === true) return
+        texts.push((step.value as { text: string }).text)
+      }
+    })()
+    for (let tick = 0; tick < 3; tick++) {
+      t.mock.timers.tick(10)
+      await Promise.resolve()
+    }
+    await pump
+    assert.deepEqual(texts, ['now waiting\n'], 'only the blank tick is dropped')
+  } finally {
+    t.mock.timers.reset()
   }
-  assert.ok(texts.length >= 1, 'the later ticks must still be emitted')
-  assert.ok(texts.every((text) => text === 'now waiting\n'), 'only blank ticks are dropped')
 })
 
 test('pool-reset wait: the adapter streams the notice into the transcript while the selection is parked', async () => {
