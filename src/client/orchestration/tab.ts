@@ -39,7 +39,13 @@ interface SlotHost {
  */
 export function installOrchestrationTab(ctx: unknown): boolean {
   const tabs = serviceOf<TabRegistryLike>(ctx, 'sidebarRightTabs')
-  if (tabs === undefined || typeof tabs.register !== 'function') return false
+  if (tabs === undefined || typeof tabs.register !== 'function') {
+    // Plugin apply order is not guaranteed: this bundle can load before the
+    // Sidebar package provides its faces. Keep trying on a short interval
+    // instead of giving up for the whole session.
+    scheduleRetry(ctx)
+    return false
+  }
   const host = ctx as SlotHost
   host.effect(() => tabs.register({
     id: ORCHESTRATION_TAB_ID,
@@ -61,7 +67,25 @@ export function installOrchestrationTab(ctx: unknown): boolean {
     { name: 'sidebar.right.pane.tab.title', key: ORCHESTRATION_TAB_ID, locale: NS },
     OrchestrationTabTitle,
   ))
+  installed = true
   return true
+}
+
+/** Registration outcomes worth retrying, and how long to keep trying. */
+const RETRY_DELAY_MS = 200
+const MAX_RETRIES = 150
+let installed = false
+let retries = 0
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleRetry(ctx: unknown): void {
+  if (installed || retryTimer !== null || retries >= MAX_RETRIES) return
+  if (typeof setTimeout !== 'function') return
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    retries += 1
+    if (!installed) installOrchestrationTab(ctx)
+  }, RETRY_DELAY_MS)
 }
 
 /**

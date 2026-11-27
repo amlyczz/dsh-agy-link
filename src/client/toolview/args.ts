@@ -59,25 +59,13 @@ export function parseInnerArgs(raw: unknown): Record<string, unknown> {
 	return { value: raw };
 }
 
+/**
+ * Kept as the projection the card model reads text through, but deliberately
+ * lossless: an MCP envelope carries images and structured blocks too, and this
+ * function used to keep only the `text` ones. Decoding now belongs to
+ * `unwrapToolPayload()`, which runs over the full text.
+ */
 export function cleanResultText(text: string): string {
-	const trimmed = text.trim();
-	if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-		try {
-			const obj = JSON.parse(trimmed) as { content?: unknown };
-			if (Array.isArray(obj?.content)) {
-				const parts: string[] = [];
-				for (const item of obj.content) {
-					const blk = item as { type?: string; text?: unknown };
-					if (blk?.type === 'text' && typeof blk.text === 'string') {
-						parts.push(blk.text);
-					}
-				}
-				if (parts.length > 0) return parts.join('\n');
-			}
-		} catch {
-			// not JSON
-		}
-	}
 	return text;
 }
 

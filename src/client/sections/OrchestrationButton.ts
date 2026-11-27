@@ -19,11 +19,32 @@ export interface OrchestrationButtonProps {
   sessionId?: string
 }
 
-/** Renders nothing until the session has orchestration data (or the host has no Sidebar). */
+/**
+ * The chip: seat and workload once a turn has run, and a plain "编排" entry
+ * before that. It deliberately stays visible on any host with a right Sidebar —
+ * the page has its own empty state, and a control that only appears after the
+ * fact is a control nobody finds.
+ */
 export function OrchestrationButton(props: OrchestrationButtonProps): unknown {
   const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
   const { snapshot } = useOrchestration(sessionId)
-  if (snapshot === null || !canOpenOrchestrationTab()) return null
+  if (!canOpenOrchestrationTab()) return null
+  if (snapshot === null) {
+    return h(
+      Button,
+      {
+        variant: 'pill',
+        title: '打开编排页（本轮还没有数据）',
+        className: 'agy-btn agy-orchestration-btn',
+        style: { padding: '2px 8px', fontSize: '11px', gap: '4px' },
+        onClick: () => {
+          openOrchestrationTab()
+        },
+      },
+      h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '11px' } }, '◈'),
+      h('span', { style: { color: 'var(--agy-text-secondary)', fontSize: '10.5px' } }, '编排'),
+    )
+  }
   const seats = snapshot.seats
   const live = snapshot.live
   const active = live

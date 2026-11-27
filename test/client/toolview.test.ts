@@ -388,3 +388,28 @@ test('mirrorCardModel: agy-native tools carry no bridge badge', () => {
   )
   assert.equal(m.badges, undefined)
 })
+
+test('mirrorCardModel: an MCP JSON envelope is decoded into the tool answer', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: { run: 'r1', step: 25, tool: 'mcp_dsh-tools-14730_read', input: { file_path: 'C:/w/a.txt' } },
+      content: [JSON.stringify({ content: [{ type: 'text', text: 'alpha\nbeta' }] })],
+    }),
+  )
+  assert.equal(m.kind, 'read')
+  assert.equal(m.output, 'alpha\nbeta')
+})
+
+test('mirrorCardModel: an image block inside the payload becomes an inline image', () => {
+  const m = mirrorCardModel(
+    settled({
+      args: { run: 'r1', step: 26, tool: 'mcp_dsh-tools-14730_read', input: { file_path: 'C:/w/shot.png' } },
+      content: [JSON.stringify({ content: [
+        { type: 'text', text: 'screenshot' },
+        { type: 'image', data: 'QUJD', mimeType: 'image/png' },
+      ] })],
+    }),
+  )
+  assert.equal(m.output, 'screenshot')
+  assert.deepEqual(m.images, ['data:image/png;base64,QUJD'])
+})

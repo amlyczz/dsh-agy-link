@@ -3,6 +3,7 @@
 import { cleanToolOutput } from '../../common/tool-output.ts';
 import { isImageFile } from '../images.ts';
 import { extractImagePathsFromText, mirrorInfo, num, parsedArgsRaw, pick, resultText } from './args.ts';
+import { unwrapToolPayload, type ToolPayload } from './payload.ts';
 import { classifyExtendedCard } from './extended-model.ts';
 import { relativize } from './format.ts';
 import type { CardKind, MirrorCardModel, ToolBlock } from './types.ts';
@@ -16,18 +17,17 @@ const DELETE_TOOLS = new Set(['delete_file', 'remove_file', 'rm']);
 const QUESTION_TOOLS = new Set(['ask_question', 'ask', 'question']);
 const IMAGE_TOOLS = new Set(['generate_image', 'create_image', 'render_image']);
 
-function buildCardModel(block: ToolBlock, cwd?: string, home?: string): MirrorCardModel {
+function buildCardModel(block: ToolBlock, payload: ToolPayload, cwd?: string, home?: string): MirrorCardModel {
 	const info = mirrorInfo(block);
-	const rawOut = resultText(block);
 	if (info === null) {
-		return { kind: 'generic', title: 'agy_tool', output: cleanToolOutput('', rawOut).body, raw: parsedArgsRaw(block) };
+		return { kind: 'generic', title: 'agy_tool', output: payload.text, raw: parsedArgsRaw(block) };
 	}
 	const { tool, input } = info;
 	// agy wraps every result in a status envelope (Created At / Completed At /
 	// Command exited with code N / Command output:) and numbers file reads. The
 	// card must show the payload, not the envelope: the collapsed preview used
 	// to read "Created At: …" instead of the command's first real output line.
-	const out = cleanToolOutput(tool, rawOut).body;
+	const out = payload.text;
 	const desc = pick(input, 'Description', 'description', 'toolAction', 'toolSummary', 'Instruction', 'instruction');
 
 	if (tool === 'invoke_subagent') {
@@ -163,8 +163,16 @@ function bridgeBadge(server: string | undefined): readonly { label: string; tone
 	return server !== undefined && /^dsh(-tools)?(-\d+)?$/.test(server) ? [{ label: 'DSH', tone: 'accent' }] : undefined;
 }
 
+/**
+ * One render, one decode: the payload is parsed here so the builders see the
+ * tool's answer rather than the JSON envelope that carried it.
+ */
 export function mirrorCardModel(block: ToolBlock, cwd?: string, home?: string): MirrorCardModel {
-	const model = buildCardModel(block, cwd, home);
+	const info = mirrorInfo(block);
+	const payload = unwrapToolPayload(cleanToolOutput(info?.tool ?? '', resultText(block)).body);
+	const model = buildCardModel(block, payload, cwd, home);
 	const badge = bridgeBadge(model.server);
-	return badge === undefined || model.badges !== undefined ? model : { ...model, badges: badge };
+	const withBadge = badge === undefined || model.badges !== undefined ? model : { ...model, badges: badge };
+	return payload.images.length > 0 ? { ...withBadge, images: payload.images } : withBadge;
 }
+

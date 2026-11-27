@@ -100,7 +100,7 @@ function seatRow(seat: OrchestrationSeat): unknown {
       { style: { marginLeft: 'auto', display: 'flex', gap: '8px', fontSize: '11px', color: MUTED, whiteSpace: 'nowrap' } },
       h('span', { title: 'calls this turn' }, String(seat.calls) + '×'),
       h('span', { title: 'last prompt tokens (cache read)' }, formatTokens(seat.contextTokens) + (seat.cacheReadTokens !== undefined ? ' (' + formatTokens(seat.cacheReadTokens) + ' cache)' : '')),
-      h('span', { title: 'this turn: input → output' }, formatTokens(seat.inputTokens) + ' → ' + formatTokens(seat.outputTokens)),
+      h('span', { title: '本轮累计 token（输入 ↑ / 输出 ↓），不是当前上下文占用' }, '↑' + formatTokens(seat.inputTokens) + ' ↓' + formatTokens(seat.outputTokens)),
     ),
   )
 }
@@ -349,7 +349,7 @@ export function OrchestrationPanel(props: OrchestrationPanelProps): unknown {
       h(
         'div',
         { style: { display: 'flex', flexWrap: 'wrap', gap: '10px', fontSize: '11px', color: MUTED } },
-        ...snap.seats.map((s) => h('span', { style: { color: seatColor(s.role) } }, label[s.role] + ' ' + formatTokens(s.inputTokens) + '→' + formatTokens(s.outputTokens))),
+        ...snap.seats.map((s) => h('span', { style: { color: seatColor(s.role) } }, label[s.role] + ' ↑' + formatTokens(s.inputTokens) + ' ↓' + formatTokens(s.outputTokens))),
       ),
     ]),
   )
@@ -359,3 +359,4 @@ export function OrchestrationPanel(props: OrchestrationPanelProps): unknown {
 export function OrchestrationTabTitle(): unknown {
   return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, h('span', { style: { color: PLANNER } }, '◈'), h('span', null, '编排'))
 }
+
