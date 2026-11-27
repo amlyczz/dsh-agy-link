@@ -211,6 +211,25 @@ reference-counted slot is the strongest isolation the plugin can provide.
   (upstream issue #36).
 - First unauthenticated call takes ~60-70s to fail (agy waits for a pasted
   code); later failures are faster.
+- **agy silently truncates an oversized prompt (measured on 1.5.18, issue
+  #223).** One message keeps about 191.6 KB; anything beyond it is cut from the
+  TAIL and replaced — in the model's view only — by `<truncated N bytes>`. That
+  marker never leaves agy: neither DSH nor this plugin sees it, so the model
+  just misses the end of a request ("it ignored my last instruction") and
+  nothing points at the cause. agy's own system prompt, tool schemas and skills
+  are counted against the same budget on top of our prompt (at least 27 KB in
+  the reporter's session), so a request that is inside this plugin's own budget
+  can still be cut.
+  - The plugin's limit is lower and never silent: `AGY_PROMPT_SAFE_BYTES`
+    (180,000 B) turns overflow into a history digest, a readable archive file,
+    or an elision with a visible marker. What it cannot do is allow for agy's
+    overhead, which varies per session.
+  - There is no detection yet, and the advertised `contextWindowDefault`
+    (1,048,576 tokens) is a context *window*, not this byte budget — DSH
+    therefore compacts much later than agy truncates. Until the budget accounts
+    for the overhead, the workaround is to make DSH compact sooner: lower
+    `contextWindowDefault` and `compactionMaxChars` (262144 / 60000 is one
+    configuration the reporter verified).
 - **A third-party MCP server registered directly in agy used to kill every
   turn with `INVALID_ARGUMENT` — wrapped now, with one gap left.**
   `<agy home>/.gemini/config/mcp_config.json` is agy's own registry; servers

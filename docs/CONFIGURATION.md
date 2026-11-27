@@ -62,7 +62,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `digestMaxChars` | `—` | `8000` | Budget for the history digest sent each turn |
 | `contextTransferMaxChars` | `—` | `660000` | Character cap for the transferred context block |
 | `contextTransferMaxBytes` | `—` | `150000` | Byte cap for the transferred context block |
-| `contextTransferFileAboveBytes` | `—` | `55000` | Files larger than this are elided in the context block |
+| `contextTransferFileAboveBytes` | `—` | `150000` | Files larger than this are elided in the context block |
 | `contextTransferFileMaxBytes` | `—` | `2000000` | Hard cap for an inlined file |
 | `compactionMaxChars` | `—` | `800000` | Character budget for compaction input |
 | `allowAuxiliary` | `—` | `true` | Allow auxiliary calls (titles, goal derivation) through the adapter |
