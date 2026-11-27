@@ -263,6 +263,51 @@ test('pool-reset wait: awaitWithNotices streams those notice lines on the reserv
   assert.match(texts[0]!, /最多等 900s/)
 })
 
+test('pool-reset wait: a slow selection with nothing to report streams no empty chunk', async () => {
+  // Aux calls and slow self-heals (healStaleModelSnapshot's refresh) never hand
+  // a pool wait to the wrapper, so the notice renders nothing while the
+  // selection still exceeds one cadence. Before the fix that tick wrote a bare
+  // '\n' reasoning delta into the transcript.
+  let calls = 0
+  const work = new Promise<string>((resolve) => {
+    setTimeout(() => resolve('served'), 250)
+  })
+  const gen = awaitWithNotices(work, {
+    intervalMs: 10,
+    notice: () => {
+      calls++
+      return ''
+    },
+  })
+  const texts: string[] = []
+  for (;;) {
+    const step = await gen.next()
+    if (step.done === true) break
+    texts.push((step.value as { text: string }).text)
+  }
+  assert.ok(calls >= 1, 'the cadence still fires while the selection runs')
+  assert.deepEqual(texts, [], 'a blank notice must not put an empty chunk into the transcript')
+})
+
+test('pool-reset wait: a blank tick is skipped without losing the next real notice', async () => {
+  let calls = 0
+  const work = new Promise<string>((resolve) => {
+    setTimeout(() => resolve('served'), 250)
+  })
+  const gen = awaitWithNotices(work, {
+    intervalMs: 10,
+    notice: () => (++calls === 1 ? '' : 'now waiting'),
+  })
+  const texts: string[] = []
+  for (;;) {
+    const step = await gen.next()
+    if (step.done === true) break
+    texts.push((step.value as { text: string }).text)
+  }
+  assert.ok(texts.length >= 1, 'the later ticks must still be emitted')
+  assert.ok(texts.every((text) => text === 'now waiting\n'), 'only blank ticks are dropped')
+})
+
 test('pool-reset wait: the adapter streams the notice into the transcript while the selection is parked', async () => {
   // The pool stays drained until its reset (60ms away), so the parked selection
   // settles on its own instead of leaking a timer.

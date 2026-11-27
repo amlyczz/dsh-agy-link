@@ -105,10 +105,13 @@ export async function* awaitWithNotices<T>(
       if (settled !== null) break
       if (pendingNotices > 0) {
         pendingNotices--
-        yield {
-          type: 'reasoning-delta',
-          index: STATUS_NOTICE_BLOCK_INDEX,
-          text: opts.notice(Date.now() - startedAt) + '\n',
+        const text = opts.notice(Date.now() - startedAt)
+        // A notice that renders nothing must not put a bare newline into the
+        // transcript: auxiliary calls and slow self-heals have no pool wait to
+        // report, and a `'\n'`-only reasoning delta is a visible empty chunk.
+        // Keep the cadence, skip the chunk.
+        if (text.trim() !== '') {
+          yield { type: 'reasoning-delta', index: STATUS_NOTICE_BLOCK_INDEX, text: text + '\n' }
         }
         // Re-arm AFTER resuming: a generator suspended at the yield must not
         // swallow the next tick (that bug produced exactly one notice and then
