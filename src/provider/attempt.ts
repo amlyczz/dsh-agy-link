@@ -45,7 +45,8 @@ import {
   reportDirectToolQuota,
   type LiveQuotaFailoverState,
 } from './quota-failover.ts'
-import { AGY_PROMPT_SAFE_BYTES, trimToUtf8Bytes, utf8Bytes } from './prompt-text.ts'
+import { trimToUtf8Bytes, utf8Bytes } from './prompt-text.ts'
+import { promptBudgetBytes } from './prompt-budget.ts'
 
 export function brief(s: string): string {
   const flat = s.trim().replace(/\s+/g, ' ')
@@ -241,9 +242,10 @@ export function buildSpawnArgs(
   log: ((msg: string) => void) | undefined,
 ): SpawnPlan {
   let prompt = stripNulBytes(input.prompt)
-  if (utf8Bytes(prompt) > AGY_PROMPT_SAFE_BYTES) {
-    log?.('prompt is ' + utf8Bytes(prompt) + ' B (> agy single-message budget) — trimming the tail')
-    prompt = trimToUtf8Bytes(prompt, AGY_PROMPT_SAFE_BYTES)
+  const budget = promptBudgetBytes(input.cfg)
+  if (utf8Bytes(prompt) > budget) {
+    log?.('prompt is ' + utf8Bytes(prompt) + ' B (> prompt budget ' + budget + ' B) — trimming the tail')
+    prompt = trimToUtf8Bytes(prompt, budget)
   }
   const activeModelForArgs = input.activeModel === '' ? input.cfg.defaultModel : input.activeModel
   const conversationId = input.persistBinding && input.binding !== undefined ? input.binding.conversationId : undefined

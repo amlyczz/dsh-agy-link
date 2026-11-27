@@ -9,11 +9,11 @@ import { dirname, join } from 'node:path'
 import { stateDir } from '../common/config.ts'
 import type { PluginConfig } from '../common/types.ts'
 import {
-  AGY_PROMPT_SAFE_BYTES,
   trimToUtf8Bytes,
   utf8Bytes,
   writeContextTransferFile,
 } from './prompt-text.ts'
+import { promptBudgetBytes } from './prompt-budget.ts'
 
 const DIGEST_HEADER = '[conversation so far]\n'
 const DIGEST_FOOTER = '\n[end of conversation so far]'
@@ -109,7 +109,7 @@ export async function deliverContext(
   if (digest === '') return ''
   const bytes = utf8Bytes(digest)
   const liveBytes = Math.max(0, opts?.liveRequestBytes ?? 0)
-  const safeInlineRoom = Math.max(0, AGY_PROMPT_SAFE_BYTES - liveBytes - FRAMING_RESERVE_BYTES)
+  const safeInlineRoom = Math.max(0, promptBudgetBytes(cfg) - liveBytes - FRAMING_RESERVE_BYTES)
   const inlineCeiling = Math.min(cfg.contextTransferFileAboveBytes, safeInlineRoom)
   if (bytes <= inlineCeiling) return digest
 

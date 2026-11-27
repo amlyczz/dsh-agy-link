@@ -89,6 +89,11 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'quotaPollIntervalMs must be a number of milliseconds >= 60000'
   }
+  if (key === 'promptMaxBytes') {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 16_000 && value <= 192_000
+      ? null
+      : 'promptMaxBytes must be a whole number of bytes between 16000 and 192000'
+  }
   if (key === 'agySettings') {
     if (typeof value !== 'string') return 'agySettings must be a string'
     const trimmed = value.trim()
@@ -127,7 +132,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
           'btwModel', 'btwEffort',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',
-          'quotaPollIntervalMs',
+          'quotaPollIntervalMs', 'promptMaxBytes',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })

@@ -234,3 +234,19 @@ test('bridge scope validates settings writes and status reports the effective sc
   assert.equal(status.mcpBridgeScope, 'host-only')
   assert.deepEqual(status.bridgeDiagnostic, bridgeDiagnostic)
 })
+
+test('issue #223: promptMaxBytes is settable only as a whole number inside the safe range', async () => {
+  const writes: Array<[string, unknown]> = []
+  const s = setup({ setOverride: (k: string, v: unknown) => { writes.push([k, v]) } })
+  const route = s.route('/plugins/agy-link/config')
+  assert.equal((await invoke(route, fakeReq('POST', '/', { key: 'promptMaxBytes', value: 150_000 }))).status(), 200)
+  assert.deepEqual(writes, [['promptMaxBytes', 150_000]])
+  // Above agy's own ceiling would configure the silent truncation back in.
+  const tooBig = await invoke(route, fakeReq('POST', '/', { key: 'promptMaxBytes', value: 200_000 }))
+  assert.equal(tooBig.status(), 400)
+  assert.deepEqual(tooBig.json(), { error: 'promptMaxBytes must be a whole number of bytes between 16000 and 192000' })
+  for (const bad of ['150000', 150_000.5, 8_000]) {
+    assert.equal((await invoke(route, fakeReq('POST', '/', { key: 'promptMaxBytes', value: bad }))).status(), 400, String(bad))
+  }
+  assert.equal(writes.length, 1, 'rejected values must not reach the store')
+})

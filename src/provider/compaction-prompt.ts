@@ -116,9 +116,9 @@ function packAnchorAndRecent(entries: readonly FormattedEntry[], byteBudget: num
   return parts.join('\n\n')
 }
 
-export function buildCompactionPrompt(messages: readonly Message[], maxChars: number): string {
+export function buildCompactionPrompt(messages: readonly Message[], maxChars: number, maxBytes: number = AGY_PROMPT_SAFE_BYTES): string {
   const fixedBytes = utf8Bytes(COMPACTION_HEADER) + utf8Bytes(COMPACTION_FOOTER) + FOOTER_MARGIN_BYTES
-  const byteBudget = Math.max(0, AGY_PROMPT_SAFE_BYTES - fixedBytes)
+  const byteBudget = Math.max(0, maxBytes - fixedBytes)
   const charBudget = maxChars > 0 ? maxChars : 800_000
   const entries = formatCompactionEntries(messages)
   const body = packAnchorAndRecent(entries, byteBudget, charBudget)

@@ -142,6 +142,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
     DSH_AGY_LOG_RETENTION_DAYS: '3',
     DSH_AGY_DISABLE_TELEMETRY: 'false',
     DSH_AGY_QUOTA_POLL_INTERVAL_MS: '120000',
+    DSH_AGY_PROMPT_MAX_BYTES: '150000',
     DSH_AGY_QUOTA_VIA_CLI: 'no',
     DSH_AGY_PROXY_URL: 'http://127.0.0.1:1',
     DSH_AGY_SUPPRESS_AUTOUPDATE: 'true',
@@ -176,6 +177,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
   assert.equal(cfg.logRetentionDays, 3)
   assert.equal(cfg.disableTelemetry, false)
   assert.equal(cfg.quotaPollIntervalMs, 120000)
+  assert.equal(cfg.promptMaxBytes, 150000)
   assert.equal(cfg.quotaViaCli, false)
   assert.equal(cfg.suppressAgyAutoUpdate, true)
   assert.equal(cfg.autoWarmup, true)
@@ -207,6 +209,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
     DSH_AGY_LOG_RETENTION_DAYS: '0',
     DSH_AGY_DISABLE_TELEMETRY: 'nope',
     DSH_AGY_QUOTA_POLL_INTERVAL_MS: '1000',
+    DSH_AGY_PROMPT_MAX_BYTES: 'nope',
     DSH_AGY_QUOTA_VIA_CLI: 'nope',
     DSH_AGY_SUPPRESS_AUTOUPDATE: 'nope',
     DSH_AGY_AUTO_WARMUP: 'nope',
@@ -223,6 +226,7 @@ test('every DSH_AGY_* env override is honoured, and junk values never corrupt th
   assert.equal(junk.mcpBridge, base.mcpBridge)
   assert.equal(junk.mcpConfigScope, base.mcpConfigScope)
   assert.equal(junk.quotaPollIntervalMs, base.quotaPollIntervalMs)
+  assert.equal(junk.promptMaxBytes, base.promptMaxBytes)
   assert.equal(junk.showHeaderBadge, true)
   assert.equal(junk.showTranslateAction, true)
   assert.equal(junk.poolWideCatalog, false)

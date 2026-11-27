@@ -505,3 +505,27 @@ test('route hints qualify only advertised collisions and preserve the leading sl
     assert.equal(await makePrompt(['send_message']), '/plan')
   })
 })
+
+test('issue #223: a lowered promptMaxBytes makes the same digest spill instead of inlining', async () => {
+  // Same ~100KB digest as the default-budget test above: inlined there, it must
+  // go to the archive under a 20KB budget so the live request keeps its room.
+  await withTempDshHome(async () => {
+    const cfg = defaultConfig()
+    const messages: Message[] = []
+    for (let i = 0; i < 20; i++) {
+      messages.push(msg('user', `turn ${i} ask`))
+      messages.push(msg('assistant', `turn ${i} reply ` + 'a'.repeat(4_800)))
+    }
+    const digest = buildDigest(messages, 0, cfg.contextTransferMaxChars, {
+      maxBytes: cfg.contextTransferFileMaxBytes,
+      maxLineBytes: 40_000,
+    })
+    assert.ok(utf8Bytes(digest) > 80_000, 'sanity: the digest is large')
+
+    const extraDirs: string[] = []
+    const delivered = await deliverContext(digest, 'sess-budget-20k', extraDirs, { ...cfg, promptMaxBytes: 20_000 }, { liveRequestBytes: 500 })
+    assert.ok(delivered.includes('[BACKGROUND CONTEXT'), 'must spill to the archive under the lowered budget')
+    assert.equal(extraDirs.length, 1, 'archive directory must be added to extraAddDirs')
+    assert.ok(utf8Bytes(delivered) + 500 <= 20_000, `delivered ${utf8Bytes(delivered)} B`)
+  })
+})

@@ -9,6 +9,7 @@ import type { AgyGenerateOptions } from '../common/protocol.ts'
 import type { ManagedAccount } from '../common/pool-types.ts'
 import { clearStaleFamilyModelBindings } from './stale-model-bindings.ts'
 import { protectTrailingRequest } from './live-last-request.ts'
+import { promptBudgetBytes } from './prompt-budget.ts'
 import type { SessionBinding, SessionStore } from '../host/sessions.ts'
 import type { ImageRefLike } from '../host/media.ts'
 import { resolveModelSlug } from '../host/models.ts'
@@ -32,7 +33,6 @@ import {
   textOf,
   utf8Bytes,
   wrapLiveRequest,
-  AGY_PROMPT_SAFE_BYTES,
 } from './prompt-text.ts'
 
 /** Projection of a live AgyAdapter run needed for binding adoption. */
@@ -216,7 +216,7 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
   // carry their decisive content at the tail. Fit them to the budget here, as the
   // last shaping step, so the generic tail trim downstream never sees them.
   if (lastAssistantIdx < 0 && !isImage && !isTranslateSession && !(isAux && options.purpose === 'compaction')) {
-    prompt = protectTrailingRequest(prompt, messages, AGY_PROMPT_SAFE_BYTES)
+    prompt = protectTrailingRequest(prompt, messages, promptBudgetBytes(cfg))
   }
   if (compactionNotice && compactionNotice.afterTokens <= 0) {
     compactionNotice.afterTokens = Math.max(100, Math.round(prompt.length / 3.5))
@@ -401,7 +401,7 @@ function buildBranchPrompt(input: BranchPromptInput): { prompt: string; digest: 
     return { prompt, digest: 'none' }
   }
   if (ctx.isAux && options.purpose === 'compaction') {
-    return { prompt: buildCompactionPrompt(messages, cfg.compactionMaxChars), digest: 'none' }
+    return { prompt: buildCompactionPrompt(messages, cfg.compactionMaxChars, promptBudgetBytes(cfg)), digest: 'none' }
   }
 
   return { prompt: buildChatPromptText({ binding, lastAssistantIdx, messages }), digest: binding === undefined ? (lastAssistantIdx >= 0 ? 'first' : 'none') : 'foreign' }

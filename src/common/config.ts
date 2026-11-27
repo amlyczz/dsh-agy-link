@@ -168,6 +168,7 @@ export function resolveConfig(
     contextTransferMaxChars: asNum(get('contextTransferMaxChars')) ?? base.contextTransferMaxChars,
     contextTransferMaxBytes: asNum(get('contextTransferMaxBytes')) ?? base.contextTransferMaxBytes,
     contextTransferFileAboveBytes: asNum(get('contextTransferFileAboveBytes')) ?? base.contextTransferFileAboveBytes,
+    promptMaxBytes: asNum(get('promptMaxBytes')) ?? base.promptMaxBytes,
     contextTransferFileMaxBytes: asNum(get('contextTransferFileMaxBytes')) ?? base.contextTransferFileMaxBytes,
     modelsCacheTtlMs: asNum(get('modelsCacheTtlMs')) ?? base.modelsCacheTtlMs,
     allowAuxiliary: asBool(get('allowAuxiliary')) ?? base.allowAuxiliary,
@@ -298,6 +299,11 @@ export function resolveConfig(
   if (env.DSH_AGY_CONTEXT_WINDOW) {
     const w = asNum(env.DSH_AGY_CONTEXT_WINDOW)
     if (w !== undefined && w > 0) cfg.contextWindowDefault = Math.floor(w)
+  {
+    const b = asNum(env.DSH_AGY_PROMPT_MAX_BYTES)
+    // Range is enforced where it is used (promptBudgetBytes); junk keeps the current value.
+    if (b !== undefined && Number.isFinite(b)) cfg.promptMaxBytes = Math.floor(b)
+  }
   }
   if (env.DSH_AGY_MAX_TOKENS) {
     const m = asNum(env.DSH_AGY_MAX_TOKENS)
