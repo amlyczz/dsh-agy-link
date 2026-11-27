@@ -16,6 +16,7 @@ import { SessionStore } from '../../src/host/sessions.ts'
 import { resolveCallContext } from '../../src/provider/call-context.ts'
 import { buildPromptPlan } from '../../src/provider/prompt.ts'
 import { AGY_PROMPT_SAFE_BYTES, utf8Bytes } from '../../src/provider/prompt-text.ts'
+import { protectTrailingRequest } from '../../src/provider/live-last-request.ts'
 import { purposePolicy } from '../../src/provider/purpose-policy.ts'
 
 const user = (text: string): Message => ({ role: 'user', content: [{ type: 'text', text }] }) as unknown as Message
@@ -77,4 +78,17 @@ test('a pending call nearly filling the budget keeps the policy and both of its 
   assert.ok(prompt.startsWith('System instructions:\n' + POLICY), 'policy is never dropped')
   assert.match(prompt, /"tool":"write"/, 'the head of the call is kept')
   assert.ok(prompt.endsWith(PENDING_END), 'the tail of the call is kept')
+})
+
+test('a small budget still keeps the final message: the head reserve scales with the budget', () => {
+  // Regression: the reserve used to be a fixed 24,000 B. Under any budget where
+  // that is more than the room left, the guard took its "huge request" branch
+  // and returned the head alone — dropping the very message it protects, even
+  // though that message fit easily.
+  const last = 'PENDING ' + 'c'.repeat(10_000)
+  const history = 'h'.repeat(30_000)
+  const out = protectTrailingRequest('System instructions:\n' + history + '\n\n' + last, [user(history), user(last)], 20_000)
+  assert.ok(utf8Bytes(out) <= 20_000, `fits the budget (${utf8Bytes(out)} B)`)
+  assert.ok(out.endsWith(last), 'a request that fits the budget is never dropped')
+  assert.ok(out.startsWith('System instructions:'), 'the head keeps its start')
 })

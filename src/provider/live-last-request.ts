@@ -40,16 +40,19 @@ export function protectTrailingRequest(prompt: string, messages: readonly Messag
   if (live === '') return prompt
   const liveBytes = utf8Bytes(live)
   const headPart = prompt.slice(0, prompt.length - live.length)
-  if (liveBytes + REQUEST_HEAD_RESERVE_BYTES <= maxBytes) {
+  // The head is never squeezed below this — but it must scale with the budget,
+  // or a fixed reserve larger than a small budget would crowd the request out.
+  const minHead = Math.min(REQUEST_HEAD_RESERVE_BYTES, Math.floor(maxBytes / 4))
+  if (liveBytes <= maxBytes - minHead) {
     // The request fits: the head gets what is left, elided in ITS middle so the
     // policy (head) and the newest history (just before the request) both stay.
-    return elideMiddle(headPart, maxBytes - liveBytes - MARKER_SLACK_BYTES) + live
+    const headBudget = maxBytes - liveBytes - MARKER_SLACK_BYTES
+    const head = utf8Bytes(headPart) <= headBudget ? headPart : elideMiddle(headPart, headBudget)
+    return head + live
   }
   // The request alone nearly fills the budget: reserve the head's start and
   // elide the middle of the request rather than dropping the policy or its tail.
-  const head = utf8Bytes(headPart) <= REQUEST_HEAD_RESERVE_BYTES
-    ? headPart
-    : trimToUtf8Bytes(headPart, REQUEST_HEAD_RESERVE_BYTES, false)
+  const head = utf8Bytes(headPart) <= minHead ? headPart : trimToUtf8Bytes(headPart, minHead, false)
   return head + elideMiddle(live, maxBytes - utf8Bytes(head) - MARKER_SLACK_BYTES)
 }
 
