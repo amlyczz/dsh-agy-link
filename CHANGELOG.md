@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.106 (2026-11-28)
+
+### English
+
+- **Fix(auth): sync Windows WSL disk tokens and discard/heal unauthenticated ACP processes for all accounts (primary & isolated).**
+  - **Windows WSL UNC `cwd` credential drift:** on Windows, when a session opens under a `\\wsl.localhost\...` / `\\wsl$\...` working directory (`isWslUncPath`), `agy` switches from Windows Credential Manager to the file-based token (`~/.gemini/antigravity-cli/antigravity-oauth-token`). `syncPrimaryDiskToken` and `syncPrimaryDiskTokenFile` now keep the primary disk token synchronized on OAuth login, refresh-token import, credential-slot activation/reinstall, and `win32` pre-flight spawns, and `persistRefreshedToken` now overwrites stale/revoked-grant primary disk files on `win32` (preserving `.bak` hygiene) while leaving non-Windows and isolated cross-grant guards intact.
+  - **Isolated multi-account protection:** `prepareAccountTokenForSpawn` (using a 5-minute refresh safety window) runs for every account before ACP and CLI `-p` runs, repairing/unwrapping `go-keyring-base64:` tokens and restoring valid `.bak` payloads when needed (`ensureIsolatedDiskTokenClean`), while `secondaryLease` normalizes persisted disk tokens (`normalizeCredentialJsonForDisk`) upon release.
+  - **Zero zombie unauthenticated ACP processes & one-shot auth self-heal:** `AcpProcess.restoreSession` immediately rethrows auth RPC errors (`auth_required`/`invalid_grant`) instead of cascading into `session/load` and `session/new`, `runAcpAttempt` discards failed/unauthenticated ACP processes and retries once via `healAcpAuthOnce` for both primary and isolated accounts, `AcpSessionPool` separates Windows WSL UNC keys (`|wsl`), and `PoolAuthFlow` invokes `evictAccount` after re-authentication or refresh-token import.
+
+### 中文
+
+- **修复(认证)：同步 Windows WSL 磁盘凭据，并为所有账号（主账号与隔离多账号）清理与自愈未认证的 ACP 进程。**
+  - **Windows WSL UNC 工作目录凭据漂移：** 在 Windows 上，当会话以 `\\wsl.localhost\...` / `\\wsl$\...` 路径启动时（`isWslUncPath`），`agy` 会从 Windows 凭据管理器回退到磁盘文件（`~/.gemini/antigravity-cli/antigravity-oauth-token`）。现在 `syncPrimaryDiskToken` 与 `syncPrimaryDiskTokenFile` 会在 OAuth 登录、refresh token 导入、凭据槽激活/重装以及 `win32` 启动前预检时同步主账号磁盘文件；`persistRefreshedToken` 在 `win32` 主账号遇到已吊销旧授权文件时会直接覆写（并维护 `.bak` 备份），同时保持非 Windows 及隔离账号的跨授权保护规则不变。
+  - **隔离多账号保护：** `prepareAccountTokenForSpawn`（采用 5 分钟提前刷新窗口）现在在所有账号的 ACP 与 CLI `-p` 运行前统一生效，自动修剪/解包 `go-keyring-base64:` 并通过 `ensureIsolatedDiskTokenClean` 从有效 `.bak` 恢复异常文件；`secondaryLease` 归还时也会通过 `normalizeCredentialJsonForDisk` 规范化写回磁盘。
+  - **消除未认证僵尸 ACP 进程并支持一次自愈：** `AcpProcess.restoreSession` 遇到 `auth_required`/`invalid_grant` 立即向外抛出而不继续级联 `session/load`/`session/new`；`runAcpAttempt` 遇到启动前认证失败立即丢弃失效 ACP 进程并通过 `healAcpAuthOnce` 对主账号与隔离账号统一尝试一次自愈重连；`AcpSessionPool` 将 Windows WSL UNC 会话隔离到 `|wsl` 进程池键；`PoolAuthFlow` 在重新登录或导入 refresh token 后通过 `evictAccount` 清理旧进程。
+
 ## 0.6.105 (2026-11-27)
 
 ### English
