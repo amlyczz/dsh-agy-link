@@ -961,3 +961,31 @@ rl.on('line', (line) => {
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 }) } catch { /* windows handle cleanup */ }
   }
 })
+
+test('ACP tool content keeps diffs, terminals and resource links instead of dropping them', async () => {
+  const { extractAcpToolOutput } = await import('../../../src/features/acp/protocol.ts')
+  // Plain text block, the shape agy uses for command output.
+  assert.equal(
+    extractAcpToolOutput({ content: [{ type: 'content', content: { type: 'text', text: 'hello' } }] }),
+    'hello',
+  )
+  // A write/edit result carries a diff; it must survive as readable text.
+  const diff = extractAcpToolOutput({
+    content: [{ type: 'diff', path: 'a/b.ts', oldText: 'const x = 1', newText: 'const x = 2' }],
+  })
+  assert.match(diff ?? '', /--- a\/b\.ts ---/)
+  assert.match(diff ?? '', /-const x = 1/)
+  assert.match(diff ?? '', /\+const x = 2/)
+
+  const terminal = extractAcpToolOutput({ content: [{ type: 'terminal', terminalId: 't1', output: 'ok\n', exitCode: 3 }] })
+  assert.equal(terminal, '[exit code 3]\nok')
+
+  const link = extractAcpToolOutput({ content: [{ type: 'resource_link', name: 'note', uri: 'file:///tmp/note.md' }] })
+  assert.equal(link, '[note] file:///tmp/note.md')
+
+  // rawOutput still wins over content when agy sends both.
+  assert.equal(extractAcpToolOutput({ rawOutput: 'raw', content: [{ type: 'text', text: 'block' }] }), 'raw')
+  // Unknown blocks fall back to their text rather than disappearing.
+  assert.equal(extractAcpToolOutput({ content: [{ type: 'weird', text: 'kept' }] }), 'kept')
+  assert.equal(extractAcpToolOutput({ content: [] }), undefined)
+})

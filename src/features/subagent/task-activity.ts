@@ -46,6 +46,45 @@ export function formatTaskLogLine(taskId: string, line: string): string {
   return `[后台任务 · ${taskId}] ${clipSingleLine(line, MAX_LINE_CHARS)}`
 }
 
+/** One detached task-log chunk, detached from the conversation stream. */
+export interface BackgroundLogChunk {
+  taskId: string
+  lines: string[]
+  skipped: number
+}
+
+/**
+ * Recognise a background-task log event emitted by {@link TaskActivityTracker}
+ * (raw.kind === 'task-log') and unwrap it into plain text for the orchestration
+ * panel. Returns null for anything else, including subagent lifecycle events.
+ *
+ * The text fallback matters for recordings written before raw carried a kind:
+ * those lines are exactly `[后台任务 · <id>] <line>` or the `… 跳过 N 行` marker.
+ */
+export function backgroundLogOf(ev: { kind?: string; stepKind?: string; text?: string; raw?: unknown }): BackgroundLogChunk | null {
+  if (ev.kind !== undefined && ev.kind !== 'step') return null
+  if (ev.stepKind !== undefined && ev.stepKind !== 'subagent') return null
+  const raw = ev.raw
+  if (raw !== null && typeof raw === 'object') {
+    const o = raw as { kind?: unknown; taskId?: unknown; line?: unknown; skipped?: unknown }
+    if (o.kind === 'task-log') {
+      const taskId = typeof o.taskId === 'string' ? o.taskId : ''
+      const skipped = typeof o.skipped === 'number' && Number.isFinite(o.skipped) ? o.skipped : 0
+      const line = typeof o.line === 'string' ? o.line : ''
+      return { taskId, lines: line === '' ? [] : [clipSingleLine(line, MAX_LINE_CHARS)], skipped }
+    }
+  }
+  const text = typeof ev.text === 'string' ? ev.text : ''
+  const m = text.match(/^\[后台任务 · ([^\]]+)\]\s*(.*)$/s)
+  if (!m) return null
+  const body = m[2] ?? ''
+  const taskId = m[1] ?? ''
+  const skipMatch = body.match(/^… 跳过 (\d+) 行中间输出/)
+  if (skipMatch) return { taskId, lines: [], skipped: Number(skipMatch[1]) }
+  const oneLine = body.split('\n')[0] ?? ''
+  return oneLine.trim() === '' ? null : { taskId, lines: [clipSingleLine(oneLine, MAX_LINE_CHARS)], skipped: 0 }
+}
+
 export function summarizeMessageJson(rawObj: unknown, fallbackName = 'message'): { dedupKey: string; text: string } | null {
   if (!rawObj || typeof rawObj !== 'object') return null
   const obj = rawObj as {

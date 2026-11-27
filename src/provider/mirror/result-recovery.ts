@@ -13,6 +13,7 @@
 import { cleanToolOutput } from '../../common/tool-output.ts'
 import { readFullToolResult } from '../../host/agy-db.ts'
 import type { RunRecording } from '../../host/recording.ts'
+import { readFile, stat } from 'node:fs/promises'
 
 /**
  * Hard cap on the recovered text. A card clips at 16 KB anyway; the point of
@@ -45,6 +46,58 @@ const RECOVERY_TOOLS = new Set([
 export function shouldRecoverResult(tool: string, output: string): boolean {
   if (output.trim() !== '') return false
   return RECOVERY_TOOLS.has(tool) || tool === ''
+}
+
+/** Tools whose result IS the file body, and whose args carry its path. */
+const FILE_READ_TOOLS = new Set(['read_file', 'view_file', 'open_file', 'read'])
+
+/** True when a step of \	ool\ can be answered by reading the file it names. */
+export function canRecoverFromFile(tool: string): boolean {
+  return FILE_READ_TOOLS.has(tool)
+}
+
+/** Largest file we are willing to pull in as a tool result (bytes). */
+const MAX_FILE_BYTES = 2 * 1024 * 1024
+
+function pathFromArgs(input: unknown): string | null {
+  if (input === null || typeof input !== 'object') return null
+  const o = input as Record<string, unknown>
+  for (const key of ['Path', 'path', 'File', 'file', 'file_path', 'filePath', 'TargetFile', 'target_file', 'AbsolutePath']) {
+    const v = o[key]
+    if (typeof v === 'string' && v.trim() !== '') return v.trim()
+  }
+  return null
+}
+
+/**
+ * Last-resort body for a file read whose result agy never streamed AND whose
+ * conversation DB is gone (agy prunes conversations, and ACP sessions do not
+ * always leave one behind). The model was shown this file's text by agy itself,
+ * so showing it in the card restores information instead of inventing any; the
+ * cap keeps a 10 MB source file out of both the card and the context.
+ */
+export async function recoverFromFile(tool: string, input: unknown): Promise<string | null> {
+  if (!FILE_READ_TOOLS.has(tool)) return null
+  const path = pathFromArgs(input)
+  if (path === null) return null
+  try {
+    const st = await stat(path)
+    if (!st.isFile() || st.size > MAX_FILE_BYTES) return null
+  } catch {
+    return null
+  }
+  let text: string
+  try {
+    text = await readFile(path, 'utf8')
+  } catch {
+    return null
+  }
+  if (text.includes('\u0000')) return null
+  if (text.trim() === '') return null
+  const body = text.replace(/\s+$/, '')
+  return body.length > MAX_RECOVERED_CHARS
+    ? body.slice(0, MAX_RECOVERED_CHARS) + '\n… (+' + (body.length - MAX_RECOVERED_CHARS) + ' chars)'
+    : body
 }
 
 /**

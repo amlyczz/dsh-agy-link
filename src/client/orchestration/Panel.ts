@@ -12,6 +12,7 @@ import { h, useEffect, useState } from '../react.ts'
 import { useOrchestration } from './data.ts'
 import { contextPercent, formatDuration, formatTokens } from './format.ts'
 import type {
+  BackgroundTaskItem,
   OrchestrationContext,
   OrchestrationSeat,
   OrchestrationSnapshot,
@@ -157,6 +158,39 @@ function stepRow(step: OrchestrationStep, now: number, last: boolean): unknown {
   )
 }
 
+function backgroundRow(task: BackgroundTaskItem): unknown {
+  const tail = task.lines.slice(-6)
+  return h(
+    'div',
+    { style: { display: 'flex', flexDirection: 'column', gap: '2px', padding: '2px 0' } },
+    h(
+      'div',
+      { style: { display: 'flex', alignItems: 'baseline', gap: '6px', fontSize: '12px' } },
+      h('span', { style: { color: MUTED } }, '⌁'),
+      h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: TEXT } }, task.taskId),
+      task.skipped > 0
+        ? h('span', { style: { fontSize: '10px', color: MUTED } }, '（跳过 ' + task.skipped + ' 行）')
+        : null,
+      h('span', { style: { marginLeft: 'auto', fontSize: '10px', color: MUTED } }, task.lines.length + ' 行'),
+    ),
+    h(
+      'div',
+      {
+        style: {
+          fontFamily: 'ui-monospace, monospace',
+          fontSize: '11px',
+          color: MUTED,
+          whiteSpace: 'pre',
+          overflowX: 'auto',
+          lineHeight: 1.45,
+          maxHeight: '132px',
+        },
+      },
+      tail.join('\n'),
+    ),
+  )
+}
+
 function contextBar(context: OrchestrationContext): unknown {
   const used = context.used
   const size = context.size
@@ -288,6 +322,9 @@ export function OrchestrationPanel(props: OrchestrationPanelProps): unknown {
       ? section('待办', h('span', { style: { fontSize: '10px' } }, snap.todos.filter((x) => x.state === 'done').length + '/' + snap.todos.length), snap.todos.map(todoRow))
       : null,
     snap.subagents.length > 0 ? section('子代理', h('span', { style: { fontSize: '10px' } }, String(snap.subagents.length)), snap.subagents.map((s) => subagentRow(s, now))) : null,
+    snap.background.length > 0
+      ? section('后台任务', h('span', { style: { fontSize: '10px' } }, String(snap.background.length)), snap.background.map((b) => backgroundRow(b)))
+      : null,
     steps.length > 0
       ? section('步骤流', h('span', { style: { fontSize: '10px' } }, String(steps.length)), steps.map((s, i) => stepRow(s, now, i === steps.length - 1)))
       : null,

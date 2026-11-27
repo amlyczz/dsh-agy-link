@@ -18,6 +18,7 @@ import { createAttemptSlot, type AttemptDeps, type AttemptInput } from '../../..
 import { EventMapper } from '../../../src/provider/mapper/event-mapper.ts'
 import { presentMirrorResult } from '../../../src/provider/mirror/present.ts'
 import { setAgyDbDir } from '../../../src/runtime/agy/db/paths.ts'
+import { snapshotOrchestration } from '../../../src/features/orchestration/live.ts'
 import { FAKE_AGY } from '../../helpers/paths.ts'
 
 describe('background task visibility (tasks/*.log, messages/*.json, RUNNING cards)', () => {
@@ -372,7 +373,19 @@ const fakeBin = FAKE_AGY
         const ev = rec.eventAt(i)
         if (ev) recorded.push(ev)
       }
-      assert.ok(recorded.some((e) => e.kind === 'step' && e.stepKind === 'subagent' && e.text.includes('[后台任务 · task-55] acp background line')))
+      // Detached task logs must NOT enter the conversation: they used to land in
+      // the reasoning block (and cut the assistant's text mid-sentence). They are
+      // reported to the orchestration ledger instead, which the side panel shows.
+      assert.equal(
+        recorded.some((e) => e.kind === 'step' && e.text.includes('[后台任务 · task-55]')),
+        false,
+        'task-log lines must stay out of the recorded conversation',
+      )
+      const snap = snapshotOrchestration('sess-acp-1')
+      assert.ok(snap !== null)
+      const task = snap.background.find((b) => b.taskId === 'task-55')
+      assert.ok(task !== undefined, 'task-55 log is reported to the orchestration ledger')
+      assert.ok(task.lines.includes('acp background line'))
       pool.dispose()
     } finally {
       if (prevHome === undefined) delete process.env.HOME

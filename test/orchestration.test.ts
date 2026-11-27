@@ -159,3 +159,65 @@ test('panel formatters stay readable at every scale', () => {
   assert.equal(contextPercent(undefined, 1000), undefined)
   assert.equal(contextPercent(10, 0), undefined)
 })
+
+test('detached task logs land in the ledger, never in the conversation', async () => {
+  const { backgroundLogOf } = await import('../src/features/subagent/task-activity.ts')
+  const line = backgroundLogOf({
+    kind: 'step',
+    stepKind: 'subagent',
+    text: '[后台任务 · task-4] some log line\n',
+    raw: { kind: 'task-log', taskId: 'task-4', line: 'some log line' },
+  })
+  assert.deepEqual(line, { taskId: 'task-4', lines: ['some log line'], skipped: 0 })
+
+  const skipped = backgroundLogOf({
+    kind: 'step',
+    stepKind: 'subagent',
+    text: '',
+    raw: { kind: 'task-log', taskId: 'task-4', skipped: 1575 },
+  })
+  assert.deepEqual(skipped, { taskId: 'task-4', lines: [], skipped: 1575 })
+
+  // Recordings written before raw carried a kind are recovered from the text.
+  const legacy = backgroundLogOf({ kind: 'step', stepKind: 'subagent', text: '[后台任务 · task-9] D:\\a\\b.txt\n' })
+  assert.deepEqual(legacy, { taskId: 'task-9', lines: ['D:\\a\\b.txt'], skipped: 0 })
+
+  // Anything else keeps its normal route (real subagent progress, thoughts).
+  assert.equal(backgroundLogOf({ kind: 'step', stepKind: 'subagent', text: '[agy subagent] working', raw: {} }), null)
+  assert.equal(backgroundLogOf({ kind: 'step', stepKind: 'thinking', text: '[后台任务 · x] y' }), null)
+  assert.equal(backgroundLogOf({ kind: 'text', text: 'hello' }), null)
+
+  resetOrchestrationForTests()
+  const ledger = attachOrchestration('sess-log', 'conv-1')
+  ledger.beginTurn()
+  ledger.noteBackground('task-4', ['one', 'two'], 0)
+  ledger.noteBackground('task-4', ['three'], 1575)
+  const snap = snapshotOrchestration('sess-log')
+  assert.ok(snap !== null)
+  const bg = snap.background[0]
+  assert.ok(bg !== undefined)
+  assert.equal(snap.background.length, 1)
+  assert.deepEqual(bg.lines, ['one', 'two', 'three'])
+  assert.equal(bg.skipped, 1575)
+  assert.equal(bg.taskId, 'task-4')
+})
+
+test('a file read with no streamed result is answered from the file itself', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { canRecoverFromFile, recoverFromFile } = await import('../src/provider/mirror/result-recovery.ts')
+  const dir = await mkdtemp(join(tmpdir(), 'agy-recover-'))
+  try {
+    const file = join(dir, 'note.md')
+    await writeFile(file, '# title\n\nbody\n', 'utf8')
+    assert.equal(canRecoverFromFile('read_file'), true)
+    assert.equal(canRecoverFromFile('run_command'), false)
+    assert.equal(await recoverFromFile('read_file', { Path: file }), '# title\n\nbody')
+    assert.equal(await recoverFromFile('run_command', { Path: file }), null)
+    assert.equal(await recoverFromFile('read_file', { Path: join(dir, 'missing.md') }), null)
+    assert.equal(await recoverFromFile('read_file', {}), null)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

@@ -35,6 +35,7 @@ import {
   type LiveQuotaFailoverState,
 } from '../../provider/quota-failover.ts'
 import { SubagentTracker } from '../subagent/tracker.ts'
+import { backgroundLogOf } from '../subagent/task-activity.ts'
 import { attachOrchestration } from '../orchestration/live.ts'
 import {
   readModeUpdate,
@@ -110,7 +111,20 @@ async function runAcpPrompt(opts: {
         resumed: Boolean(input.binding?.conversationId),
         accountHome: recorder.rec.accountHome,
         log: deps.log,
-        onEvent: (ev) => recorder.rec.append(ev),
+        onEvent: (ev) => {
+          // Detached background-task logs are NOT conversation content. agy tails
+          // them 20 lines at a time; appending them as steps used to fill the
+          // reasoning block with `[后台任务 · task-4] …` lines and, worse, cut the
+          // assistant's text block at every burst — which split its markdown
+          // mid-sentence and left `**` pairs unparsed. They belong to the
+          // orchestration ledger, which the panel renders as a task list.
+          const taskLog = backgroundLogOf(ev)
+          if (taskLog !== null) {
+            orch?.noteBackground(taskLog.taskId, taskLog.lines, taskLog.skipped)
+            return
+          }
+          recorder.rec.append(ev)
+        },
         onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info),
       })
     : null

@@ -25,6 +25,8 @@ const MAX_SESSIONS = 8
 const MAX_PLAN_CHARS = 12_000
 /** Keep tool one-liners short enough for a single row. */
 const MAX_BRIEF_CHARS = 120
+/** Detached task logs kept per task (the source file holds thousands of lines). */
+const MAX_BACKGROUND_LINES = 40
 
 export type OrchestrationTodoState = 'pending' | 'in_progress' | 'done'
 
@@ -80,6 +82,16 @@ export interface OrchestrationContext {
   at: number
 }
 
+export interface OrchestrationBackground {
+  /** agy task id (`task-4`), or `''` when the activity has no task. */
+  taskId: string
+  /** Most recent log lines, newest last. */
+  lines: string[]
+  /** Lines the tracker skipped because a burst was too large to show. */
+  skipped: number
+  updatedAt: number
+}
+
 export interface OrchestrationSnapshot {
   session: string
   conversationId: string
@@ -93,6 +105,8 @@ export interface OrchestrationSnapshot {
   title?: string
   context: OrchestrationContext
   subagents: SubagentSnapshotItem[]
+  /** Detached background-task output (agy task logs), kept OUT of the conversation. */
+  background: OrchestrationBackground[]
   updatedAt: number
 }
 
@@ -121,6 +135,7 @@ export class OrchestrationLedger {
   private mode: string | undefined
   private title: string | undefined
   private context: OrchestrationContext = { at: 0 }
+  private readonly background = new Map<string, OrchestrationBackground>()
   private lastModel = ''
   private touchedAt = Date.now()
   live = false
@@ -295,6 +310,30 @@ export class OrchestrationLedger {
     this.touch()
   }
 
+  /**
+   * Detached background-task output. agy runs detached commands whose log file
+   * the tracker tails; those lines used to be appended to the conversation as
+   * reasoning, which polluted the thinking block and — every time it cut the
+   * text block — split the assistant's markdown mid-sentence. They belong here.
+   */
+  noteBackground(taskId: string, lines: readonly string[], skipped = 0): void {
+    const id = taskId === '' ? 'task' : taskId
+    let entry = this.background.get(id)
+    if (entry === undefined) {
+      entry = { taskId: id, lines: [], skipped: 0, updatedAt: 0 }
+      this.background.set(id, entry)
+    }
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed === '') continue
+      entry.lines.push(trimmed)
+    }
+    if (entry.lines.length > MAX_BACKGROUND_LINES) entry.lines.splice(0, entry.lines.length - MAX_BACKGROUND_LINES)
+    entry.skipped += Math.max(0, skipped)
+    entry.updatedAt = Date.now()
+    this.touch()
+  }
+
   snapshot(): OrchestrationSnapshot {
     return {
       session: this.session,
@@ -308,6 +347,7 @@ export class OrchestrationLedger {
       ...(this.title !== undefined ? { title: this.title } : {}),
       context: { ...this.context },
       subagents: snapshotSessionSubagents(this.session),
+      background: [...this.background.values()].map((b) => ({ ...b, lines: [...b.lines] })),
       updatedAt: this.touchedAt,
     }
   }

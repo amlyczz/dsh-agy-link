@@ -51,6 +51,14 @@ export interface SubagentItem {
   lastAt: number
 }
 
+/** Detached agy background-task output (kept out of the conversation stream). */
+export interface BackgroundTaskItem {
+  taskId: string
+  lines: string[]
+  skipped: number
+  updatedAt: number
+}
+
 export interface OrchestrationSnapshot {
   session: string
   conversationId: string
@@ -63,6 +71,7 @@ export interface OrchestrationSnapshot {
   title?: string
   context: OrchestrationContext
   subagents: SubagentItem[]
+  background: BackgroundTaskItem[]
   updatedAt: number
 }
 

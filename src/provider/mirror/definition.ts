@@ -10,7 +10,7 @@ import { noteToolSeat } from '../../features/orchestration/tool-seats.ts'
 import { toolStepBrief } from './brief.ts'
 import { MIRROR_TOOL_NAME } from './names.ts'
 import { presentMirrorCall, presentMirrorResult } from './present.ts'
-import { recoverRecordedResult } from './result-recovery.ts'
+import { canRecoverFromFile, recoverFromFile, recoverRecordedResult } from './result-recovery.ts'
 
 /** Short preview of the recorded step for the degraded-result message. */
 function stepLabel(toolName: string, input: unknown): string {
@@ -132,6 +132,13 @@ export function defineAgyMirrorTool(deps: { runs: RunRegistry }) {
       if (outStr.trim() === '') {
         const recovered = await recoverRecordedResult(rec, step, effTool)
         if (recovered !== null) outStr = recovered
+      }
+      // The DB is not always there (agy prunes old conversations, and an ACP
+      // session does not always leave one behind). For a file read we can still
+      // show the file agy itself read: same bytes, capped, never invented.
+      if (outStr.trim() === '' && canRecoverFromFile(effTool)) {
+        const fromFile = await recoverFromFile(effTool, t.args)
+        if (fromFile !== null) outStr = fromFile
       }
       if (effTool === 'update_steps' || effTool === 'todo_write') {
         const steps = parseChecklistSteps(t.args, outStr)
