@@ -12,6 +12,13 @@ import type { RawUsage } from '../../common/types.ts'
 export interface TranscriptUsageSample {
   stepKey: string
   usage: RawUsage
+  /**
+   * The model that ran this step (`gemini-pro-orchestrator-neon` for the
+   * planner seat, the executor's model otherwise). Orchestrator sessions run two
+   * seats inside one conversation, and this field is the ONLY per-step evidence
+   * of which one spoke — the ACP stream never says.
+   */
+  model?: string
 }
 
 function resolveTranscriptPath(conversationId: string, accountHome?: string): string {
@@ -175,6 +182,11 @@ export class AcpTranscriptUsageTailer {
     const stepKey = rawIdx !== undefined && rawIdx !== null ? `transcript-${String(rawIdx)}` : `transcript-${this.offset}-${this.seenSteps.size}`
     if (this.seenSteps.has(stepKey)) return null
     this.seenSteps.add(stepKey)
-    return { stepKey, usage }
+    const model = typeof rec.model === 'string' ? rec.model.trim() : ''
+    return {
+      stepKey,
+      usage,
+      ...(model !== '' ? { model } : {}),
+    }
   }
 }

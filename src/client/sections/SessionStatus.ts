@@ -22,6 +22,7 @@ import { useSessionView } from '../session-view.ts';
 import { isUiVisible, useAgyStatus } from '../status.ts';
 import { Button } from '../ui/Button.ts';
 import { SubagentControl } from './SubagentPanel.ts';
+import { OrchestrationButton } from './OrchestrationButton.ts';
 import { accountDisplayAlias, type AliasTranslator } from './account-alias.ts';
 import { agyModalStore, modalHostManager, Modal, portalToBody } from '../ui/Modal.ts';
 import { useAgyTranslation, type LocaleLike } from '../hooks/useTranslation.ts';
@@ -193,6 +194,7 @@ function HeaderBadge({ hostId, sessionId, t }: { hostId: string; sessionId: stri
 	);
 	return h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
 		badge,
+		h(OrchestrationButton, { t, sessionId }),
 		h(SubagentControl, { t, items: subItems }),
 	);
 }

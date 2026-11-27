@@ -1,0 +1,161 @@
+// Orchestrator visibility: seat attribution, plan/checklist adoption, context
+// window learning, and the per-(run, step) seat table the tool cards read.
+//
+// These are the pieces that turn "two models shared one conversation" into
+// something the UI can show; before them the ACP stream said nothing and DSH
+// rendered one flat run of identical cards.
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { isPlannerModel, seatForModel, shortModelName } from '../src/common/seat.ts'
+import { OrchestrationLedger, attachOrchestration, resetOrchestrationForTests, snapshotOrchestration } from '../src/features/orchestration/live.ts'
+import { readModeUpdate, readPlanUpdate, readSessionInfoTitle, readToolPlan, readUsageWindow } from '../src/features/orchestration/acp-updates.ts'
+import { learnedContextWindow, noteContextWindow, resetLearnedContextWindowsForTests } from '../src/features/acp/context-window.ts'
+import { noteToolSeat, resetToolSeatsForTests, toolSeatsForRun } from '../src/features/orchestration/tool-seats.ts'
+import { contextPercent, formatDuration, formatTokens } from '../src/client/orchestration/format.ts'
+
+test('seatForModel splits orchestrator planners from executors', () => {
+  assert.equal(isPlannerModel('gemini-pro-orchestrator-neon'), true)
+  assert.equal(seatForModel('gemini-pro-orchestrator-neon'), 'planner')
+  assert.equal(seatForModel('gemini-flash-worker-agy'), 'executor')
+  assert.equal(seatForModel('gemini-4-hydrogen-high'), 'executor')
+  assert.equal(seatForModel(''), 'unknown')
+})
+
+test('shortModelName keeps the model readable in a chip', () => {
+  assert.equal(shortModelName('gemini-pro-orchestrator-neon'), 'orchestrator neon')
+  assert.equal(shortModelName('gemini-flash-worker-agy'), 'flash worker')
+  assert.ok(shortModelName('gemini-4-hydrogen-high').length <= 24)
+  assert.equal(shortModelName(''), '')
+})
+
+test('the ledger follows the seat hand-off a real Orchestrator session performs', () => {
+  const ledger = new OrchestrationLedger('s1', 'conv1')
+  ledger.beginTurn()
+  // Planner writes the plan and calls exit_plan_mode.
+  ledger.noteTranscriptSample('gemini-pro-orchestrator-neon', { input_tokens: 26069, output_tokens: 771 })
+  ledger.noteTool({ callId: 'c1', tool: 'exit_plan_mode', args: { plan: 'x' }, state: 'ACTIVE' })
+  ledger.notePlan('目标：一次性修复。\n1. 读日志\n2. 改代码')
+  ledger.noteTool({ callId: 'c1', tool: 'exit_plan_mode', args: { plan: 'x' }, state: 'DONE' })
+  // Executor takes over and drives the tools.
+  ledger.noteTranscriptSample('gemini-flash-worker-agy', { input_tokens: 211795, cache_read_tokens: 11113, output_tokens: 400 })
+  ledger.noteTool({ callId: 'c2', tool: 'read_file', args: { Path: 'a.ts' }, state: 'ACTIVE' })
+  ledger.noteTool({ callId: 'c2', tool: 'read_file', args: { Path: 'a.ts' }, state: 'DONE' })
+  ledger.noteContext(211795, 1_000_000)
+
+  const snap = ledger.snapshot()
+  assert.deepEqual(snap.seats.map((s) => s.role).sort(), ['executor', 'planner'])
+  const planner = snap.seats.find((s) => s.role === 'planner')
+  const executor = snap.seats.find((s) => s.role === 'executor')
+  assert.equal(planner?.model, 'gemini-pro-orchestrator-neon')
+  assert.equal(planner?.calls, 1)
+  assert.equal(executor?.inputTokens, 211795)
+  assert.equal(executor?.cacheReadTokens, 11113)
+  // The read_file step belongs to the executor, the plan call to the planner.
+  assert.deepEqual(snap.steps.map((s) => [s.tool, s.seat]), [['exit_plan_mode', 'planner'], ['read_file', 'executor']])
+  assert.equal(snap.live, true)
+  assert.ok(snap.plan?.text.startsWith('目标'))
+  assert.equal(snap.context.used, 211795)
+  assert.equal(snap.context.size, 1_000_000)
+
+  ledger.settle()
+  const settled = ledger.snapshot()
+  assert.equal(settled.live, false)
+  assert.deepEqual(settled.steps.map((s) => s.state), ['DONE', 'DONE'])
+})
+
+test('a new turn resets seats, steps and the plan but keeps the conversation id', () => {
+  const ledger = new OrchestrationLedger('s1', 'conv1')
+  ledger.beginTurn()
+  ledger.noteTranscriptSample('gemini-pro-orchestrator-neon', { input_tokens: 10 })
+  ledger.notePlan('old plan')
+  ledger.beginTurn()
+  const snap = ledger.snapshot()
+  assert.equal(snap.conversationId, 'conv1')
+  assert.equal(snap.seats.length, 0)
+  assert.equal(snap.steps.length, 0)
+  assert.equal(snap.plan, undefined)
+})
+
+test('update_steps checklists land in the todos section', () => {
+  const ledger = new OrchestrationLedger('s1', 'conv1')
+  ledger.noteStepsTodos([
+    { title: 'read logs', status: 'done' },
+    { title: 'patch file', status: 'in_progress' },
+    { title: 'run tests', status: 'pending' },
+  ])
+  assert.deepEqual(ledger.snapshot().todos, [
+    { text: 'read logs', state: 'done' },
+    { text: 'patch file', state: 'in_progress' },
+    { text: 'run tests', state: 'pending' },
+  ])
+})
+
+test('registry: one ledger per session, snapshot readable by the route', () => {
+  resetOrchestrationForTests()
+  const a = attachOrchestration('s1', 'conv1')
+  a.beginTurn()
+  a.noteTranscriptSample('gemini-flash-worker-agy', { input_tokens: 5 })
+  assert.equal(snapshotOrchestration('s1')?.seats.length, 1)
+  assert.equal(snapshotOrchestration('other'), null)
+  resetOrchestrationForTests()
+})
+
+test('ACP plan / mode / title / window updates are read instead of dropped', () => {
+  assert.deepEqual(
+    readPlanUpdate({ sessionUpdate: 'plan', entries: [{ content: 'a', status: 'completed' }, { content: 'b', status: 'in_progress' }] }),
+    [{ text: 'a', state: 'done' }, { text: 'b', state: 'in_progress' }],
+  )
+  assert.equal(readPlanUpdate({ sessionUpdate: 'plan', entries: [] }), null)
+  assert.equal(readPlanUpdate({ sessionUpdate: 'agent_message_chunk' }), null)
+  assert.equal(readModeUpdate({ sessionUpdate: 'current_mode_update', currentModeId: 'fast' }), 'fast')
+  assert.equal(readModeUpdate({ sessionUpdate: 'current_mode_update' }), null)
+  assert.equal(readSessionInfoTitle({ sessionUpdate: 'session_info_update', title: 'Fix the parser' }), 'Fix the parser')
+  assert.deepEqual(readUsageWindow({ sessionUpdate: 'usage_update', used: 211795, size: 1_000_000 }), { used: 211795, size: 1_000_000 })
+  assert.deepEqual(readUsageWindow({ sessionUpdate: 'usage_update', used: 10 }), { used: 10 })
+  assert.equal(readUsageWindow({ sessionUpdate: 'usage_update' }), null)
+  assert.equal(readToolPlan({ rawInput: { plan: '# Goal\n- step' } }, 'exit_plan_mode'), '# Goal\n- step')
+  assert.equal(readToolPlan({ rawInput: { plan: 'x' } }, 'read_file'), null)
+})
+
+test('context windows are learned per model and survive obvious junk', () => {
+  resetLearnedContextWindowsForTests()
+  assert.equal(learnedContextWindow('gemini-4-hydrogen-high'), undefined)
+  assert.equal(noteContextWindow('gemini-4-hydrogen-high', 1_048_576), true)
+  assert.equal(learnedContextWindow('gemini-4-hydrogen-high'), 1_048_576)
+  // Same number again: not news.
+  assert.equal(noteContextWindow('gemini-4-hydrogen-high', 1_048_576), false)
+  // A token count is not a window.
+  assert.equal(noteContextWindow('gemini-4-neon-low', 4096), false)
+  assert.equal(learnedContextWindow('gemini-4-neon-low'), undefined)
+  // Effort suffix drift still resolves to the same window.
+  assert.equal(learnedContextWindow('gemini-4-hydrogen-high-2'), 1_048_576)
+  resetLearnedContextWindowsForTests()
+})
+
+test('(run, step) seat table answers the tool cards', () => {
+  resetToolSeatsForTests()
+  noteToolSeat('run-1', 16, 'read_file', 'gemini-flash-worker-agy')
+  noteToolSeat('run-1', 2, 'exit_plan_mode', 'gemini-pro-orchestrator-neon')
+  const table = toolSeatsForRun('run-1')
+  assert.equal(table['16']?.seat, 'executor')
+  assert.equal(table['2']?.seat, 'planner')
+  assert.equal(table['2']?.short, 'orchestrator neon')
+  assert.deepEqual(toolSeatsForRun('run-missing'), {})
+  resetToolSeatsForTests()
+})
+test('panel formatters stay readable at every scale', () => {
+  assert.equal(formatTokens(undefined), '—')
+  assert.equal(formatTokens(997), '997')
+  assert.equal(formatTokens(12_345), '12k')
+  assert.equal(formatTokens(9_400), '9.4k')
+  assert.equal(formatTokens(211_795), '212k')
+  assert.equal(formatTokens(1_048_576), '1.0M')
+  assert.equal(formatDuration(undefined), '')
+  assert.equal(formatDuration(120), '120ms')
+  assert.equal(formatDuration(1234), '1.2s')
+  assert.equal(formatDuration(65_000), '1m 05s')
+  assert.equal(formatDuration(3_600_000), '1h 00m')
+  assert.equal(contextPercent(211_795, 1_000_000)?.toFixed(1), '21.2')
+  assert.equal(contextPercent(undefined, 1000), undefined)
+  assert.equal(contextPercent(10, 0), undefined)
+})

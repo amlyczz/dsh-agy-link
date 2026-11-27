@@ -35,6 +35,16 @@ import {
   type LiveQuotaFailoverState,
 } from '../../provider/quota-failover.ts'
 import { SubagentTracker } from '../subagent/tracker.ts'
+import { attachOrchestration } from '../orchestration/live.ts'
+import {
+  readModeUpdate,
+  readPlanUpdate,
+  readSessionInfoTitle,
+  readToolPlan,
+  readUsageWindow,
+} from '../orchestration/acp-updates.ts'
+import { parseChecklistSteps } from '../../common/checklist.ts'
+import { noteContextWindow } from './context-window.ts'
 import type { AcpProcess } from './client.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
@@ -108,6 +118,13 @@ async function runAcpPrompt(opts: {
   const usageTailer = !input.isAux && sid !== ''
     ? new AcpTranscriptUsageTailer(sid, recorder.rec.accountHome)
     : null
+  // Orchestration ledger: the only place that knows which seat is speaking, what
+  // the agent's plan/checklist is, and the real context window. ACP sends the
+  // seat attribution only inside transcript.jsonl, which the tailer above reads.
+  const orch = !input.isAux && input.sessionKey !== ''
+    ? attachOrchestration(input.sessionKey, sid)
+    : null
+  orch?.resume()
   const flushTranscriptUsage = (): number => {
     if (!usageTailer) return 0
     const samples = usageTailer.poll()
@@ -121,6 +138,7 @@ async function runAcpPrompt(opts: {
         usage: s.usage,
         raw: { source: 'acp-transcript' },
       })
+      orch?.noteTranscriptSample(s.model ?? '', s.usage)
     }
     return samples.length
   }
@@ -161,6 +179,25 @@ async function runAcpPrompt(opts: {
           if (updateKind === 'tool_call' || updateKind === 'tool_call_update' || updateKind === 'usage_update') {
             flushTranscriptUsage()
           }
+          // Session updates the event mapper drops because they carry no
+          // assistant text. They are exactly the orchestration signal: the
+          // agent's plan, its live mode, the session title, the real context
+          // window of THIS model.
+          // Learn the REAL window for this model from `usage_update.size`, so the host's
+          // context denominator stops being one global guess (feature #2). Done for
+          // every turn, not only orchestrated ones.
+          const usageWindow = readUsageWindow(update)
+          if (usageWindow !== null) noteContextWindow(input.activeModel, usageWindow.size)
+          if (orch !== null) {
+            const window = usageWindow
+            if (window !== null) orch.noteContext(window.used, window.size)
+            const planEntries = readPlanUpdate(update)
+            if (planEntries !== null) orch.notePlanEntries(planEntries)
+            const modeId = readModeUpdate(update)
+            if (modeId !== null) orch.noteMode(modeId)
+            const sessionTitle = readSessionInfoTitle(update)
+            if (sessionTitle !== null) orch.noteTitle(sessionTitle)
+          }
           for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
             if (
               !sawRealOutput &&
@@ -178,6 +215,18 @@ async function runAcpPrompt(opts: {
               else if (ev.stepKind === 'tool') sawTools = true
             }
             recorder.rec.append(ev)
+            if (orch !== null && ev.kind === 'step' && ev.stepKind === 'tool' && ev.tool !== undefined) {
+              const tool = ev.tool
+              const seatModel = orch.currentModel
+              if (seatModel !== '') ev.model = seatModel
+              orch.noteTool({ callId: ev.stepKey, tool: tool.name, args: tool.args, state: ev.state })
+              const planText = readToolPlan(update, tool.name)
+              if (planText !== null) orch.notePlan(planText)
+              if (tool.name === 'update_steps' || tool.name === 'todo_write' || tool.name === 'write_todos') {
+                const checklist = parseChecklistSteps(tool.args, typeof tool.output === 'string' ? tool.output : '')
+                orch.noteStepsTodos(checklist)
+              }
+            }
             input.agyOnEvent?.(ev)
             reportDirectToolQuota(quotaCtrl, ev)
           }
@@ -349,6 +398,9 @@ async function runAcpPrompt(opts: {
     // Subagents belong to this round: stopping detaches the tracker from the
     // live registry so the header stops reporting them the moment the turn ends.
     subTracker?.stop()
+    // Freeze the orchestration snapshot for the round; the sidebar keeps showing
+    // the last turn, it just stops claiming to be live.
+    orch?.settle()
     // The streak is counted where the failure is classified (above), so this
     // only has to clear it on a turn that actually produced model output.
     if (sawRealOutput) deps.clearNetworkStreak(input.sessionKey)
@@ -484,6 +536,9 @@ export async function runAcpAttempt(
   }
 
   const recorder = createAttemptRecorder(deps, cfg, account, sid, !input.isAux)
+  // One DSH turn = one orchestration turn: the panel starts from a clean slate
+  // (seats, steps, plan, checklist) and keeps the last one readable afterwards.
+  if (!input.isAux && sessionKey !== '') attachOrchestration(sessionKey, sid).beginTurn()
   recorder.rec.family = input.family
   recorder.setTrackerSession?.(input.sessionKey)
   recorder.streamCid = sid

@@ -15,6 +15,8 @@ import { register as registerEmbed } from './routes/embed.ts'
 import { register as registerEcosystem } from './routes/ecosystem.ts'
 import { register as registerLease } from './routes/lease.ts'
 import { register as registerBtw } from './routes/btw.ts'
+import { register as registerOrchestration } from './routes/orchestration.ts'
+import { register as registerToolSeats } from './routes/tool-seats.ts'
 
 export type { WebServerLike, Route, RouteHandler, RouteRegistrar } from './respond.ts'
 
@@ -48,6 +50,8 @@ export function registerRoutes(webServer: WebServerLike, services: HostServices)
   registerEmbed(reg, services)
   registerEcosystem(reg, services)
   registerBtw(reg, services)
+  registerOrchestration(reg, services)
+  registerToolSeats(reg, services)
   const disposeLease = registerLease(reg, services, webServer.port)
   return () => {
     disposeLease()

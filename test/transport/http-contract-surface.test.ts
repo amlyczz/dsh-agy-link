@@ -46,7 +46,7 @@ test('every POST-only route rejects GET/PUT/DELETE with 405 before touching serv
   }
   // POST-only + 14 GET/method-agnostic routes (incl. /btw/state & /btw/stream) + 4 lease routes (their own
   // `{ok,code,error}` envelope; gated in test/lease-routes.test.ts).
-  assert.equal(POST_ONLY_ROUTES.length + 14 + 4, EXPECTED_ROUTES.length)
+  assert.equal(POST_ONLY_ROUTES.length + 16 + 4, EXPECTED_ROUTES.length)
 })
 
 test('GET-style routes do not gate on method (current contract, asserted verbatim)', async (t) => {

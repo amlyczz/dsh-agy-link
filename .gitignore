@@ -11,3 +11,8 @@ research/
 # agy credential dirs (never commit)
 .gemini/
 Microsoft/
+
+# scratch: asar extraction / one-off probes
+tmp-asar-out/
+tmp-*.cjs
+tmp-*.ts
