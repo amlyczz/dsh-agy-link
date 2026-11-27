@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.109 (2026-11-28)
+
+### English
+
+- **Security: result recovery refuses more credential stores.** The guard added in v0.6.107 covered env files, SSH keys and the AWS / CLI credentials, and missed other places logins conventionally live: the git credential store (`.git-credentials`), `gh`'s `hosts.yml`, gcloud's application default credentials, service-account JSON, a Firefox profile's `key4.db` / `logins.json` / `Login Data`, a GnuPG home, kube and docker config. They are matched by their own name or path — never by a bare word such as `config` — so an ordinary `hosts.yml` or `service-accounts.md` stays readable. Only the guard's coverage changes: for these files an empty tool result stays empty instead of being copied into the session log.
+
+### 中文
+
+- **安全：工具结果恢复拒绝更多凭据存放处。** v0.6.107 加的闸门覆盖了 env 文件、SSH 密钥与 AWS / CLI 凭据，但漏了其它常见登录存放处：git 的凭据库（`.git-credentials`）、`gh` 的 `hosts.yml`、gcloud 的应用默认凭据、服务账号 JSON、Firefox 配置目录里的 `key4.db` / `logins.json` / `Login Data`、GnuPG 目录、kube 与 docker 的配置。它们按各自的名字或路径匹配——绝不按 `config` 这样的单词——所以普通的 `hosts.yml` 或 `service-accounts.md` 照常可读。只有闸门的覆盖面变了：对这些文件，空的工具结果保持为空，而不是被复制进会话记录。
+
 ## 0.6.108 (2026-11-28)
 
 ### English
