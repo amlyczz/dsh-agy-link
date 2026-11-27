@@ -352,6 +352,13 @@ export interface PluginConfig {
   /** Max automatic background wakeups per session between real human turns (default 12). */
   backgroundWakeupMaxPerSession: number
   /**
+   * Release an ACP turn that is only waiting on a one-shot agy `schedule` timer
+   * after this many quiet seconds, so the DSH turn ends and the host wakes the
+   * session itself instead of holding it open until the timer fires (issue #225).
+   * Only active with `backgroundWakeup`; `0` keeps the turn open (old behaviour).
+   */
+  scheduleReleaseSeconds: number
+  /**
    * Always preview local media inside DSH (right sidebar / lightbox) and hide
    * host OS "Open"/"Reveal" actions even on desktop/localhost. Remote browsers
    * (e.g. Cloudflare Tunnel) automatically enforce this regardless of the flag.
@@ -515,6 +522,7 @@ export function defaultConfig(): PluginConfig {
     backgroundWakeup: false,
     backgroundWakeupTtlMinutes: 30,
     backgroundWakeupMaxPerSession: 12,
+    scheduleReleaseSeconds: 10,
     builtInMediaPreviewOnly: false,
   }
 }

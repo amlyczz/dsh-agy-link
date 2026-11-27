@@ -151,6 +151,13 @@ async function runAcpPrompt(opts: {
     const idleMs = !input.isAux && cfg.timeoutMs >= 60_000 ? Math.max(cfg.timeoutMs, 15 * 60_000) : cfg.timeoutMs
     const longToolIdleMs = cfg.longToolIdleMinutes > 0 ? cfg.longToolIdleMinutes * 60_000 : 0
     const maxTurnMs = cfg.maxTurnMinutes > 0 ? cfg.maxTurnMinutes * 60_000 : 0
+    // Issue #225: a turn that only waits on a one-shot agy `schedule` timer is
+    // released after `scheduleReleaseSeconds` of quiet, and the host re-arms
+    // the timer and wakes the session itself. Only with backgroundWakeup: with
+    // it off there is no DSH-side wake-up, so the turn must stay open for agy's.
+    const scheduleReleaseMs = !input.isAux && cfg.backgroundWakeup && cfg.scheduleReleaseSeconds > 0
+      ? cfg.scheduleReleaseSeconds * 1000
+      : 0
     const inlineImages: Array<{ data: string; mimeType: string }> = []
     if (proc.supportsImageBlocks && input.stagedImages && input.stagedImages.length > 0) {
       for (const img of input.stagedImages) {
@@ -173,6 +180,15 @@ async function runAcpPrompt(opts: {
         idleTimeoutMs: idleMs,
         longToolIdleMs,
         maxTurnMs,
+        ...(scheduleReleaseMs > 0 ? { scheduleReleaseMs } : {}),
+        onScheduleRelease: ({ delayMs }) => {
+          const secs = Math.round(delayMs / 1000)
+          const text =
+            `[定时巡检] 已设置 ${secs}s 后的一次性定时器，本轮提前结束以释放会话（用户消息可立即发送）；到点由后台唤醒自动开启新回合汇报。\n` +
+            `[Schedule release] A one-shot timer (${secs}s) is armed and this turn is released so the session is free; the background wakeup opens a new turn when it fires.\n`
+          recorder.rec.append({ kind: 'step', stepKey: `acp-schedule-release-${secs}s`, stepKind: 'subagent', text, state: 'DONE', raw: { kind: 'schedule-release', delayMs } })
+          deps.log?.(`acp: released the turn for a pending one-shot schedule (${secs}s); background wakeup will re-open it`)
+        },
         ...(input.signal ? { signal: input.signal } : {}),
         onUpdate: (update) => {
           const updateKind = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : ''

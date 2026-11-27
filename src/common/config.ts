@@ -238,6 +238,7 @@ export function resolveConfig(
     backgroundWakeup: asBool(get('backgroundWakeup')) ?? base.backgroundWakeup,
     backgroundWakeupTtlMinutes: asNum(get('backgroundWakeupTtlMinutes')) ?? base.backgroundWakeupTtlMinutes,
     backgroundWakeupMaxPerSession: asNum(get('backgroundWakeupMaxPerSession')) ?? base.backgroundWakeupMaxPerSession,
+    scheduleReleaseSeconds: asNum(get('scheduleReleaseSeconds')) ?? base.scheduleReleaseSeconds,
     builtInMediaPreviewOnly: asBool(get('builtInMediaPreviewOnly')) ?? base.builtInMediaPreviewOnly,
   }
   // Env wins last (spec ADR-13).
@@ -461,5 +462,8 @@ export function resolveConfig(
   }
   cfg.backgroundWakeupTtlMinutes = Math.min(240, Math.max(1, Math.floor(cfg.backgroundWakeupTtlMinutes)))
   cfg.backgroundWakeupMaxPerSession = Math.min(100, Math.max(1, Math.floor(cfg.backgroundWakeupMaxPerSession)))
+  const release = asNum(env.DSH_AGY_SCHEDULE_RELEASE_SECONDS)
+  if (release !== undefined && release >= 0) cfg.scheduleReleaseSeconds = Math.floor(release)
+  cfg.scheduleReleaseSeconds = Math.min(600, Math.max(0, Math.floor(cfg.scheduleReleaseSeconds)))
   return cfg
 }

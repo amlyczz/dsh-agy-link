@@ -250,3 +250,35 @@ test('issue #223: promptMaxBytes is settable only as a whole number inside the s
   }
   assert.equal(writes.length, 1, 'rejected values must not reach the store')
 })
+
+test('issue #225: scheduleReleaseSeconds is settable as a whole number 0..600 and reads DSH_AGY_SCHEDULE_RELEASE_SECONDS', async () => {
+  const writes: Array<[string, unknown]> = []
+  const s = setup({ setOverride: (k: string, v: unknown) => { writes.push([k, v]) } })
+  const route = s.route('/plugins/agy-link/config')
+  assert.equal((await invoke(route, fakeReq('POST', '/', { key: 'scheduleReleaseSeconds', value: 0 }))).status(), 200)
+  assert.equal((await invoke(route, fakeReq('POST', '/', { key: 'scheduleReleaseSeconds', value: 30 }))).status(), 200)
+  assert.deepEqual(writes, [['scheduleReleaseSeconds', 0], ['scheduleReleaseSeconds', 30]])
+  const tooBig = await invoke(route, fakeReq('POST', '/', { key: 'scheduleReleaseSeconds', value: 601 }))
+  assert.equal(tooBig.status(), 400)
+  assert.deepEqual(tooBig.json(), { error: 'scheduleReleaseSeconds must be a whole number of seconds between 0 and 600 (0 = keep the turn open)' })
+  for (const bad of ['10', 2.5, -1]) {
+    assert.equal((await invoke(route, fakeReq('POST', '/', { key: 'scheduleReleaseSeconds', value: bad }))).status(), 400, String(bad))
+  }
+  assert.equal(writes.length, 2, 'rejected values must not reach the store')
+  // Config layers: default, override file, env (clamped to 0..600).
+  const { resolveConfig } = await import('../../src/common/config.ts')
+  assert.equal(resolveConfig(undefined).scheduleReleaseSeconds, 10)
+  assert.equal(resolveConfig({ scheduleReleaseSeconds: 25 }).scheduleReleaseSeconds, 25)
+  const saved = process.env.DSH_AGY_SCHEDULE_RELEASE_SECONDS
+  try {
+    process.env.DSH_AGY_SCHEDULE_RELEASE_SECONDS = '0'
+    assert.equal(resolveConfig({ scheduleReleaseSeconds: 25 }).scheduleReleaseSeconds, 0, 'env wins; 0 disables the release')
+    process.env.DSH_AGY_SCHEDULE_RELEASE_SECONDS = '99999'
+    assert.equal(resolveConfig(undefined).scheduleReleaseSeconds, 600, 'clamped to the ceiling')
+    process.env.DSH_AGY_SCHEDULE_RELEASE_SECONDS = 'junk'
+    assert.equal(resolveConfig(undefined).scheduleReleaseSeconds, 10, 'junk never corrupts the config')
+  } finally {
+    if (saved === undefined) delete process.env.DSH_AGY_SCHEDULE_RELEASE_SECONDS
+    else process.env.DSH_AGY_SCHEDULE_RELEASE_SECONDS = saved
+  }
+})
