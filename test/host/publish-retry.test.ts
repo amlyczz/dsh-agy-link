@@ -110,3 +110,38 @@ test('PUBLISH_STRICT_VERIFY mode makes an unresolved registry probe fatal', asyn
     /not readable from the registry/i,
   )
 })
+
+// v0.6.93 and v0.6.101: `npm publish` exited 0, the registry stayed stale for
+// just over the window, the strict run went red, and the version showed up about
+// a minute later. A red run for a healthy publish is as misleading as a silent
+// skip, so the DEFAULT window must outlast what propagation has actually taken.
+test('a version that only becomes readable after six minutes is still verified by default', async () => {
+  const npm = fakeNpm([ok()])
+  const inner = npm.run
+  let views = 0
+  // One pre-publish probe, then 39 verify probes see nothing; the 40th does.
+  // That is past the old 36 x 10s window and well inside the new one.
+  const run = (bin: string, args: string[]): RunResult => {
+    if (args[0] === 'view') {
+      views += 1
+      if (views <= 40) return fail('E404 not found')
+    }
+    return inner(bin, args)
+  }
+  const sleeps: number[] = []
+  const result = await publishWithRetry({ pkg, run, strictVerify: true, sleep: async (ms: number) => { sleeps.push(ms) }, log: () => {} })
+  assert.equal(result.verified, true, 'a slow-but-healthy publish must not fail the run')
+  assert.equal(sleeps.length, 39, 'it kept probing past the old window')
+})
+
+test('the default verify window is bounded: a version that never appears still fails, within fifteen minutes', async () => {
+  const run = (_bin: string, args: string[]): RunResult => (args[0] === 'view' ? fail('E404 not found') : ok())
+  const sleeps: number[] = []
+  await assert.rejects(
+    () => publishWithRetry({ pkg, run, strictVerify: true, sleep: async (ms: number) => { sleeps.push(ms) }, log: () => {} }),
+    /not readable from the registry/i,
+  )
+  const waited = sleeps.reduce((a, b) => a + b, 0)
+  assert.ok(waited > 6 * 60_000, `outlasts the old six-minute window (${waited} ms)`)
+  assert.ok(waited <= 15 * 60_000, `but is bounded (${waited} ms)`)
+})
