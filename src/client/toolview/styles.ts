@@ -271,6 +271,21 @@ const ROW_CSS = `
 	color: var(--dsw-alias-label-primary, #0f172a);
 }
 
+/* Images carried inside a bridged tool's payload */
+.agy-tv-card-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 8px 14px 0;
+}
+.agy-tv-card-image {
+	max-width: 100%;
+	max-height: 240px;
+	border-radius: 6px;
+	border: 1px solid var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12));
+	object-fit: contain;
+}
+
 /* Card scrollable content */
 .agy-tv-card-content {
 	max-height: 260px;
@@ -542,3 +557,4 @@ if (gDoc !== undefined && gDoc !== null) {
 		if (host) host.appendChild(st);
 	}
 }
+

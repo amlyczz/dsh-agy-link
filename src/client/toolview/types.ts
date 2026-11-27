@@ -80,5 +80,8 @@ export interface MirrorCardModel {
 	brief?: string;
 	url?: string;
 	badges?: readonly CardBadge[];
+	/** Inline data: images a bridged tool returned inside its payload. */
+	images?: readonly string[];
 	checklist?: readonly ChecklistStepItem[];
 }
+
