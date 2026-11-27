@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.105 (2026-11-27)
+
+### English
+
+- **Fix(tool cards): tool cards show what the tool actually returned (first commit of PR #224 by @HUANGsir-JH, cherry-picked as `ac2b62b`).** Four problems reproduced on real sessions:
+  - every completed step was wrapped in agy's status envelope, so a command card previewed `Created At: 2026-11-26T…` instead of the command's first output line. The envelope is now stripped for display (leading header lines only — a command whose own output contains `Created At: …` keeps it), with the exit code and any truncation surfaced as notes;
+  - `read_file` came back with an **empty** result over ACP (the stream carries no content), so Read cards said `(no output)`. When the stream result is empty for a tool agy is known to strip, the mirror now recovers the recorded result from agy's conversation database — only then, capped at 12,000 characters, and never failing a turn if the database cannot be read;
+  - the `[agy tool running: …]` note was written into the **reasoning** block for every tool call (121 times in one recorded session), stored as model thinking and replayed to the model on every later turn. It is gone: DSH already renders the running span itself.
+  - The read gutter (`N: ` line numbers) is removed from cards, and only when the numbering is genuinely consecutive.
+  - The rest of PR #224 (the Orchestrator page, about 2,700 lines) is still open: it needs a rebase onto the ACP changes of v0.6.104.
+- **Note on v0.6.104:** it is now on npm as well; its release had been tagged but not published.
+
+### 中文
+
+- **修复(工具卡片)：卡片显示工具真正返回的内容（PR #224 的第一个提交，作者 @HUANGsir-JH，拣选自 `ac2b62b`）。** 真实会话里复现的四个问题：
+  - 每个完成的步骤都被 agy 的状态信封包着，命令卡片的预览显示的是 `Created At: 2026-11-26T…` 而不是命令的第一行输出。现在显示时会剥掉信封（只剥离开头的头部行——命令自己的输出里出现 `Created At: …` 会保留），退出码与截断信息作为附注保留；
+  - ACP 下 `read_file` 的结果是**空的**（流里不带内容），Read 卡片显示“(no output)”。当流里结果为空、且属于 agy 已知会清空内容的工具时，镜像会从 agy 的会话数据库里找回记录的结果——仅限这种情况，封顶 12,000 字符，数据库读不到也绝不会让回合失败；
+  - 每次工具调用都会往**思考**块里写一条 `[agy tool running: …]`（一次录制会话里出现 121 次），被存成模型思考、之后每一回合都重放给模型。现已移除：DSH 自己会渲染运行中的状态。
+  - 卡片里去掉了读取结果的行号栏（`N: `），且只在编号确实连续时才去。
+  - PR #224 的其余部分（编排器页面，约 2,700 行）仍然开启：它需要基于 v0.6.104 的 ACP 改动重新变基。
+- **关于 v0.6.104**：它现在也已发布到 npm；此前只打了 tag、没有发布。
+
 ## 0.6.104 (2026-11-27)
 
 ### English
