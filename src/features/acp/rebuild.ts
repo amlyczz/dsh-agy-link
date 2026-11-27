@@ -1,3 +1,4 @@
+import { plannedWatermarks } from '../../provider/system-budget.ts'
 import { lastHistoryIndex } from '../../provider/history-boundary.ts'
 // Rebuilding a session agy can no longer find.
 //
@@ -26,7 +27,6 @@ export async function rebuildAcpSession(opts: {
   workspaceRoot: string
 }): Promise<{ sid: string; prompt: string }> {
   const { deps, input, proc, previousSid, workspaceRoot } = opts
-  const { cfg } = input
   deps.log?.(`acp session ${previousSid} could not be restored — rebuilding with a full history digest`)
   try {
     deps.store.delete(input.sessionAccountKey)
@@ -34,12 +34,41 @@ export async function rebuildAcpSession(opts: {
     // a store that refuses the delete must not block the rebuild
   }
   input.binding = undefined
+  input.systemWatermarks = undefined
   deps.appendAcpNotice?.(input.sessionKey, {
     kind: 'acp-reset',
     text:
       '原常驻会话已重置（agy 侧已找不到该会话），已自动携历史上下文重建新会话。' +
       '\nThe persistent ACP session was reset; a new one was created with the conversation history carried over.',
   })
+  const previousDirs = input.addDirs
+  if (input.freshPromptPlan) {
+    const fresh = await input.freshPromptPlan()
+    Object.assign(input, {
+      prompt: fresh.prompt, addDirs: fresh.addDirs, stagedImages: fresh.stagedImages,
+      newlySentImageIds: fresh.newlySentImageIds,
+      systemWatermarks: plannedWatermarks(fresh),
+    })
+  } else {
+    await restoreDigest(input)
+  }
+  let sid = previousSid
+  if (input.addDirs.some(dir => !previousDirs.includes(dir))) {
+    // The digest was spilled to a file; agy needs that directory in scope.
+    const reopened = await proc.openSession({
+      cwd: workspaceRoot,
+      addDirs: input.addDirs,
+      model: resolveModelSlug(input.activeModel || input.cfg.defaultModel),
+      ...(input.effort ? { effort: input.effort } : {}),
+      mode: input.permissionMode,
+    })
+    sid = reopened.sessionId
+  }
+  return { sid, prompt: input.prompt }
+}
+
+async function restoreDigest(input: AttemptInput): Promise<void> {
+  const { cfg } = input
   const history = input.messages.slice(0, lastHistoryIndex(input.messages) + 1)
   const digest = buildDigest(history, 0, cfg.contextTransferMaxChars, {
     maxBytes: cfg.contextTransferFileMaxBytes,
@@ -51,18 +80,6 @@ export async function rebuildAcpSession(opts: {
   const delivered = digest === ''
     ? ''
     : await deliverContext(digest, input.sessionKey, extraDirs, cfg, { liveRequestBytes: utf8Bytes(liveWrapped) })
-  const prompt = delivered === '' ? input.prompt : liveWrapped + delivered
-  let sid = previousSid
-  if (extraDirs.length > 0) {
-    // The digest was spilled to a file; agy needs that directory in scope.
-    const reopened = await proc.openSession({
-      cwd: workspaceRoot,
-      addDirs: [...input.addDirs, ...extraDirs],
-      model: resolveModelSlug(input.activeModel || cfg.defaultModel),
-      ...(input.effort ? { effort: input.effort } : {}),
-      mode: input.permissionMode,
-    })
-    sid = reopened.sessionId
-  }
-  return { sid, prompt }
+  if (delivered) input.prompt = liveWrapped + delivered
+  input.addDirs = [...input.addDirs, ...extraDirs]
 }

@@ -18,6 +18,8 @@ import { createToolWatchdog, type ToolWatchdog } from './tool-watchdog.ts'
 import { Err, looksLikeTosViolation } from '../common/types.ts'
 import type { ManagedAccount, ModelFamily } from '../common/pool-types.ts'
 import type { AccountPoolManager } from '../host/pool.ts'
+import type { PromptPlan } from './prompt.ts'
+import { confirmedPrefix, type SystemWatermarks } from './system-budget.ts'
 import type { SessionBinding, SessionStore } from '../host/sessions.ts'
 import { conversationsDirFor, diffConversations, snapshotConversations, type DirSnapshot } from '../host/discovery.ts'
 import type { RunRecording, RunRegistry } from '../host/recording.ts'
@@ -123,6 +125,8 @@ export interface AcpSessionNotice {
 
 /** Everything one attempt needs. Values are produced by streamAttempt. */
 export interface AttemptInput {
+  systemWatermarks?: SystemWatermarks
+  freshPromptPlan?: () => Promise<PromptPlan>
   bridgeRoute?: string
   cfg: PluginConfig
   bin: string
@@ -544,6 +548,8 @@ export function persistBindingOnResult(
     lastMessageCount: input.messages.length,
     updatedAt: Date.now(),
     model: input.activeModel,
+    ...confirmedPrefix(input.binding, finalId),
+    lastInputTokens: input.binding?.conversationId === finalId ? input.binding.lastInputTokens : undefined,
     ...(mergedImages && mergedImages.length > 0 ? { sentImageIds: mergedImages } : {}),
     ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
   })

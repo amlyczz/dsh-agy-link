@@ -1,16 +1,12 @@
 // Pure prompt-text helpers: message flattening, harness-message sniffing,
 // image-ref collection, UTF-8 budget arithmetic and the ADR-7 history digest.
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { AGY_LINK_NOTICE_KIND } from '../common/agy-link-source.ts'
 import { PROVIDER_ID } from '../common/types.ts'
 import { isMirrorToolNotFoundText, MIRROR_TOOL_RELOAD_NOTICE } from '../common/mirror-error.ts'
-import { stateDir } from '../common/config.ts'
 import { stripNulBytes } from '../host/runner.ts'
-import { sweepDir, mediaKindFor, type ImageRefLike, type MediaRefLike } from '../host/media.ts'
+import { mediaKindFor, type ImageRefLike, type MediaRefLike } from '../host/media.ts'
 export type { MediaRefLike }
-
 export type ForeignSource = { source?: { kind?: string; provider?: string; callId?: string; replayState?: unknown } }
 
 /** Loose content-block view spanning dsh-llm schema revisions. */
@@ -206,7 +202,8 @@ export function latestUserTaskText(messages: readonly Message[]): string {
     // ride along with the first turn, issue #158).
     if (sourceKindOf(m) === MEMORY_SNAPSHOT_SOURCE_KIND) continue
     if (m.role === 'user') {
-      return textOf(m).trim()
+      const text = textOf(m)
+      return text.trim() ? text : ''
     }
   }
   return ''
@@ -238,8 +235,8 @@ export function latestUserMessageAny(messages: readonly Message[]): string {
   for (let i = messages.length - 1; i > lastAssistantIdx; i--) {
     const m = messages[i]
     if (m === undefined || m.role !== 'user' || isToolResultMessage(m)) continue
-    const text = textOf(m).trim()
-    if (text !== '') return text
+    const text = textOf(m)
+    if (text.trim() !== '') return text
   }
   return ''
 }
@@ -426,6 +423,7 @@ export function trimToUtf8Bytes(s: string, maxBytes: number, note = true): strin
     if (utf8Bytes(s.slice(0, mid)) <= budget) lo = mid
     else hi = mid - 1
   }
+  if (lo > 0 && /[\uD800-\uDBFF]/.test(s.charAt(lo - 1))) lo--
   return s.slice(0, lo) + marker
 }
 
@@ -460,26 +458,12 @@ export function elideMiddle(text: string, capBytes: number): string {
  * truncation can only ever discard background history, never the question.
  */
 export function wrapLiveRequest(live: string): string {
-  const body = live.trim()
-  if (body === '') return ''
+  if (live.trim() === '') return ''
   return '[CURRENT REQUEST — answer this and only this; everything after it is background history]\n' +
-    body + '\n[/CURRENT REQUEST]\n\n'
+    live + '\n[/CURRENT REQUEST]\n\n'
 }
 
-/** Write a large context digest to a temp .md so agy can read it in pages. */
-export async function writeContextTransferFile(sessionKey: string, body: string): Promise<string | null> {
-  try {
-    const dir = join(stateDir(), 'context-transfer')
-    await mkdir(dir, { recursive: true })
-    await sweepDir(dir, 86_400_000)
-    const key = (sessionKey === '' ? 'anon' : sessionKey).replace(/[^a-zA-Z0-9_-]+/g, '_')
-    const file = join(dir, key + '-' + Date.now() + '.md')
-    await writeFile(file, body, 'utf8')
-    return file
-  } catch {
-    return null
-  }
-}
+export { writeContextTransferFile } from './context-transfer-file.ts'
 
 export interface DigestBudget {
   /** Hard UTF-8 byte ceiling for the returned digest. */

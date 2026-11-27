@@ -453,6 +453,7 @@ export async function handleAttemptOutcome(
       model: input.model,
       activeModel: input.activeModel,
       superseded,
+      systemWatermarks: input.systemWatermarks,
       newlySentImageIds: input.newlySentImageIds,
       rawErrText,
       runLogText,
@@ -506,7 +507,7 @@ export async function* runAgyAttempt(
   // Build the argv (and tail-trim an over-budget prompt) BEFORE waiting for
   // the slot, exactly as the former inline block did — the trim warning is
   // logged even when the dispatch later aborts.
-  const spawn = buildSpawnArgs(input, recorder.printTimeoutMinutes, deps.log)
+  let spawn = buildSpawnArgs(input, recorder.printTimeoutMinutes, deps.log)
   const attemptInput: AttemptInput = { ...input, prompt: spawn.prompt }
   // Dispatch sees the NUL-sanitized prompt: its failure path clears the
   // in-flight marker with the same string the former inline block used.
@@ -523,6 +524,18 @@ export async function* runAgyAttempt(
     if (acpRec !== null) {
       recorder.stop()
       return acpRec
+    }
+    if (input.binding && !attemptInput.binding) {
+      // ACP invalidated the saved conversation. The precomputed CLI argv still
+      // points at it and may omit instructions only that conversation received.
+      if (input.systemWatermarks?.nextSystemHash && !attemptInput.systemWatermarks?.nextSystemHash) {
+        slot.releaseOnce()
+        recorder.stop()
+        deps.clearInFlightPrompt(input.sessionKey, input.prompt)
+        throw new LlmError('Unable to restore the full prompt after ACP session reset', Err.PROCESS_EXIT)
+      }
+      recorder.streamCid = null
+      spawn = buildSpawnArgs(attemptInput, recorder.printTimeoutMinutes, deps.log)
     }
   }
   const spawned = await startAttemptProcess(deps, attemptInput, spawn, recorder, slot)

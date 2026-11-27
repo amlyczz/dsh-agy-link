@@ -19,6 +19,11 @@ export interface SessionBinding {
    * Capped (see `SENT_IMAGE_IDS_MAX`) — order is oldest-first.
    */
   sentImageIds?: string[]
+  /** Hashes acknowledged by this agy conversation on a successful turn. */
+  sentSystemHash?: string
+  sentSnapshotHashes?: Record<string, string>
+  /** Earliest expiry of a referenced system/snapshot archive. */
+  prefixFilesExpireAt?: number
   /**
    * The last turn on this conversation was cut mid-flight (Stop button, steer
    * preemption, idle watchdog). agy's server-side turn has no finalized reply,

@@ -18,6 +18,7 @@
 // state it touches is passed in as a callback or a value, so the adapter keeps
 // being the single owner of activeRuns / failoverBudget / rateLimitFailover /
 // networkStreak.
+import { confirmedPrefix, type SystemWatermarks } from './system-budget.ts'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import {
   Err,
@@ -54,6 +55,9 @@ export interface RunTelemetry {
  * caller held flow through untouched.
  */
 export interface FinalizeInput {
+  systemWatermarks?: SystemWatermarks
+  /** ACP reports per-prompt usage on its result, while CLI result usage is cumulative. */
+  acpResultUsage?: boolean
   rec: RunRecording
   outcome: RunOutcome
   /** null = success; the classified failure otherwise. */
@@ -166,7 +170,13 @@ function writeSuccessBinding(input: FinalizeInput): void {
     nextCount: input.messages.length,
     messages: input.messages,
   })
-  const inputTokens = resolveInputTokens(input.rec, input.binding)
+  const previous = input.binding?.conversationId === finalId ? input.binding : undefined
+  const confirmed = input.rec.getResultEvent()?.ok && !input.outcome.idleGraceTerminated
+  const inputTokens = confirmed ? resolveInputTokens(input, previous) : previous?.lastInputTokens
+  const oldTokens = previous?.lastInputTokens ?? 0
+  const compacted = oldTokens >= 40_000 && inputTokens !== undefined && inputTokens < oldTokens * 0.55
+  // A different conversation may not have received the sections omitted on resume.
+  const acknowledged = confirmed && (!input.binding || previous) ? input.systemWatermarks : undefined
   const resolvedCwd = input.binding?.cwd || input.cwd
   input.store.set(input.sessionAccountKey, {
     conversationId: finalId,
@@ -174,6 +184,9 @@ function writeSuccessBinding(input: FinalizeInput): void {
     updatedAt: Date.now(),
     model: input.activeModel,
     sentImageIds: mergeSentImageIds(input.binding?.sentImageIds, input.newlySentImageIds),
+    sentSystemHash: compacted ? undefined : acknowledged?.nextSystemHash ?? previous?.sentSystemHash,
+    sentSnapshotHashes: acknowledged?.nextSnapshotHashes ?? previous?.sentSnapshotHashes,
+    prefixFilesExpireAt: acknowledged?.nextSystemHash ? acknowledged.nextPrefixFilesExpireAt : previous?.prefixFilesExpireAt,
     ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
     ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
   })
@@ -322,7 +335,7 @@ function persistFailureBinding(input: FinalizeInput, failure: AttemptFailure): v
     // writes its dead id back and the next turn resumes nothing.
     const finalId = input.conversationId ?? input.binding?.conversationId
     if (!finalId) return
-    const inputTokens = resolveInputTokens(input.rec, input.binding)
+    const inputTokens = input.binding?.conversationId === finalId ? input.binding.lastInputTokens : undefined
     const resolvedCwd = input.binding?.cwd || input.cwd
     // Preserve the prior watermark when the turn failed without substantially
     // consuming the prompt (RATE_LIMIT / NETWORK / OVERLOADED / PROCESS_EXIT).
@@ -343,6 +356,7 @@ function persistFailureBinding(input: FinalizeInput, failure: AttemptFailure): v
       // away and an image-only follow-up died with "request carries no
       // user text or images".
       sentImageIds: mergeSentImageIds(input.binding?.sentImageIds, []),
+      ...confirmedPrefix(input.binding, finalId),
       ...((interruptedTurn || input.binding?.interrupted === true) ? { interrupted: true } : {}),
       ...(typeof inputTokens === 'number' && inputTokens > 0 ? { lastInputTokens: inputTokens } : {}),
       ...(resolvedCwd ? { cwd: resolvedCwd } : {}),
@@ -375,15 +389,18 @@ function emitRunTelemetry(input: FinalizeInput): void {
 
 // ---- shared helpers (moved verbatim from adapter.ts) ----------------------
 
-/** Input-token count to persist: last per-call step sample, else envelope. */
-function resolveInputTokens(rec: RunRecording, binding: SessionBinding | undefined): number | undefined {
-  const finalUsage = rec.lastUsage ?? rec.finalUsage({})
-  const promptTokens = calcPromptTokens(finalUsage)
-  return promptTokens ?? (
-    typeof finalUsage?.input_tokens === 'number' && finalUsage.input_tokens > 0
-      ? finalUsage.input_tokens
-      : binding?.lastInputTokens
-  )
+/** Settlement can precede the mapper consuming the final step. Use recorded
+ * per-call usage for the comparison; result envelopes can be cumulative. */
+function resolveInputTokens({ rec, acpResultUsage }: FinalizeInput, binding: SessionBinding | undefined): number | undefined {
+  let envelope: number | undefined
+  for (let i = rec.length - 1; i >= 0; i--) {
+    const event = rec.eventAt(i)
+    if (acpResultUsage && event?.kind === 'result') envelope ??= calcPromptTokens(event.usage)
+    if (event?.kind !== 'step' || !event.usage) continue
+    const measured = calcPromptTokens(event.usage)
+    if (measured !== undefined) return measured
+  }
+  return calcPromptTokens(rec.lastUsage) ?? envelope ?? binding?.lastInputTokens
 }
 
 export function calcPromptTokens(usage: RawUsage | null | undefined): number | undefined {

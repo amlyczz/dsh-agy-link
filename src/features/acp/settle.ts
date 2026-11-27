@@ -130,6 +130,8 @@ export async function settleAcpOutcome(opts: {
     model: input.model,
     activeModel: input.activeModel,
     superseded: deps.isSuperseded(input.sessionKey, rec),
+    systemWatermarks: input.systemWatermarks,
+    acpResultUsage: true,
     newlySentImageIds: input.newlySentImageIds,
     rawErrText,
     runLogText,

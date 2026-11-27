@@ -19,12 +19,12 @@ import { buildCompactionPrompt } from './compaction-prompt.ts'
 import type { DeliverContextOptions } from './context-delivery.ts'
 import { toolCallIdOf } from './continuation.ts'
 import { stageHistoricalAttachments, stageLivePromptMedia } from './history-media.ts'
-import { cloakPromptText } from './prompt-cloak.ts'
+import { plannedWatermarks, systemDelta, systemPrefix, type SystemWatermarks } from './system-budget.ts'
+import { deliverSystemPrompt } from './system-delivery.ts'
 import { extractLeadingAgySlash, formatWithLeadingAgySlash } from './leading-slash.ts'
 import type { PurposePolicy } from './purpose-policy.ts'
 import {
   buildDigest,
-  snapshotSource,
   isForeignAssistant,
   isSyntheticHarnessMessage,
   isToolResultMessage,
@@ -71,7 +71,7 @@ export interface PromptPlanInput {
   deps: PromptPlanDeps
 }
 
-export interface PromptPlan {
+export interface PromptPlan extends SystemWatermarks {
   prompt: string
   /** Roots added because the prompt staged images (mirrors the old stagedDirs). */
   stagedDirs: string[]
@@ -140,7 +140,7 @@ function resolveAddDirs(workspaceRoot: string, stagedDirs: string[], neutralAuxW
  * Assemble everything needed to spawn one agy call for this hop. The adapter
  * calls this once; nothing here touches process state or account selection.
  */
-export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPlan> {
+export async function buildPromptPlan(input: PromptPlanInput, freshConversation = false): Promise<PromptPlan> {
   const { options, cfg, ctx, policy, account, activeModel, deps } = input
   const { isAux, isTranslateSession, translateSession, sessionKey, isImage, workspaceRoot, neutralAuxWorkspace } = ctx
   const messages = options.messages
@@ -150,7 +150,7 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
   const sessionAccountKey = account ? `${bindingKey}:${account.id}` : bindingKey
   const currentModel = activeModel === '' ? cfg.defaultModel : activeModel
 
-  const { binding, compactionNotice } = resolvePromptBinding({
+  const { binding, compactionNotice } = freshConversation ? { binding: undefined, compactionNotice: undefined } : resolvePromptBinding({
     cfg, ctx, account, activeModel, currentModel, persistBinding,
     bindingKey, sessionAccountKey, messages, lastAssistantIdx, deps,
   })
@@ -173,26 +173,6 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
     coveredHistory = digestRes.coveredHistory
   }
 
-  if ((cfg.forwardSystemPrompt && !isAux) || ctx.isReview || ctx.isTitle) {
-    const lastSystem = messages.findLast(m => m.role === 'system')
-    const system = options.system ?? (lastSystem ? textOf(lastSystem) : '')
-    const sys = cloakPromptText(system, cfg.cloakSystemPrompt)
-    const sections = sys ? ['System instructions:\n' + sys] : []
-    if (!isAux) {
-      const snapshots = new Map<string, string>()
-      for (const message of messages) {
-        const source = snapshotSource(message)
-        if (source) snapshots.set(source, cloakPromptText(textOf(message), cfg.cloakSystemPrompt))
-      }
-      if (snapshots.size) sections.push('Current DSH context (supersedes previous snapshots):\n' + [...snapshots.values()].join('\n\n'))
-    }
-    if (sections.length) prompt = [...sections, prompt].filter(Boolean).join('\n\n')
-  }
-  if (input.bridgeServer && options.tools?.length) {
-    prompt = bridgeRouting(input.bridgeServer, options.tools, cfg) + prompt
-  }
-  if (leadingSlash) prompt = formatWithLeadingAgySlash(leadingSlash, prompt)
-
   const newlySentImageIds: string[] = [...historicalStagedIds]
   const stagedImages: Array<{ path: string; mediaType: string }> = []
   if (!isAux) {
@@ -205,18 +185,33 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
     if (staged.stagedDir !== null && !stagedDirs.includes(staged.stagedDir)) stagedDirs.push(staged.stagedDir)
     newlySentImageIds.push(...staged.stagedIds)
     stagedImages.push(...staged.stagedImages)
-    if (prompt.trim() === '') {
-      throw new LlmError('request carries no user text or images to forward to agy', Err.AGY_ERROR)
-    }
-  } else if (prompt.trim() === '') {
-    throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
+  }
+  const routing = input.bridgeServer && options.tools?.length ? bridgeRouting(input.bridgeServer, options.tools, cfg) : ''
+  const forward = (cfg.forwardSystemPrompt && !isAux) || ctx.isReview || ctx.isTitle
+  const reusable = persistBinding && (!binding?.prefixFilesExpireAt || binding.prefixFilesExpireAt > Date.now()) ? binding : undefined
+  const delta = forward ? systemDelta(options.system, messages, cfg.cloakSystemPrompt, !isAux, reusable) : undefined
+  const maxBytes = promptBudgetBytes(cfg)
+  if (delta && !isAux) {
+    delta.nextPrefixFilesExpireAt = reusable?.prefixFilesExpireAt
+    const slashBytes = leadingSlash ? utf8Bytes(leadingSlash.commandLine) + 2 : 0
+    const latest = utf8Bytes(prompt) + slashBytes + utf8Bytes(routing) > maxBytes ? latestUserTaskText(messages) : undefined
+    const delivered = await deliverSystemPrompt(delta, prompt, routing, sessionKey, stagedDirs, slashBytes, maxBytes, latest)
+    prompt = delivered.prompt
+    delta.nextPrefixFilesExpireAt = delivered.expiresAt
+  } else {
+    const prefix = delta ? systemPrefix(delta.system, delta.snapshots) : ''
+    prompt = routing + [prefix, prompt].filter(Boolean).join('\n\n')
+  }
+  if (leadingSlash) prompt = formatWithLeadingAgySlash({ ...leadingSlash, rest: '' }, prompt)
+  if (prompt.trim() === '') {
+    throw new LlmError(isAux ? 'request carries no user text to forward to agy' : 'request carries no user text or images to forward to agy', Err.AGY_ERROR)
   }
 
   // "Live-last" requests (no assistant anchor: DSH's auto-review, session titles)
   // carry their decisive content at the tail. Fit them to the budget here, as the
   // last shaping step, so the generic tail trim downstream never sees them.
   if (lastAssistantIdx < 0 && !isImage && !isTranslateSession && !(isAux && options.purpose === 'compaction')) {
-    prompt = protectTrailingRequest(prompt, messages, promptBudgetBytes(cfg))
+    prompt = protectTrailingRequest(prompt, messages, maxBytes)
   }
   if (compactionNotice && compactionNotice.afterTokens <= 0) {
     compactionNotice.afterTokens = Math.max(100, Math.round(prompt.length / 3.5))
@@ -224,6 +219,7 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
   const addDirs = resolveAddDirs(workspaceRoot, stagedDirs, neutralAuxWorkspace)
   return {
     prompt, stagedDirs, addDirs, binding, bindingKey, persistBinding, sessionAccountKey,
+    ...(delta ? plannedWatermarks(delta) : {}),
     currentModel, compactionNotice, newlySentImageIds, stagedImages, messages, lastAssistantIdx,
   }
 }
@@ -449,8 +445,7 @@ function buildChatPromptText(input: ChatPromptInput): string {
   const trailingText = effectiveTrailingUser
     .filter((m) => !(dropToolPayloads && isToolResultMessage(m) && !isBridgeToolResult(m)))
     .map(textOf)
-    .map((s) => s.trim())
-    .filter((s) => s !== '')
+    .filter((s) => s.trim() !== '')
   const hasBridgeToolResult = effectiveTrailingUser.some(isBridgeToolResult)
   const trailingJoined = trailingText.join('\n\n')
   let prompt: string
