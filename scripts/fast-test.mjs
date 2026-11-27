@@ -21,6 +21,8 @@ const COMPONENT_TEST_MAP = {
   'src/host/active-runs.ts': ['test/host/session-view.test.ts'],
   'src/host/session-view.ts': ['test/host/session-view.test.ts', 'test/transport/http-contract-status-routes.test.ts'],
   'src/provider/prompt.ts': ['test/provider/adapter-*.test.ts', 'test/provider/model-switch-stale-bindings.test.ts'],
+  'src/provider/stale-model-bindings.ts': ['test/provider/model-switch-stale-bindings.test.ts'],
+  'src/provider/live-last-request.ts': ['test/provider/review-prompt-truncation.test.ts'],
   'src/host/models.ts': ['test/host/models.test.ts', 'test/domain/model-support-ineligibility.test.ts'],
   'src/host/quota.ts': ['test/features/quota/quota-*.test.ts', 'test/domain/domain-quota.test.ts'],
   'src/host/pool.ts': ['test/domain/pool.test.ts', 'test/host/pool-auth.test.ts'],

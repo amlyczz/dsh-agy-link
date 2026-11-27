@@ -6,7 +6,9 @@ import { lastHistoryIndex } from './history-boundary.ts'
 import { LlmError, type Message } from '@deepseek-ai/dsh-llm'
 import { Err, type PluginConfig } from '../common/types.ts'
 import type { AgyGenerateOptions } from '../common/protocol.ts'
-import { modelFamilyOf, sharedArgonPeerFamily, type ManagedAccount } from '../common/pool-types.ts'
+import type { ManagedAccount } from '../common/pool-types.ts'
+import { clearStaleFamilyModelBindings } from './stale-model-bindings.ts'
+import { protectTrailingRequest } from './live-last-request.ts'
 import type { SessionBinding, SessionStore } from '../host/sessions.ts'
 import type { ImageRefLike } from '../host/media.ts'
 import { resolveModelSlug } from '../host/models.ts'
@@ -30,7 +32,6 @@ import {
   textOf,
   utf8Bytes,
   wrapLiveRequest,
-  protectTrailingRequest,
   AGY_PROMPT_SAFE_BYTES,
 } from './prompt-text.ts'
 
@@ -241,33 +242,6 @@ interface ResolveBindingInput {
   deps: PromptPlanDeps
 }
 
-/**
- * Drop older same-family bindings under `bindingKey:` whose model differs from
- * `currentModel` so a model switch never leaves behind an older account's
- * conversation binding to resurrect as `stickyAccount` while the new run is
- * in flight or if it fails before creating a conversation.
- */
-function clearStaleFamilyModelBindings(
-  store: SessionStore,
-  bindingKey: string,
-  currentModel: string,
-  account: ManagedAccount | undefined,
-): void {
-  if (bindingKey === '') return
-  const targetFam = modelFamilyOf(currentModel)
-  if (targetFam === 'unknown') return
-  const targetSlug = resolveModelSlug(currentModel)
-  const prefix = `${bindingKey}:`
-  const peerFam = account !== undefined ? sharedArgonPeerFamily(account, targetFam) : undefined
-  for (const [k, b] of Object.entries(store.all())) {
-    if (!k.startsWith(prefix) || !b?.model) continue
-    if (resolveModelSlug(b.model) === targetSlug) continue
-    const bFam = modelFamilyOf(b.model)
-    if (bFam === targetFam || (peerFam !== undefined && bFam === peerFam)) {
-      store.delete(k)
-    }
-  }
-}
 
 /**
  * Look up (or adopt) the agy conversation binding for this session, then apply

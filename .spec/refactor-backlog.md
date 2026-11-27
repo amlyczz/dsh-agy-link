@@ -11,6 +11,7 @@
 
 | 模块 | 行数（抽取前） | 可抽出的职责 | 状态 |
 | --- | --- | --- | --- |
+| `src/provider/prompt-text.ts` | 599 | 纯文本预算工具族已稳定；新增职责应另起模块（#221 的 `protectTrailingRequest` 已另起 `live-last-request.ts`） | 待办（勿再往里加） |
 | `src/provider/mapper/event-mapper.ts` | 599 | `formatRunningToolFallback`（纯函数） | **已抽出** → `running-tool-fallback.ts`（575 行） |
 | `src/features/translation/service.ts` | 599 | 4 个纯 helper（错误映射 / 空结果 / 模型名比较） | **已抽出** → `translation/helpers.ts`（567 行） |
 | `src/features/subagent/tracker.ts` | 599 | 日志尾部跟随与状态机可分离 | 待办 |
@@ -46,3 +47,8 @@
 - **`delay(ms[, signal])` 在 13 个文件里各写一遍**（`host/models`、`host/services`、`quota/freshness`、`acp/pool`、`acp/run-attempt`、`warmup/schedule`、`provider/mapper/event-mapper`、`provider/retry-policy`、`provider/failover-budget`、`common/pool-types`、`domain/quota/identity`、`client/mermaid-render`、`translation/service`）。多数是 `new Promise(r => setTimeout(r, ms))`，但**并非全部等价**（部分带 `AbortSignal` 且 abort 后 resolve 而非 reject）。
   - 收敛到 `src/common/async.ts` 的正确做法：先逐个确认语义（是否接受 signal、abort 后 resolve/reject、`ms <= 0` 是否立即返回），再统一；**不要**一次性替换成"最像的那个"。
   - 优先级：中。属于一致性收益，不是缺陷。
+
+## 2026-11-27 新增
+
+- `src/provider/prompt.ts`（596 → 578）：为给 #221 的保护逻辑腾出预算，抽出 `clearStaleFamilyModelBindings` → `stale-model-bindings.ts`。**更大的那一步未做**：`resolvePromptBinding` + `ResolveBindingInput`（约 160 行，绑定生命周期）与提示词组装是两个职责，应整体抽成 `prompt-binding.ts`；当时为控制单次改动范围只动了最小的一块。
+- 教训（本轮连踩两次）：`prompt.ts` 与 `prompt-text.ts` 都贴在 599/596 行，**往这两个文件里加任何逻辑之前先看行数**，新职责直接另起模块。

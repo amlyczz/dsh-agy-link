@@ -439,56 +439,6 @@ export function trimToUtf8Bytes(s: string, maxBytes: number, note = true): strin
  * @param capBytes - UTF-8 byte ceiling for the returned text.
  * @returns the payload unchanged when it already fits, else head + marker + tail.
  */
-/** Room kept for the start of a request's head (policy, environment). */
-export const REQUEST_HEAD_RESERVE_BYTES = 24_000
-
-/**
- * Keep the FINAL message of a request when the prompt is over budget (issue #221).
- *
- * Some requests are "live-last": DSH's auto-review sends the environment, the
- * retained session items in order and the pending tool call LAST — its policy
- * even states "The final message is the pending tool call". With no assistant
- * message to wrap the live request first and no binding to continue, the whole
- * history goes out in order, and a tail trim deletes exactly the one thing the
- * request is for: the reviewer then fails closed and every tool call in a long
- * session becomes an approval prompt.
- *
- * The order is a contract here, so nothing is moved. Instead the MIDDLE is
- * elided: the head (policy, environment, oldest items) and the final message
- * both survive whenever that message fits the budget on its own. A request that
- * nearly fills the budget by itself keeps its two ends and loses its middle.
- * Prompts that already fit, or whose last message is not recognisably at the
- * end, are returned untouched for the generic trim.
- */
-export function protectTrailingRequest(prompt: string, messages: readonly Message[], maxBytes: number): string {
-  if (utf8Bytes(prompt) <= maxBytes) return prompt
-  let live = ''
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const text = textOf(messages[i] as Message).trim()
-    if (text !== '' && prompt.endsWith(text)) {
-      live = text
-      break
-    }
-  }
-  if (live === '') return prompt
-  const liveBytes = utf8Bytes(live)
-  const headPart = prompt.slice(0, prompt.length - live.length)
-  if (liveBytes + REQUEST_HEAD_RESERVE_BYTES <= maxBytes) {
-    // The request fits: the head gets what is left, elided in ITS middle so the
-    // policy (head) and the newest history (just before the request) both stay.
-    return elideMiddle(headPart, maxBytes - liveBytes - MARKER_SLACK_BYTES) + live
-  }
-  // The request alone nearly fills the budget: reserve the head's start and
-  // elide the middle of the request rather than dropping the policy or its tail.
-  const head = utf8Bytes(headPart) <= REQUEST_HEAD_RESERVE_BYTES
-    ? headPart
-    : trimToUtf8Bytes(headPart, REQUEST_HEAD_RESERVE_BYTES, false)
-  return head + elideMiddle(live, maxBytes - utf8Bytes(head) - MARKER_SLACK_BYTES)
-}
-
-/** elideMiddle's own marker is ~25 bytes; leave room so the result stays within budget. */
-const MARKER_SLACK_BYTES = 64
-
 export function elideMiddle(text: string, capBytes: number): string {
   if (capBytes <= 0) return ''
   if (utf8Bytes(text) <= capBytes) return text
