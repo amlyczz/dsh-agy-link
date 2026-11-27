@@ -12,21 +12,17 @@ import {
   isNonConsumableResultError,
   isTransportFailure,
   looksLikeAuthFailure,
-  looksLikeAuthVerificationJitter,
-  looksLikeRateLimit,
-  networkRetryDelayMs,
 } from '../../common/types.ts'
 import { logSize, readLogSlice } from '../../host/agy-log.ts'
-import { StreamJsonParser } from '../../host/parser.ts'
 import type { RunRecording } from '../../host/recording.ts'
+import { ensureIsolatedKeychain } from '../../host/runner.ts'
 import { resolveModelSlug } from '../../host/models.ts'
-import { ensureIsolatedKeychain, type RunOutcome } from '../../host/runner.ts'
+
 import { supportsSshIsolation } from '../../runtime/agy/env.ts'
 import { accountHome, buildAgyEnv } from '../../runtime/net/account-env.ts'
 import { prepareOrchestratorSettingsForAcp } from './orchestrator-prep.ts'
 import { createAttemptRecorder, type AttemptDeps, type AttemptInput, type AttemptSlot } from '../../provider/attempt.ts'
 import { deliverContext } from '../../provider/context-delivery.ts'
-import { classifyFailure, type AttemptFailure } from '../../provider/failure.ts'
 import { finalizeAttempt } from '../../provider/finalize.ts'
 import { buildDigest, wrapLiveRequest } from '../../provider/prompt-text.ts'
 import {
@@ -35,9 +31,12 @@ import {
   type LiveQuotaFailoverState,
 } from '../../provider/quota-failover.ts'
 import { SubagentTracker } from '../subagent/tracker.ts'
-import { appendConversationEvent } from '../subagent/task-activity.ts'
+import { beginOrchestrationTurn, instrumentTurn } from '../orchestration/instrument.ts'
+
+import { noteContextWindow } from './context-window.ts'
 import type { AcpProcess } from './client.ts'
 import type { AcpSessionPool } from './pool.ts'
+import { buildPromptFailure } from './prompt-failure.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
 import { rebuildAcpSession } from './rebuild.ts'
 import {
@@ -102,7 +101,7 @@ async function runAcpPrompt(opts: {
         resumed: Boolean(input.binding?.conversationId),
         accountHome: recorder.rec.accountHome,
         log: deps.log,
-        onEvent: (ev) => appendConversationEvent(recorder.rec, ev),
+        onEvent: (ev) => wiring.onEvent(ev),
         onQuotaExhausted: (info) => quotaCtrl.handleQuotaExhausted(info),
       })
     : null
@@ -111,6 +110,19 @@ async function runAcpPrompt(opts: {
     ? new AcpTranscriptUsageTailer(sid, recorder.rec.accountHome)
     : null
   const bgWait = createBackgroundWaitMonitor(subTracker, recorder)
+  // Orchestration ledger: the only place that knows which seat is speaking, what
+  // the agent's plan/checklist is, and the real context window. ACP sends the
+  // seat attribution only inside transcript.jsonl, which the tailer above reads,
+  // so every transport event goes through the instrumentation as well.
+  const wiring = instrumentTurn({
+    isAux: input.isAux,
+    sessionKey: input.sessionKey,
+    conversationId: sid,
+    activeModel: input.activeModel,
+    append: (ev) => recorder.rec.append(ev),
+    learnWindow: (model, size) => noteContextWindow(model, size),
+  })
+  wiring.resume()
   const flushTranscriptUsage = (): number => {
     if (!usageTailer) return 0
     const samples = usageTailer.poll()
@@ -124,6 +136,7 @@ async function runAcpPrompt(opts: {
         usage: s.usage,
         raw: { source: 'acp-transcript' },
       })
+      wiring.noteTranscriptSample(s)
     }
     return samples.length
   }
@@ -165,6 +178,12 @@ async function runAcpPrompt(opts: {
           if (updateKind === 'tool_call' || updateKind === 'tool_call_update' || updateKind === 'usage_update') {
             flushTranscriptUsage()
           }
+          // Session updates the event mapper drops because they carry no
+          // assistant text — and they are exactly the orchestration signal:
+          // the agent's plan, its live mode, the session title, and the real
+          // context window of THIS model (learned on every turn, see
+          // instrument.ts).
+          wiring.noteUpdate(update)
           for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
             if (
               !sawRealOutput &&
@@ -183,6 +202,7 @@ async function runAcpPrompt(opts: {
             }
             recorder.rec.append(ev)
             bgWait?.noteEvent(ev)
+            wiring.noteStep(ev, update)
             input.agyOnEvent?.(ev)
             reportDirectToolQuota(quotaCtrl, ev)
           }
@@ -281,80 +301,30 @@ async function runAcpPrompt(opts: {
     return buildAcpPromptOutcome(null, startedAt, roundStderr(), quotaCtrl.cooledFamilies())
   } catch (err) {
     subTracker?.flush()
-    const liveQf = quotaCtrl.failoverState()
-    const msg = err instanceof Error ? err.message : String(err)
-    const errText = roundStderr()
-    const logText = roundLog()
-    const rawErrText = [msg, errText, liveQf?.rawErrorText].filter(Boolean).join(' ').trim()
-    // A quota-triggered kill is not a timeout and not the user aborting: its
-    // classification comes from the quota evidence, not from the error text.
-    const timedOut = liveQf === null && /timed out/i.test(msg)
-    const aborted = !quotaCancelled && liveQf === null && (Boolean(input.signal?.aborted) || recorder.rec.isAbortRequested || /aborted|cancelled|canceled/i.test(msg))
-    const outcome: RunOutcome = {
-      code: 1,
-      signal: null,
-      timedOut,
-      aborted,
-      capped: false,
-      stdout: '',
-      stderrTail: errText,
-      durationMs: Date.now() - startedAt,
-    }
-    const networkStreak = isTransportFailure({
-      rawErrText,
-      authFailureText: '',
-      stderrTail: errText,
-      stdoutHead: '',
-      runLogText: logText,
-    })
-      ? deps.noteNetworkFailure(input.sessionKey)
-      : 0
-    const failure =
-      classifyFailure({
-        cfg,
-        outcome,
-        parser: new StreamJsonParser(),
-        sawAuthFailure: looksLikeAuthFailure(rawErrText),
-        consumable: false,
-        transportFailure: isTransportFailure({
-          rawErrText,
-          authFailureText: '',
-          stderrTail: errText,
-          stdoutHead: '',
-          runLogText: logText,
-        }),
-        // keyringJitter used to be hard-coded false here, which silently turned
-        // every "the keyring helper timed out" blip into a real auth failure and
-        // rotated the account away.
-        keyringJitter: looksLikeAuthVerificationJitter(`${errText} ${logText}`),
-        rawErrText,
-        isRateLimit: looksLikeRateLimit(rawErrText),
-        silentTimeout: timedOut && !emittedAny,
-      }) ?? { kind: aborted ? 'aborted' : 'error', code: Err.AGY_ERROR, message: msg }
-    // A transport failure that reaches the caller without a backoff makes the
-    // CLI fallback retry instantly into the same dead egress; the CLI path
-    // already stamps this delay, so the ACP path must too.
-    if (networkStreak > 0 && failure.retryAfterMs === undefined) {
-      failure.retryAfterMs = networkRetryDelayMs(networkStreak)
-    }
-    return {
-      failure,
-      durationMs: outcome.durationMs,
-      stderr: errText,
-      rawErrText,
-      runLogText: logText,
-      silentTimeout: timedOut && !emittedAny,
-      outcomeOverride: outcome,
-      quotaFailover: liveQf,
+    // Classification lives in ./prompt-failure.ts: it only reads evidence.
+    return buildPromptFailure({
+      cfg,
+      deps,
+      input,
+      rec: recorder.rec,
+      err,
+      stderrText: roundStderr(),
+      logText: roundLog(),
+      quotaFailover: quotaCtrl.failoverState(),
+      quotaCancelled,
+      emittedAny,
+      sawRealOutput,
       cooledInLiveFamilies: quotaCtrl.cooledFamilies(),
-      empty: !sawRealOutput,
-      keyringJitter: looksLikeAuthVerificationJitter(`${errText} ${logText}`),
-    }
+      startedAt,
+    })
   } finally {
     bgWait?.stop()
     // Subagents belong to this round: stopping detaches the tracker from the
     // live registry so the header stops reporting them the moment the turn ends.
     subTracker?.stop()
+    // Freeze the orchestration snapshot for the round; the sidebar keeps showing
+    // the last turn, it just stops claiming to be live.
+    wiring.settle()
     // The streak is counted where the failure is classified (above), so this
     // only has to clear it on a turn that actually produced model output.
     if (sawRealOutput) deps.clearNetworkStreak(input.sessionKey)
@@ -490,6 +460,9 @@ export async function runAcpAttempt(
   }
 
   const recorder = createAttemptRecorder(deps, cfg, account, sid, !input.isAux)
+  // One DSH turn = one orchestration turn: the panel starts from a clean slate
+  // (seats, steps, plan, checklist) and keeps the last one readable afterwards.
+  beginOrchestrationTurn(input.isAux, sessionKey, sid)
   recorder.rec.family = input.family
   recorder.setTrackerSession?.(input.sessionKey)
   recorder.streamCid = sid

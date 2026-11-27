@@ -59,6 +59,15 @@ export function detachSubagentTracker(sessionKey: string, tracker: SubagentTrack
   else live.set(sessionKey, next)
 }
 
+/** One session's tracked subagents (the Orchestration panel merges these). */
+export function snapshotSessionSubagents(session: string): SubagentSnapshotItem[] {
+  const trackers = live.get(session)
+  if (trackers === undefined) return []
+  const items: SubagentSnapshotItem[] = []
+  for (const tr of trackers) items.push(...tr.snapshot().items)
+  return items
+}
+
 /** Every session that currently has at least one tracked subagent. */
 export function snapshotSubagents(): SessionSubagentSnapshot[] {
   const out: SessionSubagentSnapshot[] = []
