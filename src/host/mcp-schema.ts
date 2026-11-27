@@ -326,6 +326,33 @@ function trimDescriptions(node: unknown, maxLen: number): unknown {
 }
 
 /**
+ * Drop `description`/`title` from every NESTED schema node while keeping the
+ * tool's own description and the top-level schema description (issue #215).
+ *
+ * A 194-tool SDK spends most of its bytes on per-property prose; the model still
+ * gets each parameter's name, type, enum and `required`, plus the tool-level
+ * description, so this stage recovers far more budget than trimming every
+ * description to a stub — and it costs no tool (nothing is ever dropped).
+ */
+export function stripNestedDescriptions(node: unknown, depth = 0): unknown {
+  if (!isPlainObj(node)) return node;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (depth > 0 && (k === 'description' || k === 'title')) continue;
+    if (k === 'properties' && isPlainObj(v)) {
+      const nextProps: Record<string, unknown> = {};
+      for (const [pk, pv] of Object.entries(v)) nextProps[pk] = stripNestedDescriptions(pv, depth + 1);
+      out[k] = nextProps;
+    } else if (isPlainObj(v)) {
+      out[k] = stripNestedDescriptions(v, depth + 1);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/**
  * Sanitize every tool's schema, attach `_meta: { 'antigravity/alwaysLoad': true }`,
  * and progressively trim verbose descriptions if the serialized toolbox exceeds
  * `maxTokens` (default 18,000, safely under agy's 20,000 hard drop ceiling).
@@ -347,6 +374,12 @@ export function prepareMcpTools(
 
   // Stage 1: strip `title` fields across schemas
   tools = tools.map((t) => ({ ...t, inputSchema: stripTitles(t.inputSchema) as Record<string, unknown> }))
+  if (estimateMcpToolsTokens(tools) <= maxTokens) return tools
+
+  // Stage 1b: drop nested property prose, keep the tool + top-level descriptions
+  // (issue #215). Recovers much more than stubbing every description, and the
+  // parameters keep their names, types, enums and `required`.
+  tools = tools.map((t) => ({ ...t, inputSchema: stripNestedDescriptions(t.inputSchema) as Record<string, unknown> }))
   if (estimateMcpToolsTokens(tools) <= maxTokens) return tools
 
   // Stage 2: progressive description trimming (never drops any tool!)

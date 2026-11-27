@@ -50,11 +50,19 @@ export function snapshotConversations(dir = defaultConversationsDir()): DirSnaps
 }
 
 export interface DiffOutcome {
+  /** The one new conversation db, or null when none or more than one appeared. */
   conversationId: string | null;
-  /** more than one new db appeared; picked newest by mtime. */
+  /** more than one new db appeared: the conversation cannot be attributed, so nothing is picked. */
   ambiguous: boolean;
 }
 
+/**
+ * Diff two snapshots of the conversations dir. Exactly one new db names the
+ * conversation this run created. Two or more new dbs (concurrent sessions
+ * sharing a HOME) cannot be attributed — picking the newest by mtime bound a
+ * session to a neighbour's conversation (issue #215) — so the id stays null and
+ * the caller falls back to its other discovery paths.
+ */
 export function diffConversations(before: DirSnapshot, dir = defaultConversationsDir()): DiffOutcome {
   const after = snapshotConversations(dir);
   const added: Array<{ name: string; mtime: number }> = [];
@@ -62,8 +70,6 @@ export function diffConversations(before: DirSnapshot, dir = defaultConversation
     if (!before.files.has(name)) added.push({ name, mtime });
   }
   if (added.length === 0) return { conversationId: null, ambiguous: false };
-  added.sort((a, b) => b.mtime - a.mtime);
-  const top = added[0];
-  const id = top !== undefined ? top.name.replace(/\.db$/, '') : '';
-  return { conversationId: id, ambiguous: added.length > 1 };
+  if (added.length > 1) return { conversationId: null, ambiguous: true };
+  return { conversationId: added[0]!.name.replace(/\.db$/, ''), ambiguous: false };
 }

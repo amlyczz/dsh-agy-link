@@ -350,7 +350,9 @@ function resolveFallbackConversationId(
   const outcome = diffConversations(before, conversationsDir)
   if (outcome.ambiguous && !logged.done) {
     logged.done = true
-    log?.(`[discovery] multiple new conversation dbs detected; picked newest ${outcome.conversationId ?? 'none'}`)
+    // Several conversations appeared at once (concurrent runs on one HOME): the
+    // newest-by-mtime guess bound sessions to a neighbour's db (issue #215).
+    log?.('[discovery] multiple new conversation dbs detected; refusing to guess which one is this run')
   }
   return outcome.conversationId
 }

@@ -132,6 +132,49 @@ describe('Slice 4: Reverse MCP Bridge 4x hardening', () => {
     }
   })
 
+  it('issue #215: stage 1b drops nested property prose but keeps names, types, enums, required and the tool/top-level descriptions', () => {
+    const prose = 'Per-parameter documentation that goes on for a while and explains every nuance of this field. '.repeat(6)
+    // Tool descriptions are modest; the bulk is per-property prose, so stage 1b
+    // (not the description-stubbing stage 2) is what must bring it under budget.
+    const raw: McpToolDef[] = Array.from({ length: 60 }, (_, i) => ({
+      name: `tool_${i}`,
+      dshName: `dsh.tool_${i}`,
+      description: `Tool ${i}: does a focused thing.`,
+      inputSchema: {
+        type: 'object',
+        description: `Input for tool ${i}.`,
+        properties: {
+          query: { type: 'string', description: prose, minLength: 1 },
+          mode: { type: 'string', enum: ['fast', 'slow'], description: prose },
+          options: {
+            type: 'object',
+            description: prose,
+            properties: { depth: { type: 'number', description: prose, default: 1 } },
+            required: ['depth'],
+          },
+        },
+        required: ['query'],
+      },
+    }))
+    assert.ok(estimateMcpToolsTokens(raw) > AGY_MCP_SAFE_TOKEN_BUDGET, 'fixture must start over budget')
+    const prepared = prepareMcpTools(raw)
+    assert.equal(prepared.length, raw.length, 'no tool is ever dropped')
+    assert.ok(estimateMcpToolsTokens(prepared) <= AGY_MCP_SAFE_TOKEN_BUDGET)
+    const first = prepared[0]!
+    assert.equal(first.description, 'Tool 0: does a focused thing.', 'stage 2 never ran: tool descriptions are intact')
+    assert.equal(first.inputSchema.description, 'Input for tool 0.', 'top-level schema description survives')
+    assert.equal((first.inputSchema.required as string[] | undefined)?.[0], 'query')
+    const props = first.inputSchema.properties as Record<string, Record<string, unknown>>
+    assert.deepEqual(Object.keys(props).sort(), ['mode', 'options', 'query'])
+    assert.equal(props.query?.type, 'string')
+    assert.equal(props.query?.minLength, 1)
+    assert.equal('description' in props.query!, false, 'nested prose is gone')
+    assert.deepEqual(props.mode?.enum, ['fast', 'slow'])
+    assert.deepEqual(props.options?.required, ['depth'])
+    assert.equal((props.options?.properties as Record<string, Record<string, unknown>>).depth?.default, 1)
+    assert.equal('description' in (props.options?.properties as Record<string, Record<string, unknown>>).depth!, false)
+  })
+
   it('extracts MCP image + text content blocks when a tool returns images', () => {
     assert.equal(extractMcpContentBlocks({ content: [{ type: 'text', text: 'only text' }] }), undefined)
     const blocks = extractMcpContentBlocks({

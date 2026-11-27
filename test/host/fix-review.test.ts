@@ -117,6 +117,23 @@ describe('discovery follows pool account homes', () => {
 		assert.equal(diffConversations(sysBefore, sysDir).conversationId, null)
 		rmSync(home, { recursive: true, force: true })
 	})
+
+	test('issue #215: two new dbs at once are not attributed to either (no newest-by-mtime guess)', () => {
+		const home = mkdtempSync(join(tmpdir(), 'agy-disc-'))
+		const dir = conversationsDirFor(home)
+		mkdirSync(dir, { recursive: true })
+		const before = snapshotConversations(dir)
+		writeFileSync(join(dir, 'conv-old.db'), 'x')
+		assert.equal(diffConversations(before, dir).conversationId, 'conv-old', 'exactly one new db is attributed')
+		const before2 = snapshotConversations(dir)
+		// Concurrent runs on one HOME: the newer one must not steal the binding.
+		writeFileSync(join(dir, 'conv-a.db'), 'x')
+		writeFileSync(join(dir, 'conv-b.db'), 'x')
+		const outcome = diffConversations(before2, dir)
+		assert.equal(outcome.conversationId, null)
+		assert.equal(outcome.ambiguous, true)
+		rmSync(home, { recursive: true, force: true })
+	})
 })
 
 describe('pool hardening', () => {
