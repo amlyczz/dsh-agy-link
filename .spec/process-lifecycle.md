@@ -30,6 +30,12 @@
 - `PluginConfig.suppressAgyAutoUpdate` 在 Windows 默认 `true`，其余平台默认 `false`。
 - 启动探测延迟执行并串行化，不在插件加载瞬间阻塞或并发拉起多份 `agy` 进程。
 
+### Deferred Boot Maintenance 非阻塞不变式
+
+- `scheduleBootMaintenance()` 异步执行 `runMaintenancePassAsync` 并带有重入锁（in-flight guard），避免慢盘或周期调度重叠触发，绝不阻塞宿主 Node 事件循环。
+- 后台孤儿 MCP 收割使用基于异步 `execFile` 的 `readProcessTableAsync()`（绝不在延迟维护路径上调用 `execFileSync`）；同步 `readProcessTable()` 仅保留给同步状态检查与测试调用。
+- `syncEcosystemToPool()` / `syncEcosystemToPoolAsync()` 跳过依赖、版本控制与缓存目录（`node_modules`、`.git`、`.venv`、`venv`、`__pycache__`、`.pytest_cache`、`.mypy_cache`）及系统杂项文件（`.DS_Store`、`Thumbs.db`），自动清剪隔离账号中历史遗留的镜像副本；对超出 racy-mtime 窗口（2s）且 `size` 与 `mtimeMs` 一致的文件直接经 `stat` 跳过读取，复制文件时保留源时间戳。
+
 ## 4. 验证锚点
 
 - `test/features/background/background-task-hang.test.ts`：idle 宽限终止、stderr 噪声不喂狗。
@@ -93,6 +99,7 @@ agy 在等待自己派发的工作时会打印 `root agent idle; waiting for N b
   - **关闭必须整组升级，单发 SIGTERM 不算终止**：`AcpProcess.close()` 复用 `killTree()`（POSIX：进程组 `SIGTERM` → 3s `SIGKILL`；Windows：`taskkill /T /F`），ACP 子进程在 POSIX 以 `detached` 启动以成为进程组组长。agy 会挂上优雅退出钩子并忽略 SIGTERM，旧实现「先 `procs.delete()` 再 `child.kill()`」会把它变成隐形孤儿——2026-11-23 实测 pid 75365 在池遗忘后存活 12+ 分钟，每 60s 刷 `You are not logged into Antigravity`，并带着 6 个 MCP 子进程。
   - **残留对账（strays）**：`AcpSessionPool` 的 60s sweep 调用 `sweepStrays(now, true)`——只匹配 `parentPid === process.pid` 且命令形态为 `agy[.exe] acp …` 的**直系**子进程，排除 live/draining 跟踪集合，先杀后代再杀根（避免 MCP 子进程被 reparent 后长存）。`status()` 以 15s 节流刷新：池内还有 live/draining 进程时只观察不杀（读徽标不得有副作用）；池内为空时同一次扫描可直接回收——此刻不存在任何合法属主，而空闲孤儿会拿着已失效的凭据继续轮询 Google，并同时回报 `strayProcesses` / `strayPids` / `reapedStrays`。第二个 DSH 实例或终端里的 `agy` 因 parentPid 不符永不被误杀。
   - **徽标必须描述机器，不是池内 map**：控制台「n 进程 · m 会话」的 n = `activeProcesses + drainingProcesses + strayProcesses`，draining/stray 非零时追加说明。只数池内 map 正是 2026-11-23「面板显示 1 进程、实际 2 个 agy acp」的根因。
+  - **ACP 首帧输出即持久化绑定与后台任务等待可见性（`src/features/acp/bg-wait-notice.ts`、`src/features/subagent/task-activity.ts`）**：`runAcpAttempt()` 在 `onFirstOutput` 立即调用 `persistInterimAcpBinding()` 落盘新 `conversationId`（保留旧 `lastMessageCount`/`sentImageIds` 直到 `finalizeAttempt` 结算），防止用户在长后台任务期间中止或重启丢失 ACP 会话而退化为冷启动全量重压；`TaskActivityTracker` 将本轮新产生的 `task-*.log` 并入 `SubagentTracker.snapshot()` 头部运行胶囊，`BackgroundWaitMonitor` 在主回复输出完毕后静默等待后台任务超过 12s 时发出单次双语 `[后台等待]` 提示，明确告知点击停止将中止后台任务。锚点：`test/features/acp/acp-early-binding-and-bg-wait.test.ts`。
 - **CLI 参数透传（`src/provider/attempt.ts`, `src/host/oneshot.ts`）**：
   - 支持结构化透传 `--agent`（`agent` / `agyAgent`）、`--settings`（`agySettings`）、`--json-schema`（`agyJsonSchema` / `schemaArgs()` 自动写临时 schema 并清理）与 `--sandbox`。
 - **跨回合后台唤醒（`src/features/background/watcher.ts`, `BackgroundWakeWatcher`）**：

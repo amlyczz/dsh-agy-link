@@ -257,9 +257,13 @@ test('definitions register once uiConversation is provided after the client appl
     locale: { register: () => () => undefined, bind: () => (key: string) => key, addLanguage: () => () => undefined, subscribe: () => () => undefined },
     get: scope.get,
     inject(deps: string[], apply: (scope: unknown) => unknown) {
-      // The bundle runs in a vm context: copy its array into this realm before a strict compare.
-      assert.deepEqual([...deps], ['uiConversation'])
-      pending.push(apply)
+      // The bundle runs in a vm context: copy its array into this realm before checking.
+      const list = [...deps]
+      if (list.length === 1 && list[0] === 'uiConversation') {
+        pending.push(apply)
+      } else {
+        assert.deepEqual(list, ['documentPreviews'])
+      }
       return { dispose: () => undefined }
     },
     effect(callback: () => (() => void) | void) {

@@ -43,7 +43,7 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'translateDisplay must be card or replace'
   }
-  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'mcpBridge' || key === 'btwEnabled' || key === 'slashCommandsEnabled' || key === 'tslEnabled' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'auxNeutralWorkspace') {
+  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'mcpBridge' || key === 'btwEnabled' || key === 'slashCommandsEnabled' || key === 'tslEnabled' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'auxNeutralWorkspace' || key === 'builtInMediaPreviewOnly') {
     return typeof value === 'boolean' ? null : `${key} must be a boolean`
   }
   if (key === 'warmupWindows') {
@@ -132,7 +132,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
           'imageModel', 'imageEffort', 'imageTimeoutMs', 'imageMaxBytes', 'imageOutputDir', 'imageRetries',
           'btwModel', 'btwEffort',
           'showHeaderBadge', 'showTranslateAction', 'poolWideCatalog', 'selectedModels',
-          'quotaPollIntervalMs', 'promptMaxBytes',
+          'quotaPollIntervalMs', 'promptMaxBytes', 'builtInMediaPreviewOnly',
         ]
         if (!allowed.includes(key)) {
           sendJson(res as RawRes, 400, { error: 'key not settable' })

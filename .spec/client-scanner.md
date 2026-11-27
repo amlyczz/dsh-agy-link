@@ -4,7 +4,7 @@
 
 ## 1. 扫描触发与单趟预算
 
-`scanAndEnhanceImages()` 等会话增强器由 `MutationObserver` + 100ms debounce 驱动，并统一受 `scroll-guard`（`isInteractionLocked()`）约束：
+`scanAndEnhanceImages()` 等会话增强器由 `MutationObserver` + 100ms debounce 驱动，并统一受 `scroll-guard`（`isInteractionLocked()`）约束；`installImageEnhancer()` 的 `MutationObserver` 先通过 `hasRelevantMutation()`（`src/client/images/mutation-filter.ts`）过滤自身注入的 `.agy-*` 节点、受跟踪容器外的纯移除及非 markdown 文本跳变（如计时器/状态计数），再决定是否调度扫描：
 
 | 子任务 | 幂等标记 | 快速路径 |
 | --- | --- | --- |
@@ -13,6 +13,7 @@
 | media origin 改写 | `data-agy-origin-rewritten` | 仅查询未改写的 `img[src*="/plugins/agy-link/media"]` |
 | Generative UI 微件（`<agent-embed>`） | `data-agy-embed-scanned` | `embed.ts` 将 `/plugins/agy-link/embed` 链接升级为 `<iframe sandbox="allow-scripts">` 卡片，按 `id` + `ev.source === frame.contentWindow` 校验证 `agy-embed-resize` 自动高度（80–800px）并同步 DSH 深浅主题变量 |
 | 扩展工具镜像卡片 | — | `extended-model.ts` / `extended-cards.ts` / `checklist-card.ts` 为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理生命周期、`browser`/`chrome-devtools`、`update_steps`（步骤检查清单卡片，默认展开呈现 `N/M steps` 进度与逐项状态图标，并在宿主侧同步发射 DSH 原生 `todo/write` 会话事件以点亮 `TodoPanel`）与 `update_focus`（当前焦点卡片）提供结构化标签、图标与输出卡片；`invoke_subagent(image-generator)` 路由至图片卡片 |
+| 原生右侧栏媒体预览与远程安全模式 | `documentPreviews` + `sidebar.right.tab.document` | `sidebar-preview.ts` 向 DSH 原生右侧栏注册视频（`.mp4/.m4v/.webm/.mov/.mkv/.ogv/.avi/.flv/.wmv`）、音频与扩展图片（`.tif/.tiff/.heic/.heif`）的 `loading: 'renderer'` 预览器；服务端 `/media` 委托 DSH `connection.requestRejection` 鉴权、支持完整 RFC 9110 `Range`/`HEAD`/`ETag`/`?download=1` 并按需通过 FFmpeg 将不兼容像素格式/封装透明转码缓存为 `H.264 + yuv420p + faststart`；远程浏览器（如 Cloudflare Tunnel）与 `builtInMediaPreviewOnly` 模式下自动隐藏/拒绝宿主机 `/open` 弹窗 |
 
 ## 2. 流式跳过可恢复不变式（PR #110 / v0.6.25）
 
@@ -35,3 +36,4 @@
 - `test/client/client-dom.test.ts`：单趟幂等标记与流式文本增长后本地图片卡片恢复。
 - `test/client/modal-overlay-isolation.test.ts` / `test/client/scroll-guard.test.ts`：禁用 `backdrop-filter`/`contain`/`will-change`、滚动锁、非 passive 滚轮拦截、扫描器门控与卸载清理。
 - `test/client/issue153-client-locale.test.ts` / `test/client/extended-ui-and-embed.test.ts`：所有新增 DOM 增强器（`embed.ts`、`audio.ts`、`extended-cards.ts`、`image-card.ts`）通过 `i18n-bridge.ts` 遵循宿主语言且无硬编码中文，且 `installAgentEmbedRenderer()` 在缺省 `window.addEventListener` 环境下安全无操作退化。
+- `test/transport/media-transcode.test.ts` / `test/client/sidebar-media-preview.test.ts`：Cloudflare 同源鉴权与远程 `/open` 拒止、RFC 9110 `Range`/`HEAD`/`304`/`?download=1`、MP4 faststart 与 FFmpeg 兼容转码缓存、DSH 右侧栏媒体预览注册与 `?compat=1` 自动重试。

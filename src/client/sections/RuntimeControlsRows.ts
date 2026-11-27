@@ -263,6 +263,17 @@ export function RuntimeControlsSection(props: RuntimeControlsProps): unknown {
 			loadingAction,
 			setCfg,
 		}),
+		// Keep media previews inside DSH (sidebar / lightbox) and hide host OS
+		// app launches. Remote Cloudflare/LAN browsers enforce this automatically.
+		boolRow({
+			t,
+			title: t('config.builtInMediaPreviewOnly'),
+			desc: t('config.builtInMediaPreviewOnlyDesc'),
+			cfgKey: 'builtInMediaPreviewOnly',
+			value: status.builtInMediaPreviewOnly === true,
+			loadingAction,
+			setCfg,
+		}),
 		renderAgentRow({ ...props, draft: agentDraft, setDraft: setAgentDraft }),
 	);
 }

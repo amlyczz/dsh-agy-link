@@ -589,6 +589,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     get lastRun() { return lastRun },
     get lastParser() { return lastParser },
     mediaDir, bridgeState, bridgeSteps, webServerPort, activeCwds,
+    connection: () => safeCtxGet<{ requestRejection(req: { readonly headers: Record<string, string | string[] | undefined> }): 401 | 403 | undefined }>(ctx, 'connection'),
     hostDir: '',
     setMirrorToolCheck: (fn: (sessionId?: string) => boolean): void => { mirrorToolCheck = fn },
     onConfigWritten: (_key: string, _value: unknown): void => undefined,

@@ -8,6 +8,7 @@ import type { WarmupStatusSnapshot } from '../common/warmup-types.ts';
 import { base, win, timedSignal, STATUS_TIMEOUT_MS } from './api.ts';
 import { useEffect, useState } from './react.ts';
 import { isScrollActive, onScrollIdle } from './scroll-guard.ts';
+import { setBuiltInMediaPreviewOnly } from './images/media.ts';
 
 /** One model row, shared by the picker, the visibility chips and the dropdowns. */
 export interface CatalogModelView {
@@ -104,6 +105,7 @@ export interface StatusPayload {
 	translateEffort?: string;
 	showHeaderBadge?: boolean;
 	showTranslateAction?: boolean;
+	builtInMediaPreviewOnly?: boolean;
 	poolWideCatalog?: boolean;
 	imageModel?: string;
 	imageEffort?: string;
@@ -145,6 +147,7 @@ function loadInitialStatusCache(): StatusPayload | null {
 
 // Module-level cache for instant remount rendering (preloaded from localStorage for zero-flicker startup)
 let statusCache: StatusPayload | null = loadInitialStatusCache();
+setBuiltInMediaPreviewOnly(statusCache?.builtInMediaPreviewOnly === true);
 let lastEtag: string | null = null;
 let inFlightStatus: Promise<{ kind: 'ok'; data: StatusPayload } | { kind: 'not-modified' } | { kind: 'error' }> | null = null;
 
@@ -244,6 +247,7 @@ function bindSettleFlush(): void {
 /** Single writer for the shared status snapshot (poll loop, refresh, tests). */
 function publishStatus(st: StatusPayload): void {
 	statusCache = st;
+	setBuiltInMediaPreviewOnly(st.builtInMediaPreviewOnly === true);
 	try {
 		win.localStorage?.setItem(STATUS_CACHE_KEY, JSON.stringify(st));
 	} catch {
@@ -255,6 +259,11 @@ function publishStatus(st: StatusPayload): void {
 		return;
 	}
 	notifyListeners(st);
+}
+
+/** Synchronous read of the latest shared status snapshot for DOM enhancers. */
+export function getStatusSnapshot(): StatusPayload | null {
+	return statusCache;
 }
 
 /** Publish an externally obtained snapshot to every mounted consumer. */

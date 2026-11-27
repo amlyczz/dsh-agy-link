@@ -1,7 +1,13 @@
 // Inline audio player enhancer for local audio file links rendered in DSH chat.
 import { translateOr } from '../i18n-bridge.ts';
-import { buildMediaUrl, openInSystem } from './media.ts';
-import { showToast } from './lightbox.ts';
+import {
+  buildMediaUrl,
+  openInSystem,
+  probeMediaError,
+  shouldUseBuiltInMediaOnly,
+  triggerBrowserDownload,
+} from './media.ts';
+import { canOpenLightboxSidebar, openLightboxSidebar, showToast } from './lightbox.ts';
 
 export function enhanceAudioLink(link: HTMLAnchorElement, rawHref: string, resolvedHref: string): void {
   link.dataset.agyAudioEnhanced = 'true';
@@ -47,23 +53,56 @@ export function enhanceAudioLink(link: HTMLAnchorElement, rawHref: string, resol
   title.textContent = fileName;
   title.title = pathToUse;
 
-  const revealBtn = document.createElement('button');
-  revealBtn.type = 'button';
-  revealBtn.className = 'agy-audio-card-open';
-  revealBtn.textContent = translateOr('audio.openBtn', 'Open');
-  revealBtn.onclick = (e) => {
-    e.stopPropagation();
-    openInSystem(pathToUse, true).then((res) => {
-      if (!res.ok) {
-        showToast(translateOr('file.openFailed', 'Could not open: {error}', {
-          error: res.error || translateOr('file.notFound', 'file not found'),
-        }));
+  const actions = document.createElement('div');
+  actions.className = 'agy-audio-card-actions';
+
+  if (canOpenLightboxSidebar()) {
+    const sidebarBtn = document.createElement('button');
+    sidebarBtn.type = 'button';
+    sidebarBtn.className = 'agy-audio-card-btn';
+    sidebarBtn.dataset.agyAction = 'sidebar';
+    sidebarBtn.textContent = translateOr('audio.sidebarBtn', 'Sidebar');
+    sidebarBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (openLightboxSidebar(pathToUse)) {
+        showToast(translateOr('file.openedInSidebar', 'Opened in the sidebar: {name}', { name: fileName }));
       }
-    });
+    };
+    actions.appendChild(sidebarBtn);
+  }
+
+  const downloadBtn = document.createElement('button');
+  downloadBtn.type = 'button';
+  downloadBtn.className = 'agy-audio-card-btn';
+  downloadBtn.dataset.agyAction = 'download';
+  downloadBtn.textContent = translateOr('audio.downloadBtn', 'Download');
+  downloadBtn.onclick = (e) => {
+    e.stopPropagation();
+    triggerBrowserDownload(pathToUse, fileName);
   };
+  actions.appendChild(downloadBtn);
+
+  if (!shouldUseBuiltInMediaOnly()) {
+    const revealBtn = document.createElement('button');
+    revealBtn.type = 'button';
+    revealBtn.className = 'agy-audio-card-open';
+    revealBtn.dataset.agyAction = 'open';
+    revealBtn.textContent = translateOr('audio.openBtn', 'Open');
+    revealBtn.onclick = (e) => {
+      e.stopPropagation();
+      openInSystem(pathToUse, true).then((res) => {
+        if (!res.ok) {
+          showToast(translateOr('file.openFailed', 'Could not open: {error}', {
+            error: res.error || translateOr('file.notFound', 'file not found'),
+          }));
+        }
+      });
+    };
+    actions.appendChild(revealBtn);
+  }
 
   header.appendChild(title);
-  header.appendChild(revealBtn);
+  header.appendChild(actions);
 
   const audio = document.createElement('audio');
   audio.className = 'agy-audio-player';
@@ -71,7 +110,23 @@ export function enhanceAudioLink(link: HTMLAnchorElement, rawHref: string, resol
   audio.preload = 'metadata';
   audio.src = mediaUrl;
 
+  const errEl = document.createElement('div');
+  errEl.className = 'agy-audio-card-err';
+  errEl.style.display = 'none';
+
+  audio.onerror = () => {
+    errEl.style.display = 'block';
+    errEl.textContent = translateOr('lightbox.unavailableTitle', 'Preview unavailable');
+    void probeMediaError(mediaUrl).then((reason) => {
+      if (card.isConnected) errEl.textContent = reason;
+    });
+  };
+  audio.onloadedmetadata = () => {
+    errEl.style.display = 'none';
+  };
+
   card.appendChild(header);
   card.appendChild(audio);
+  card.appendChild(errEl);
   link.insertAdjacentElement('afterend', card);
 }

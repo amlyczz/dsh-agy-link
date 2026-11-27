@@ -23,9 +23,17 @@ function selectableModels(
   return sanitizeCatalogEntries(mergeCatalogWithQuotaModels(sanitizeCatalogEntries(supportedModels).entries, quota)).entries
 }
 
-/** The command opt-out switches the settings panel renders (`slashCommandsEnabled`, `tslEnabled`). */
-function commandOptOuts(cfg: ReturnType<HostServices['getConfig']>): { slashCommandsEnabled: boolean; tslEnabled: boolean } {
-  return { slashCommandsEnabled: cfg.slashCommandsEnabled, tslEnabled: cfg.tslEnabled }
+/** UI display & command opt-out flags mirrored from config into the status payload. */
+function uiAndCommandFlags(cfg: ReturnType<HostServices['getConfig']>) {
+  return {
+    showHeaderBadge: cfg.showHeaderBadge,
+    showTranslateAction: cfg.showTranslateAction,
+    builtInMediaPreviewOnly: cfg.builtInMediaPreviewOnly,
+    poolWideCatalog: cfg.poolWideCatalog,
+    btwEnabled: cfg.btwEnabled,
+    slashCommandsEnabled: cfg.slashCommandsEnabled,
+    tslEnabled: cfg.tslEnabled,
+  }
 }
 
 function handleStatus(services: HostServices, req: unknown, res: unknown): void {
@@ -130,14 +138,10 @@ function handleStatus(services: HostServices, req: unknown, res: unknown): void 
           translateModel: cfg.translateModel,
           translateEffort: cfg.translateEffort,
           translateTargetLanguage: cfg.translateTargetLanguage,
-          showHeaderBadge: cfg.showHeaderBadge,
-          showTranslateAction: cfg.showTranslateAction,
-          poolWideCatalog: cfg.poolWideCatalog,
+          ...uiAndCommandFlags(cfg),
           imageModel: cfg.imageModel,
           imageEffort: cfg.imageEffort,
           imageOutputDir: cfg.imageOutputDir,
-          btwEnabled: cfg.btwEnabled,
-          ...commandOptOuts(cfg),
           btwModel: cfg.btwModel,
           btwEffort: cfg.btwEffort,
           translateState: { pending: translation.pendingFor(), stats: translation.stats() },

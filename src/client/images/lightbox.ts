@@ -1,6 +1,14 @@
-// Fullscreen image & media lightbox (modern glassmorphism, video player, zoom, pan, copy image, copy path, reveal in finder).
+// Fullscreen image & media lightbox (modern glassmorphism, video player, zoom, pan, copy image, copy path, download, sidebar, reveal).
 import { injectStyles } from './styles.ts';
-import { isVideoFile, openInSystem } from './media.ts';
+import {
+  buildMediaUrl,
+  isRemoteUrl,
+  isVideoFile,
+  openInSystem,
+  probeMediaError,
+  shouldUseBuiltInMediaOnly,
+  triggerBrowserDownload,
+} from './media.ts';
 import { copyImageToClipboard } from './clipboard.ts';
 import { translateOr } from '../i18n-bridge.ts';
 
@@ -13,6 +21,27 @@ let lightboxTranslateY = 0;
 let isDraggingLightbox = false;
 let dragStartX = 0;
 let dragStartY = 0;
+
+// Hook wired by scanner.ts so lightbox/audio can open files in DSH's right
+// sidebar without creating a circular import between lightbox.ts and scanner.ts.
+let sidebarOpener: ((rawPath: string) => boolean) | null = null;
+let sidebarAvailability: (() => boolean) | null = null;
+
+export function setLightboxSidebarOpener(
+  openFn: ((rawPath: string) => boolean) | null,
+  canOpenFn?: (() => boolean) | null,
+): void {
+  sidebarOpener = openFn;
+  sidebarAvailability = canOpenFn ?? null;
+}
+
+export function canOpenLightboxSidebar(): boolean {
+  return sidebarOpener !== null && (sidebarAvailability ? sidebarAvailability() : true);
+}
+
+export function openLightboxSidebar(rawPath: string): boolean {
+  return sidebarOpener ? sidebarOpener(rawPath) : false;
+}
 
 export function showToast(message: string, duration = 2200): void {
   if (typeof document === 'undefined') return;
@@ -91,29 +120,63 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
   }
 
   if (rawPath) {
-    const btnOpen = document.createElement('button');
-    btnOpen.className = 'agy-lightbox-btn';
-    btnOpen.title = translateOr('lightbox.openWithApp', 'Open with the default app');
-    btnOpen.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.openChip', 'Open') + '</span>';
-    btnOpen.onclick = (e) => {
-      e.stopPropagation();
-      openInSystem(rawPath, false).then((res) => {
-        showToast(res.ok ? translateOr('lightbox.openedInApp', 'Opened in the system app') : translateOr('lightbox.openFailed', 'Could not open: {error}', { error: res.error || translateOr('lightbox.unknownError', 'unknown error') }));
-      });
-    };
-    actions.appendChild(btnOpen);
+    const builtInOnly = shouldUseBuiltInMediaOnly();
 
-    const btnReveal = document.createElement('button');
-    btnReveal.className = 'agy-lightbox-btn';
-    btnReveal.title = translateOr('lightbox.reveal', 'Reveal in the file manager');
-    btnReveal.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></span><span class="agy-btn-text">' + translateOr('lightbox.revealChip', 'Reveal') + '</span>';
-    btnReveal.onclick = (e) => {
+    if (canOpenLightboxSidebar()) {
+      const btnSidebar = document.createElement('button');
+      btnSidebar.className = 'agy-lightbox-btn';
+      btnSidebar.dataset.agyAction = 'sidebar';
+      btnSidebar.title = translateOr('lightbox.sidebarTitle', 'Open in the DSH right sidebar');
+      btnSidebar.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.sidebarChip', 'Sidebar') + '</span>';
+      btnSidebar.onclick = (e) => {
+        e.stopPropagation();
+        if (openLightboxSidebar(rawPath)) {
+          const fileName = rawPath.split(/[/\\]/).pop() || rawPath;
+          showToast(translateOr('file.openedInSidebar', 'Opened in the sidebar: {name}', { name: fileName }));
+          callbacks.onClose();
+        }
+      };
+      actions.appendChild(btnSidebar);
+    }
+
+    const btnDownload = document.createElement('button');
+    btnDownload.className = 'agy-lightbox-btn';
+    btnDownload.dataset.agyAction = 'download';
+    btnDownload.title = translateOr('lightbox.downloadTitle', 'Download original file to this device');
+    btnDownload.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.downloadChip', 'Download') + '</span>';
+    btnDownload.onclick = (e) => {
       e.stopPropagation();
-      openInSystem(rawPath, true).then((res) => {
-        showToast(res.ok ? translateOr('lightbox.revealed', 'Revealed in the file manager') : translateOr('lightbox.revealFailedDetail', 'Could not reveal: {error}', { error: res.error || translateOr('lightbox.unknownError', 'unknown error') }));
-      });
+      triggerBrowserDownload(rawPath);
     };
-    actions.appendChild(btnReveal);
+    actions.appendChild(btnDownload);
+
+    if (!builtInOnly) {
+      const btnOpen = document.createElement('button');
+      btnOpen.className = 'agy-lightbox-btn';
+      btnOpen.dataset.agyAction = 'open';
+      btnOpen.title = translateOr('lightbox.openWithApp', 'Open with the default app');
+      btnOpen.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span><span class="agy-btn-text">' + translateOr('lightbox.openChip', 'Open') + '</span>';
+      btnOpen.onclick = (e) => {
+        e.stopPropagation();
+        openInSystem(rawPath, false).then((res) => {
+          showToast(res.ok ? translateOr('lightbox.openedInApp', 'Opened in the system app') : translateOr('lightbox.openFailed', 'Could not open: {error}', { error: res.error || translateOr('lightbox.unknownError', 'unknown error') }));
+        });
+      };
+      actions.appendChild(btnOpen);
+
+      const btnReveal = document.createElement('button');
+      btnReveal.className = 'agy-lightbox-btn';
+      btnReveal.dataset.agyAction = 'reveal';
+      btnReveal.title = translateOr('lightbox.reveal', 'Reveal in the file manager');
+      btnReveal.innerHTML = '<span class="agy-lightbox-btn-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></span><span class="agy-btn-text">' + translateOr('lightbox.revealChip', 'Reveal') + '</span>';
+      btnReveal.onclick = (e) => {
+        e.stopPropagation();
+        openInSystem(rawPath, true).then((res) => {
+          showToast(res.ok ? translateOr('lightbox.revealed', 'Revealed in the file manager') : translateOr('lightbox.revealFailedDetail', 'Could not reveal: {error}', { error: res.error || translateOr('lightbox.unknownError', 'unknown error') }));
+        });
+      };
+      actions.appendChild(btnReveal);
+    }
 
     const btnCopyPath = document.createElement('button');
     btnCopyPath.className = 'agy-lightbox-btn';
@@ -148,7 +211,11 @@ function createActionButtons(rawPath: string | undefined, isVideo: boolean, call
   return { actions, flashCopyImageCopied };
 }
 
-function buildErrorCard(rawPath: string | undefined, src: string): HTMLElement {
+function buildErrorCard(
+  rawPath: string | undefined,
+  src: string,
+  onRetry: () => void,
+): { card: HTMLElement; setDetail: (detail: string) => void } {
   const errorCard = document.createElement('div');
   errorCard.className = 'agy-lightbox-error-card';
   errorCard.style.display = 'none';
@@ -174,23 +241,53 @@ function buildErrorCard(rawPath: string | undefined, src: string): HTMLElement {
   errorCard.appendChild(errorDesc);
   errorCard.appendChild(errorHint);
 
-  if (rawPath) {
-    const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:8px;margin-top:14px;';
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;justify-content:center;';
 
-    const btnOpen = document.createElement('button');
-    btnOpen.className = 'agy-lightbox-btn';
-    btnOpen.textContent = translateOr('lightbox.revealAction', 'Reveal in the file manager');
-    btnOpen.onclick = () => {
-      openInSystem(rawPath, true).then((r) => {
-        showToast(r.ok ? translateOr('lightbox.revealed', 'Revealed in the file manager') : translateOr('lightbox.revealFailed', 'Could not locate the file'));
-      });
+  const btnRetry = document.createElement('button');
+  btnRetry.className = 'agy-lightbox-btn';
+  btnRetry.dataset.agyAction = 'retry';
+  btnRetry.textContent = translateOr('lightbox.retryChip', 'Retry');
+  btnRetry.onclick = (e) => {
+    e.stopPropagation();
+    onRetry();
+  };
+  btnRow.appendChild(btnRetry);
+
+  if (rawPath) {
+    const btnDownload = document.createElement('button');
+    btnDownload.className = 'agy-lightbox-btn';
+    btnDownload.dataset.agyAction = 'download';
+    btnDownload.textContent = translateOr('lightbox.downloadChip', 'Download');
+    btnDownload.onclick = (e) => {
+      e.stopPropagation();
+      triggerBrowserDownload(rawPath);
     };
-    btnRow.appendChild(btnOpen);
-    errorCard.appendChild(btnRow);
+    btnRow.appendChild(btnDownload);
+
+    if (!shouldUseBuiltInMediaOnly()) {
+      const btnOpen = document.createElement('button');
+      btnOpen.className = 'agy-lightbox-btn';
+      btnOpen.dataset.agyAction = 'reveal';
+      btnOpen.textContent = translateOr('lightbox.revealAction', 'Reveal in the file manager');
+      btnOpen.onclick = (e) => {
+        e.stopPropagation();
+        openInSystem(rawPath, true).then((r) => {
+          showToast(r.ok ? translateOr('lightbox.revealed', 'Revealed in the file manager') : translateOr('lightbox.revealFailed', 'Could not locate the file'));
+        });
+      };
+      btnRow.appendChild(btnOpen);
+    }
   }
 
-  return errorCard;
+  errorCard.appendChild(btnRow);
+
+  return {
+    card: errorCard,
+    setDetail: (detail: string) => {
+      errorHint.textContent = detail;
+    },
+  };
 }
 
 /**
@@ -295,9 +392,16 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
 
   const spinner = document.createElement('div');
   spinner.className = 'agy-lightbox-spinner';
-  spinner.innerHTML = '<div class="agy-lightbox-spinner-ring"></div><div class="agy-lightbox-spinner-text">' + translateOr('lightbox.loading', 'Loading media…') + '</div>';
+  const spinnerRing = document.createElement('div');
+  spinnerRing.className = 'agy-lightbox-spinner-ring';
+  const spinnerText = document.createElement('div');
+  spinnerText.className = 'agy-lightbox-spinner-text';
+  spinnerText.textContent = translateOr('lightbox.loading', 'Loading media…');
+  spinner.appendChild(spinnerRing);
+  spinner.appendChild(spinnerText);
 
-  const errorCard = buildErrorCard(rawPath, src);
+  let retryLoad: () => void = () => {};
+  const { card: errorCard, setDetail: setErrorDetail } = buildErrorCard(rawPath, src, () => retryLoad());
 
   if (isVideo) {
     const video = document.createElement('video');
@@ -308,15 +412,46 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
     video.loop = true;
     video.playsInline = true;
 
-    video.onerror = () => {
-      spinner.style.display = 'none';
-      video.style.display = 'none';
-      errorCard.style.display = 'flex';
-    };
-    video.onloadeddata = () => {
+    let triedCompat = false;
+    let currentSrc = src;
+
+    const showReady = (): void => {
       spinner.style.display = 'none';
       video.style.display = '';
       errorCard.style.display = 'none';
+    };
+
+    video.onerror = () => {
+      if (!triedCompat && rawPath && !isRemoteUrl(rawPath) && !currentSrc.includes('compat=1')) {
+        triedCompat = true;
+        currentSrc = buildMediaUrl(rawPath, { compat: true });
+        spinnerText.textContent = translateOr('lightbox.transcoding', 'Transcoding video for browser playback…');
+        spinner.style.display = 'flex';
+        errorCard.style.display = 'none';
+        video.style.display = '';
+        video.src = currentSrc;
+        try { video.load(); } catch { /* jsdom */ }
+        return;
+      }
+      spinner.style.display = 'none';
+      video.style.display = 'none';
+      errorCard.style.display = 'flex';
+      void probeMediaError(currentSrc).then((reason) => {
+        if (overlay.isConnected) setErrorDetail(reason);
+      });
+    };
+    video.onloadedmetadata = showReady;
+    video.onloadeddata = showReady;
+
+    retryLoad = () => {
+      triedCompat = false;
+      currentSrc = src;
+      spinnerText.textContent = translateOr('lightbox.loading', 'Loading media…');
+      spinner.style.display = 'flex';
+      errorCard.style.display = 'none';
+      video.style.display = '';
+      video.src = currentSrc;
+      try { video.load(); } catch { /* jsdom */ }
     };
 
     imgWrap.appendChild(spinner);
@@ -333,11 +468,22 @@ export function openLightbox(src: string, title = 'Image Preview', rawPath?: str
       spinner.style.display = 'none';
       img.style.display = 'none';
       errorCard.style.display = 'flex';
+      void probeMediaError(src).then((reason) => {
+        if (overlay.isConnected) setErrorDetail(reason);
+      });
     };
     img.onload = () => {
       spinner.style.display = 'none';
       img.style.display = '';
       errorCard.style.display = 'none';
+    };
+
+    retryLoad = () => {
+      spinnerText.textContent = translateOr('lightbox.loading', 'Loading media…');
+      spinner.style.display = 'flex';
+      errorCard.style.display = 'none';
+      img.style.display = '';
+      img.src = `${src}${src.includes('?') ? '&' : '?'}_r=${Date.now()}`;
     };
 
     imgWrap.appendChild(spinner);

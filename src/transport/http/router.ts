@@ -2,7 +2,7 @@
 // the host webServer and returns one disposer that tears them all down.
 // Route bodies live in ./routes/*; this module only wires them up.
 import type { HostServices } from '../../host/services.ts'
-import { isCrossOriginBlocked, type HttpRequestLike } from '../../host/media-route.ts'
+import { authorizePluginRequest, type HttpRequestLike } from '../../host/media-route.ts'
 import { methodOf, sendJson, type RawRes, type RouteRegistrar, type WebServerLike } from './respond.ts'
 import { register as registerStatus } from './routes/status.ts'
 import { register as registerSessionView } from './routes/session-view.ts'
@@ -28,9 +28,15 @@ export function registerRoutes(webServer: WebServerLike, services: HostServices)
           ...route,
           handler: (req: unknown, res: unknown) => {
             const m = methodOf(req)
-            if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS' && isCrossOriginBlocked(req as HttpRequestLike)) {
-              sendJson(res as RawRes, 403, { ok: false, error: 'cross-origin request denied' })
-              return
+            if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
+              const rejection = authorizePluginRequest(req as HttpRequestLike, services.connection?.())
+              if (rejection !== undefined) {
+                sendJson(res as RawRes, rejection, {
+                  ok: false,
+                  error: rejection === 401 ? 'authentication required' : 'cross-origin request denied',
+                })
+                return
+              }
             }
             route.handler(req, res)
           },

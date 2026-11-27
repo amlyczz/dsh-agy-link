@@ -237,6 +237,7 @@ export function resolveConfig(
     backgroundWakeup: asBool(get('backgroundWakeup')) ?? base.backgroundWakeup,
     backgroundWakeupTtlMinutes: asNum(get('backgroundWakeupTtlMinutes')) ?? base.backgroundWakeupTtlMinutes,
     backgroundWakeupMaxPerSession: asNum(get('backgroundWakeupMaxPerSession')) ?? base.backgroundWakeupMaxPerSession,
+    builtInMediaPreviewOnly: asBool(get('builtInMediaPreviewOnly')) ?? base.builtInMediaPreviewOnly,
   }
   // Env wins last (spec ADR-13).
   if (env.DSH_AGY_ENABLED !== undefined) cfg.enabled = asBool(env.DSH_AGY_ENABLED) ?? cfg.enabled
@@ -452,6 +453,10 @@ export function resolveConfig(
   if (env.DSH_AGY_BACKGROUND_WAKEUP_MAX_PER_SESSION) {
     const max = asNum(env.DSH_AGY_BACKGROUND_WAKEUP_MAX_PER_SESSION)
     if (max !== undefined && max > 0) cfg.backgroundWakeupMaxPerSession = Math.min(100, Math.max(1, Math.floor(max)))
+  }
+  if (env.DSH_AGY_BUILTIN_MEDIA_ONLY !== undefined) {
+    const bm = asBool(env.DSH_AGY_BUILTIN_MEDIA_ONLY)
+    if (bm !== undefined) cfg.builtInMediaPreviewOnly = bm
   }
   cfg.backgroundWakeupTtlMinutes = Math.min(240, Math.max(1, Math.floor(cfg.backgroundWakeupTtlMinutes)))
   cfg.backgroundWakeupMaxPerSession = Math.min(100, Math.max(1, Math.floor(cfg.backgroundWakeupMaxPerSession)))

@@ -344,6 +344,12 @@ export interface PluginConfig {
   backgroundWakeupTtlMinutes: number
   /** Max automatic background wakeups per session between real human turns (default 12). */
   backgroundWakeupMaxPerSession: number
+  /**
+   * Always preview local media inside DSH (right sidebar / lightbox) and hide
+   * host OS "Open"/"Reveal" actions even on desktop/localhost. Remote browsers
+   * (e.g. Cloudflare Tunnel) automatically enforce this regardless of the flag.
+   */
+  builtInMediaPreviewOnly: boolean
 }
 
 // The offline/signed-out lineup lives in `common/model-lineup.ts` — the single
@@ -496,5 +502,6 @@ export function defaultConfig(): PluginConfig {
     backgroundWakeup: false,
     backgroundWakeupTtlMinutes: 30,
     backgroundWakeupMaxPerSession: 12,
+    builtInMediaPreviewOnly: false,
   }
 }

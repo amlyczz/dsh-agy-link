@@ -1,9 +1,10 @@
 // DOM scanner that turns rendered image/media alt-text and file links into previews and native file handlers.
 import { isInteractionLocked, onScrollSettle } from '../scroll-guard.ts';
 import { translateOr } from '../i18n-bridge.ts';
-import { buildMediaUrl, getOrigin, isImageFile, isVideoFile, isAudioFile, isLocalFilePath, openInSystem } from './media.ts';
+import { buildMediaUrl, getOrigin, isImageFile, isVideoFile, isAudioFile, isLocalFilePath, openInSystem, shouldUseBuiltInMediaOnly } from './media.ts';
 import { enhanceAudioLink } from './audio.ts';
-import { openLightbox, showToast } from './lightbox.ts';
+import { openLightbox, setLightboxSidebarOpener, showToast } from './lightbox.ts';
+import { hasRelevantMutation } from './mutation-filter.ts';
 import { injectStyles } from './styles.ts';
 
 /**
@@ -16,6 +17,11 @@ let clientContext: unknown = null
 
 export function setClientContext(ctx: unknown): void {
   clientContext = ctx
+  if (ctx === null || ctx === undefined) {
+    setLightboxSidebarOpener(null, null)
+  } else {
+    setLightboxSidebarOpener(openInRightSidebar, () => clientContext !== null && canPreviewFiles(clientContext))
+  }
 }
 
 /** The tab type that previews a session file in the right Sidebar (documentpreview's fallback). */
@@ -433,6 +439,23 @@ function enhanceVideoLink(link: HTMLAnchorElement, rawHref: string, resolvedHref
   }
 }
 
+function openFileOrFallback(pathToUse: string): void {
+  const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
+  if (openInRightSidebar(pathToUse)) {
+    showToast(translateOr('file.openedInSidebar', 'Opened in the sidebar: {name}', { name: fileName }));
+    return;
+  }
+  if (shouldUseBuiltInMediaOnly()) {
+    showToast(translateOr('file.remoteOpenBlocked', 'Host OS app launch is disabled in remote / built-in preview mode'));
+    return;
+  }
+  openInSystem(pathToUse, false).then((res) => {
+    showToast(res.ok
+      ? translateOr('file.openedInSystem', 'Opened in the system app: {name}', { name: fileName })
+      : translateOr('file.openFailed', 'Could not open: {error}', { error: res.error || translateOr('file.notFound', 'file not found') }));
+  });
+}
+
 function enhanceFileLink(link: HTMLAnchorElement, rawHref: string, resolvedHref: string): void {
   link.dataset.agyFileEnhanced = 'true';
   const pathToUse = rawHref.startsWith('file://') ? rawHref : (resolvedHref.startsWith('file://') ? resolvedHref : (rawHref || resolvedHref));
@@ -443,16 +466,7 @@ function enhanceFileLink(link: HTMLAnchorElement, rawHref: string, resolvedHref:
     if ((e.target as HTMLElement)?.closest?.('.agy-image-link-chip')) return;
     e.preventDefault();
     e.stopPropagation();
-    const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
-    if (openInRightSidebar(pathToUse)) {
-      showToast(translateOr('file.openedInSidebar', 'Opened in the sidebar: {name}', { name: fileName }));
-      return;
-    }
-    openInSystem(pathToUse, false).then((res) => {
-      showToast(res.ok
-        ? translateOr('file.openedInSystem', 'Opened in the system app: {name}', { name: fileName })
-        : translateOr('file.openFailed', 'Could not open: {error}', { error: res.error || translateOr('file.notFound', 'file not found') }));
-    });
+    openFileOrFallback(pathToUse);
   });
 }
 
@@ -525,16 +539,7 @@ function handleGlobalLinkClick(e: MouseEvent): void {
 
     e.preventDefault();
     e.stopPropagation();
-    const fileName = pathToUse.split(/[/\\]/).pop() || pathToUse;
-    if (openInRightSidebar(pathToUse)) {
-      showToast(translateOr('file.openedInSidebar', 'Opened in the sidebar: {name}', { name: fileName }));
-      return;
-    }
-    openInSystem(pathToUse, false).then((res) => {
-      showToast(res.ok
-        ? translateOr('file.openedInSystem', 'Opened in the system app: {name}', { name: fileName })
-        : translateOr('file.openFailed', 'Could not open: {error}', { error: res.error || translateOr('file.notFound', 'file not found') }));
-    });
+    openFileOrFallback(pathToUse);
   }
 }
 
@@ -544,8 +549,8 @@ export function installImageEnhancer(ctx?: any): () => void {
   imageEnhancerDispose?.();
   injectStyles();
 
-  const observer = new MutationObserver(() => {
-    scheduleImageScan();
+  const observer = new MutationObserver((mutations) => {
+    if (hasRelevantMutation(mutations)) scheduleImageScan();
   });
 
   unbindImageSettle = onScrollSettle(() => {

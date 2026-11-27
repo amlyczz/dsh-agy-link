@@ -11,6 +11,7 @@ import { installAgyToolView } from './toolview.ts';
 import { installMermaidRendering } from './mermaid.ts';
 import { installAutoExpandReasoning } from './reasoning.ts';
 import { installImageEnhancer, setClientContext } from './images.ts';
+import { installSidebarMediaPreviews } from './images/sidebar-preview.ts';
 import { installAgentEmbedRenderer } from './embed.ts';
 import { installDecisionChips } from './decisions.ts';
 import { installTranslationUi } from './translate.ts';
@@ -264,6 +265,9 @@ export function apply(ctx: ClientContext): void {
 			return () => {};
 		}
 	});
+
+	// Native DSH right-sidebar media previewers (video, audio, TIFF/HEIC).
+	ctx.effect(() => installSidebarMediaPreviews(ctx as never), 'agy-link: sidebar media previews');
 
 	// Custom Antigravity brand icon inside Settings dialog nav list
 	ctx.effect(() => installSettingsNavIcon(ctx, () => locale.bind(NS)('section.label')));

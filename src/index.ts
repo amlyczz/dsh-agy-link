@@ -24,6 +24,8 @@ import type { ToolExecution, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { MIN_AGY_VERSION, compareVersions, isolatedHomeEnv } from './host/runner.ts'
 import { agyNotInstalledMessage } from './provider/call-context.ts'
 import { sweepDir } from './host/media.ts'
+import { sweepMediaCache } from './host/media-transcode.ts'
+import { stateDir } from './common/config.ts'
 import { agyMcpConfigPath, registerBridgeMcpConfig, startMcpBridge, teardownBridgeState, type ToolsServiceLike } from './host/mcp-bridge.ts'
 import { observeBridgeAssemblies } from './host/bridge-steps.ts'
 import type { GoalServiceLike } from './host/commands/shared.ts'
@@ -59,7 +61,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
     accounts: () => services.pool.getAccounts(),
     sweepStaging: () => services.pool.sweepStaleStaging(),
     sweepLogs: () => services.pool.sweepOldLogs(getConfig().logRetentionDays),
-    ...(getConfig().syncAccountCustomizations ? { syncEcosystem: () => services.ecosystem?.syncAll() } : {}),
+    ...(getConfig().syncAccountCustomizations ? { syncEcosystem: () => services.ecosystem?.syncAllAsync() } : {}),
     log,
     reapOrphans: getConfig().reapOrphanMcp,
   })
@@ -428,6 +430,7 @@ export function apply(ctx: Context, entryConfig: Record<string, unknown> = {}): 
   ctx.effect(() => {
     const timer = setInterval(() => {
       void sweepDir(mediaDir(), getConfig().mediaTtlMs).catch(() => undefined)
+      void sweepMediaCache(join(stateDir(), 'media-cache')).catch(() => undefined)
     }, Math.max(60_000, Math.min(getConfig().mediaTtlMs, 3_600_000)))
     timer.unref?.()
     return () => clearInterval(timer)

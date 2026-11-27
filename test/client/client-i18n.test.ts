@@ -79,8 +79,9 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
   // + plugins.row.config + agy_tool + run_code toolviews
   // + conversation.chat.node(agy-translation) + conversation.chat.assistant-actions
   // + conversation.chat.node(agy-acp-report) + conversation.chat.node(agy-acp-notice)
-  // conversation.input.dock(agy-btw) + conversation.chat.commandview(atw) + 9 a-prefix direct commandviews
-  assert.equal(registeredSlots.length, 21)
+  // + conversation.input.dock(agy-btw) + conversation.chat.commandview(atw) + 9 a-prefix direct commandviews
+  // + 3 sidebar.right.tab.document media previewers (video, audio, image-compat)
+  assert.equal(registeredSlots.length, 24)
   assert.equal(registeredSlots[0]!.options.locale, 'agy-link')
   assert.equal(registeredSlots[1]!.options.id, 'agy-link')
   assert.equal(registeredSlots[2]!.options.key, 'dsh-agy-link')
@@ -100,6 +101,14 @@ test('native-contract locale lifecycle registers, publishes switches, falls back
   assert.equal(registeredSlots[10]!.options.id, 'agy-btw')
   assert.equal(registeredSlots[11]!.options.name, 'conversation.chat.commandview')
   assert.equal(registeredSlots[11]!.options.key, 'atw')
+  assert.deepEqual(
+    registeredSlots.slice(-3).map((s) => [s.options.name, s.options.key]),
+    [
+      ['sidebar.right.tab.document', 'dsh-agy-link/video'],
+      ['sidebar.right.tab.document', 'dsh-agy-link/audio'],
+      ['sidebar.right.tab.document', 'dsh-agy-link/image-compat'],
+    ],
+  )
   const t = locale.bind('agy-link')
   locale.setLocale('pt-BR'); assert.equal(t('account.add'), 'Adicionar conta Google')
   locale.setLocale('es'); assert.equal(t('account.add'), 'Añadir cuenta de Google')
