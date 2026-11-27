@@ -288,7 +288,9 @@ export class PoolAuthFlow {
             const docStr = buildAgyCredentialDoc(tokens)
             this.writeSlot(docStr)
             writePrimaryCredential({ raw: docStr, email, savedAt: Date.now() }, this.pool.dir)
-            syncPrimaryDiskToken(docStr, { log: this.log })
+            // Explicit user action (refresh-token import): the file-based mirror
+            // follows the new primary unconditionally, like the slot write above.
+            syncPrimaryDiskToken(docStr, { baseDir: this.pool.dir, respectExternalSignIn: false, log: this.log })
           } catch {
             // best effort
           }

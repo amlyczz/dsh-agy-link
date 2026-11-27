@@ -78,6 +78,7 @@
 
 - **`SSH_CONNECTION` 隔离（`agy >= 1.5`）**：`isolatedHomeEnv()` 为所有带独立 `dir` 的隔离池账号注入 `SSH_CONNECTION="127.0.0.1 0 127.0.0.1 0"`，`agy 1.5+` 将其识别为远程 SSH 会话并直接读写各自 `dir/.gemini/antigravity-cli/antigravity-oauth-token`，三端（含 Windows）绕开全局共享钥匙串/凭据管理器。Windows 下当 `supportsSshIsolation(agyVersion)` 成立时，隔离辅账号免除全局凭据槽排队与 ACP 切号驱逐，且 `QuotaService.readCliUsageFamilies` 可直接为隔离账号（含免费账号，issue #143）执行官方 `agy -p /usage`。
 - **外部独立登录保护（issue #145，`respectExternalSignIn`）**：`src/domain/credentials/external-guard.ts` 追踪插件上次写入 Windows 凭据槽的指纹（`.last-installed-slot.json`）；当配置 `respectExternalSignIn: true` 且检测到用户在独立 `agy` 终端中重新登录了未识别的外部账号时，租约获取前拒绝覆盖并在租约释放后保留外部登录。锚点：`test/integration/slice3-ssh-tier-143-145-152.test.ts`。
+- **保护范围覆盖文件态磁盘令牌（issue #232）**：「外部登录」的判据是同一个纯谓词 `isExternalCredentialGrant()`（`src/domain/credentials/docs.ts`）：授权既不等于保存的主账号授权、也不等于插件上次安装的指纹即为外部；无法证明（无 `refresh_token`）不算外部。Windows + WSL UNC `cwd` 下 `agy` 改读的 `<HOME>/.gemini/antigravity-cli/antigravity-oauth-token` 与凭据槽适用同一承诺：`syncPrimaryDiskTokenFile()` / `persistRefreshedToken()` 的 win32 主账号分支在 `respectExternalSignIn: true` 时保留磁盘上完整的外部登录（即便它更旧），而插件自身授权（含已吊销的旧授权、上次安装的授权）始终可覆写，WSL 自愈不受影响；显式用户动作（`importRefreshToken`）与槽位写入一样不受该设置约束。锚点：`test/host/external-disk-sign-in.test.ts`。
 
 ## 隔离账号不得回落到机器级 keyring（2026-11-23）
 

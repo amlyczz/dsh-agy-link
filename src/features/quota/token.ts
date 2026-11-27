@@ -13,6 +13,7 @@ import { normalizeStoredToken, type StoredToken } from '../../domain/quota/ident
 import { formatLocalIso, refreshTokens } from '../../host/oauth.ts'
 import { readWindowsCredentialRawAsync } from '../../host/wincred.ts'
 import { readAccountCredential, saveCredentialBackup } from '../../domain/credentials/backup.ts'
+import { isExternalDiskSignIn } from '../../domain/credentials/docs.ts'
 import { unwrapGoKeyringPayload } from '../../runtime/agy/keychain.ts'
 
 /** Durable primary credential record (mirrors credential-slot.PrimaryCredential). */
@@ -56,6 +57,8 @@ export interface QuotaTokenDeps {
   readPrimaryCredential(baseDir: string): PrimaryCredentialLike | null
   writePrimaryCredential(cred: PrimaryCredentialLike, baseDir: string): boolean
   parseCredentialDoc(raw: string | null | undefined): CredentialDocLike | null
+  /** Preserve an external file-based sign-in in the Windows primary's WSL disk token (issue #232). */
+  respectExternalSignIn?: boolean
 }
 
 /**
@@ -328,6 +331,28 @@ export function persistRefreshedToken(
     const grantMatchesDisk = !expectedRefreshToken || !existingRefresh || existingRefresh === expectedRefreshToken
     if (!grantMatchesDisk && !isWinPrimary) {
       return
+    }
+    if (isWinPrimary && !grantMatchesDisk) {
+      // The disk file holds another grant while we refreshed the primary's own.
+      // Under WSL UNC `cwd` agy reads that file, so an external standalone
+      // sign-in there is protected exactly like the Windows slot (issue #232).
+      const stored = deps.readPrimaryCredential(deps.pool.dir)
+      if (
+        deps.respectExternalSignIn === true &&
+        isExternalDiskSignIn(existingRaw, stored?.raw, deps.pool.dir)
+      ) {
+        const doc = {
+          token: {
+            access_token: tokens.access_token,
+            token_type: 'Bearer',
+            refresh_token: expectedRefreshToken ?? deps.parseCredentialDoc(stored?.raw)?.refreshToken,
+            ...(tokens.expiryMs ? { expiry: formatLocalIso(tokens.expiryMs) } : {}),
+          },
+          auth_method: 'consumer',
+        }
+        deps.writePrimaryCredential({ raw: JSON.stringify(doc), email: stored?.email, savedAt: Date.now() }, deps.pool.dir)
+        return
+      }
     }
     // On macOS/Linux, systemHome (real HOME) primary accounts authenticate via
     // OS Keychain (`service=gemini, account=antigravity`), shared with

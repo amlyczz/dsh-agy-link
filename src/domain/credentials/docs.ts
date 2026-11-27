@@ -192,6 +192,47 @@ export function readTokenFileRaw(file: string): string | null {
   return raw && raw.trim() ? raw : null
 }
 
+/**
+ * True when `liveRaw` holds a provably distinct OAuth grant: not the saved
+ * primary's grant, and not the grant this plugin last installed (tracked by
+ * the irreversible fingerprint in `baseDir`). "Cannot prove it" (no refresh
+ * token) is NOT external — the same rule the Windows slot guard follows.
+ * Shared by the slot guard (`external-guard.ts`) and the file-based/WSL disk
+ * mirror (`syncPrimaryDiskTokenFile`, issue #232) so `respectExternalSignIn`
+ * means the same thing for both stores.
+ */
+export function isExternalCredentialGrant(
+  liveRaw: string | null | undefined,
+  primaryRaw: string | null | undefined,
+  baseDir?: string,
+): boolean {
+  if (!liveRaw) return false
+  if (sameCredentialGrant(liveRaw, primaryRaw)) return false
+  const liveHash = hashCredentialFingerprint(liveRaw)
+  if (!liveHash) return false
+  if (baseDir) {
+    const lastInstalled = readLastInstalledFingerprintAt(baseDir)
+    if (lastInstalled !== null && liveHash === lastInstalled) return false
+  }
+  return true
+}
+
+/**
+ * True when the on-disk token file holds a complete sign-in that belongs to
+ * neither the saved primary nor a grant this plugin installed: an external,
+ * file-based standalone AGY sign-in (Windows + WSL UNC `cwd` reads this file
+ * instead of Credential Manager). A document without a refresh token cannot
+ * authenticate anyone, so it never counts as an external sign-in.
+ */
+export function isExternalDiskSignIn(
+  existingRaw: string | null | undefined,
+  primaryRaw: string | null | undefined,
+  baseDir?: string,
+): boolean {
+  if (!isExternalCredentialGrant(existingRaw, primaryRaw, baseDir)) return false
+  return Boolean(parseCredentialDoc(existingRaw)?.refreshToken)
+}
+
 /** Atomic replace: write a sibling temp file then rename over the target. */
 export function writeFileAtomic(file: string, data: string): boolean {
   return tryWriteFileAtomic(file, data)
@@ -230,11 +271,19 @@ export function normalizeCredentialJsonForDisk(raw: string | null | undefined): 
  * `<homeDir>/.gemini/antigravity-cli/antigravity-oauth-token` so `agy` runs
  * with WSL UNC `cwd` (`Using file-based token storage because WSL environment detected`)
  * authenticate with the live primary account instead of a stale disk leftover.
+ *
+ * Issue #232: the mirror honours `respectExternalSignIn` the same way the
+ * Windows slot does. An existing file that provably belongs to another grant
+ * (a complete, external file-based sign-in) is preserved when the setting is
+ * on; the plugin's own grant — same refresh token, or the one this plugin
+ * last installed — is always replaceable, so the revoked-token self-heal that
+ * motivated this mirror keeps working for the primary account itself.
  */
 export function syncPrimaryDiskTokenFile(
   raw: string | null | undefined,
   homeDir: string,
   log?: (msg: string) => void,
+  opts: { baseDir?: string; respectExternalSignIn?: boolean } = {},
 ): boolean {
   if (!homeDir || homeDir.trim() === '') return false
   const plain = normalizeCredentialJsonForDisk(raw)
@@ -244,8 +293,16 @@ export function syncPrimaryDiskTokenFile(
   if (existsSync(file)) {
     try {
       const existing = readFileSync(file, 'utf8')
-      if (!existing.trim().startsWith('go-keyring-base64:') && isSlotAtLeastAsFresh(existing, plain)) {
-        return true
+      if (existing.trim() !== '') {
+        if (isExternalDiskSignIn(existing, plain, opts.baseDir)) {
+          if (opts.respectExternalSignIn === true) {
+            log?.('[agy-link] external standalone AGY sign-in detected in the file-based token — preserving it (respectExternalSignIn)')
+            return false
+          }
+          log?.('[agy-link] notice: file-based token holds an external standalone AGY sign-in; enable respectExternalSignIn to preserve it')
+        } else if (!existing.trim().startsWith('go-keyring-base64:') && isSlotAtLeastAsFresh(existing, plain)) {
+          return true
+        }
       }
     } catch {
       // treat unreadable existing file as stale and overwrite below

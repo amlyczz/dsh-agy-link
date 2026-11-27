@@ -4,8 +4,7 @@
 //   2. `slot == lastInstalled`   -> leftover from our own plugin lease, safe to restore
 //   3. `slot ∉ {primary, last}`  -> external manual sign-in (refuse overwrite when respectExternalSignIn is on)
 import {
-  hashCredentialFingerprint,
-  readLastInstalledFingerprintAt,
+  isExternalCredentialGrant,
   sameCredentialGrant,
   writeLastInstalledFingerprintAt,
 } from './docs.ts'
@@ -19,13 +18,7 @@ export function isExternalSlotSignIn(
   primaryRaw: string,
   baseDir: string,
 ): boolean {
-  if (!liveSlotRaw) return false
-  if (sameCredentialGrant(liveSlotRaw, primaryRaw)) return false
-  const liveHash = hashCredentialFingerprint(liveSlotRaw)
-  if (!liveHash) return false
-  const lastInstalled = readLastInstalledFingerprintAt(baseDir)
-  if (lastInstalled !== null && liveHash === lastInstalled) return false
-  return true
+  return isExternalCredentialGrant(liveSlotRaw, primaryRaw, baseDir)
 }
 
 /** Record our install fingerprint immediately after writing to the Windows slot. */

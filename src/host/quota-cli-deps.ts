@@ -21,9 +21,14 @@ export function syncPrimarySlotFromStore(
 ): boolean {
   const raw = readPrimaryCredential(poolDir)?.raw
   if (raw === undefined || raw === '') return false
+  const diskOpts = {
+    baseDir: poolDir,
+    respectExternalSignIn: opts.respectExternalSignIn === true,
+    log: opts.log,
+  }
   const live = io.readSlot()
   if (isSlotAtLeastAsFresh(live, raw)) {
-    syncPrimaryDiskToken(raw, { log: opts.log })
+    syncPrimaryDiskToken(raw, diskOpts)
     return true
   }
   if (!sameCredentialGrant(live, raw) && opts.respectExternalSignIn === true && isExternalSlotSignIn(live, raw, poolDir)) {
@@ -32,7 +37,7 @@ export function syncPrimarySlotFromStore(
   }
   try {
     installSlotTracked(io, raw, poolDir, opts.log, 'quota token refresh')
-    syncPrimaryDiskToken(raw, { log: opts.log })
+    syncPrimaryDiskToken(raw, diskOpts)
     return true
   } catch {
     return false

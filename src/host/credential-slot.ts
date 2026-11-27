@@ -253,12 +253,15 @@ export async function recoverPrimaryCredential(
 
 export function syncPrimaryDiskToken(
   raw: string | null | undefined,
-  opts: { homeDir?: string; log?: (msg: string) => void } = {},
+  opts: { homeDir?: string; log?: (msg: string) => void; baseDir?: string; respectExternalSignIn?: boolean } = {},
 ): boolean {
   if (process.platform !== 'win32') return false
   if (opts.homeDir === undefined && process.env.NODE_TEST_CONTEXT !== undefined) return false
   const homeDir = opts.homeDir ?? (process.env.HOME || process.env.USERPROFILE || '')
-  return syncPrimaryDiskTokenFile(raw, homeDir, opts.log)
+  return syncPrimaryDiskTokenFile(raw, homeDir, opts.log, {
+    ...(opts.baseDir === undefined ? {} : { baseDir: opts.baseDir }),
+    ...(opts.respectExternalSignIn === undefined ? {} : { respectExternalSignIn: opts.respectExternalSignIn }),
+  })
 }
 
 /**
@@ -274,6 +277,8 @@ export async function prepareAccountTokenForSpawn(opts: {
   homeDir?: string
   log?: (msg: string) => void
   safetyWindowMs?: number
+  /** Preserve an external file-based sign-in in the WSL disk token (issue #232). */
+  respectExternalSignIn?: boolean
 }): Promise<boolean> {
   const safetyMs = opts.safetyWindowMs ?? 5 * 60_000
   const tok = await opts.quota.getValidAccessToken(opts.account, safetyMs).catch(() => null)
@@ -282,8 +287,10 @@ export async function prepareAccountTokenForSpawn(opts: {
       const raw = readPrimaryCredentialAt(opts.poolDir)?.raw
       if (raw) {
         syncPrimaryDiskToken(raw, {
+          baseDir: opts.poolDir,
           ...(opts.homeDir === undefined ? {} : { homeDir: opts.homeDir }),
           ...(opts.log === undefined ? {} : { log: opts.log }),
+          ...(opts.respectExternalSignIn === undefined ? {} : { respectExternalSignIn: opts.respectExternalSignIn }),
         })
       }
     } else {
@@ -320,6 +327,8 @@ export function reinstallCredential(
   )
   if (ok && (options.syncPrimaryDisk === true || label === 'primary')) {
     syncPrimaryDiskToken(raw, {
+      baseDir,
+      respectExternalSignIn: options.respectExternalSignIn === true,
       ...(options.homeDir === undefined ? {} : { homeDir }),
       ...(options.log === undefined ? {} : { log: options.log }),
     })

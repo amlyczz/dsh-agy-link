@@ -174,6 +174,8 @@ export class QuotaService {
        * write the real machine slot.
        */
       syncSlot?: (account: ManagedAccount) => boolean
+      /** Preserve external standalone sign-ins when the host enables `respectExternalSignIn` (issue #232). */
+      respectExternalSignIn?: () => boolean
       /** Diagnostic sink for the decisions below (the class is otherwise silent). */
       log?: (msg: string) => void
     } = {},
@@ -210,6 +212,9 @@ export class QuotaService {
       readPrimaryCredential: (baseDir) => readPrimaryCredential(baseDir),
       writePrimaryCredential: (cred, baseDir) => writePrimaryCredential(cred, baseDir),
       parseCredentialDoc: (raw) => parseCredentialDoc(raw),
+      ...(this.cliDeps.respectExternalSignIn === undefined
+        ? {}
+        : { respectExternalSignIn: this.cliDeps.respectExternalSignIn() }),
     }
   }
 

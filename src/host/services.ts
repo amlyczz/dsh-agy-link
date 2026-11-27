@@ -125,14 +125,17 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     // safety window has to land in the slot too — QuotaService already holds
     // credentialSlotMutex for this read. Other platforms have no slot: agy reads
     // the token document itself, which the refresh just rewrote.
-    buildCliQuotaDeps({
-      bin: () => bin(),
-      viaCli: () => getConfig().quotaViaCli,
-      preemptAutoUpdate: () => getConfig().suppressAgyAutoUpdate,
-      poolDir: () => pool.dir,
+    {
+      ...buildCliQuotaDeps({
+        bin: () => bin(),
+        viaCli: () => getConfig().quotaViaCli,
+        preemptAutoUpdate: () => getConfig().suppressAgyAutoUpdate,
+        poolDir: () => pool.dir,
+        respectExternalSignIn: () => getConfig().respectExternalSignIn,
+        log,
+      }),
       respectExternalSignIn: () => getConfig().respectExternalSignIn,
-      log,
-    }),
+    },
   )
   // Keep the account actually in use fresh. `recordSuccess`/a switch fires
   // `onAccountUsed`; we refresh just that account (throttled) instead of waiting
@@ -452,7 +455,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     // Non-forced: honours per-account cooldowns so a heal cannot stampede the
     // pool. Catalog re-discovery repairs `agy models` in the same pass.
     onAccountUsed: (accountId) => { quotaRefresher.trigger(accountId) },
-    ensureFreshToken: (acc) => prepareAccountTokenForSpawn({ account: acc, quota, poolDir: pool.dir, log }),
+    ensureFreshToken: (acc) => prepareAccountTokenForSpawn({ account: acc, quota, poolDir: pool.dir, log, respectExternalSignIn: getConfig().respectExternalSignIn }),
     refreshQuota: async () => {
       await quota.refreshAllQuotas(false).catch(() => undefined)
       await catalog.forceRefreshAndNotify().catch(() => undefined)
@@ -481,7 +484,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
         ? (readPrimaryCredential(pool.dir)?.raw ?? null)
         : readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log)
       if (raw === null || raw === '') return false
-      const ok = reinstallCredential(raw, { baseDir: pool.dir, log, syncPrimaryDisk: isPrimary }, account.alias || account.id)
+      const ok = reinstallCredential(raw, { baseDir: pool.dir, log, syncPrimaryDisk: isPrimary, respectExternalSignIn: getConfig().respectExternalSignIn }, account.alias || account.id)
       if (ok) acpPool.noteSlotOverwrite()
       return ok
     },
