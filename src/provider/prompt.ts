@@ -30,6 +30,8 @@ import {
   textOf,
   utf8Bytes,
   wrapLiveRequest,
+  protectTrailingRequest,
+  AGY_PROMPT_SAFE_BYTES,
 } from './prompt-text.ts'
 
 /** Projection of a live AgyAdapter run needed for binding adoption. */
@@ -209,6 +211,12 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
     throw new LlmError('request carries no user text to forward to agy', Err.AGY_ERROR)
   }
 
+  // "Live-last" requests (no assistant anchor: DSH's auto-review, session titles)
+  // carry their decisive content at the tail. Fit them to the budget here, as the
+  // last shaping step, so the generic tail trim downstream never sees them.
+  if (lastAssistantIdx < 0 && !isImage && !isTranslateSession && !(isAux && options.purpose === 'compaction')) {
+    prompt = protectTrailingRequest(prompt, messages, AGY_PROMPT_SAFE_BYTES)
+  }
   if (compactionNotice && compactionNotice.afterTokens <= 0) {
     compactionNotice.afterTokens = Math.max(100, Math.round(prompt.length / 3.5))
   }
