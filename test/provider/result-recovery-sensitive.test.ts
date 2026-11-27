@@ -23,12 +23,21 @@ test('credential-ish paths are recognised; ordinary files are not', () => {
     '/etc/ssl/private/server.key', '/certs/server.pem', '/certs/bundle.p12', '/certs/keystore.pfx',
     '/home/u/.aws/credentials', '/home/u/.netrc', '/home/u/.npmrc', '/home/u/.pgpass',
     '/app/config/credentials.json', '/app/config/secrets.yaml',
+    // Other places credentials conventionally live.
+    '/home/u/.git-credentials', '/home/u/.config/gh/hosts.yml',
+    '/home/u/.config/gcloud/application_default_credentials.json',
+    '/proj/service-account.json', '/proj/service-accounts.json',
+    '/home/u/.mozilla/firefox/abc.default/key4.db', '/home/u/.mozilla/firefox/abc.default/logins.json',
+    '/home/u/.mozilla/firefox/abc.default/Login Data',
+    '/home/u/.gnupg/secring.gpg', '/home/u/.kube/config', '/home/u/.docker/config.json',
   ]) {
     assert.equal(isSensitiveReadPath({ Path: p }), true, p)
   }
   for (const p of [
     '/repo/src/app.ts', '/repo/notes.txt', '/repo/docs/token-guide.md', '/repo/README.credentials.md',
     '/repo/.github/workflows/ci.yml', '/repo/src/credentials.ts',
+    // Specific paths, not bare names: these are not credential stores.
+    '/proj/hosts.yml', '/proj/service-accounts.md', '/home/u/kube-config.md', '/proj/docker/config.json',
   ]) {
     assert.equal(isSensitiveReadPath({ path: p }), false, p)
   }
