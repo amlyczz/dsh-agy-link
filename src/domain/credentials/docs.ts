@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { tryWriteFileAtomic } from '../../common/atomic-write.ts'
 import { unwrapGoKeyringPayload } from '../../common/go-keyring.ts'
 import type { ManagedAccount } from '../../common/pool-types.ts'
-import { readAccountCredential } from './backup.ts'
+import { readAccountCredential, saveCredentialBackup } from './backup.ts'
 
 const PRIMARY_STORE_FILE = '.primary-credential.json'
 const LAST_INSTALLED_FILE = '.last-installed-fingerprint.json'
@@ -200,6 +200,84 @@ export function writeFileAtomic(file: string, data: string): boolean {
 export function accountTokenFilePath(account: ManagedAccount, homeDir: string): string {
   const home = account.dir ? account.dir : homeDir
   return join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+}
+
+/** True when `p` is a Windows WSL UNC path (`\\wsl.localhost\...`, `\\wsl$\...`, or `//wsl...`). */
+export function isWslUncPath(p: string | undefined): boolean {
+  return typeof p === 'string' && /^(?:\\\\|\/\/)(?:wsl\.localhost|wsl\$)(?:[\\/]|$)/i.test(p.trim())
+}
+
+/**
+ * Unwrap any `go-keyring-base64:` envelope and validate that the credential is
+ * valid JSON carrying a non-empty refresh token suitable for file-based agy auth.
+ */
+export function normalizeCredentialJsonForDisk(raw: string | null | undefined): string | null {
+  if (!raw || !raw.trim()) return null
+  const unwrapped = unwrapGoKeyringPayload(raw).trim()
+  if (!unwrapped) return null
+  try {
+    JSON.parse(unwrapped)
+  } catch {
+    return null
+  }
+  const doc = parseCredentialDoc(unwrapped)
+  if (!doc?.refreshToken) return null
+  return unwrapped
+}
+
+/**
+ * Mirror an authoritative primary credential as plain JSON into
+ * `<homeDir>/.gemini/antigravity-cli/antigravity-oauth-token` so `agy` runs
+ * with WSL UNC `cwd` (`Using file-based token storage because WSL environment detected`)
+ * authenticate with the live primary account instead of a stale disk leftover.
+ */
+export function syncPrimaryDiskTokenFile(
+  raw: string | null | undefined,
+  homeDir: string,
+  log?: (msg: string) => void,
+): boolean {
+  if (!homeDir || homeDir.trim() === '') return false
+  const plain = normalizeCredentialJsonForDisk(raw)
+  if (!plain) return false
+  const dir = join(homeDir, '.gemini', 'antigravity-cli')
+  const file = join(dir, 'antigravity-oauth-token')
+  if (existsSync(file)) {
+    try {
+      const existing = readFileSync(file, 'utf8')
+      if (!existing.trim().startsWith('go-keyring-base64:') && isSlotAtLeastAsFresh(existing, plain)) {
+        return true
+      }
+    } catch {
+      // treat unreadable existing file as stale and overwrite below
+    }
+  }
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {
+    // ignore
+  }
+  if (!writeFileAtomic(file, plain)) return false
+  saveCredentialBackup(file, plain)
+  log?.('[agy-link] synced primary credential to disk token file for file-based/WSL auth')
+  return true
+}
+
+/**
+ * Ensure an isolated account's on-disk token file is intact (recovered from `.bak`
+ * if missing/corrupt) and stored as plain JSON (never `go-keyring-base64:` encoded).
+ */
+export function ensureIsolatedDiskTokenClean(accountFile: string, log?: (msg: string) => void): boolean {
+  const raw = readAccountCredential(accountFile, log)
+  if (!raw) return false
+  if (raw.trim().startsWith('go-keyring-base64:')) {
+    const plain = normalizeCredentialJsonForDisk(raw)
+    if (plain && writeFileAtomic(accountFile, plain)) {
+      saveCredentialBackup(accountFile, plain)
+      log?.('[agy-link] unwrapped keyring-encoded isolated account token file to plain JSON')
+      return true
+    }
+  }
+  return Boolean(parseCredentialDoc(raw)?.refreshToken)
 }
 
 // ---- durable primary credential ------------------------------------------

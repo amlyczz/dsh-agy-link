@@ -495,9 +495,8 @@ export async function* runAgyAttempt(
   deps: AttemptDeps,
   input: AttemptInput,
 ): AsyncGenerator<StreamChunk, RunRecording, void> {
-  // Same pre-flight for the CLI path: a stale isolated token makes agy load the
-  // machine-wide keyring (wrong account) instead of this account's own token.
-  if (input.account && input.account.dir && !input.account.systemHome && deps.ensureFreshToken) {
+  // Refresh/sync credentials for both primary (WSL disk token) and isolated accounts before spawn.
+  if (input.account && deps.ensureFreshToken) {
     await deps.ensureFreshToken(input.account).catch(() => false)
   }
   const recorder = createAttemptRecorder(deps, input.cfg, input.account, input.binding?.conversationId, true, {

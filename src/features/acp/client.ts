@@ -2,6 +2,7 @@
 import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import type { PermissionMode } from '../../common/types.ts'
+import { looksLikeAuthFailure } from '../../common/types.ts'
 import { preemptAgyAutoUpdate } from '../../host/auto-updater.ts'
 import { killTree } from '../../runtime/agy/process.ts'
 import { consoleOutputEncoding, makeLineDecoder } from '../../runtime/agy/console.ts'
@@ -61,6 +62,11 @@ interface PendingRpc {
   timer?: NodeJS.Timeout
   /** RPC name: lets `isBusy` tell a long turn from a short control request. */
   method: string
+}
+
+function isAuthRpcError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return looksLikeAuthFailure(msg) || /\bauth_required\b|authentication required|invalid_grant|not logged into antigravity/i.test(msg)
 }
 
 export class AcpProcess extends EventEmitter {
@@ -359,7 +365,8 @@ export class AcpProcess extends EventEmitter {
       const sid = typeof r.sessionId === 'string' && r.sessionId !== '' ? r.sessionId : sessionId
       this.rememberModels(sid, r)
       return { sessionId: sid, status: 'resumed' }
-    } catch {
+    } catch (err) {
+      if (isAuthRpcError(err)) throw err
       // -32603 cannot distinguish "wrong account" from "no such session";
       // fall through to a load and judge it by its replay evidence.
     }
@@ -387,7 +394,8 @@ export class AcpProcess extends EventEmitter {
       if (replayed === 0) await new Promise((r2) => setTimeout(r2, 300))
       if (replayed === 0 && cachedReadTokens === 0) return null
       return { sessionId: sid, status: 'loaded' }
-    } catch {
+    } catch (err) {
+      if (isAuthRpcError(err)) throw err
       return null
     } finally {
       unsub()

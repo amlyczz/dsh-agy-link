@@ -48,8 +48,11 @@ import { defaultPoolDir } from './pool.ts'
 import { readWindowsCredentialRaw, writeWindowsCredentialRaw } from './wincred.ts'
 import { fetchUserEmail, refreshTokens } from './oauth.ts'
 import {
+  accountTokenFilePath,
+  ensureIsolatedDiskTokenClean,
   parseCredentialDoc,
   readPrimaryCredentialAt,
+  syncPrimaryDiskTokenFile,
   writePrimaryCredentialAt,
   type PrimaryCredential,
 } from '../domain/credentials/docs.ts'
@@ -135,6 +138,8 @@ export interface ResolveOptions {
   force?: boolean
   /** Refuse to overwrite an unrecognised external standalone AGY sign-in in the Windows slot (#145). */
   respectExternalSignIn?: boolean
+  /** Mirror the verified primary credential to disk for file-based/WSL paths on Windows. */
+  syncPrimaryDisk?: boolean
 }
 
 function resolveIo(options: ResolveOptions): SlotIo {
@@ -246,6 +251,49 @@ export async function recoverPrimaryCredential(
   })
 }
 
+export function syncPrimaryDiskToken(
+  raw: string | null | undefined,
+  opts: { homeDir?: string; log?: (msg: string) => void } = {},
+): boolean {
+  if (process.platform !== 'win32') return false
+  if (opts.homeDir === undefined && process.env.NODE_TEST_CONTEXT !== undefined) return false
+  const homeDir = opts.homeDir ?? (process.env.HOME || process.env.USERPROFILE || '')
+  return syncPrimaryDiskTokenFile(raw, homeDir, opts.log)
+}
+
+/**
+ * Prepare any account (primary OR isolated) before spawning `agy` (ACP or CLI -p):
+ * refreshes its OAuth token with a 5-minute safety margin, mirrors the Windows
+ * primary credential to `<HOME>/.gemini/antigravity-cli/antigravity-oauth-token`
+ * for WSL UNC `cwd` runs, and unwraps/repairs isolated disk token files.
+ */
+export async function prepareAccountTokenForSpawn(opts: {
+  account: ManagedAccount
+  quota: { getValidAccessToken(account: ManagedAccount, minValidityMs?: number): Promise<string | null> }
+  poolDir: string
+  homeDir?: string
+  log?: (msg: string) => void
+  safetyWindowMs?: number
+}): Promise<boolean> {
+  const safetyMs = opts.safetyWindowMs ?? 5 * 60_000
+  const tok = await opts.quota.getValidAccessToken(opts.account, safetyMs).catch(() => null)
+  if (process.platform === 'win32') {
+    if (opts.account.systemHome || !opts.account.dir) {
+      const raw = readPrimaryCredentialAt(opts.poolDir)?.raw
+      if (raw) {
+        syncPrimaryDiskToken(raw, {
+          ...(opts.homeDir === undefined ? {} : { homeDir: opts.homeDir }),
+          ...(opts.log === undefined ? {} : { log: opts.log }),
+        })
+      }
+    } else {
+      const accountFile = accountTokenFilePath(opts.account, opts.homeDir ?? '')
+      ensureIsolatedDiskTokenClean(accountFile, opts.log)
+    }
+  }
+  return tok !== null
+}
+
 /**
  * Force `raw` into the Windows slot, ignoring leases. Only for the identity
  * mismatch recovery path, where the slot provably holds the wrong account and no
@@ -259,7 +307,7 @@ export function reinstallCredential(
   const io = resolveIo(options)
   if (io.platform !== 'win32') return false
   const { baseDir, homeDir } = resolvedDirs(options)
-  return reinstallAccountCredentialAt(
+  const ok = reinstallAccountCredentialAt(
     raw,
     {
       baseDir,
@@ -270,6 +318,13 @@ export function reinstallCredential(
     },
     label,
   )
+  if (ok && (options.syncPrimaryDisk === true || label === 'primary')) {
+    syncPrimaryDiskToken(raw, {
+      ...(options.homeDir === undefined ? {} : { homeDir }),
+      ...(options.log === undefined ? {} : { log: options.log }),
+    })
+  }
+  return ok
 }
 
 // ---- frozen public surface (moved implementations) ------------------------

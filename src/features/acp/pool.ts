@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { PermissionMode, PluginConfig } from '../../common/types.ts'
+import { isWslUncPath } from '../../domain/credentials/docs.ts'
 import { slotGuardStats } from '../../domain/credentials/guards.ts'
 import { AcpProcess, type AcpProcessOptions } from './client.ts'
 import { realStrayDeps, reapStrayAcpProcesses, type StrayDeps } from './strays.ts'
@@ -137,9 +138,10 @@ export class AcpSessionPool {
     }
   }
 
-  private keyFor(opts: { env?: NodeJS.ProcessEnv; accountId?: string; mode: PermissionMode; sandbox: boolean; agent: string; settingsTag?: string }): string {
+  private keyFor(opts: { env?: NodeJS.ProcessEnv; accountId?: string; mode: PermissionMode; sandbox: boolean; agent: string; settingsTag?: string; cwd?: string }): string {
     const scope = opts.env?.DSH_MCP_ROUTE
-    const base = `${opts.accountId || 'primary'}|${opts.mode}|${opts.sandbox ? '1' : '0'}|${opts.agent}|${opts.settingsTag ?? ''}`
+    const wsl = process.platform === 'win32' && isWslUncPath(opts.cwd) ? '|wsl' : ''
+    const base = `${opts.accountId || 'primary'}|${opts.mode}|${opts.sandbox ? '1' : '0'}|${opts.agent}|${opts.settingsTag ?? ''}${wsl}`
     return scope ? base + '|scope:' + createHash('sha256').update(scope).digest('hex') : base
   }
 
@@ -324,27 +326,30 @@ export class AcpSessionPool {
     }
   }
 
-  evictOtherAccounts(keepAccountId?: string): number {
-    const prefix = `${keepAccountId || 'primary'}|`
+  private evictMatching(match: (key: string) => boolean, reason: string): number {
     let evicted = 0
     for (const [k, p] of [...this.procs.entries()]) {
-      if (k.startsWith(prefix)) continue
-      if (this.hasRetainedSession(p)) {
-        // Account switch: keep serving the old session's background work in a
-        // draining slot, but never hand it new prompts (the credential slot now
-        // holds the new account — a new prompt would bill the wrong account).
-        this.drain(k, p, 'account-switch')
-      } else {
+      if (!match(k)) continue
+      if (this.hasRetainedSession(p)) this.drain(k, p, reason)
+      else {
         this.procs.delete(k)
         this.closeProc(p, false)
       }
       evicted++
     }
-    // Deliberately no stopSweepTimerIfEmpty() here: this runs at the START of
-    // acquiring a process for the incoming account, so an empty pool is
-    // transient and firing onIdle would race the new spawn into a slot restore.
     if (evicted > 0) this.ensureSweepTimer()
     return evicted
+  }
+
+  evictOtherAccounts(keepAccountId?: string): number {
+    const prefix = `${keepAccountId || 'primary'}|`
+    return this.evictMatching((k) => !k.startsWith(prefix), 'account-switch')
+  }
+
+  /** Evict cached ACP processes belonging to a specific account (e.g. after re-auth). */
+  evictAccount(accountId?: string): number {
+    const prefix = `${accountId || 'primary'}|`
+    return this.evictMatching((k) => k.startsWith(prefix), 'reauth')
   }
 
   /**
@@ -393,23 +398,10 @@ export class AcpSessionPool {
     return out
   }
 
-  private fireDrainClosed(
-    keys: readonly string[],
-    targets: readonly AcpDrainSession[],
-    reason: string,
-    expired: boolean,
-  ): void {
+  private fireDrainClosed(keys: readonly string[], targets: readonly AcpDrainSession[], reason: string, expired: boolean): void {
     try {
-      this.opts.onDrainClosed?.({
-        keys,
-        sessions: targets.map((t) => t.acpSessionId),
-        targets,
-        reason,
-        expired,
-      })
-    } catch {
-      /* a failing hook must not break the pool sweep */
-    }
+      this.opts.onDrainClosed?.({ keys, sessions: targets.map((t) => t.acpSessionId), targets, reason, expired })
+    } catch { /* a failing hook must not break the pool sweep */ }
   }
 
   /** Draining processes whose last retained session let go can be closed at once. */
@@ -431,19 +423,10 @@ export class AcpSessionPool {
         this.draining.delete(id)
         const targets = entry.sessions
         this.closeProc(entry.proc, true)
-        this.opts.log?.(
-          `[acp-pool] drained ${entry.key} hit its ${Math.round((now - entry.startedAt) / 1000)}s budget — force-closed`,
-        )
+        this.opts.log?.(`[acp-pool] drained ${entry.key} hit its ${Math.round((now - entry.startedAt) / 1000)}s budget — force-closed`)
         try {
-          this.opts.onDrainExpired?.({
-            keys: [entry.key],
-            sessions: targets.map((t) => t.acpSessionId),
-            targets,
-            reason: entry.reason,
-          })
-        } catch {
-          /* a failing notice hook must not break the pool sweep */
-        }
+          this.opts.onDrainExpired?.({ keys: [entry.key], sessions: targets.map((t) => t.acpSessionId), targets, reason: entry.reason })
+        } catch { /* a failing notice hook must not break the pool sweep */ }
         this.fireDrainClosed([entry.key], targets, entry.reason, true)
         closed++
       }

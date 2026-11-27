@@ -320,12 +320,13 @@ export function persistRefreshedToken(
   expectedRefreshToken?: string,
 ): void {
   const file = quotaTokenFilePath(account)
+  const isPrimary = Boolean(account.systemHome || !account.dir)
+  const isWinPrimary = process.platform === 'win32' && isPrimary
   try {
-    if (
-      expectedRefreshToken &&
-      existsSync(file) &&
-      deps.parseCredentialDoc(readFileSync(file, 'utf8'))?.refreshToken !== expectedRefreshToken
-    ) {
+    const existingRaw = existsSync(file) ? readFileSync(file, 'utf8') : null
+    const existingRefresh = existingRaw !== null ? deps.parseCredentialDoc(existingRaw)?.refreshToken : undefined
+    const grantMatchesDisk = !expectedRefreshToken || !existingRefresh || existingRefresh === expectedRefreshToken
+    if (!grantMatchesDisk && !isWinPrimary) {
       return
     }
     // On macOS/Linux, systemHome (real HOME) primary accounts authenticate via
@@ -335,7 +336,7 @@ export function persistRefreshedToken(
     // (Windows still re-adopts `.primary-credential.json` below).
     if (
       process.platform !== 'win32' &&
-      (account.systemHome || !account.dir) &&
+      isPrimary &&
       !existsSync(file) &&
       expectedRefreshToken
     ) {
@@ -343,9 +344,9 @@ export function persistRefreshedToken(
     }
     mkdirSync(dirname(file), { recursive: true })
     let existing: Record<string, unknown> = {}
-    if (existsSync(file)) {
+    if (existingRaw !== null && grantMatchesDisk) {
       try {
-        existing = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+        existing = JSON.parse(existingRaw) as Record<string, unknown>
       } catch {
         existing = {}
       }
@@ -358,7 +359,8 @@ export function persistRefreshedToken(
     const refreshToken =
       tokens.refresh_token ??
       (typeof source.refresh_token === 'string' ? source.refresh_token : undefined) ??
-      (typeof source.refreshToken === 'string' ? source.refreshToken : undefined)
+      (typeof source.refreshToken === 'string' ? source.refreshToken : undefined) ??
+      (!grantMatchesDisk ? expectedRefreshToken : undefined)
     const expiryIso = tokens.expiryMs ? formatLocalIso(tokens.expiryMs) : undefined
     const doc = {
       token: {
@@ -376,7 +378,7 @@ export function persistRefreshedToken(
     } catch {
       // Windows: mode bits unsupported — best effort
     }
-    if (account.dir && !account.systemHome) {
+    if ((account.dir && !account.systemHome) || isWinPrimary) {
       saveCredentialBackup(file, raw)
     }
   } catch {
@@ -384,11 +386,10 @@ export function persistRefreshedToken(
   }
 
   // On Windows the primary's authoritative copy is the durable slot store:
-  // agy authenticates from Credential Manager, not from this file. Re-adopt
-  // the canonical file we just wrote, but only when it still carries a
-  // refresh token — the store must never be degraded back to an
-  // unidentifiable document.
-  if (process.platform === 'win32' && (account.systemHome || !account.dir)) {
+  // agy authenticates from Credential Manager (and from this file under WSL UNC
+  // paths). Re-adopt the canonical file we just wrote when it carries a refresh
+  // token — the store must never be degraded back to an unidentifiable doc.
+  if (isWinPrimary) {
     try {
       const fresh = readFileSync(file, 'utf8')
       if (deps.parseCredentialDoc(fresh)?.refreshToken) {

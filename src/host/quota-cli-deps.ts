@@ -2,7 +2,7 @@ import type { ManagedAccount } from '../common/pool-types.ts'
 import { isSlotAtLeastAsFresh, sameCredentialGrant } from '../domain/credentials/docs.ts'
 import { installSlotTracked, isExternalSlotSignIn } from '../domain/credentials/external-guard.ts'
 import type { CredentialPlatform } from '../domain/credentials/platform.ts'
-import { defaultSlotIo, readPrimaryCredential } from './credential-slot.ts'
+import { defaultSlotIo, readPrimaryCredential, syncPrimaryDiskToken } from './credential-slot.ts'
 
 export interface SyncPrimarySlotOpts {
   respectExternalSignIn?: boolean
@@ -22,13 +22,17 @@ export function syncPrimarySlotFromStore(
   const raw = readPrimaryCredential(poolDir)?.raw
   if (raw === undefined || raw === '') return false
   const live = io.readSlot()
-  if (isSlotAtLeastAsFresh(live, raw)) return true
+  if (isSlotAtLeastAsFresh(live, raw)) {
+    syncPrimaryDiskToken(raw, { log: opts.log })
+    return true
+  }
   if (!sameCredentialGrant(live, raw) && opts.respectExternalSignIn === true && isExternalSlotSignIn(live, raw, poolDir)) {
     opts.log('[agy-link] quota token sync skipped: preserving external standalone AGY sign-in in Windows slot')
     return false
   }
   try {
     installSlotTracked(io, raw, poolDir, opts.log, 'quota token refresh')
+    syncPrimaryDiskToken(raw, { log: opts.log })
     return true
   } catch {
     return false

@@ -13,6 +13,7 @@ import type { ManagedAccount } from '../../common/pool-types.ts'
 import {
   accountTokenFilePath,
   credentialFingerprint,
+  normalizeCredentialJsonForDisk,
   readPrimaryCredentialAt,
   readTokenFileRaw,
   sameCredentialGrant,
@@ -55,16 +56,9 @@ import { slotEmailMatches as slotEmailMatchesIn, slotIdentity, type AcquireInput
 
 export { fastPathRunCount, isSlotSwitchPending } from './switch-state.ts'
 
-// The identity checks (gate 1), the primary re-assertion (gate 3) and the
-// `AcquireInput` they share live in guards.ts, the fast-path counters and the
-// switch-target bookkeeping in switch-state.ts, so this state machine stays
-// under the module budget.
+// Wait helpers live in guards.ts; fast-path/switch bookkeeping lives in switch-state.ts.
 
-
-/**
- * Leave a reference-counted secondary identity. The last holder completes the
- * handoff: persist a rotated token, restore the primary, release the mutex.
- */
+/** Leave a reference-counted secondary identity and restore primary on the last holder. */
 function leaveInstalledIdentity(state: InstalledIdentity): void {
   if (state.holders <= 0) return
   state.holders -= 1
@@ -557,8 +551,9 @@ class SlotAcquire {
             // a foreign login into the account's own file, so the identity agy
             // recorded must agree before anything is written.
             if (afterRaw && afterRaw !== accountRaw && this.slotEmailMatches(this.account.email)) {
-              if (readTokenFileRaw(accountFile) === accountRaw && writeFileAtomic(accountFile, afterRaw)) {
-                saveCredentialBackup(accountFile, afterRaw)
+              const diskRaw = normalizeCredentialJsonForDisk(afterRaw)
+              if (diskRaw && readTokenFileRaw(accountFile) === accountRaw && writeFileAtomic(accountFile, diskRaw)) {
+                saveCredentialBackup(accountFile, diskRaw)
               }
             }
           } else if (afterFingerprint !== null) {

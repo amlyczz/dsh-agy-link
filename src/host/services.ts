@@ -33,7 +33,7 @@ import { PREFERRED_IMAGE_QUOTA_MODEL } from '../common/model-lineup.ts'
 import { BackgroundWakeWatcher, type AgentLike } from '../features/background/watcher.ts'
 import { agyMcpConfigPath, mcpServerKey, registerBridgeMcpConfig, type BridgeRegistryState } from './mcp-bridge.ts'
 import { readAccountCredential } from './credential-backup.ts'
-import { acquireCredentialSlot, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
+import { acquireCredentialSlot, prepareAccountTokenForSpawn, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
 import { buildCliQuotaDeps } from './quota-cli-deps.ts'
 import { ACP_REPORT_RECORD_TYPE, createSessionRecords } from './session-records.ts'
 import {
@@ -314,6 +314,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
       const activeId = pool.getActiveAccountId('google')
       if (activeId) void catalog.forceRefreshAndNotify(activeId).catch(() => undefined)
     },
+    onAccountReauthenticated: (id) => { acpPool.evictAccount(id) },
     onIsolatedAccountCommitted: (acc) => {
       if (getConfig().syncAccountCustomizations) {
         ecosystem.syncAccount(acc)
@@ -451,7 +452,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     // Non-forced: honours per-account cooldowns so a heal cannot stampede the
     // pool. Catalog re-discovery repairs `agy models` in the same pass.
     onAccountUsed: (accountId) => { quotaRefresher.trigger(accountId) },
-    ensureFreshToken: (acc) => quota.getValidAccessToken(acc).then((t) => t !== null).catch(() => false),
+    ensureFreshToken: (acc) => prepareAccountTokenForSpawn({ account: acc, quota, poolDir: pool.dir, log }),
     refreshQuota: async () => {
       await quota.refreshAllQuotas(false).catch(() => undefined)
       await catalog.forceRefreshAndNotify().catch(() => undefined)
@@ -473,19 +474,14 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     backgroundObserver: backgroundWakeup,
     appendAcpNotice,
     noteAcpReport: (sessionKey, text, seq) => backgroundWakeup.noteAcpReport(sessionKey, text, seq),
-    // Gate 2 recovery: agy proved it loaded a different account than the one we
-    // dispatched, so the slot must be rewritten before the single retry.
     reinstallCredentialSlot: (account) => {
       if (process.platform !== 'win32') return false
-      // The primary has no isolated dir: its token lives in the durable primary
-      // store, so read that instead. Falling through to null here used to make
-      // the whole gate-2 self-heal a no-op for the user's own account.
-      const raw =
-        account.systemHome || !account.dir
-          ? (readPrimaryCredential(pool.dir)?.raw ?? null)
-          : readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log)
+      const isPrimary = Boolean(account.systemHome || !account.dir)
+      const raw = isPrimary
+        ? (readPrimaryCredential(pool.dir)?.raw ?? null)
+        : readAccountCredential(join(account.dir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), log)
       if (raw === null || raw === '') return false
-      const ok = reinstallCredential(raw, { baseDir: pool.dir, log }, account.alias || account.id)
+      const ok = reinstallCredential(raw, { baseDir: pool.dir, log, syncPrimaryDisk: isPrimary }, account.alias || account.id)
       if (ok) acpPool.noteSlotOverwrite()
       return ok
     },

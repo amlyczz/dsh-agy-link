@@ -54,6 +54,7 @@ import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
 import { reportAcpCacheTurn } from './cache-turn.ts'
 import { FIRST_OUTPUT_GATE_MS, firstLine } from './turn-format.ts'
 import { createBackgroundWaitMonitor, persistInterimAcpBinding } from './bg-wait-notice.ts'
+import { healAcpAuthOnce, isAcpPreStreamAuthError } from './auth-heal.ts'
 
 /** Drive one prompt and classify what happened. Never settles, never cleans up. */
 async function runAcpPrompt(opts: {
@@ -189,10 +190,7 @@ async function runAcpPrompt(opts: {
       })
     let result = await runOnePrompt(prompt, true)
     subTracker?.flush()
-    // agy flushes transcript.jsonl asynchronously: on a single-call turn the
-    // last PLANNER_RESPONSE line can land a few ms after the prompt resolves.
-    // Retry a bounded handful of times (only when nothing new arrived) so the
-    // per-call sample wins over the cumulative result envelope (context bug).
+    // Flush async transcript.jsonl usage entries before falling back to envelope usage.
     if (usageTailer) {
       for (let attempt = 0; attempt < 4 && flushTranscriptUsage() === 0; attempt++) {
         await new Promise((r) => setTimeout(r, 40))
@@ -386,11 +384,7 @@ export async function runAcpAttempt(
   if (input.bridgeRoute) env.DSH_MCP_ROUTE = input.bridgeRoute
   else delete env.DSH_MCP_ROUTE
 
-  // ACP has no per-invocation `--settings`: the resident server reads
-  // `<home>/.gemini/antigravity-cli/settings.json` at STARTUP. Persist the
-  // Orchestrator seats; the returned tag joins the process key so a process
-  // spawned under other seats is never reused. If the file cannot be merged
-  // safely, fall back to the CLI path below so `--settings` still applies (#204).
+  // Persist orchestrator seats into `<home>/.gemini/antigravity-cli/settings.json` (#204).
   let settingsTag: string | undefined
   if (!input.isAux) {
     const prep = prepareOrchestratorSettingsForAcp({
@@ -403,13 +397,10 @@ export async function runAcpAttempt(
     settingsTag = prep.settingsTag
   }
 
-  // Isolated accounts must authenticate from their OWN token file. If that
-  // token is stale agy may fall back to the machine-wide keyring and silently
-  // run as another account (observed 2026-11-23: "authenticated via keyring",
-  // empty email, then an empty turn). Refresh it first.
-  if (account && account.dir && !account.systemHome && deps.ensureFreshToken) {
+  // Refresh/sync credentials for both primary (WSL disk token) and isolated accounts before spawn.
+  if (account && deps.ensureFreshToken) {
     const fresh = await deps.ensureFreshToken(account).catch(() => false)
-    if (!fresh) deps.log?.('acp: isolated token for ' + account.id + ' could not be refreshed — agy may fall back to the system keyring')
+    if (!fresh) deps.log?.('acp: token pre-flight for ' + account.id + ' could not be refreshed')
   }
   let proc!: AcpProcess
   let sid = ''
@@ -418,10 +409,9 @@ export async function runAcpAttempt(
   const usesSharedSlot =
     process.platform === 'win32'
     && !(account?.dir && !account.systemHome && supportsSshIsolation(deps.agyVersion?.() ?? null))
-  // Gate 2 allows exactly ONE self-heal: a second mismatch means the slot keeps
-  // being stolen (another agy refreshing it hourly), and retrying forever would
-  // just burn the wrong account's quota.
+  // Gate 2 allows one self-heal on wrong-account mismatch, plus one retry after pre-stream auth refresh.
   let identityRetried = false
+  let authRetried = false
   for (;;) {
     try {
       proc = pool.acquireProcess({
@@ -478,6 +468,17 @@ export async function runAcpAttempt(
         pool.discardProcess(proc)
         return await settleIdentityFailure(deps, input, slot, sid || null, msg, identityFailure)
       }
+      if (isAcpPreStreamAuthError(msg)) {
+        pool.discardProcess(proc)
+        if (!authRetried && account) {
+          authRetried = true
+          deps.log?.(`acp pre-stream auth failure (${msg}) — discarding process, refreshing credentials for ${account.alias || account.id}, and retrying once`)
+          if (await healAcpAuthOnce({ deps, account, usesSharedSlot })) continue
+        }
+        deps.log?.(`acp pre-stream auth failure (${msg}) — discarded unauthenticated process, falling back to CLI -p`)
+        return null
+      }
+      if (!proc.isAlive() || proc.sessionCount === 0) pool.discardProcess(proc)
       deps.log?.(`acp pre-stream failure (${msg}) — falling back to CLI -p transport`)
       return null
     }
@@ -500,12 +501,7 @@ export async function runAcpAttempt(
   if (!input.isAux && sessionKey !== '') {
     deps.registerActiveRun(sessionKey, recorder.rec)
   }
-  // Arm the narrow hand-off now, but do NOT fire onFirstEvent yet. ACP reads the
-  // credential when the child starts, however this turn can still be abandoned
-  // below and re-run over the CLI — and the CLI path spawns a NEW agy that must
-  // read the slot again. Releasing the lease here would let the slot be
-  // rewritten (typically back to the primary) before that second spawn, so the
-  // fallback would silently run as a different account.
+  // Fallback path returns `null` keeping the slot held so CLI -p re-runs on the same account.
   const handoff = slot.armHandoff()
 
   const initEv = { kind: 'init' as const, conversationId: sid, raw: { transport: 'acp' } }

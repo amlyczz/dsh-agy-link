@@ -30,7 +30,7 @@ import type { ManagedAccount } from '../common/pool-types.ts'
 import type { AccountPoolManager } from './pool.ts'
 import type { QuotaService } from './quota.ts'
 import { detectSystemProxy, writeWindowsCredentialRaw } from './wincred.ts'
-import { writePrimaryCredential } from './credential-slot.ts'
+import { writePrimaryCredential, syncPrimaryDiskToken } from './credential-slot.ts'
 import { extractRefreshToken, saveCredentialBackup } from './credential-backup.ts'
 import { writeSystemKeyringRaw } from '../runtime/agy/keychain.ts'
 
@@ -86,6 +86,8 @@ export interface PoolAuthFlowDeps {
   refreshTokens?: typeof refreshTokens
   onUpdate?: () => void
   onIsolatedAccountCommitted?: (account: ManagedAccount) => void
+  /** Called when an existing account's credentials are replaced (evicts stale ACP processes). */
+  onAccountReauthenticated?: (accountId: string) => void
   /**
    * Injectable Windows credential-slot writer. Defaults to the real slot, but
    * tests MUST override it: the machine-wide slot is shared with the running
@@ -112,6 +114,7 @@ export class PoolAuthFlow {
   private readonly refresh: typeof refreshTokens
   private readonly onUpdate?: () => void
   private readonly onIsolatedAccountCommitted?: (account: ManagedAccount) => void
+  private readonly onAccountReauthenticated?: (accountId: string) => void
   private readonly writeSlot: (raw: string) => boolean
   private readonly writeKeyring: (raw: string, homeDir: string) => boolean
 
@@ -127,6 +130,7 @@ export class PoolAuthFlow {
     this.refresh = deps.refreshTokens ?? refreshTokens
     this.onUpdate = deps.onUpdate
     this.onIsolatedAccountCommitted = deps.onIsolatedAccountCommitted
+    this.onAccountReauthenticated = deps.onAccountReauthenticated
     this.writeSlot = deps.writeSlot ?? ((raw) => writeWindowsCredentialRaw(raw, 'gemini:antigravity'))
     this.writeKeyring = deps.writeKeyring ?? ((raw, homeDir) => writeSystemKeyringRaw(raw, homeDir))
   }
@@ -284,6 +288,7 @@ export class PoolAuthFlow {
             const docStr = buildAgyCredentialDoc(tokens)
             this.writeSlot(docStr)
             writePrimaryCredential({ raw: docStr, email, savedAt: Date.now() }, this.pool.dir)
+            syncPrimaryDiskToken(docStr, { log: this.log })
           } catch {
             // best effort
           }
@@ -311,6 +316,7 @@ export class PoolAuthFlow {
         void this.quota.refreshAccountQuota(existing).catch(() => undefined)
         this.log(`imported refresh token for existing account ${existing.id}${email ? ` <${email}>` : ''}`)
         this.setStatus({ phase: 'done', alias: existing.alias || email, code: 'account_activated' })
+        this.onAccountReauthenticated?.(existing.id)
         this.onUpdate?.()
         return { ok: true, account: existing, isNew: false, email }
       }
@@ -407,6 +413,7 @@ export class PoolAuthFlow {
         this.flow = null
         if (flow.listener) void flow.listener.close().catch(() => undefined)
         this.setStatus({ phase: 'done', alias: account.alias, code: 'account_activated' })
+        this.onAccountReauthenticated?.(account.id)
         this.onUpdate?.()
         return
       }
@@ -469,6 +476,7 @@ export class PoolAuthFlow {
         this.flow = null
         if (flow.listener) void flow.listener.close().catch(() => undefined)
         this.setStatus({ phase: 'done', alias: email, code: 'primary_activated' })
+        if (primary) this.onAccountReauthenticated?.(primary.id)
         this.onUpdate?.()
         return
       }
