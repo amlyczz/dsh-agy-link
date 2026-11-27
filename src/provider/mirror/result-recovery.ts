@@ -13,6 +13,7 @@
 import { cleanToolOutput } from '../../common/tool-output.ts'
 import { readFullToolResult } from '../../host/agy-db.ts'
 import type { RunRecording } from '../../host/recording.ts'
+import { isSensitivePath } from '../../common/sensitive-paths.ts'
 import { readFile, stat } from 'node:fs/promises'
 
 /**
@@ -51,6 +52,12 @@ export function shouldRecoverResult(tool: string, output: string): boolean {
 /** Tools whose result IS the file body, and whose args carry its path. */
 const FILE_READ_TOOLS = new Set(['read_file', 'view_file', 'open_file', 'read'])
 
+/** True when a tool call names a file this plugin must never copy into a result. */
+export function isSensitiveReadPath(args: unknown): boolean {
+  const path = pathFromArgs(args)
+  return path !== null && isSensitivePath(path)
+}
+
 /** True when a step of \	ool\ can be answered by reading the file it names. */
 export function canRecoverFromFile(tool: string): boolean {
   return FILE_READ_TOOLS.has(tool)
@@ -80,6 +87,7 @@ export async function recoverFromFile(tool: string, input: unknown): Promise<str
   if (!FILE_READ_TOOLS.has(tool)) return null
   const path = pathFromArgs(input)
   if (path === null) return null
+  if (isSensitivePath(path)) return null
   try {
     const st = await stat(path)
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return null
@@ -143,6 +151,10 @@ export async function recoverStepOutput(
   current: string,
 ): Promise<string> {
   if (current.trim() !== '') return current
+  // Before either recovery path: agy reading a credential file is agy's
+  // business, but a recovered result lands in DSH's session log, which a later
+  // model switch can replay to another vendor. The card stays empty instead.
+  if (isSensitiveReadPath(args)) return current
   const recovered = await recoverRecordedResult(rec, step, tool)
   if (recovered !== null) return recovered
   if (!canRecoverFromFile(tool)) return current

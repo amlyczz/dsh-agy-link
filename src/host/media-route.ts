@@ -5,6 +5,7 @@ import { createReadStream, existsSync, readdirSync, realpathSync, statSync, type
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
+import { SENSITIVE_PATH_RE } from '../common/sensitive-paths.ts';
 import {
   authorizePluginRequest,
   isRemoteOpenBlocked,
@@ -70,7 +71,6 @@ const IS_WIN = process.platform === 'win32';
 const SKIP_DIRS = new Set([
   'node_modules', '.git', '.cache', '.venv', 'dist', 'build', '.idea', '.vscode', '.next', '.nuxt', 'Library',
 ]);
-const SENSITIVE_PATH_RE = /(?:^|[/\\])(?:\.env(?:\.[^/\\]+)?|antigravity-oauth-token(?:\.bak)?|\.primary-credential\.json|\.ssh|Keychains|id_rsa|id_ed25519)(?:$|[/\\])/i;
 
 function safeDecodeUri(s: string): string | null {
   try {
