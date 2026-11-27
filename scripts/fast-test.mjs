@@ -16,7 +16,7 @@ const TEST_DIR = join(ROOT, 'test')
 
 const COMPONENT_TEST_MAP = {
   'src/index.ts': ['test/integration/lifecycle.test.ts', 'test/host/services.test.ts'],
-  'src/host/services.ts': ['test/host/services.test.ts', 'test/transport/http-contract-*.test.ts'],
+  'src/host/services.ts': ['test/host/services.test.ts', 'test/host/config-cache.test.ts', 'test/transport/http-contract-*.test.ts'],
   'src/host/adapter.ts': ['test/provider/adapter-*.test.ts', 'test/host/session-view.test.ts'],
   'src/host/active-runs.ts': ['test/host/session-view.test.ts'],
   'src/host/session-view.ts': ['test/host/session-view.test.ts', 'test/transport/http-contract-status-routes.test.ts'],
@@ -33,6 +33,7 @@ const COMPONENT_TEST_MAP = {
   'src/host/sessions.ts': ['test/host/sessions.test.ts'],
   'src/host/runner.ts': ['test/runtime/cross-platform.test.ts', 'test/runtime/proxy-keychain.test.ts'],
   'src/host/boot-hygiene.ts': ['test/runtime/boot-hygiene.test.ts'],
+  'src/host/config-cache.ts': ['test/host/config-cache.test.ts', 'test/host/services.test.ts'],
   'src/host/credential-slot.ts': ['test/host/credential-slot.test.ts', 'test/host/external-disk-sign-in.test.ts', 'test/features/acp/acp-auth-heal-and-wsl-tokens.test.ts', 'test/provider/issue101-slot-failover.test.ts'],
   'src/host/agy-log.ts': ['test/host/auth-jitter.test.ts', 'test/provider/failure-classifier.test.ts'],
   'src/host/agy-usage.ts': ['test/host/agy-usage.test.ts'],

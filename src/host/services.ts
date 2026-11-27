@@ -35,6 +35,7 @@ import { agyMcpConfigPath, mcpServerKey, registerBridgeMcpConfig, type BridgeReg
 import { readAccountCredential } from './credential-backup.ts'
 import { acquireCredentialSlot, prepareAccountTokenForSpawn, readPrimaryCredential, recoverPrimaryCredential, reinstallCredential } from './credential-slot.ts'
 import { buildCliQuotaDeps } from './quota-cli-deps.ts'
+import { createCachedConfigResolver } from './config-cache.ts'
 import { ACP_REPORT_RECORD_TYPE, createSessionRecords } from './session-records.ts'
 import {
   Semaphore,
@@ -77,7 +78,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     tokenSpeed: { lastTps: number | null; avgTps: number | null; outputTokens: number; measuredSteps: number; generatingMs: number }
   } | null = null
   let lastParser = new StreamJsonParser()
-  const getConfig = (): PluginConfig => resolveConfig(entryConfig)
+  const getConfig = createCachedConfigResolver((): PluginConfig => resolveConfig(entryConfig))
 
   const notifyPicker = (): void => {
     try {
@@ -527,7 +528,7 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
     if (key in current && JSON.stringify(current[key]) === JSON.stringify(value)) return
     current[key] = value
     try {
-      writeFileAtomicSync(file, JSON.stringify(current, null, 2))
+      writeFileAtomicSync(file, JSON.stringify(current, null, 2)); getConfig.invalidate()
     } catch (e) {
       log('failed to persist override: ' + String(e))
     }

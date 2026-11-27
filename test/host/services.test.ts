@@ -1,4 +1,4 @@
-﻿// Coverage for the composition factory `createHostServices`.
+// Coverage for the composition factory `createHostServices`.
 //
 // This exercises the REAL factory (no mocking of the module) against a temp
 // DSH home/state dir so it never reads or writes the developer's ~/.dsh or
@@ -20,6 +20,19 @@ type FakeCtx = {
   sessions?: unknown
 }
 const asCtx = (ctx: FakeCtx): Context => ctx as unknown as Context
+
+/**
+ * `getConfig` caches `resolveConfig` for its TTL (issue #229), so an env edit
+ * is observed only once the TTL elapsed. Returns a knob that moves the cache's
+ * clock forward without sleeping.
+ */
+function clockAdvance(t: TestContext): (ms: number) => void {
+  const realNow = Date.now
+  let offset = 0
+  Date.now = () => realNow() + offset
+  t.after(() => { Date.now = realNow })
+  return (ms) => { offset += ms }
+}
 
 /**
  * Redirect HOME and every DSH path to a fresh temp dir for the test, and restore
@@ -100,6 +113,7 @@ test('returns the full services shape with sane defaults', (t) => {
 
 test('getConfig reflects entryConfig, runtime overrides and env (env wins)', (t) => {
   sandbox(t)
+  const advance = clockAdvance(t)
   const services = createHostServices(asCtx({}), {
     enabled: false,
     defaultModel: 'entry-model',
@@ -109,25 +123,28 @@ test('getConfig reflects entryConfig, runtime overrides and env (env wins)', (t)
   assert.equal(services.getConfig().defaultModel, 'entry-model')
   assert.equal(services.getConfig().workspaceRoot, '/entry/ws')
 
-  // Runtime override beats entryConfig.
+  // Runtime override beats entryConfig (setOverride invalidates the cache at once).
   services.setOverride('defaultModel', 'override-model')
   assert.equal(services.getConfig().defaultModel, 'override-model')
   assert.equal(services.getConfig().enabled, false)
 
-  // Env wins last.
+  // Env wins last (after the cache TTL).
   process.env.DSH_AGY_DEFAULT_MODEL = 'env-model'
   process.env.DSH_AGY_ENABLED = 'true'
+  advance(2_000)
   assert.equal(services.getConfig().defaultModel, 'env-model')
   assert.equal(services.getConfig().enabled, true)
 
   delete process.env.DSH_AGY_DEFAULT_MODEL
   delete process.env.DSH_AGY_ENABLED
+  advance(2_000)
   assert.equal(services.getConfig().defaultModel, 'override-model')
   assert.equal(services.getConfig().enabled, false)
 })
 
 test('getConfig covers mcpConfigScope / disableTelemetry / quotaViaCli / workspaceRoot / proxyUrl branches', (t) => {
   sandbox(t)
+  const advance = clockAdvance(t)
   const base = defaultConfig()
   const services = createHostServices(asCtx({}), {
     mcpConfigScope: 'workspace',
@@ -151,12 +168,13 @@ test('getConfig covers mcpConfigScope / disableTelemetry / quotaViaCli / workspa
   assert.equal(empty.getConfig().workspaceRoot, base.workspaceRoot)
   assert.equal(empty.getConfig().proxyUrl, base.proxyUrl)
 
-  // Env overrides for the same knobs.
+  // Env overrides for the same knobs (read once the cache TTL elapsed).
   process.env.DSH_AGY_MCP_CONFIG_SCOPE = 'both'
   process.env.DSH_AGY_DISABLE_TELEMETRY = 'false'
   process.env.DSH_AGY_QUOTA_VIA_CLI = 'false'
   process.env.DSH_AGY_WORKSPACE_ROOT = '/env-ws'
   process.env.DSH_AGY_PROXY_URL = 'http://env-proxy:2'
+  advance(2_000)
   assert.equal(services.getConfig().mcpConfigScope, 'both')
   assert.equal(services.getConfig().disableTelemetry, false)
   assert.equal(services.getConfig().quotaViaCli, false)
