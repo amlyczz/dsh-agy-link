@@ -86,7 +86,8 @@
 | 📋 **按账号真实模型目录与编排器配置** | 同步 `agy 1.5.16`（含 `Gemini 4 Carbon` 与 `Orchestrator`）模型目录，提供允许清单勾选（`selectedModels`）、`poolWideCatalog` 并集路由、动态思考档自愈，以及 Orchestrator 上级 Planner / 下级 Executor 独立模型配置 |
 | 🛡️ **4 档权限模式、OS 沙箱与反向 MCP 桥** | 支持 `skip`、`auto`、`accept-edits`、`plan`（`/aplan` 单次只读守卫）与 `--sandbox`；`mcpBridge` 支持按当前会话与模型步骤调用 DSH 已开放的工具。详见[桥接配置](docs/CONFIGURATION.md) |
 | ⚡ **默认持久化 `agy acp` / CLI (`-p`) 双传输** | 默认开启持久化 `agy acp` stdio JSON-RPC 会话池（主回合与 `isAux` 辅助请求均复用，临时辅助会话自动 `session/close`，流前异常无缝回退 `cli`）；后台 `/usage` 配额刷新自动避让活跃对话回合 |
-| 🃏 **全链路工具卡片与 Generative UI** | 镜像 Terminal / Diff / Read / Search / MCP（含 `alwaysLoad` 直调拆解）卡片，并为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理与 `image-generator` 提供专属卡片；支持 `<agent-embed>` 严格 CSP 沙箱微件 |
+| 🃏 **全链路工具卡片与 Generative UI** | 镜像 Terminal / Diff / Read / Search / MCP（含 `alwaysLoad` 直调拆解）卡片，并为 `swarm`、`run_workflow`、`schedule`、`manage_task`、子代理与 `image-generator` 提供专属卡片；工具结果会剥离 agy 状态信封、解出 MCP `CallToolResult` 载荷（含内联图片）；支持 `<agent-embed>` 严格 CSP 沙箱微件 |
+| 🧭 **Orchestrator 编排页（右栏）** | 新增「编排」页与头部入口：两个席位卡（planner / executor 及其模型、调用次数、最近上下文）、planner 的计划（Markdown 渲染）、`update_steps` 待办、子代理与后台任务、按席位着色的工具步骤流，以及本轮 token 与真实上下文窗口；每张工具卡同时显示席位徽章，便于分辨同一轮里哪个模型在动手 |
 | 🎬 **多模态附件与内联播放** | 通过 `--add-dir` 安全暂存 **图片、PDF、音频、视频** 附件（非图单文件默认上限 `mediaMaxFileBytes` 20 MiB）；聊天内支持图片全屏灯箱、视频预览、**内联 `<audio>` 播放器**、Mermaid 图表、交互决策芯片与上下文压缩卡 |
 | 📊 **原生上下文缓存与 1M 计量** | 无损映射 `cache_read_tokens`、思考 token 与 1M 物理上下文负载计量；超长上下文自动采用 8:2 掐头去尾并按阈值切为临时 `.md` 分页读取 |
 | 🎨 **对话内生图与命令行生图** | 注册 `agy_image` DSH 工具（`imageTool: true`）、`/agy image` 命令、`image-generator` 卡片与 `dsh-agy-image` CLI；优先 `gemini-4-hydrogen`（否则回退 `gemini-3.8-flash`），均衡 `medium` 思考档 |
