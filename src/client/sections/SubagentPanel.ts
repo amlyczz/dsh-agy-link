@@ -12,6 +12,7 @@ import { h, useEffect, useRef, useState } from '../react.ts';
 import { win } from '../api.ts';
 import { Button } from '../ui/Button.ts';
 import { portalToBody } from '../ui/Modal.ts';
+import { openOrchestrationTab } from '../orchestration/tab.ts';
 
 export interface SubagentItem {
 	conversationId: string
@@ -176,7 +177,12 @@ export function SubagentControl(props: {
 		className: 'agy-btn agy-subagent-chain',
 		style: { padding: '2px 8px', fontSize: '11px', gap: '4px' },
 		...(open ? {} : {}),
-		onClick: () => setOpen((v) => !v),
+		// Merged into the 编排 page: the popover only remains for hosts without a right
+	// Sidebar, where there is nowhere else to show the list.
+	onClick: () => {
+		if (openOrchestrationTab()) return
+		setOpen((v) => !v)
+	},
 	},
 		h('span', { style: { color: tint, fontSize: '11px' } }, '●'),
 		h('span', { style: { color: tint, fontWeight: 700, fontSize: '10.5px' } }, String(runningCount)),

@@ -4,6 +4,7 @@
 export type ReactApi = {
 	createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown;
 	useState: <S>(initial: S) => [S, (next: S | ((prev: S) => S)) => void];
+	useEffect?: (setup: () => (() => void) | void, deps?: unknown[]) => void;
 };
 
 export function react(): ReactApi {

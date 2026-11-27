@@ -12,6 +12,8 @@ import { installMermaidRendering } from './mermaid.ts';
 import { installAutoExpandReasoning } from './reasoning.ts';
 import { installImageEnhancer, setClientContext } from './images.ts';
 import { installSidebarMediaPreviews } from './images/sidebar-preview.ts';
+import { setServicesContext } from './services.ts';
+import { installOrchestrationTab } from './orchestration/tab.ts';
 import { installAgentEmbedRenderer } from './embed.ts';
 import { installDecisionChips } from './decisions.ts';
 import { installTranslationUi } from './translate.ts';
@@ -50,6 +52,7 @@ export interface ClientContext extends Context {
 
 export function apply(ctx: ClientContext): void {
 	setClientContext(ctx);
+	setServicesContext(ctx);
 	injectGlobalStyles();
 	ctx.effect(() => {
 		ensureStatusPolling();
@@ -199,6 +202,15 @@ export function apply(ctx: ClientContext): void {
 		installAgyToolView(ctx);
 	} catch (err) {
 		console.warn('[dsh-agy-link] agy tool view registration failed:', err);
+	}
+
+	// 编排 page in the right Sidebar (Orchestrator visibility): a tab type plus its
+// body/title seats. Hosts without the sidebar packages keep everything else —
+// the header chip and the panel simply stay absent.
+	try {
+		installOrchestrationTab(ctx);
+	} catch (err) {
+		console.warn('[dsh-agy-link] orchestration tab registration failed:', err);
 	}
 
 	// Auto-expand reasoning blocks containing full model thought prose.
