@@ -114,6 +114,35 @@ test('pool-reset wait: a reset beyond the cap fails fast, names the cap and keep
   assert.ok(Date.now() - started < 1_000, 'a reset outside the cap must not be slept on')
 })
 
+test('pool-reset wait: a blocker the reset cannot repair (model missing from the catalog) fails fast', async () => {
+  // acc_cooling holds a finite cooldown, acc_other simply lacks the model. The
+  // reset will not make acc_other able to serve it, so a chat turn must not park
+  // for 15 minutes on a blocker that outlives the reset.
+  const cooling = account('acc_cooling')
+  const other = account('acc_other')
+  const pool = {
+    getAccounts: () => [cooling, other],
+    getAccount: () => undefined,
+    getPoolData: () => ({ lastActiveAccountId: undefined, activeAccountIds: {}, manualPinAt: 0 }),
+    isAccountEligible: () => false,
+    isAccountEligibleForModel: () => false,
+    explainIneligibility: (a: ManagedAccount) => (a.id === 'acc_cooling' ? 'cooldown' : 'model-unsupported'),
+    selectAccount: () => null,
+    findAccount: () => undefined,
+    markAccountActive: () => {},
+    setActiveAccount: () => {},
+    getEarliestAvailableCountdown: () => 5_000,
+    getEarliestResetCountdown: () => 5_000,
+  } as unknown as AccountPoolManager
+  const started = Date.now()
+  await assert.rejects(run(pool, { poolResetWaitMs: 900_000 }), (error: { code?: string }) => {
+    assert.equal(error.code, 'AGY_ERROR')
+    return true
+  })
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 1_000, 'no wait when a non-reset blocker remains, took ' + elapsed + 'ms')
+})
+
 test('pool-reset wait: a snapshot that never advances fails after one round instead of parking to the cap', async () => {
   // A stale quota row (or a reset that already landed but was never refreshed)
   // keeps reporting the same countdown. Re-arming it would sleep until the

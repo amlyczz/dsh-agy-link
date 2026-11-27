@@ -214,6 +214,30 @@ function resetDelay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
+ * True when a reset is what the pool is actually waiting for.
+ *
+ * Every enabled account must be held back by quota or a 429 cooldown — the two
+ * states the next reset repairs. A missing plan, a model absent from the
+ * catalog, a signed-out or disabled account is still true after the reset, so
+ * parking the turn on one would just delay the real error (a chat turn asking
+ * for a model only a cooling account has must fail now, not in 15 minutes).
+ * A pool without `explainIneligibility` cannot be judged and keeps the wait.
+ */
+function resetCanUnblockPool(pool: AccountPoolManager, family: ModelFamily, model: string): boolean {
+  if (typeof pool.explainIneligibility !== 'function') return true
+  const accounts = pool.getAccounts().filter((a) => a.enabled)
+  if (accounts.length === 0) return false
+  const now = Date.now()
+  return accounts.every((a) => {
+    const reason = pool.explainIneligibility?.(a, family, now, model) ?? null
+    // `null` means the pool reports the account as eligible even though it
+    // handed us nothing; that is not provably a non-reset blocker, and the
+    // bounded wait is cheap, so it keeps the wait.
+    return reason === 'cooldown' || reason === 'quota' || reason === null
+  })
+}
+
+/**
  * Wait out a finite pool reset (quota window or cooldown) before giving up.
  *
  * A near-drained 5h window is benched by the low-quota guard (LOW_QUOTA_5H) well
@@ -229,11 +253,13 @@ async function waitForPoolReset(
   deps: AccountSelectionDeps,
   pool: AccountPoolManager,
   family: ModelFamily,
+  model: string,
   pick: () => ManagedAccount | undefined,
   capMs: number,
   signal?: AbortSignal,
 ): Promise<ManagedAccount | undefined> {
   if (!(capMs > 0)) return undefined
+  if (!resetCanUnblockPool(pool, family, model)) return undefined
   const deadline = Date.now() + capMs
   const countdownNow = (): number | null =>
     pool.getEarliestAvailableCountdown?.(family) ?? pool.getEarliestResetCountdown(family)
@@ -403,7 +429,7 @@ export async function selectSessionAccount(input: AccountSelectionInput): Promis
     // Auxiliary calls (title / compaction / translate / review) never park on a
     // pool reset: their latency budget belongs to the failed turn, not to them.
     if (account === undefined && !isAux) {
-      account = await waitForPoolReset(deps, pool, family, pick, cfg.poolResetWaitMs, signal)
+      account = await waitForPoolReset(deps, pool, family, activeModel, pick, cfg.poolResetWaitMs, signal)
     }
     if (account === undefined) account = await healStaleModelSnapshot(deps, pool, family, activeModel)
     if (account === undefined) throw unavailableError(pool, family, activeModel, cfg.poolResetWaitMs)
