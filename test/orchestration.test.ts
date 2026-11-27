@@ -12,6 +12,9 @@ import { readModeUpdate, readPlanUpdate, readSessionInfoTitle, readToolPlan, rea
 import { learnedContextWindow, noteContextWindow, resetLearnedContextWindowsForTests } from '../src/features/acp/context-window.ts'
 import { noteToolSeat, resetToolSeatsForTests, toolSeatsForRun } from '../src/features/orchestration/tool-seats.ts'
 import { contextPercent, formatDuration, formatTokens } from '../src/client/orchestration/format.ts'
+import { beginOrchestrationTurn, instrumentTurn } from '../src/features/orchestration/instrument.ts'
+import { noteToolSeatFromRecording } from '../src/features/orchestration/tool-seats.ts'
+import type { AgyEvent } from '../src/common/types/events.ts'
 
 test('seatForModel splits orchestrator planners from executors', () => {
   assert.equal(isPlannerModel('gemini-pro-orchestrator-neon'), true)
@@ -226,4 +229,85 @@ test('a file read with no streamed result is answered from the file itself', asy
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('the transport wiring reports to the ledger without touching the transcript', () => {
+  resetOrchestrationForTests()
+  resetToolSeatsForTests()
+  const appended: AgyEvent[] = []
+  const learned: Array<[string, number | undefined]> = []
+  beginOrchestrationTurn(false, 'sess-wire', 'conv-wire')
+  const wiring = instrumentTurn({
+    isAux: false,
+    sessionKey: 'sess-wire',
+    conversationId: 'conv-wire',
+    activeModel: 'gemini-4-neon-high',
+    append: (ev) => appended.push(ev),
+    learnWindow: (model, size) => learned.push([model, size]),
+  })
+  wiring.resume()
+  // transcript.jsonl is the only place CACP names the seat (ACP sends no model).
+  wiring.noteTranscriptSample({ model: 'gemini-pro-orchestrator-neon', usage: { input_tokens: 26069, output_tokens: 771 } })
+  // usage_update carries the REAL window; it must be learned under the active model.
+  wiring.noteUpdate({ sessionUpdate: 'usage_update', used: 4000, size: 1048576 })
+  wiring.noteUpdate({ sessionUpdate: 'plan', entries: [{ content: '读日志', status: 'pending' }] })
+  const step = {
+    kind: 'step',
+    stepKey: 's1',
+    stepKind: 'tool',
+    text: '',
+    state: 'ACTIVE',
+    tool: { name: 'run_command', args: { CommandLine: 'ls' } },
+  } as unknown as AgyEvent
+  wiring.noteStep(step, {})
+  // exit_plan_mode carries the plan body in its arguments.
+  const planStep = {
+    kind: 'step',
+    stepKey: 's2',
+    stepKind: 'tool',
+    text: '',
+    state: 'DONE',
+    tool: { name: 'exit_plan_mode', args: { plan: '目标：把编排显出来' } },
+  } as unknown as AgyEvent
+  wiring.noteStep(planStep, { sessionUpdate: 'tool_call', rawInput: { plan: '目标：把编排显出来' } })
+  // A detached task-log burst: ledger yes, transcript no.
+  wiring.onEvent({
+    kind: 'step',
+    stepKey: 'log1',
+    stepKind: 'subagent',
+    text: '[后台任务 · task-9] tail',
+    state: 'ACTIVE',
+    raw: { kind: 'task-log', taskId: 'task-9', lines: ['tail'], skipped: 3 },
+  } as unknown as AgyEvent)
+  wiring.onEvent({ kind: 'init', conversationId: 'conv-wire' } as unknown as AgyEvent)
+  wiring.settle()
+
+  // The tool step was stamped with the seat that was driving.
+  assert.equal((step as { model?: string }).model, 'gemini-pro-orchestrator-neon')
+  // Only the non-log event reached the transcript.
+  assert.deepEqual(appended.map((ev) => ev.kind), ['init'])
+  assert.deepEqual(learned, [['gemini-4-neon-high', 1048576]])
+  const snap = snapshotOrchestration('sess-wire')
+  assert.ok(snap !== null)
+  assert.equal(snap?.live, false)
+  assert.equal(snap?.context.seat, 'planner')
+  assert.equal(snap?.plan?.text, '目标：把编排显出来')
+  // the ACP `plan` update is the checklist, not the plan body
+  assert.deepEqual(snap?.todos.map((t) => t.text), ['读日志'])
+  assert.deepEqual(snap?.steps.map((s) => s.tool), ['run_command', 'exit_plan_mode'])
+  assert.deepEqual(snap?.background.map((b) => [b.taskId, b.skipped]), [['task-9', 3]])
+})
+
+test('a recorded step remembers the seat it ran on, and never fails over it', () => {
+  resetToolSeatsForTests()
+  const rec = { runId: 'run-seat', eventAt: (step: number) => (step === 3 ? { model: 'gemini-flash-worker-agy' } : undefined) }
+  noteToolSeatFromRecording(rec, 3, 'read_file')
+  noteToolSeatFromRecording(rec, 4, 'read_file')
+  // A recording that cannot answer (a replayed CLI run) must stay quiet.
+  noteToolSeatFromRecording({ runId: 'run-seat', eventAt: () => { throw new Error('no events') } }, 5, 'read_file')
+  const seats = toolSeatsForRun('run-seat')
+  assert.equal(seats['3']?.seat, 'executor')
+  assert.equal(seats['3']?.short, 'flash worker')
+  assert.equal(seats['4']?.seat, 'unknown')
+  assert.equal(seats['5'], undefined)
 })

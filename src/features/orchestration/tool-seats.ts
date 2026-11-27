@@ -68,3 +68,23 @@ export function toolSeatsForRun(runId: string): Record<string, ToolSeatEntry> {
 export function resetToolSeatsForTests(): void {
   byRun.clear()
 }
+
+/**
+ * Record the seat for one step of a recorded run, reading the model the
+ * recorder stamped on the event when it arrived.
+ *
+ * Attribution is cosmetic, so anything unexpected (a missing event, a step
+ * that never got a model) must stay quiet rather than fail the tool call.
+ */
+export function noteToolSeatFromRecording(
+  rec: { runId: string; eventAt(step: number): unknown },
+  step: number,
+  tool: string,
+): void {
+  try {
+    const ev = rec.eventAt(step) as { model?: string } | undefined
+    noteToolSeat(rec.runId, step, tool, typeof ev?.model === 'string' ? ev.model : '')
+  } catch {
+    // cosmetic only
+  }
+}

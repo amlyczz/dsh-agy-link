@@ -129,3 +129,22 @@ export async function recoverRecordedResult(
     ? body.slice(0, MAX_RECOVERED_CHARS) + '\n… (+' + (body.length - MAX_RECOVERED_CHARS) + ' chars)'
     : body
 }
+
+/**
+ * Best-effort output for one recorded step: keep what the transport sent,
+ * otherwise read it back from the agy conversation DB, otherwise — for a file
+ * read — show the file agy itself read.
+ */
+export async function recoverStepOutput(
+  rec: RunRecording,
+  step: number,
+  tool: string,
+  args: unknown,
+  current: string,
+): Promise<string> {
+  if (current.trim() !== '') return current
+  const recovered = await recoverRecordedResult(rec, step, tool)
+  if (recovered !== null) return recovered
+  if (!canRecoverFromFile(tool)) return current
+  return (await recoverFromFile(tool, args)) ?? current
+}
