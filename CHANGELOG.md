@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.110 (2026-11-28)
+
+### English
+
+- **Fix(goal, plan): `/goal` completes and `/plan` exits under DSH's PTC preset (issue #233).** PTC exposes ONE direct tool, `run_code`; `update_goal` and `exit_plan_mode` exist only inside the tools SDK it renders into the system prompt. The bridge asked the direct tool list for them, concluded "unsupported" and never synthesised the completion — DSH kept dispatching `<goal_round>` (73 idle rounds observed) — and plan mode lost its read-only downgrade. Each host tool is now resolved three ways: **direct** when it is in the list, **through `run_code`** when the list is PTC's and the SDK's `ToolArgsMap` names it, otherwise unavailable (a direct call is rejected by the PTC executor). Under PTC the two bridge calls travel as a `run_code` program that calls the tool from the SDK and logs its JSON result — no top-level `return` (issue #103) — and keep their bridge call ids, so the continuation scans still recognise them.
+- **Fix(goal): a second `/goal` in the same session starts working on its first round (issue #233).** With no chat message between two goals, the new goal's `<goal_round>` was scanned past and its first rounds read as the tail of the previous goal's completion — seven empty turns until round 8. A goal round now ends that scan.
+- **Fix(client): the tool-card seat cache is bounded.** It kept one table per mirror run for as long as the window stayed open, while the host only keeps attribution for its last 16 runs. The cache now holds the same 16 and refetches an evicted run when one of its cards asks.
+
+### 中文
+
+- **修复(goal / plan)：DSH 的 PTC 预设下 `/goal` 能完成、`/plan` 能退出（issue #233）。** PTC 只把 `run_code` 一个工具暴露为可直接调用，`update_goal` 与 `exit_plan_mode` 只存在于渲染进系统提示词的 tools SDK 里。桥接此前只查"可直接调用的工具列表"，于是判定"不支持"，从不合成完成调用——DSH 便一轮轮派发 `<goal_round>`（实测空转 73 轮）——计划模式也丢失了只读降级。现在每个宿主工具有三种判定：在列表里为**直调**；列表是 PTC 的、且 SDK 的 `ToolArgsMap` 里声明了它，为**经 `run_code` 调用**；否则不可用（直接调用会被 PTC 执行器拒绝）。PTC 下这两个桥接调用以一段 `run_code` 程序发出，从 SDK 内部调用对应工具并打印其 JSON 结果——不使用顶层 `return`（issue #103）——并保留桥接调用 ID，续跑判定照旧认得它们。
+- **修复(goal)：同一会话里的第二个 `/goal` 从第一轮就开始干活（issue #233）。** 两个目标之间没有聊天消息时，新目标的 `<goal_round>` 会被反向扫描跨过，其前几轮被当成上一个目标的收尾——空返回 7 轮，直到第 8 轮。现在目标回合会成为该扫描的边界。
+- **修复(client)：工具卡片的席位缓存有上限。** 此前窗口开多久它就存多久（每次镜像运行一张表），而宿主只保留最近 16 次运行的归属。现在缓存同样只留 16 次，被淘汰的运行在卡片需要时重新取。
+
 ## 0.6.109 (2026-11-28)
 
 ### English
