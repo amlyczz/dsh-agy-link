@@ -19,6 +19,8 @@ const COMPONENT_TEST_MAP = {
   'src/host/services.ts': ['test/host/services.test.ts', 'test/host/config-cache.test.ts', 'test/transport/http-contract-*.test.ts'],
   'src/host/adapter.ts': ['test/provider/adapter-*.test.ts', 'test/host/session-view.test.ts'],
   'src/host/dsh-goal.ts': ['test/integration/dsh-goal.test.ts', 'test/provider/adapter-stream.test.ts'],
+  'src/domain/accounts/quota-exhaustion.ts': ['test/domain/quota-exhaustion.test.ts', 'test/domain/pool.test.ts'],
+  'src/features/acp/settle.ts': ['test/features/acp/acp-transient-banners.test.ts'],
   'src/host/active-runs.ts': ['test/host/session-view.test.ts'],
   'src/host/session-view.ts': ['test/host/session-view.test.ts', 'test/transport/http-contract-status-routes.test.ts'],
   'src/provider/prompt.ts': ['test/provider/adapter-*.test.ts', 'test/provider/model-switch-stale-bindings.test.ts'],
