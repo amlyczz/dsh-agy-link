@@ -9,6 +9,8 @@ import { Err } from '../common/types.ts'
 import type { RunningProcess } from '../host/runner.ts'
 import { ensureIsolatedKeychain, startAgyProcess } from '../host/runner.ts'
 import { agyHomeDirFor, snapshotAgyLogs, type AgyLogSnapshot } from '../host/agy-log.ts'
+import { readAccountCredential } from '../domain/credentials/backup.ts'
+import { accountTokenFilePath } from '../domain/credentials/docs.ts'
 import { buildAgyEnv, pickProxy } from '../runtime/net/account-env.ts'
 import {
   persistBindingOnResult,
@@ -38,6 +40,12 @@ function abortableDelay(ms: number, signal: AbortSignal | undefined, abortedMess
 function brief(s: string): string {
   const flat = s.trim().replace(/\s+/g, ' ')
   return flat.length > 300 ? flat.slice(0, 300) + '...' : flat
+}
+
+function prepareIsolatedAccountHome(account: AttemptInput['account'], log?: (msg: string) => void): void {
+  if (!account?.dir) return
+  ensureIsolatedKeychain(account.dir)
+  if (!account.systemHome) readAccountCredential(accountTokenFilePath(account, account.dir), log)
 }
 
 export interface SpawnedAttempt {
@@ -71,7 +79,7 @@ export async function startAttemptProcess(
   // Only SECONDARY pool accounts get an isolated HOME. The primary account
   // rides the real system HOME (agy 1.1.15 keeps credentials in the macOS
   // Keychain); injecting HOME there signs agy out.
-  if (account && account.dir) ensureIsolatedKeychain(account.dir)
+  prepareIsolatedAccountHome(account, deps.log)
   // Snapshot agy's per-run log set BEFORE spawning so evidence found after the
   // run can be attributed to THIS run (each invocation writes a fresh
   // cli-*.log). Only this log separates a genuine sign-out from a keyring
