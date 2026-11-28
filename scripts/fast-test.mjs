@@ -18,6 +18,7 @@ const COMPONENT_TEST_MAP = {
   'src/index.ts': ['test/integration/lifecycle.test.ts', 'test/host/services.test.ts'],
   'src/host/services.ts': ['test/host/services.test.ts', 'test/host/config-cache.test.ts', 'test/transport/http-contract-*.test.ts'],
   'src/host/adapter.ts': ['test/provider/adapter-*.test.ts', 'test/host/session-view.test.ts'],
+  'src/host/dsh-goal.ts': ['test/integration/dsh-goal.test.ts', 'test/provider/adapter-stream.test.ts'],
   'src/host/active-runs.ts': ['test/host/session-view.test.ts'],
   'src/host/session-view.ts': ['test/host/session-view.test.ts', 'test/transport/http-contract-status-routes.test.ts'],
   'src/provider/prompt.ts': ['test/provider/adapter-*.test.ts', 'test/provider/model-switch-stale-bindings.test.ts'],
@@ -76,7 +77,7 @@ const PREFIX_TEST_MAP = [
   ['src/client/images/', ['test/client/client-dom.test.ts', 'test/transport/media-route.test.ts']],
   ['src/client/toolview/', ['test/client/toolview.test.ts', 'test/client/run-code-view.test.ts']],
   ['src/client/sections/', ['test/client/client-render.test.ts', 'test/client/client-account-card-style.test.ts', 'test/client/catalog-rows.test.ts', 'test/client/orchestration-header.test.ts', 'test/client/subagent-panel.test.ts', 'test/client/session-badge.test.ts']],
-  ['src/client/orchestration/', ['test/client/orchestration-header.test.ts']],
+  ['src/client/orchestration/', ['test/client/orchestration-header.test.ts', 'test/client/orchestration-seats.test.ts']],
   ['src/client/hooks/', ['test/client/client-api.test.ts', 'test/client/client-render.test.ts']],
   ['src/client/ui/', ['test/client/modal-overlay-isolation.test.ts', 'test/client/client-render.test.ts']],
 ]

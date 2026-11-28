@@ -24,6 +24,29 @@
 
 **为什么记下来而不是一次全抽**：这几处分别属于 ACP、凭证、宿主调度三条高风险链路；一次性大改会让回归范围失控。按上表逐个推进，每次只动一个概念。
 
+## 2026-11-28 扫描（402 模块 / 77,889 行 / 0 环 / 0 方向违规；测试 216 文件 / 57,778 行）
+
+四天相对 11-24：+59 模块、+15% 源码；**贴上限（≥580 行）的文件从 9 个变成 18 个**，其中 4 个正好停在 599：`host/services.ts`、`host/recording.ts`、`features/background/watcher.ts`、`client/sections/AccountsPanel.ts`。增长本身是健康的（新职责基本都开了新模块：provider +13、host +8、acp +6、common +6），要盯的是"往同一批大文件里继续加"的趋势——这几天两侧各撞了三次预算。
+
+**已抽出**：`provider/prompt.ts` 596 → 420（`prompt-binding.ts`、`live-last-request.ts`、`stale-model-bindings.ts`）；`mapper/event-mapper.ts` 599 → 582；`provider/prompt-text.ts` 650 → 583。
+
+**结构性排查（本次新增的三类检查，结论供后续复用）**：
+
+| 检查 | 结果 | 处置 |
+| --- | --- | --- |
+| 模块级 `Map` / `Set` 是否有上限（31 处） | 宿主侧全部有界（账本 8 会话 / 16 次运行 / 8 会话缓存等）；**客户端工具卡片席位缓存无上限**（按运行累加，宿主只留 16 次） | **已修**（`client/orchestration/seats.ts` 限 16，按需重取）。`client/reasoning.ts` 的 `handledTurns`、`client/btw.ts` 的 `sessionStore` 随回合 / 会话增长但条目很小，暂不动 |
+| 空 `catch {}`（454 处）中"写路径静默失败" | 跟在写入后的空 catch 全部是副写入：凭据备份、目录缓存落盘、临时文件清理、`.last-good` 备份；主持久化路径不在其中 | 无需处理；保留此检查法 |
+| 定时任务里的同步读盘 | `features/background/brain-poll.ts` 有 15 处 `*Sync` 读盘且被轮询调用；每次只读几个小文件，量级远小于 #229 修掉的 950ms 孤儿扫描 | 下次动该模块时改为异步 fs（`media-transcode.ts` 23 处同步读盘同理，先量再改） |
+
+**下一批抽取候选**（按"纯函数 → 无状态分支 → 有状态协作"）：
+
+| 模块 | 行数 | 可抽出的职责 |
+| --- | --- | --- |
+| `src/host/recording.ts` | 599 | 镜像调用 ID 的编解码（纯函数，`parseMirrorCallId` 一族）→ `recording-ids.ts` |
+| `src/host/services.ts` | 599 | 组合根只留装配；`isXxxAvailable` 一类的探测函数集中到 `host/service-probes.ts` |
+| `src/features/background/watcher.ts` | 599 | 定时器调度与唤醒判定分离（与 #225 的 schedule release 相邻，等其稳定后再动） |
+| `src/client/sections/AccountsPanel.ts` | 599 | 配额条渲染分离 |
+
 ## 2026-11-25 测试树与样式表
 
 | 动作 | 结果 |
