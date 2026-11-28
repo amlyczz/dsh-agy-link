@@ -9,15 +9,11 @@
 // it never calls DSH's external host tools directly. Without this bridge,
 // agy would report "Goal achieved" and exit, but DSH would consider the goal
 // still active and drive Round 2, Round 3... in an infinite loop.
-import type { Message, StreamChunk, ToolCallId } from '@deepseek-ai/dsh-llm'
-import * as dshLlm from '@deepseek-ai/dsh-llm'
+import type { Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { bridgeCall, nextBridgeCallId, type ExcludeUnavailable } from './host-tools.ts'
+export { resolveHostToolAccess, sdkDeclaresTool, toToolCallId, type HostToolAccess, type HostToolSupport } from './host-tools.ts'
 import { toolCallIdOf } from '../provider/continuation.ts'
 import { isSyntheticHarnessMessage, isToolResultMessage, textOf } from '../provider/prompt-text.ts'
-
-export const toToolCallId: (id: string) => ToolCallId =
-  (dshLlm as { ToolCallId?: (id: string) => ToolCallId; CallId?: (id: string) => ToolCallId }).ToolCallId ??
-  (dshLlm as { ToolCallId?: (id: string) => ToolCallId; CallId?: (id: string) => ToolCallId }).CallId ??
-  ((id: string) => id as unknown as ToolCallId)
 
 export interface GoalContext {
   goalId?: string
@@ -245,54 +241,6 @@ export function isGoalToolContinuation(messages: readonly Message[]): boolean {
   return false
 }
 
-/** How a host tool can be reached from a model-facing tool call in this deployment. */
-export type HostToolAccess = 'direct' | 'run_code' | 'unavailable'
-
-/**
- * What the event mapper receives: `false` when the tool cannot be reached at
- * all, `true` / `'direct'` for a direct call, `'run_code'` under PTC.
- */
-export type HostToolSupport = boolean | Exclude<HostToolAccess, 'unavailable'>
-
-/**
- * True when the PTC tools SDK names `toolName` (issue #233).
- *
- * DSH's PTC preset exposes ONE direct tool, `run_code`; everything else is
- * declared in the TypeScript SDK it renders into the system prompt
- * (`renderToolsSdk`), where every tool is a key of `interface ToolArgsMap`.
- * Looking for the key inside that block — and only there — is what keeps a
- * tool that the prompt merely MENTIONS from counting as available.
- */
-export function sdkDeclaresTool(system: string | undefined, toolName: string): boolean {
-  if (!system || toolName === '') return false
-  const open = system.indexOf('interface ToolArgsMap {')
-  if (open < 0) return false
-  const end = system.indexOf('\n}', open)
-  const body = end < 0 ? system.slice(open) : system.slice(open, end)
-  const escaped = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`^\\s*(?:${escaped}|"${escaped}")\\s*:`, 'm').test(body)
-}
-
-/**
- * Decide how the bridge may call a host tool.
- *
- * `direct` when the tool is in the model-facing list. `run_code` when it is
- * not, but the list is PTC's (`run_code` without the `agy_tool` mirror) and
- * the tools SDK declares it: the call then has to travel inside a program.
- * Otherwise `unavailable` — calling anyway would be rejected by the PTC
- * executor ("only run_code is callable directly").
- */
-export function resolveHostToolAccess(
-  toolName: string,
-  tools: readonly { name: string }[] | undefined,
-  system: string | undefined,
-): HostToolAccess {
-  const names = new Set((tools ?? []).map((t) => t.name))
-  if (names.has(toolName)) return 'direct'
-  if (names.has('run_code') && !names.has('agy_tool') && sdkDeclaresTool(system, toolName)) return 'run_code'
-  return 'unavailable'
-}
-
 export type PlanToolContinuation = 'none' | 'dismissed' | 'continue'
 
 /**
@@ -318,22 +266,13 @@ export function isPlanToolContinuation(messages: readonly Message[]): boolean {
   return classifyPlanToolContinuation(messages) !== 'none'
 }
 
-// Monotonic per-process counter used together with Date.now() to keep every
-// synthetic bridge call id unique (avoids `400 Duplicate 'call_id'`).
-let bridgeCallSeq = 0
-
-function nextBridgeCallId(prefix: string): ToolCallId {
-  bridgeCallSeq += 1
-  return toToolCallId(`${prefix}-${Date.now().toString(36)}-${bridgeCallSeq.toString(36)}`)
-}
-
 /**
  * Build the synthetic `update_goal` tool-call chunk that marks the goal complete on DSH.
  */
 export function buildGoalCompleteToolCallBlock(
   goalContext: GoalContext,
   blockIdx: number,
-  access: Exclude<HostToolAccess, 'unavailable'> = 'direct',
+  access: ExcludeUnavailable = 'direct',
 ): StreamChunk[] {
   const goalId = goalContext.goalId || 'active-goal'
   const revision = goalContext.revision ?? 1
@@ -354,40 +293,13 @@ export function buildGoalCompleteToolCallBlock(
 }
 
 /**
- * Shape of a bridge-emitted host tool call: the direct call, or a `run_code`
- * program that makes it from inside the tools SDK (issue #233).
- *
- * The program logs the call's JSON result instead of returning it: no
- * top-level `return` (a `vm-script` / `repl` host rejects it, issue #103), and
- * the result lands in the tool-result text, which is where the plan
- * continuation reads `"approved": true|false` from.
- */
-function bridgeCall(
-  toolName: string,
-  args: Record<string, unknown>,
-  access: Exclude<HostToolAccess, 'unavailable'>,
-  purpose: string,
-): { name: string; arguments: string } {
-  if (access === 'direct') return { name: toolName, arguments: JSON.stringify(args) }
-  return {
-    name: 'run_code',
-    arguments: JSON.stringify({
-      code:
-        `// dsh-agy-link bridge: ${purpose} through the tools SDK (only run_code is callable directly)\n`
-        + `console.log(JSON.stringify(await tools['${toolName}'](${JSON.stringify(args)})))`,
-      description: `${purpose} · ${toolName}`,
-    }),
-  }
-}
-
-/**
  * Build the synthetic `exit_plan_mode` tool-call chunk that presents the generated plan to DSH.
  * DSH's `exit_plan_mode` requires markdown starting with a `#` heading (`/^#\s+\S/`).
  */
 export function buildPlanExitToolCallBlock(
   planMarkdown: string,
   blockIdx: number,
-  access: Exclude<HostToolAccess, 'unavailable'> = 'direct',
+  access: ExcludeUnavailable = 'direct',
 ): StreamChunk[] {
   const trimmed = planMarkdown.trim()
   const plan = trimmed === ''
