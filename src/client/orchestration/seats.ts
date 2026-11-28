@@ -17,6 +17,13 @@ const inFlight = new Set<string>()
 const listeners = new Set<() => void>()
 /** A live turn keeps adding steps; refetch this often while a card misses. */
 const REFETCH_MS = 3000
+/**
+ * Tables kept in memory: the same number of runs the host keeps attribution
+ * for (`MAX_RUNS` in features/orchestration/tool-seats.ts). A long session runs
+ * hundreds of turns, and an older table could never be refreshed anyway; an
+ * evicted run is simply fetched again when one of its cards asks.
+ */
+const MAX_CACHED_RUNS = 16
 
 function emit(): void {
   for (const listener of listeners) listener()
@@ -31,6 +38,12 @@ function fetchRun(run: string): void {
       if (res !== null && res.seats !== undefined) {
         runs.set(run, res.seats)
         fetchedAt.set(run, Date.now())
+        while (runs.size > MAX_CACHED_RUNS) {
+          const oldest = runs.keys().next().value
+          if (oldest === undefined) break
+          runs.delete(oldest)
+          fetchedAt.delete(oldest)
+        }
         emit()
       }
     } catch {
