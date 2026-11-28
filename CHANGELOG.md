@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.113 (2026-11-28)
+
+### English
+
+- **Feat(ask): agy's questions are asked through DSH's native question card (issue #236).** Over ACP, agy parks an `ask_question` and ends the turn. The bridge used to show it as a generic tool card plus plain text, and the answer only reached agy if the user typed it as the next message. When `ask_user_question` is reachable — directly, or inside the PTC tools SDK — the turn now ends on DSH's own question card with agy's questions, and the answer returns as that call's tool result, which agy receives as its next prompt and resolves as the pending answer (as readable `Q` / `A` lines, not the host's result JSON). A question the host timed out on, or a call that failed, ends the hop without calling agy: the card stays answerable and a later reply is an ordinary user message. A skipped question forwards agy's own words for it, `User Skipped`. Auxiliary calls never ask, and without the host tool — or on the `cli` transport, where agy auto-answers — nothing changes.
+- **Refactor: one `BridgeToolSupport` per hop, and the text pipeline leaves the mapper.** The goal, plan and question bridges share their reachability rules and call shape in `host/host-tools.ts`; the adapter resolves them once and passes one object instead of threading two positional parameters through every span call. EventMapper's assistant-text post-processing moved to `mapper/text-format.ts` to keep the mapper under the line budget. No behaviour change outside the feature above.
+
+### 中文
+
+- **特性(提问)：agy 的提问通过 DSH 原生的提问卡片来问（issue #236）。** 在 ACP 传输下，agy 会挂起一个 `ask_question` 并结束回合。桥接此前把它显示为一张普通工具卡片加一段纯文本，用户只有把回答输入成下一条消息才能传到 agy。现在，只要能调到 `ask_user_question`——直接调用，或在 PTC 的 tools SDK 里——回合就在 DSH 自己的提问卡片上结束，带上 agy 的问题；回答作为这次调用的工具结果返回，agy 在下一跳收到它并据此解答挂起的问题（是可读的 `Q` / `A` 行，而不是宿主的结果 JSON）。宿主超时未答、或调用本身失败时，这一跳不调用 agy：卡片仍可作答，之后的回复是一条普通的用户消息。被跳过的问题，转发 agy 自己的说法 `User Skipped`。辅助调用绝不提问；调不到宿主工具时——以及在 `cli` 传输下，agy 会自动作答——一切照旧。
+- **重构：每一跳一个 `BridgeToolSupport`，文本处理流水线移出映射器。** goal、plan、提问三个桥接在 `host/host-tools.ts` 共用可达性规则与调用形态；适配器解析一次、传一个对象，不再往每一处片段调用里穿两个位置参数。EventMapper 的助手文本后处理移到了 `mapper/text-format.ts`，让映射器留在行数预算之内。除上述特性外无行为变化。
+
 ## 0.6.112 (2026-11-28)
 
 ### English
