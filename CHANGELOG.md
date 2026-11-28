@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.112 (2026-11-28)
+
+### English
+
+- **Fix(acp): a transient upstream error no longer settles as a green reply (merges PR #238 by @franksong2702).** `agy acp` reports upstream 401 / 503 / 504 as one or two lines of assistant text followed by a normal end of turn — `⚠ UNAVAILABLE (code 503): …`. The bridge did not recognise them, so the turn came back green with the error prose standing in for the answer, and a mid-turn failure after tool calls leaked the same prose into the transcript. These banners are now recognised: a banner-only turn discards the broken process and falls back, a trailing one fails the turn cleanly without quarantining the account, and the banner text never reaches the transcript. A banner that agy streams in pieces is treated as one banner rather than having its tail read as a reply. Empty-stderr exits keep their diagnostics, and repeated error fragments are no longer duplicated.
+- **Fix(pool, acp): deleting an account evicts its cached ACP processes; isolated tokens heal from `.bak` before a spawn (merges PR #239 by @franksong2702).** `deleteAccount` removed the account and its directory but never told the ACP process pool, so processes belonging to the deleted account stayed alive. They are now closed — live, retained and draining — as soon as the account is gone. And before `agy` is spawned for an isolated account, the token file is read through the credential reader, which restores it from the `.bak` when it is missing or corrupt; previously only the isolated Keychain was ensured.
+- **Fix(auth): a genuine sign-out is AUTH, not NETWORK (merges PR #237 by @franksong2702).** `agy` prints `Print mode: silent auth failed` on every real sign-out too, and the network classifier matched that bare line. A real sign-out was therefore treated as a transport failure: no account rotation on shared-egress pools and no "auth required" mark. The line is byte-identical for a sign-out and for a Keychain validation that missed its window, as the classifier's own documentation says, so it cannot decide; the `keyringAuth:` lines in the log still identify a validation timeout as a transport failure.
+- **Refactor: the quota-exhaustion rule lives in `domain/accounts/quota-exhaustion.ts`.** `host/pool.ts` went over the line budget once two of the fixes above landed in it. Which families a fresh snapshot shows as exhausted — and which the user already overrode — is now a pure function with a direct unit test; the pool manager keeps only the decision to advance its pointers. No behaviour change.
+
+### 中文
+
+- **修复(acp)：上游临时错误不再变成一条绿色回复（合并 PR #238，作者 @franksong2702）。** `agy acp` 会把上游的 401 / 503 / 504 当作一两行助手文本、再正常结束回合发回来——`⚠ UNAVAILABLE (code 503): …`。桥接此前认不出来，于是回合以绿色结束、错误提示顶替了回答；工具调用之后中途失败时，同样的文字还会漏进转录。现在这类横幅会被识别：只有横幅的回合丢弃坏掉的进程并回退，尾部横幅让回合干净地失败且不隔离账号，横幅文字不再进入转录。agy 分成多块发来的横幅会被当作一个横幅，而不是把尾巴当成回复。空 stderr 的退出保留诊断信息，重复的错误片段不再重复拼接。
+- **修复(号池 / acp)：删除账号时清掉它缓存的 ACP 进程；隔离账号在启动前从 `.bak` 自愈令牌（合并 PR #239，作者 @franksong2702）。** `deleteAccount` 删除了账号和它的目录，却从没通知 ACP 进程池，属于该账号的进程一直活着。现在账号一删，这些进程（存活、保留、排空中的）立即关闭。为隔离账号启动 `agy` 之前，会通过凭据读取器读一次令牌文件，缺失或损坏时从 `.bak` 恢复；此前只确保了隔离钥匙串。
+- **修复(认证)：真正的登出归为 AUTH，而不是 NETWORK（合并 PR #237，作者 @franksong2702）。** `agy` 在每次真正登出时也会打印 `Print mode: silent auth failed`，而网络错误判定会匹配这一行。于是真实的登出被当成传输故障：共享出口的号池不轮换账号、也不标记“需要认证”。这一行在“登出”和“钥匙串校验错过窗口”两种情况下逐字节相同——分类器自己的文档就是这么写的——所以它不能用来判定；日志里的 `keyringAuth:` 行仍能把校验超时识别为传输故障。
+- **重构：配额耗尽规则移到 `domain/accounts/quota-exhaustion.ts`。** 上面两个修复落进 `host/pool.ts` 后，它超出了行数预算。“最新快照下哪些家族已耗尽、其中哪些用户已覆盖”现在是一个带直接单元测试的纯函数，号池管理器只保留推进指针的决策。无行为变化。
+
 ## 0.6.111 (2026-11-28)
 
 ### English
