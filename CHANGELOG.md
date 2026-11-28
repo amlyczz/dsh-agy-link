@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.111 (2026-11-28)
+
+### English
+
+- **Feat(auth): `macFileAuthOnly`, an opt-in switch to run macOS on file-based credentials without touching the Keychain (merges PR #235 by @hssqz).** On macOS the bridge talks to the login Keychain through the `security` CLI when it installs, repairs and reads the primary token. On a locked or headless login keychain every one of those calls makes SecurityAgent prompt for the password — at boot and again on every quota poll. With the switch on, the four Keychain entry points, the boot-time token restore and the per-account Keychain fallback are skipped, and isolated pool accounts use their token files exclusively. Since the primary (system-HOME) account's token lives in that Keychain, it cannot be used in this mode: such accounts are disabled on boot and cannot be re-enabled, pinned or signed in while the switch is on. **Turning the switch off again does not re-enable them; re-enable them by hand.** Default off, so nothing changes unless it is set — via `DSH_AGY_MAC_FILE_AUTH_ONLY`, `runtime-overrides.json`, or `POST /plugins/agy-link/config`.
+
+### 中文
+
+- **特性(认证)：`macFileAuthOnly`——让 macOS 只用文件凭据、完全不碰钥匙串的开关（合并 PR #235，作者 @hssqz）。** 在 macOS 上，桥接安装、修复、读取主账号令牌时都要通过 `security` CLI 访问登录钥匙串。登录钥匙串被锁定或处于无人值守状态时，这些调用每一次都会让 SecurityAgent 弹出密码框——启动时一次，之后每次配额轮询又一次。开关打开后，四个钥匙串入口、启动时的令牌恢复、以及按账号的钥匙串回退全部跳过，隔离的号池账号只使用各自的令牌文件。主账号（系统 HOME）的令牌就在那个钥匙串里，这种模式下无法再用：这类账号会在启动时被禁用，开关打开期间也不能重新启用、置顶或登录。**关掉开关不会自动把它们恢复，需要手动重新启用。** 默认关闭，不设置就不改变任何行为——可通过 `DSH_AGY_MAC_FILE_AUTH_ONLY`、`runtime-overrides.json` 或 `POST /plugins/agy-link/config` 开启。
+
 ## 0.6.110 (2026-11-28)
 
 ### English
