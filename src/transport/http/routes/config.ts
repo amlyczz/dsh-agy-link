@@ -8,7 +8,7 @@ const TRANSPORTS = new Set(['cli', 'acp'])
 const WARMUP_WINDOWS = new Set(['weekly', '5h', 'both'])
 const TRANSLATE_DISPLAYS = new Set(['card', 'replace'])
 
-function validateConfigValue(key: string, value: unknown): string | null {
+export function validateConfigValue(key: string, value: unknown): string | null {
   if (key === 'hiddenModels') {
     return Array.isArray(value) && value.every((x) => typeof x === 'string')
       ? null
@@ -43,7 +43,7 @@ function validateConfigValue(key: string, value: unknown): string | null {
       ? null
       : 'translateDisplay must be card or replace'
   }
-  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'mcpBridge' || key === 'btwEnabled' || key === 'slashCommandsEnabled' || key === 'tslEnabled' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'auxNeutralWorkspace' || key === 'builtInMediaPreviewOnly') {
+  if (key === 'sandbox' || key === 'imageTool' || key === 'syncAccountCustomizations' || key === 'backgroundWakeup' || key === 'mcpBridge' || key === 'btwEnabled' || key === 'slashCommandsEnabled' || key === 'tslEnabled' || key === 'cloakSystemPrompt' || key === 'respectExternalSignIn' || key === 'macFileAuthOnly' || key === 'auxNeutralWorkspace' || key === 'builtInMediaPreviewOnly') {
     return typeof value === 'boolean' ? null : `${key} must be a boolean`
   }
   if (key === 'warmupWindows') {
@@ -128,7 +128,7 @@ function handleConfig(services: HostServices, req: unknown, res: unknown): void 
         const key = typeof body.key === 'string' ? body.key : ''
         const allowed = [
           'enabled', 'permissionMode', 'sandbox', 'agent', 'agySettings', 'transport', 'imageTool', 'syncAccountCustomizations', 'backgroundWakeup', 'mcpBridge', 'mcpBridgeScope', 'btwEnabled', 'slashCommandsEnabled', 'tslEnabled',
-          'cloakSystemPrompt', 'respectExternalSignIn', 'auxNeutralWorkspace',
+          'cloakSystemPrompt', 'respectExternalSignIn', 'macFileAuthOnly', 'auxNeutralWorkspace',
           'defaultModel', 'defaultEffort',
           'orchestratorPlannerModel', 'orchestratorPlannerEffort', 'orchestratorExecutorModel', 'orchestratorExecutorEffort',
           'askTool', 'workspaceRoot', 'hiddenModels',

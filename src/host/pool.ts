@@ -7,7 +7,7 @@
 // keeping every public method signature unchanged.
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { stateDir } from '../common/config.ts'
+import { macFileAuthOnly, stateDir } from '../common/config.ts'
 import {
   accountHasArgon,
   argonSharesGoogleGroup,
@@ -102,6 +102,11 @@ export class AccountPoolManager {
       pool: this,
       selectAccount: (family, model) => this.selectAccount(family, model),
     })
+    if (macFileAuthOnly()) {
+      for (const account of this.data.accounts) {
+        if (account.systemHome && account.enabled) this.admin.setAccountEnabled(account.id, false)
+      }
+    }
     this.admin.dropModelScopedCooldowns()
   }
 
@@ -219,6 +224,7 @@ export class AccountPoolManager {
   setPlanTierOverride(id: string, tier: AccountPlanTier | undefined): boolean { return this.admin.setPlanTierOverride(id, tier) }
 
   setAccountEnabled(id: string, enabled: boolean): boolean {
+    if (enabled && macFileAuthOnly() && this.getAccount(id)?.systemHome) return false
     const wasActive = this.data.activeAccountIds?.google === id || this.data.lastActiveAccountId === id
     const ok = this.admin.setAccountEnabled(id, enabled)
     if (ok && (!enabled ? wasActive : !this.data.lastActiveAccountId)) {
@@ -284,6 +290,7 @@ export class AccountPoolManager {
   }
 
   setPrimaryAccount(id: string): boolean {
+    if (macFileAuthOnly() && this.getAccount(id)?.systemHome) return false
     const prev = this.data.primaryAccountId
     const ok = this.admin.setPrimaryAccount(id)
     if (ok && id !== prev) {

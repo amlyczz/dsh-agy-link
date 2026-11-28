@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { writeFileAtomicSync } from '../../common/atomic-write.ts'
+import { macFileAuthOnly } from '../../common/config.ts'
 import type { ManagedAccount } from '../../common/pool-types.ts'
 import { shouldMarkAuthRequired } from '../../common/types.ts'
 import { normalizeStoredToken, type StoredToken } from '../../domain/quota/identity.ts'
@@ -148,7 +149,7 @@ export async function readLinuxSecretToken(): Promise<StoredToken | null> {
  * under service "gemini" / account "antigravity" (base64-encoded JSON).
  */
 export async function readMacKeychainToken(): Promise<StoredToken | null> {
-  if (process.platform !== 'darwin') return null
+  if (process.platform !== 'darwin' || macFileAuthOnly()) return null
   try {
     const home = homedir()
     const candidates = [
@@ -283,7 +284,7 @@ export async function getStoredToken(
 
   if (disk) return disk
 
-  if (account.dir && !account.systemHome && process.platform === 'darwin' && allowKeychainFallback) {
+  if (account.dir && !account.systemHome && process.platform === 'darwin' && allowKeychainFallback && !macFileAuthOnly()) {
     const candidates = [
       join(account.dir, 'Library', 'Keychains', 'login.keychain-db'),
       join(account.dir, 'Library', 'Keychains', 'login.keychain'),

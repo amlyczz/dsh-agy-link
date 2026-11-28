@@ -47,6 +47,28 @@ export function readOverrides(file = overridesPath()): OverridesFile {
   return readJson(file)
 }
 
+/**
+ * macOS file-only auth mode: use isolated pool token files exclusively and
+ * skip all macOS `security` Keychain CLI calls so SecurityAgent never prompts
+ * for the login keychain password. Honors `DSH_AGY_MAC_FILE_AUTH_ONLY` first,
+ * then `runtime-overrides.json`'s `macFileAuthOnly` flag.
+ */
+export function macFileAuthOnly(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides?: OverridesFile,
+): boolean {
+  if (process.platform !== 'darwin') return false
+  if (env.DSH_AGY_MAC_FILE_AUTH_ONLY !== undefined) {
+    const fromEnv = asBool(env.DSH_AGY_MAC_FILE_AUTH_ONLY)
+    if (fromEnv !== undefined) return fromEnv
+  }
+  if (overrides !== undefined) return asBool(overrides.macFileAuthOnly) === true
+  // Avoid leaking a developer's real ~/.dsh/agy-link/runtime-overrides.json
+  // into unrelated node:test suites unless the test isolated DSH_HOME.
+  if (env.NODE_TEST_CONTEXT !== undefined && !env.DSH_HOME) return false
+  return asBool(readOverrides().macFileAuthOnly) === true
+}
+
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined
 }
@@ -157,6 +179,7 @@ export function resolveConfig(
     dispatchRetries: asNum(get('dispatchRetries')) ?? base.dispatchRetries,
     parallelSameAccount: asBool(get('parallelSameAccount')) ?? base.parallelSameAccount,
     respectExternalSignIn: asBool(get('respectExternalSignIn')) ?? base.respectExternalSignIn,
+    macFileAuthOnly: asBool(get('macFileAuthOnly')) ?? base.macFileAuthOnly,
     reapOrphanMcp: asBool(get('reapOrphanMcp')) ?? base.reapOrphanMcp,
     maxConcurrent: asNum(get('maxConcurrent')) ?? base.maxConcurrent,
     contextWindowDefault: asNum(get('contextWindowDefault')) ?? base.contextWindowDefault,
@@ -459,6 +482,10 @@ export function resolveConfig(
   if (env.DSH_AGY_BUILTIN_MEDIA_ONLY !== undefined) {
     const bm = asBool(env.DSH_AGY_BUILTIN_MEDIA_ONLY)
     if (bm !== undefined) cfg.builtInMediaPreviewOnly = bm
+  }
+  if (env.DSH_AGY_MAC_FILE_AUTH_ONLY !== undefined) {
+    const mfa = asBool(env.DSH_AGY_MAC_FILE_AUTH_ONLY)
+    if (mfa !== undefined) cfg.macFileAuthOnly = mfa
   }
   cfg.backgroundWakeupTtlMinutes = Math.min(240, Math.max(1, Math.floor(cfg.backgroundWakeupTtlMinutes)))
   cfg.backgroundWakeupMaxPerSession = Math.min(100, Math.max(1, Math.floor(cfg.backgroundWakeupMaxPerSession)))

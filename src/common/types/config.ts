@@ -90,6 +90,12 @@ export interface PluginConfig {
   reapOrphanMcp: boolean
   /** Preserve a newer external standalone AGY sign-in in the Windows credential slot instead of overwriting it (#145). */
   respectExternalSignIn: boolean
+  /**
+   * macOS opt-in: use file-based isolated pool credentials exclusively and skip
+   * all macOS `security` Keychain calls so SecurityAgent never prompts for the
+   * login keychain password. Disables system-HOME primary account login/activation.
+   */
+  macFileAuthOnly: boolean
   maxConcurrent: number
   contextWindowDefault: number
   maxTokensDefault: number
@@ -424,6 +430,7 @@ export function defaultConfig(): PluginConfig {
     parallelSameAccount: true,
     reapOrphanMcp: true,
     respectExternalSignIn: false,
+    macFileAuthOnly: false,
     /**
      * Cross-session cap on concurrent agy request streams. 0 = UNLIMITED
      * (default): native agy concurrency — agy is a stateless CLI and runs

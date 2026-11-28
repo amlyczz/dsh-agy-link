@@ -27,6 +27,7 @@ import {
   type CallbackHandle,
 } from './oauth.ts'
 import type { ManagedAccount } from '../common/pool-types.ts'
+import { macFileAuthOnly } from '../common/config.ts'
 import type { AccountPoolManager } from './pool.ts'
 import type { QuotaService } from './quota.ts'
 import { detectSystemProxy, writeWindowsCredentialRaw } from './wincred.ts'
@@ -223,6 +224,7 @@ export class PoolAuthFlow {
    * same browser flow, tokens land in ~/.gemini so the real agy stays signed in.
    */
   async beginPrimary(proxyUrl?: string): Promise<PoolAuthStatus & { ok: boolean; dir?: string }> {
+    if (macFileAuthOnly()) return { ok: false, phase: 'failed', code: 'request_failed' }
     const { homedir } = await import('node:os')
     return this.startFlow({ stagingId: 'acc_primary', dir: homedir(), primary: true, proxyUrl: proxyUrl || detectSystemProxy() })
   }
