@@ -1,10 +1,12 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  AGY_ALWAYS_LOAD_MAX_BYTES,
   AGY_ALWAYS_LOAD_META,
   AGY_MCP_SAFE_TOKEN_BUDGET,
   enforceArrayItems,
   estimateMcpToolsTokens,
+  estimateToolWireBytes,
   extractMcpContentBlocks,
   findArraysMissingItems,
   prepareMcpTools,
@@ -254,5 +256,60 @@ describe('Gemini enum hygiene', () => {
     assert.deepEqual(clean.properties.permission?.enum, ['read', 'write', 'admin'])
     assert.deepEqual(clean.properties.mode?.enum, ['a'])
     assert.equal(clean.properties.onlyEmpty?.enum, undefined)
+  })
+})
+
+describe('alwaysLoad per-tool byte ceiling', () => {
+  it('attaches antigravity/alwaysLoad only to tools within the per-tool wire-byte ceiling so oversized tools stay lazy instead of being dropped by agy', () => {
+    const smallTool: McpToolDef = {
+      name: 'send_message',
+      dshName: 'send_message',
+      description: 'Send a message to an agent.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          agent: { type: 'string' },
+          message: { type: 'string' },
+        },
+        required: ['agent', 'message'],
+      },
+    }
+    const largeRunCode: McpToolDef = {
+      name: 'run_code',
+      dshName: 'run_code',
+      description: 'Execute a TypeScript program against the available tools. '.repeat(25),
+      inputSchema: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The TypeScript program to execute.' },
+          description: { type: 'string', description: 'Short summary of what the program does.' },
+        },
+        required: ['code', 'description'],
+      },
+      _meta: { 'antigravity/alwaysLoad': true, customTag: 'keep-me' },
+    }
+    const largeWithoutCustomMeta: McpToolDef = {
+      name: 'bash',
+      dshName: 'bash',
+      description: 'Execute a bash command. '.repeat(35),
+      inputSchema: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          description: { type: 'string' },
+        },
+        required: ['command', 'description'],
+      },
+    }
+
+    assert.ok(estimateToolWireBytes(smallTool) <= AGY_ALWAYS_LOAD_MAX_BYTES)
+    assert.ok(estimateToolWireBytes(largeRunCode) > AGY_ALWAYS_LOAD_MAX_BYTES)
+    assert.ok(estimateToolWireBytes(largeWithoutCustomMeta) > AGY_ALWAYS_LOAD_MAX_BYTES)
+
+    const prepared = prepareMcpTools([smallTool, largeRunCode, largeWithoutCustomMeta])
+    const [outSmall, outRunCode, outBash] = prepared
+    assert.deepEqual(outSmall?._meta, AGY_ALWAYS_LOAD_META)
+    assert.deepEqual(outRunCode?._meta, { customTag: 'keep-me' }, 'strips alwaysLoad while preserving unrelated _meta keys')
+    assert.equal('_meta' in (outBash ?? {}), false, 'omits _meta cleanly when oversized tool has no other metadata')
   })
 })

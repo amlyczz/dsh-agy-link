@@ -76,7 +76,7 @@ async function listTools() {
     name: t.name,
     description: t.description || t.dshName,
     inputSchema: t.inputSchema || { type: 'object' },
-    _meta: t._meta || { 'antigravity/alwaysLoad': true },
+    ...(t._meta && typeof t._meta === 'object' ? { _meta: t._meta } : {}),
     _dshName: t.dshName,
   }))
 }

@@ -556,3 +556,51 @@ test('host-only filters the live step catalog, direct dispatch and PTC inner too
   assert.deepEqual(executed, ['send_message', 'run_code'])
   ptc.close()
 })
+
+test('bridge.mjs preserves lazy omission of antigravity/alwaysLoad for oversized tools like run_code', async () => {
+  const steps = new BridgeSteps()
+  const agent = { session: { id: 'ptc-lazy-test' } }
+  const signal = new AbortController().signal
+  const longDesc = 'Execute a TypeScript program against the available tools. '.repeat(25)
+  steps.capture({ agent, signal, toolSet: { view: () => new Map([['run_code', 'ok'], ['ping', 'ok']]) } })
+  const bridge = await startMcpBridge({
+    bridgeScript: BRIDGE_SCRIPT,
+    allowlist: () => '',
+    resolveStep: (key) => steps.resolve(key),
+    tools: () => ({
+      schemas: () => [],
+      execute: async ({ calls }) => ({
+        results: calls.map((c) => ({ callId: c.id, result: { content: [{ type: 'text', text: 'ok' }] } })),
+      }),
+    }),
+  })
+  const route = steps.enter(agent, {
+    signal,
+    sessionId: agent.session.id,
+    tools: [
+      { name: 'ping', description: 'Short tool.', parameters: { type: 'object', properties: {} } },
+      { name: 'run_code', description: longDesc, parameters: { type: 'object', properties: { code: { type: 'string' } } } },
+    ],
+  })!
+  const token = route.bind('acct-1')
+  const child = spawn(process.execPath, [resolve('src/host/bridge.mjs')], {
+    env: { DSH_MCP_URL: bridge.url, DSH_MCP_TOKEN: bridge.token, DSH_MCP_ROUTE: token },
+  })
+  const closed = once(child, 'exit')
+  const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]()
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }) + '\n')
+    const reply = JSON.parse((await lines.next()).value!) as {
+      result: { tools: Array<{ name: string; _meta?: Record<string, unknown> }> }
+    }
+    const ping = reply.result.tools.find((t) => t.name === 'ping')
+    const runCode = reply.result.tools.find((t) => t.name === 'run_code')
+    assert.deepEqual(ping?._meta, { 'antigravity/alwaysLoad': true })
+    assert.equal(runCode?._meta, undefined, 'bridge.mjs must not re-inject alwaysLoad on oversized tools')
+  } finally {
+    route.close()
+    child.stdin.end()
+    await closed
+    await bridge.close()
+  }
+})

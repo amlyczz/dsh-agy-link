@@ -17,6 +17,15 @@ export interface McpToolDef {
 }
 
 export const AGY_MCP_SAFE_TOKEN_BUDGET = 18_000
+/**
+ * `agy` 1.5.x enforces a per-tool size ceiling (~650 bytes) on tools tagged
+ * with `antigravity/alwaysLoad: true` and silently drops oversized tools
+ * instead of demoting them to lazy-loading (`tool <name> is not enabled`).
+ * Only tools at or below this serialized wire-byte cap receive `alwaysLoad`;
+ * larger tools (such as `run_code`, `bash`, `edit`, `team_task_update`) omit
+ * it so `agy` exposes them cleanly as lazy tools callable via `call_mcp_tool`.
+ */
+export const AGY_ALWAYS_LOAD_MAX_BYTES = 600
 export const AGY_ALWAYS_LOAD_META: Readonly<Record<string, boolean>> = {
   'antigravity/alwaysLoad': true,
 }
@@ -352,14 +361,42 @@ export function stripNestedDescriptions(node: unknown, depth = 0): unknown {
   return out;
 }
 
+/** Serialized wire size of one tool as `agy` measures it (name + description + inputSchema). */
+export function estimateToolWireBytes(
+  tool: Pick<McpToolDef, 'name' | 'description' | 'inputSchema'>,
+): number {
+  return Buffer.byteLength(
+    JSON.stringify({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }),
+    'utf8',
+  )
+}
+
+function applyAlwaysLoadMeta(tools: McpToolDef[], maxAlwaysLoadBytes: number): McpToolDef[] {
+  return tools.map((t) => {
+    if (estimateToolWireBytes(t) <= maxAlwaysLoadBytes) {
+      return { ...t, _meta: { ...AGY_ALWAYS_LOAD_META, ...(t._meta ?? {}) } }
+    }
+    if (t._meta === undefined) return t
+    const { 'antigravity/alwaysLoad': _dropped, ...rest } = t._meta
+    if (Object.keys(rest).length === 0) {
+      const { _meta: _removed, ...withoutMeta } = t
+      return withoutMeta
+    }
+    return { ...t, _meta: rest }
+  })
+}
+
 /**
- * Sanitize every tool's schema, attach `_meta: { 'antigravity/alwaysLoad': true }`,
- * and progressively trim verbose descriptions if the serialized toolbox exceeds
- * `maxTokens` (default 18,000, safely under agy's 20,000 hard drop ceiling).
+ * Sanitize every tool's schema, progressively trim verbose descriptions if the
+ * serialized toolbox exceeds `maxTokens` (default 18,000, safely under agy's
+ * 20,000 hard drop ceiling), and attach `_meta: { 'antigravity/alwaysLoad': true }`
+ * only to tools whose wire size fits within `maxAlwaysLoadBytes` so oversized
+ * tools fall back to lazy-loading instead of being silently dropped by `agy`.
  */
 export function prepareMcpTools(
   rawTools: readonly McpToolDef[],
   maxTokens = AGY_MCP_SAFE_TOKEN_BUDGET,
+  maxAlwaysLoadBytes = AGY_ALWAYS_LOAD_MAX_BYTES,
 ): McpToolDef[] {
   let tools: McpToolDef[] = rawTools.map((t) => ({
     ...t,
@@ -367,20 +404,23 @@ export function prepareMcpTools(
     // schemas to Google verbatim, and one array without `items` fails the whole
     // turn with INVALID_ARGUMENT (see findArraysMissingItems).
     inputSchema: enforceArrayItems(sanitizeMcpSchema(t.inputSchema)),
-    _meta: { ...AGY_ALWAYS_LOAD_META, ...(t._meta ?? {}) },
   }))
+  const finalize = (list: McpToolDef[]): McpToolDef[] => applyAlwaysLoadMeta(list, maxAlwaysLoadBytes)
 
-  if (estimateMcpToolsTokens(tools) <= maxTokens) return tools
+  let ready = finalize(tools)
+  if (estimateMcpToolsTokens(ready) <= maxTokens) return ready
 
   // Stage 1: strip `title` fields across schemas
   tools = tools.map((t) => ({ ...t, inputSchema: stripTitles(t.inputSchema) as Record<string, unknown> }))
-  if (estimateMcpToolsTokens(tools) <= maxTokens) return tools
+  ready = finalize(tools)
+  if (estimateMcpToolsTokens(ready) <= maxTokens) return ready
 
   // Stage 1b: drop nested property prose, keep the tool + top-level descriptions
   // (issue #215). Recovers much more than stubbing every description, and the
   // parameters keep their names, types, enums and `required`.
   tools = tools.map((t) => ({ ...t, inputSchema: stripNestedDescriptions(t.inputSchema) as Record<string, unknown> }))
-  if (estimateMcpToolsTokens(tools) <= maxTokens) return tools
+  ready = finalize(tools)
+  if (estimateMcpToolsTokens(ready) <= maxTokens) return ready
 
   // Stage 2: progressive description trimming (never drops any tool!)
   const caps = [320, 180, 100, 60, 32]
@@ -390,10 +430,11 @@ export function prepareMcpTools(
       description: t.description.length > cap ? t.description.slice(0, cap - 1).trimEnd() + '…' : t.description,
       inputSchema: trimDescriptions(t.inputSchema, cap) as Record<string, unknown>,
     }))
-    if (estimateMcpToolsTokens(tools) <= maxTokens) return tools
+    ready = finalize(tools)
+    if (estimateMcpToolsTokens(ready) <= maxTokens) return ready
   }
 
-  return tools
+  return finalize(tools)
 }
 
 /** Extract MCP-compatible content blocks (text + image) when a tool returns image blocks. */
