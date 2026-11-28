@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileAtomicSync } from '../common/atomic-write.ts'
+import { macFileAuthOnly } from '../common/config.ts'
 import { detectSystemProxy } from './wincred.ts'
 import { resolveAccountPlanTier } from '../common/plan-tier.ts'
 import { findDuplicateEmailGroups } from '../common/account-duplicates.ts'
@@ -23,7 +24,7 @@ import type { HostServices } from './services.ts'
  * is not falsely quarantined as auth_required.
  */
 export function restoreTokenFromMacKeychain(accDir: string, tokenFile: string, log?: (msg: string) => void): string | null {
-  if (process.platform !== 'darwin') return null
+  if (process.platform !== 'darwin' || macFileAuthOnly()) return null
   const candidates = [
     join(accDir, 'Library', 'Keychains', 'login.keychain-db'),
     join(accDir, 'Library', 'Keychains', 'login.keychain'),

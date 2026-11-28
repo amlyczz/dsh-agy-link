@@ -19,6 +19,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | `agySettings` | `DSH_AGY_SETTINGS` | `''` | Inline JSON object or file path passed to `agy --settings` |
 | `transport` | `DSH_AGY_TRANSPORT` | `acp` | `acp` (default) keeps one persistent `agy acp` process per account and session, so background commands, subagents and timers keep running after a turn ends and report back on their own, and per-call usage/cache metrics stay accurate. `cli` runs one-shot `agy -p` per turn (background work dies with the process); switch with `/agy config transport cli`, `/agy transport cli` or the settings page. A pre-stream ACP failure and a no-output ACP turn fall back to `cli` automatically |
 | `syncAccountCustomizations` | `DSH_AGY_SYNC_CUSTOMIZATIONS` | `true` | Mirror primary `plugins`, `skills`, `rules`, `agents`, and MCP config into isolated pool accounts (credentials/keychains never touched) |
+| `macFileAuthOnly` | `DSH_AGY_MAC_FILE_AUTH_ONLY` | `false` | macOS opt-in: use file-based isolated pool credentials only and skip all `security` Keychain calls so SecurityAgent never prompts for the login keychain password; disables system-HOME primary account login/activation |
 | `workspaceRoot` | `DSH_AGY_WORKSPACE_ROOT` | `''` (session cwd) | Workspace root passed to agy |
 
 ## Models and effort

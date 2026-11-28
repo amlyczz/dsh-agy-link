@@ -7,6 +7,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { macFileAuthOnly } from '../../common/config.ts'
 import { GO_KEYRING_PREFIX, unwrapGoKeyringPayload } from '../../common/go-keyring.ts'
 
 // Re-exported for the existing macOS/Linux keyring readers and boot-time
@@ -21,7 +22,7 @@ export { GO_KEYRING_PREFIX, unwrapGoKeyringPayload }
  * Never runs under `node:test`.
  */
 export function writeSystemKeyringRaw(rawJson: string, userHome: string = homedir()): boolean {
-  if (process.env.NODE_TEST_CONTEXT !== undefined) return false
+  if (macFileAuthOnly() || process.env.NODE_TEST_CONTEXT !== undefined) return false
   const encoded = GO_KEYRING_PREFIX + Buffer.from(rawJson, 'utf8').toString('base64')
   if (process.platform === 'darwin') {
     try {
@@ -68,7 +69,7 @@ export function ensureIsolatedKeychain(
   run: (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => unknown = (file, args, env) =>
     execFileSync(file, args, { stdio: 'ignore', env, timeout: 10_000 }),
 ): boolean {
-  if (platform !== 'darwin') return false
+  if (platform !== 'darwin' || macFileAuthOnly()) return false
   if (dir === '') return false
   const kc = join(dir, 'Library', 'Keychains', 'login.keychain-db')
   if (existsSync(kc)) return false
@@ -98,7 +99,7 @@ export function purgeStaleIsolatedKeychain(
   run: (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => unknown = (file, args, env) =>
     execFileSync(file, args, { stdio: 'ignore', env, timeout: 5000 }),
 ): boolean {
-  if (platform !== 'darwin') return false
+  if (platform !== 'darwin' || macFileAuthOnly()) return false
   if (dir === '') return false
   const kc = join(dir, 'Library', 'Keychains', 'login.keychain-db')
   if (!existsSync(kc)) return false
@@ -145,7 +146,7 @@ export function repairMacSystemKeychain(
   run: (file: string, args: readonly string[], env?: NodeJS.ProcessEnv) => string = (file, args, env) =>
     execFileSync(file, args, { encoding: 'utf8', env: env ?? process.env, timeout: 5000 }),
 ): boolean {
-  if (platform !== 'darwin') return false
+  if (platform !== 'darwin' || macFileAuthOnly()) return false
   if (!userHome) return false
 
   let repaired = false
