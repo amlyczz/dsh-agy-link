@@ -13,7 +13,8 @@ import type { RunRecording, RunRegistry } from '../host/recording.ts'
 import { EventMapper } from '../host/mapper.ts'
 import { readFullToolArgs, readStepThoughts } from '../host/agy-db.ts'
 import { getGitHeadContentAsync, unwrapMcpTool } from '../host/mirror-tool.ts'
-import type { GoalContext, HostToolSupport } from '../host/dsh-goal.ts'
+import type { GoalContext } from '../host/dsh-goal.ts'
+import { NO_BRIDGE_TOOLS, type BridgeToolSupport } from '../host/host-tools.ts'
 
 /** What the span driver needs from the adapter (nothing more). */
 export interface SpanDeps {
@@ -199,8 +200,7 @@ export async function* driveSpan(
   cutOnTool: boolean,
   useCodeWrapper: boolean,
   goalContext?: GoalContext | null,
-  supportsGoalUpdate?: HostToolSupport,
-  supportsPlanExit?: HostToolSupport,
+  tools: BridgeToolSupport = NO_BRIDGE_TOOLS,
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
   skipDbEnrichment = false,
@@ -223,7 +223,7 @@ export async function* driveSpan(
   deps.runs.remember(rec)
   deps.runs.pin(rec.runId)
   try {
-    yield* driveSpanBody(deps, rec, from, cutOnTool, useCodeWrapper, goalContext, supportsGoalUpdate, supportsPlanExit, signal, compactionNotice, skipDbEnrichment, sessionId)
+    yield* driveSpanBody(deps, rec, from, cutOnTool, useCodeWrapper, goalContext, tools, signal, compactionNotice, skipDbEnrichment, sessionId)
   } finally {
     deps.runs.unpin(rec.runId)
     deps.runs.remember(rec)
@@ -238,8 +238,7 @@ export async function* driveSpanBody(
   cutOnTool: boolean,
   useCodeWrapper: boolean,
   goalContext?: GoalContext | null,
-  supportsGoalUpdate?: HostToolSupport,
-  supportsPlanExit?: HostToolSupport,
+  tools: BridgeToolSupport = NO_BRIDGE_TOOLS,
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
   skipDbEnrichment = false,
@@ -279,8 +278,9 @@ export async function* driveSpanBody(
       resolvedThoughts,
       mediaBaseUrl: deps.getMediaBaseUrl?.() ?? undefined,
       goalContext,
-      supportsGoalUpdate,
-      supportsPlanExit,
+      supportsGoalUpdate: tools.goalUpdate,
+      supportsPlanExit: tools.planExit,
+      supportsAskUser: tools.askUser,
       compactionNotice: from === 0 ? compactionNotice : undefined,
     })
     let i = from

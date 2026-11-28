@@ -141,7 +141,7 @@ export function resolveGoalContext(
 }
 
 /** Find the newest non-harness-metadata message in the trailing span. */
-function trailingNonSyntheticMessage(messages: readonly Message[]): Message | undefined {
+export function trailingNonSyntheticMessage(messages: readonly Message[]): Message | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (!m) continue

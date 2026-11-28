@@ -16,6 +16,7 @@ import type { CompactionNotice } from '../common/compaction.ts'
 import type { CallContext } from './call-context.ts'
 import { buildCompactionPrompt } from './compaction-prompt.ts'
 import { toolCallIdOf } from './continuation.ts'
+import { ASK_BRIDGE_PREFIX, askAnswerPrompt, askQuestionsOfCall } from '../host/dsh-ask.ts'
 import { stageHistoricalAttachments, stageLivePromptMedia } from './history-media.ts'
 import { plannedWatermarks, systemDelta, systemPrefix, type SystemWatermarks } from './system-budget.ts'
 import { deliverSystemPrompt } from './system-delivery.ts'
@@ -281,9 +282,16 @@ function buildChatPromptText(input: ChatPromptInput): string {
     const callId = toolCallIdOf(m)
     return callId !== null && callId.startsWith('agytc-bridge-')
   }
+  // The answer to the bridge's question (issue #236) is a host result object;
+  // agy gets it as readable Q/A lines quoting the question it asked.
+  const bridgeText = (m: Message): string => {
+    const callId = toolCallIdOf(m)
+    if (callId === null || !callId.startsWith(ASK_BRIDGE_PREFIX)) return textOf(m)
+    return askAnswerPrompt(textOf(m), askQuestionsOfCall(callId, messages) ?? [])
+  }
   const trailingText = effectiveTrailingUser
     .filter((m) => !(dropToolPayloads && isToolResultMessage(m) && !isBridgeToolResult(m)))
-    .map(textOf)
+    .map(bridgeText)
     .filter((s) => s.trim() !== '')
   const hasBridgeToolResult = effectiveTrailingUser.some(isBridgeToolResult)
   const trailingJoined = trailingText.join('\n\n')

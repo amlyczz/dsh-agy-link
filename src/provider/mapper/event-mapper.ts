@@ -18,18 +18,10 @@ import type { LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { isAgyQuotaBannerLine, isNonConsumableResultError, type AgyEvent, type RawUsage } from '../../common/types.ts'
 import { type CompactionNotice, renderCompactionMarker } from '../../common/compaction.ts'
 import { buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock, type GoalContext, type HostToolSupport } from '../../host/dsh-goal.ts'
+import { askSynthesisChunks, isAcpAskStep, type AskStepLike } from '../../host/dsh-ask.ts'
 import { composeThinkingText } from './thoughts.ts'
-import {
-  normalizeFileLinks,
-  rewriteAgentEmbeds,
-  rewriteImageMarkdown,
-  splitPendingEmbedFragment,
-  splitPendingMarkdownLink,
-  splitPendingWarn,
-  stripAgyInternalNoise,
-  stripQuotaBannerLines,
-  suffixDelta,
-} from './text.ts'
+import { splitPendingEmbedFragment, splitPendingMarkdownLink, splitPendingWarn, stripQuotaBannerLines, suffixDelta } from './text.ts'
+import { formatAssistantText } from './text-format.ts'
 import { buildToolCallBlock } from './tool-block.ts'
 import { usageFromRaw } from './usage.ts'
 import type { ToolCallState } from './tool-calls.ts'
@@ -95,6 +87,8 @@ export interface EventMapperOptions {
   supportsGoalUpdate?: HostToolSupport
   /** Whether the host provides the `exit_plan_mode` tool for DSH plan mode. */
   supportsPlanExit?: HostToolSupport
+  /** How `ask_user_question` can be reached: agy's `ask_question` becomes the native question card (issue #236). */
+  supportsAskUser?: HostToolSupport
   /** Compaction notice to emit at the beginning of the turn if history was compacted. */
   compactionNotice?: CompactionNotice
 }
@@ -127,6 +121,8 @@ export class EventMapper {
   private pendingWarnFrag = ''
   private readonly toolCallStates = new Map<string, ToolCallState>()
   private emittedCompactionNotice = false
+  /** The span's last tool step: a trailing `ask_question` becomes the host's question card. */
+  private lastToolStep: AskStepLike | null = null
 
   constructor(private readonly opts: EventMapperOptions) {
     this.sawTextStep = opts.initialSawText === true
@@ -142,14 +138,6 @@ export class EventMapper {
     return this.opts.canCutOnTool ? this.opts.canCutOnTool() : true
   }
 
-  private formatAssistantText(text: string): string {
-    const clean = stripAgyInternalNoise(text)
-    const embedBase = this.opts.mediaBaseUrl ? this.opts.mediaBaseUrl.replace(/\/media\/?$/, '/embed') : undefined
-    const withEmbeds = rewriteAgentEmbeds(clean, embedBase)
-    const withImages = this.opts.mediaBaseUrl ? rewriteImageMarkdown(withEmbeds, this.opts.mediaBaseUrl) : withEmbeds
-    return normalizeFileLinks(withImages)
-  }
-
   private *flushPendingWarn(dropQuotaBanner = true): Generator<StreamChunk> {
     if (this.pendingWarnFrag === '') return
     const raw = this.pendingWarnFrag
@@ -157,7 +145,7 @@ export class EventMapper {
     if (dropQuotaBanner && isAgyQuotaBannerLine(raw)) return
     this.sawTextStep = true
     yield* this.ensureBlock('text')
-    const d = this.appendDelta(this.formatAssistantText(raw))
+    const d = this.appendDelta(formatAssistantText(raw, this.opts.mediaBaseUrl))
     if (d) yield d
   }
 
@@ -168,14 +156,14 @@ export class EventMapper {
       const tail = this.pendingLinkFrag
       this.pendingLinkFrag = ''
       yield* this.ensureBlock('text')
-      const d = this.appendDelta(this.formatAssistantText(tail))
+      const d = this.appendDelta(formatAssistantText(tail, this.opts.mediaBaseUrl))
       if (d) yield d
     }
     if (this.pendingEmbedFrag === '') return
     const raw = this.pendingEmbedFrag
     this.pendingEmbedFrag = ''
     yield* this.ensureBlock('text')
-    const d = this.appendDelta(this.formatAssistantText(raw))
+    const d = this.appendDelta(formatAssistantText(raw, this.opts.mediaBaseUrl))
     if (d) yield d
   }
 
@@ -339,7 +327,7 @@ export class EventMapper {
             if (linkSplit.ready !== '') {
               this.sawTextStep = true
               yield* this.ensureBlock('text')
-              const processedText = this.formatAssistantText(linkSplit.ready)
+              const processedText = formatAssistantText(linkSplit.ready, this.opts.mediaBaseUrl)
               const acc = (this.emittedByKey.get(ev.stepKey) ?? '') + processedText
               this.emittedByKey.set(ev.stepKey, acc)
               d = this.appendDelta(processedText)
@@ -351,7 +339,7 @@ export class EventMapper {
           if (cleaned !== '') {
             this.sawTextStep = true
             yield* this.ensureBlock('text')
-            const processedText = this.formatAssistantText(cleaned)
+            const processedText = formatAssistantText(cleaned, this.opts.mediaBaseUrl)
             const prev = this.emittedByKey.get(ev.stepKey) ?? ''
             const delta = suffixDelta(prev, processedText)
             this.emittedByKey.set(ev.stepKey, processedText)
@@ -405,6 +393,7 @@ export class EventMapper {
         return
       }
       if (ev.stepKind === 'tool' && ev.tool) {
+        this.lastToolStep = ev
         // Only a COMPLETED step becomes a card.
         // agy ≥1.1.15 stream-json emits two envelopes per tool step:
         //  1. state: 'ACTIVE' with name and metadata args only (payload in progress)
@@ -436,6 +425,9 @@ export class EventMapper {
         }
         if (this.announcedTools.has(ev.stepKey)) return
         this.announcedTools.add(ev.stepKey)
+        // agy's question becomes the host's own card at the result: let the span run on
+        // instead of cutting a mirror card that would ask the same thing twice.
+        if (this.opts.supportsAskUser && isAcpAskStep(ev)) return
         if (!this.canCutOnTool()) return // auxiliary calls or unavailable agy_tool mirror: do not emit doomed tool-call
         yield* this.flushBannerOnlyThoughts()
         yield* this.flushPendingEmbed()
@@ -475,7 +467,7 @@ export class EventMapper {
       // tool timed out mid-run or network closed after generation). Keep the answer,
       // surface the error as a reasoning annotation, and finish normally.
       if (ev.response === '') return
-      const respText = this.formatAssistantText(ev.response)
+      const respText = formatAssistantText(ev.response, this.opts.mediaBaseUrl)
       if (!this.sawTextStep) {
         yield* this.ensureBlock('text')
         const d = this.appendDelta(respText)
@@ -488,7 +480,7 @@ export class EventMapper {
       }
     } else if (!this.sawTextStep && ev.response !== '') {
       yield* this.ensureBlock('text')
-      const d = this.appendDelta(this.formatAssistantText(ev.response))
+      const d = this.appendDelta(formatAssistantText(ev.response, this.opts.mediaBaseUrl))
       if (d) yield d
     }
     const close = this.closeOpen()
@@ -500,6 +492,17 @@ export class EventMapper {
       yield { type: 'usage', usage: usageFromRaw(resultUsage) }
     }
 
+    // agy ended on a question: ask it through the host's card and end the turn with
+    // that call; the answer returns as its tool result. A question is never a
+    // finished goal, so it comes before the goal completion.
+    const ask = askSynthesisChunks(this.opts.supportsAskUser, this.lastToolStep, this.blockIdx)
+    if (ask !== null) {
+      for (const ch of ask) yield ch
+      this.blockIdx++
+      yield { type: 'finish', reason: { kind: 'tool-calls' }, ...(ev.conversationId !== '' ? { replayState: { response: { conversationId: ev.conversationId } } } : {}) }
+      this.finished = true
+      return
+    }
     // If running in a DSH goal continuation round and DSH provided the update_goal tool:
     // Emit a synthetic update_goal call to mark the goal complete and prevent infinite loop continuation rounds.
     // Require a resolved goalId so we never emit a guaranteed-failing CAS call against a dummy id.

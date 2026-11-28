@@ -33,7 +33,9 @@ import { ActiveRunTracker, type LiveSessionAccount } from './active-runs.ts'
 import type { RunRecording } from './recording.ts'
 import { defaultEffortFor, findEntry, resolveModelSlug } from './models.ts'
 import { detectSystemProxy } from './wincred.ts'
-import { classifyPlanToolContinuation, isGoalToolContinuation, isPlanMode, resolveGoalContext, resolveHostToolAccess, type HostToolSupport } from './dsh-goal.ts'
+import { classifyPlanToolContinuation, isGoalToolContinuation, isPlanMode, resolveGoalContext } from './dsh-goal.ts'
+import { classifyAskToolContinuation } from './dsh-ask.ts'
+import { resolveBridgeToolSupport } from './host-tools.ts'
 
 import type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
 export type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
@@ -243,7 +245,8 @@ export class AgyAdapter extends LlmAdapter {
     const isTranslateSession = translateSession !== null
     // DSH synthetic lifecycle continuations: short-circuit on goal completion
     // or dismissed plan review; approved/keep-planning must run agy next.
-    if (isGoalToolContinuation(options.messages) || classifyPlanToolContinuation(options.messages) === 'dismissed') {
+    if (isGoalToolContinuation(options.messages) || classifyPlanToolContinuation(options.messages) === 'dismissed'
+      || classifyAskToolContinuation(options.messages) === 'pending') {
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
     }
@@ -256,13 +259,10 @@ export class AgyAdapter extends LlmAdapter {
     // (2026-11-07 incident).
     const liveGoal = sessionKey !== '' && this.deps.sessionGoal ? this.deps.sessionGoal(sessionKey) : undefined
     const goalContext = resolveGoalContext(options.messages, liveGoal)
-    // PTC exposes only run_code directly; the goal tools then live in the tools SDK (issue #233).
-    const goalToolAccess = resolveHostToolAccess('update_goal', options.tools, options.system)
-    const supportsGoalUpdate: HostToolSupport = goalToolAccess === 'unavailable' ? false : goalToolAccess
     const livePlanMode = sessionKey !== '' && this.deps.sessionPlanMode ? this.deps.sessionPlanMode(sessionKey) : undefined
-    const planToolAccess = resolveHostToolAccess('exit_plan_mode', options.tools, options.system)
-    const supportsPlanExit: HostToolSupport = planToolAccess === 'unavailable'
-      || !isPlanMode(options.messages, options.system, livePlanMode) ? false : planToolAccess
+    // Which host tools this hop may call for agy, and how (PTC exposes only run_code
+    // directly — issue #233): the goal completion, the plan exit, the question card.
+    const bridgeTools = resolveBridgeToolSupport(options.tools, options.system, { planActive: isPlanMode(options.messages, options.system, livePlanMode), aux: isAux })
     // Native tool mirroring continuation spans (v0.3): resume live RunRecording without re-running prompt assembly.
     const continuation = detectContinuation(options.messages)
     if (continuation !== null) {
@@ -275,7 +275,7 @@ export class AgyAdapter extends LlmAdapter {
       const deadRevivable = deadFailure !== null && isRevivableFailure(deadFailure.code)
       if (rec !== undefined && !deadNoResult && !deadRevivable && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
         lease?.resume()
-        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
+        yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, bridgeTools, options.signal, undefined, false, sessionKey)
         return
       }
       if (rec !== undefined) {
@@ -296,7 +296,7 @@ export class AgyAdapter extends LlmAdapter {
     }
     // Session ownership: steer preemption + duplicate debounce AFTER prompt assembly.
     const forcedPlan = !isAux && sessionKey !== '' && (this.deps.consumeForcedPlanMode?.(sessionKey) ?? false)
-    const agyPermissionMode = effectivePermissionMode(permissionMode, Boolean(supportsPlanExit) || forcedPlan, isAux)
+    const agyPermissionMode = effectivePermissionMode(permissionMode, Boolean(bridgeTools.planExit) || forcedPlan, isAux)
     const catalog = this.deps.catalog.get()
     const rawModel = options.model
     const model = resolveModelSlug(rawModel)
@@ -445,7 +445,7 @@ export class AgyAdapter extends LlmAdapter {
           )
           this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
           lease?.resume()
-          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
+          yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, bridgeTools, options.signal, undefined, false, sessionKey)
           return
         }
         throw new LlmError(
@@ -589,7 +589,7 @@ export class AgyAdapter extends LlmAdapter {
 
       // First span of the run: stream recorded events until the first
       // completed tool step cuts it (or the result finishes it).
-      yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, compactionNotice, false, sessionKey)
+      yield* driveSpanImpl(this.deps, rec, 0, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, bridgeTools, options.signal, compactionNotice, false, sessionKey)
     } finally {
       if (pendingToken !== undefined) this.activeRuns.clearPending(sessionKey, pendingToken)
     }

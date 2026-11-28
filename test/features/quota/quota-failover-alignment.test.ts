@@ -783,12 +783,12 @@ rl.on('close', () => process.exit(0));
       const rec1 = await runAcpAttempt(acpPool, deps, baseInput('sess-b-1'), slot)
       assert.ok(rec1)
       const span0: StreamChunk[] = []
-      for await (const ch of driveSpan({ runs }, rec1, 0, true, false, undefined, undefined, undefined, undefined, undefined, true, 'sess-b-1')) span0.push(ch)
+      for await (const ch of driveSpan({ runs }, rec1, 0, true, false, undefined, undefined, undefined, undefined, true, 'sess-b-1')) span0.push(ch)
       const finish0 = span0[span0.length - 1] as { type: string; reason: { kind: string } }
       assert.equal(finish0.reason.kind, 'tool-calls')
 
       const span1: StreamChunk[] = []
-      for await (const ch of driveSpan({ runs }, rec1, 3, true, false, undefined, undefined, undefined, undefined, undefined, true, 'sess-b-1')) span1.push(ch)
+      for await (const ch of driveSpan({ runs }, rec1, 3, true, false, undefined, undefined, undefined, undefined, true, 'sess-b-1')) span1.push(ch)
       const finish1 = span1[span1.length - 1] as { type: string; reason: { kind: string; failure?: { code: string } } }
       assert.equal(finish1.reason.kind, 'error')
       assert.equal(finish1.reason.failure?.code, Err.RATE_LIMIT)

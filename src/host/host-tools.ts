@@ -76,23 +76,32 @@ export interface BridgeToolSupport {
   askUser: HostToolSupport
 }
 
-/**
- * Resolve every bridge at once. `planActive` is the caller's: plan mode is a
- * property of the turn (policy, live mode, trailing approval), not of the tool
- * list, so `exit_plan_mode` stays off unless the turn is actually planning.
- */
+/** No bridge at all: auxiliary calls, tests, and spans that must not synthesise. */
+export const NO_BRIDGE_TOOLS: BridgeToolSupport = { goalUpdate: false, planExit: false, askUser: false }
+
+export interface BridgeToolOptions {
+  /** Plan mode is a property of the turn (policy, live mode, trailing approval), not of the tool list. */
+  planActive: boolean
+  /**
+   * An auxiliary call (title, compaction, translation, review) runs out of
+   * sight: it must never park the turn on a question card nobody is looking at.
+   */
+  aux?: boolean
+}
+
+/** Resolve every bridge at once for one hop. */
 export function resolveBridgeToolSupport(
   tools: readonly { name: string }[] | undefined,
   system: string | undefined,
-  planActive: boolean,
+  opts: BridgeToolOptions,
 ): BridgeToolSupport {
   const goalUpdate = resolveHostToolAccess('update_goal', tools, system)
   const planExit = resolveHostToolAccess('exit_plan_mode', tools, system)
   const askUser = resolveHostToolAccess('ask_user_question', tools, system)
   return {
     goalUpdate: goalUpdate === 'unavailable' ? false : goalUpdate,
-    planExit: !planActive || planExit === 'unavailable' ? false : planExit,
-    askUser: askUser === 'unavailable' ? false : askUser,
+    planExit: !opts.planActive || planExit === 'unavailable' ? false : planExit,
+    askUser: opts.aux === true || askUser === 'unavailable' ? false : askUser,
   }
 }
 

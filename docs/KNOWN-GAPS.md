@@ -74,6 +74,16 @@ and pushes its result later as `tool_call_update` / `agent_message_chunk`.
   process starts, with one reinstall-and-retry; and the primary credential is
   re-asserted once a drained secondary process exits. A process that still
   reports the wrong account is refused instead of billing it.
+- **agy's questions are asked through DSH's own card (issue #236).** Over
+  ACP, agy parks an `ask_question` and ends the turn. When `ask_user_question`
+  is reachable — directly, or inside the PTC tools SDK — the bridge synthesises
+  that call instead of mirroring the step, the turn ends on the card, and the
+  answer returns as its tool result: forwarded to agy as the next prompt, which
+  agy resolves as the pending answer. A question the host timed out on, or a
+  call that failed, ends the hop without calling agy — the card stays
+  answerable and a later reply is an ordinary user message. Without the host
+  tool, on auxiliary calls, and always on the `cli` transport (where agy
+  auto-answers `User Skipped`), nothing changes.
 
 ## Credential injection: what agy actually supports (verified 2026-10-17)
 
