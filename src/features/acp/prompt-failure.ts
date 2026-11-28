@@ -50,11 +50,26 @@ export interface PromptFailureInput {
   startedAt: number
 }
 
+/** Join error fragments while dropping exact/substring duplicates already captured. */
+function joinUniqueErrParts(parts: readonly (string | undefined)[]): string {
+  const out: string[] = []
+  let accLower = ''
+  for (const raw of parts) {
+    const text = raw?.trim()
+    if (!text) continue
+    const lower = text.toLowerCase()
+    if (accLower.includes(lower)) continue
+    out.push(text)
+    accLower = accLower ? `${accLower} ${lower}` : lower
+  }
+  return out.join(' ')
+}
+
 /** Turn one thrown prompt error into the attempt outcome the pool understands. */
 export function buildPromptFailure(opts: PromptFailureInput): AcpPromptOutcome {
   const { cfg, deps, input, rec, stderrText: errText, logText, quotaFailover: liveQf } = opts
   const msg = opts.err instanceof Error ? opts.err.message : String(opts.err)
-  const rawErrText = [msg, errText, liveQf?.rawErrorText].filter(Boolean).join(' ').trim()
+  const rawErrText = joinUniqueErrParts([msg, errText, liveQf?.rawErrorText])
   // A quota-triggered kill is not a timeout and not the user aborting: its
   // classification comes from the quota evidence, not from the error text.
   const timedOut = liveQf === null && /timed out/i.test(msg)
@@ -67,7 +82,7 @@ export function buildPromptFailure(opts: PromptFailureInput): AcpPromptOutcome {
     aborted,
     capped: false,
     stdout: '',
-    stderrTail: errText,
+    stderrTail: errText !== '' ? errText : msg.trim(),
     durationMs: Date.now() - opts.startedAt,
   }
   const evidence = {

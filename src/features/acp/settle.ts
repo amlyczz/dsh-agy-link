@@ -16,7 +16,9 @@ import type { acpPromptResultToAgyEvent } from './protocol.ts'
 
 const INVALID_OUTPUT_RE = /model produced invalid output/i
 const AGY_INFRA_BANNER =
-  /(failed to construct executor|plan model not specified|failed to fetch user info|proxyconnect|failed to construct (?:the )?executor)/i
+  /(failed to construct (?:the )?executor|plan model not specified|failed to fetch user info|proxyconnect)/i
+const AGY_TRANSIENT_STATUS_BANNER =
+  /^⚠\uFE0F?\s*(?:UNAUTHENTICATED\s*\(code 401\)|UNAVAILABLE\s*\(code 503\)|DEADLINE_EXCEEDED\s*\(code 504\))/i
 
 /**
  * True when an ACP prompt ended with either an empty thinking-only turn (no
@@ -33,12 +35,12 @@ export function shouldSelfHealAcpResult(
   return resEv.ok && !flags.sawText && flags.sawThinking && resEv.response.trim() === ''
 }
 
-/** Recognise agy's own 1-2 line infrastructure banners sent as end_turn text. */
+/** Recognise agy's own 1-2 line infrastructure or transient upstream status banners sent as end_turn text. */
 export function isAgyFailureBanner(text: string): boolean {
   const body = text.trim()
   if (body === '') return false
   const lines = body.split('\n').filter((l) => l.trim() !== '')
-  return lines.length <= 2 && AGY_INFRA_BANNER.test(body)
+  return lines.length <= 2 && (AGY_INFRA_BANNER.test(body) || AGY_TRANSIENT_STATUS_BANNER.test(body))
 }
 
 export interface AcpPromptOutcome {
