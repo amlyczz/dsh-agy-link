@@ -14,6 +14,7 @@ import { SessionStore } from '../../src/host/sessions.ts'
 import { classifyToolError, RunRegistry } from '../../src/host/recording.ts'
 import { defineAgyMirrorTool } from '../../src/host/mirror-tool.ts'
 import { collect, makeAdapter, msg, opts, runTurn, waitFor, workDir } from '../helpers/adapter-fixtures.ts'
+import { PTC_TOOLS_SDK } from '../helpers/ptc-sdk.ts'
 
 test('ok run mirrors tools natively, streams text, and persists the binding', async () => {
   const { adapter, store, argsFile, runs } = makeAdapter()
@@ -473,4 +474,54 @@ test('chat diagnostics identify disabled settings, deduplicate reordered tools, 
   await stream(['read_ticket'])
   assert.equal(adapter.bridgeDiagnostic, null)
   assert.equal(diagnostics().length, 3)
+})
+
+// issue #233: in DSH's PTC preset `update_goal` is not a direct tool, so the
+// bridge never completed the goal and DSH kept dispatching <goal_round> (73
+// idle rounds observed). The completion now travels through run_code.
+test('issue #233: a goal round in PTC mode completes the goal through run_code, never a direct update_goal', async () => {
+  process.env.FAKE_AGY_MODE = 'ok'
+  // The mirror is off so this single hop reaches the result: with it on, PTC
+  // cuts the span at the first tool step and the completion travels on the
+  // continuation hop — the same code path the direct-mode tests cover.
+  const { adapter } = makeAdapter({}, { sessionGoal: () => ({ goalId: 'goal-live', revision: 5 }), isMirrorToolAvailable: () => false })
+  const messages: Message[] = [
+    {
+      role: 'user',
+      content: [{ type: 'text', text: '<goal_round>\nObjective: "Y"\nRound: 2/4\n</goal_round>' }],
+      source: { kind: 'goal', goalId: 'goal-live', revision: 1, round: 2 },
+    } as unknown as Message,
+  ]
+  const chunks = await collect(
+    adapter.stream(
+      opts(messages, {
+        sessionId: 'sess-ptc-goal' as never,
+        tools: [{ name: 'run_code' }] as never,
+        system: PTC_TOOLS_SDK,
+      }),
+    ),
+  )
+  const blocks = chunks.filter((c) => c.type === 'block-end').map((c) => (c as { block: { name: string; id: string; arguments: string } }).block)
+  assert.equal(blocks.some((b) => b.name === 'update_goal'), false, 'a direct call is rejected by the PTC executor')
+  const wrapped = blocks.find((b) => b.name === 'run_code' && b.id.startsWith('agytc-bridge-goal-'))
+  assert.ok(wrapped, 'the goal completion is wrapped in run_code')
+  const args = JSON.parse(wrapped.arguments) as { code: string }
+  assert.match(args.code, /tools\['update_goal'\]\(\{"goal_id":"goal-live","revision":5,"action":"complete"\}\)/, 'the live revision is used')
+})
+
+test('issue #233: without the tool in the tools SDK, PTC mode still emits nothing for the goal', async () => {
+  process.env.FAKE_AGY_MODE = 'ok'
+  const { adapter } = makeAdapter({}, { sessionGoal: () => ({ goalId: 'goal-live', revision: 5 }), isMirrorToolAvailable: () => false })
+  const messages: Message[] = [
+    {
+      role: 'user',
+      content: [{ type: 'text', text: '<goal_round>\nObjective: "Y"\nRound: 2/4\n</goal_round>' }],
+      source: { kind: 'goal', goalId: 'goal-live', revision: 1, round: 2 },
+    } as unknown as Message,
+  ]
+  const chunks = await collect(
+    adapter.stream(opts(messages, { sessionId: 'sess-ptc-nogoal' as never, tools: [{ name: 'run_code' }] as never, system: 'No goal tools here.' })),
+  )
+  const blocks = chunks.filter((c) => c.type === 'block-end').map((c) => (c as { block: { name: string } }).block)
+  assert.equal(blocks.some((b) => b.name === 'update_goal' || b.name === 'run_code'), false)
 })

@@ -33,7 +33,7 @@ import { ActiveRunTracker, type LiveSessionAccount } from './active-runs.ts'
 import type { RunRecording } from './recording.ts'
 import { defaultEffortFor, findEntry, resolveModelSlug } from './models.ts'
 import { detectSystemProxy } from './wincred.ts'
-import { classifyPlanToolContinuation, isGoalToolContinuation, isPlanMode, resolveGoalContext } from './dsh-goal.ts'
+import { classifyPlanToolContinuation, isGoalToolContinuation, isPlanMode, resolveGoalContext, resolveHostToolAccess, type HostToolSupport } from './dsh-goal.ts'
 
 import type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
 export type { AgyAdapterDeps } from '../provider/adapter-contract.ts'
@@ -256,10 +256,13 @@ export class AgyAdapter extends LlmAdapter {
     // (2026-11-07 incident).
     const liveGoal = sessionKey !== '' && this.deps.sessionGoal ? this.deps.sessionGoal(sessionKey) : undefined
     const goalContext = resolveGoalContext(options.messages, liveGoal)
-    const supportsGoalUpdate = Boolean(options.tools?.some((t) => t.name === 'update_goal'))
+    // PTC exposes only run_code directly; the goal tools then live in the tools SDK (issue #233).
+    const goalToolAccess = resolveHostToolAccess('update_goal', options.tools, options.system)
+    const supportsGoalUpdate: HostToolSupport = goalToolAccess === 'unavailable' ? false : goalToolAccess
     const livePlanMode = sessionKey !== '' && this.deps.sessionPlanMode ? this.deps.sessionPlanMode(sessionKey) : undefined
-    const supportsPlanExit = Boolean(options.tools?.some((t) => t.name === 'exit_plan_mode'))
-      && isPlanMode(options.messages, options.system, livePlanMode)
+    const planToolAccess = resolveHostToolAccess('exit_plan_mode', options.tools, options.system)
+    const supportsPlanExit: HostToolSupport = planToolAccess === 'unavailable'
+      || !isPlanMode(options.messages, options.system, livePlanMode) ? false : planToolAccess
     // Native tool mirroring continuation spans (v0.3): resume live RunRecording without re-running prompt assembly.
     const continuation = detectContinuation(options.messages)
     if (continuation !== null) {
@@ -293,7 +296,7 @@ export class AgyAdapter extends LlmAdapter {
     }
     // Session ownership: steer preemption + duplicate debounce AFTER prompt assembly.
     const forcedPlan = !isAux && sessionKey !== '' && (this.deps.consumeForcedPlanMode?.(sessionKey) ?? false)
-    const agyPermissionMode = effectivePermissionMode(permissionMode, supportsPlanExit || forcedPlan, isAux)
+    const agyPermissionMode = effectivePermissionMode(permissionMode, Boolean(supportsPlanExit) || forcedPlan, isAux)
     const catalog = this.deps.catalog.get()
     const rawModel = options.model
     const model = resolveModelSlug(rawModel)

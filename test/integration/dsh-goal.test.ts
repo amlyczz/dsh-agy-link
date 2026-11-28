@@ -10,8 +10,11 @@ import {
   classifyPlanToolContinuation,
   buildGoalCompleteToolCallBlock,
   buildPlanExitToolCallBlock,
+  resolveHostToolAccess,
+  sdkDeclaresTool,
 } from '../../src/host/dsh-goal.ts'
 import { parseMirrorCallId } from '../../src/host/recording.ts'
+import { PTC_TOOLS_SDK } from '../helpers/ptc-sdk.ts'
 
 test('detectGoalContext extracts goal context from source.kind === "goal"', () => {
   const messages: Message[] = [
@@ -563,4 +566,78 @@ test('plan mode semantics: system policy, live planMode, approved reset, continu
   assert.equal(parseMirrorCallId(idA), null, 'bridge plan callId must not parse as a mirror runId/eventIndex')
   const goalChunks = buildGoalCompleteToolCallBlock({ goalId: 'g1', revision: 1 }, 0) as Array<{ type: string; block?: { id: string } }>
   assert.equal(parseMirrorCallId(goalChunks[1]!.block!.id), null, 'bridge goal callId must not parse as a mirror runId/eventIndex')
+})
+
+// issue #233: in DSH's PTC preset only `run_code` is a direct tool; update_goal
+// and exit_plan_mode exist only inside the generated tools SDK. The bridge
+// tested `options.tools` for them, concluded "unsupported" and never completed
+// the goal — DSH kept dispatching <goal_round> (73 idle rounds observed).
+test('issue #233: a tool is detected in the tools SDK, and only there', () => {
+  assert.equal(sdkDeclaresTool(PTC_TOOLS_SDK, 'update_goal'), true)
+  assert.equal(sdkDeclaresTool(PTC_TOOLS_SDK, 'exit_plan_mode'), true)
+  assert.equal(sdkDeclaresTool(PTC_TOOLS_SDK, 'read-file'), true, 'quoted keys count')
+  // Mentioned in the prose only: not declared.
+  assert.equal(sdkDeclaresTool(PTC_TOOLS_SDK, 'ask_question'), false)
+  assert.equal(sdkDeclaresTool('please call update_goal when done', 'update_goal'), false)
+  assert.equal(sdkDeclaresTool('interface ToolArgsMap {\n  update_goals: {};\n}', 'update_goal'), false, 'a longer name is not a match')
+  assert.equal(sdkDeclaresTool(undefined, 'update_goal'), false)
+})
+
+test('issue #233: host tool access is direct, through run_code, or unavailable', () => {
+  assert.equal(resolveHostToolAccess('update_goal', [{ name: 'update_goal' }], undefined), 'direct')
+  assert.equal(resolveHostToolAccess('update_goal', [{ name: 'run_code' }], PTC_TOOLS_SDK), 'run_code')
+  assert.equal(resolveHostToolAccess('update_goal', [{ name: 'run_code' }], 'no sdk here'), 'unavailable')
+  // With the agy_tool mirror this is code mode, not PTC: nothing gets wrapped.
+  assert.equal(resolveHostToolAccess('update_goal', [{ name: 'run_code' }, { name: 'agy_tool' }], PTC_TOOLS_SDK), 'unavailable')
+  assert.equal(resolveHostToolAccess('update_goal', undefined, undefined), 'unavailable')
+})
+
+test('issue #233: the goal-complete and plan-exit calls are wrapped for run_code, keeping their bridge call ids', () => {
+  const goalDirect = buildGoalCompleteToolCallBlock({ goalId: 'g1', revision: 3 }, 0)
+  assert.equal((goalDirect[1] as { block: { name: string } }).block.name, 'update_goal', 'the default stays the direct call')
+
+  const goal = buildGoalCompleteToolCallBlock({ goalId: 'g1', revision: 3 }, 0, 'run_code')
+  const goalBlock = (goal[1] as { block: { id: string; name: string; arguments: string } }).block
+  assert.equal(goalBlock.name, 'run_code')
+  assert.ok(goalBlock.id.startsWith('agytc-bridge-goal-'), 'the continuation scan keys on this prefix')
+  const goalArgs = JSON.parse(goalBlock.arguments) as { code: string; description: string }
+  assert.match(goalArgs.code, /await tools\['update_goal'\]\(\{"goal_id":"g1","revision":3,"action":"complete"\}\)/)
+  assert.match(goalArgs.code, /console\.log\(JSON\.stringify\(/, 'the result reaches the tool-result text')
+  assert.doesNotMatch(goalArgs.code, /^\s*return\b/m, 'no top-level return (issue #103)')
+  assert.match(goalArgs.description, /update_goal/)
+
+  const plan = buildPlanExitToolCallBlock('# Implementation Plan\n\n1. do it', 0, 'run_code')
+  const planBlock = (plan[1] as { block: { id: string; name: string; arguments: string } }).block
+  assert.equal(planBlock.name, 'run_code')
+  assert.ok(planBlock.id.startsWith('agytc-bridge-plan-'), 'classifyPlanToolContinuation keys on this prefix')
+  const planArgs = JSON.parse(planBlock.arguments) as { code: string }
+  const planText = '# Implementation Plan\n\n1. do it'
+  assert.ok(planArgs.code.includes("await tools['exit_plan_mode'](" + JSON.stringify({ plan: planText }) + ')'), 'the plan travels as the inner call arguments')
+  assert.match(planArgs.code, /console\.log\(JSON\.stringify\(/, '"approved":true/false must land in the tool-result text')
+})
+
+test('issue #233: a new goal round ends the scan for the previous goal\'s completion', () => {
+  const goalRound = (goalId: string, round: number): Message => ({
+    role: 'user',
+    content: [{ type: 'text', text: `<goal_round>\nObjective: "y"\nRound: ${round}/256\n</goal_round>` }],
+    source: { kind: 'goal', goalId, revision: 1, round },
+  }) as unknown as Message
+  const bridgeResult: Message = {
+    role: 'user',
+    content: [{ type: 'tool-result', toolCallId: 'agytc-bridge-goal-g1-1-abc', content: [{ type: 'text', text: '{"ok":true}' }] }],
+    source: { kind: 'tool', callId: 'agytc-bridge-goal-g1-1-abc' },
+  } as unknown as Message
+  const notice: Message = {
+    role: 'user',
+    content: [{ type: 'text', text: '<goal_complete>done</goal_complete>' }],
+    source: { kind: 'tool-goal' },
+  } as unknown as Message
+  const empty = { role: 'assistant', content: [{ type: 'text', text: '' }] } as unknown as Message
+
+  // Still inside the completion hop of goal g1: short-circuit as before.
+  assert.equal(isGoalToolContinuation([goalRound('g1', 2), bridgeResult, notice, empty]), true)
+
+  // A second /goal in the same session, with no chat message in between: its
+  // first round must NOT be read as the tail of g1's completion.
+  assert.equal(isGoalToolContinuation([goalRound('g1', 2), bridgeResult, notice, empty, goalRound('g2', 1)]), false)
 })

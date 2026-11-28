@@ -17,7 +17,7 @@
 import type { LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { isAgyQuotaBannerLine, isNonConsumableResultError, type AgyEvent, type RawUsage } from '../../common/types.ts'
 import { type CompactionNotice, renderCompactionMarker } from '../../common/compaction.ts'
-import { buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock, type GoalContext } from '../../host/dsh-goal.ts'
+import { buildGoalCompleteToolCallBlock, buildPlanExitToolCallBlock, type GoalContext, type HostToolSupport } from '../../host/dsh-goal.ts'
 import { composeThinkingText } from './thoughts.ts'
 import {
   normalizeFileLinks,
@@ -91,9 +91,10 @@ export interface EventMapperOptions {
   /** Active DSH goal context for the current turn, if running under <goal_round>. */
   goalContext?: GoalContext | null
   /** Whether the host provides the `update_goal` tool to mark the goal completed. */
-  supportsGoalUpdate?: boolean
+  /** How `update_goal` can be reached: `false`, `'direct'`, or `'run_code'` under PTC (issue #233). */
+  supportsGoalUpdate?: HostToolSupport
   /** Whether the host provides the `exit_plan_mode` tool for DSH plan mode. */
-  supportsPlanExit?: boolean
+  supportsPlanExit?: HostToolSupport
   /** Compaction notice to emit at the beginning of the turn if history was compacted. */
   compactionNotice?: CompactionNotice
 }
@@ -503,7 +504,7 @@ export class EventMapper {
     // Emit a synthetic update_goal call to mark the goal complete and prevent infinite loop continuation rounds.
     // Require a resolved goalId so we never emit a guaranteed-failing CAS call against a dummy id.
     if (this.opts.supportsGoalUpdate && this.opts.goalContext?.goalId) {
-      for (const ch of buildGoalCompleteToolCallBlock(this.opts.goalContext, this.blockIdx)) yield ch
+      for (const ch of buildGoalCompleteToolCallBlock(this.opts.goalContext, this.blockIdx, this.opts.supportsGoalUpdate === 'run_code' ? 'run_code' : 'direct')) yield ch
       this.blockIdx++
       yield {
         type: 'finish',
@@ -516,7 +517,7 @@ export class EventMapper {
 
     // If running in DSH plan mode and DSH provided the exit_plan_mode tool:
     if (this.opts.supportsPlanExit && this.totalTextOutput.trim() !== '') {
-      for (const ch of buildPlanExitToolCallBlock(this.totalTextOutput, this.blockIdx)) yield ch
+      for (const ch of buildPlanExitToolCallBlock(this.totalTextOutput, this.blockIdx, this.opts.supportsPlanExit === 'run_code' ? 'run_code' : 'direct')) yield ch
       this.blockIdx++
       yield {
         type: 'finish',

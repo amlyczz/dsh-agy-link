@@ -13,7 +13,7 @@ import type { RunRecording, RunRegistry } from '../host/recording.ts'
 import { EventMapper } from '../host/mapper.ts'
 import { readFullToolArgs, readStepThoughts } from '../host/agy-db.ts'
 import { getGitHeadContentAsync, unwrapMcpTool } from '../host/mirror-tool.ts'
-import type { GoalContext } from '../host/dsh-goal.ts'
+import type { GoalContext, HostToolSupport } from '../host/dsh-goal.ts'
 
 /** What the span driver needs from the adapter (nothing more). */
 export interface SpanDeps {
@@ -199,8 +199,8 @@ export async function* driveSpan(
   cutOnTool: boolean,
   useCodeWrapper: boolean,
   goalContext?: GoalContext | null,
-  supportsGoalUpdate?: boolean,
-  supportsPlanExit?: boolean,
+  supportsGoalUpdate?: HostToolSupport,
+  supportsPlanExit?: HostToolSupport,
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
   skipDbEnrichment = false,
@@ -238,8 +238,8 @@ export async function* driveSpanBody(
   cutOnTool: boolean,
   useCodeWrapper: boolean,
   goalContext?: GoalContext | null,
-  supportsGoalUpdate?: boolean,
-  supportsPlanExit?: boolean,
+  supportsGoalUpdate?: HostToolSupport,
+  supportsPlanExit?: HostToolSupport,
   signal?: AbortSignal,
   compactionNotice?: CompactionNotice,
   skipDbEnrichment = false,

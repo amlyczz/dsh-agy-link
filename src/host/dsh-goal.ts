@@ -223,6 +223,13 @@ export function isGoalToolContinuation(messages: readonly Message[]): boolean {
     if (src && typeof src === 'object' && src.kind === 'tool-goal') {
       return true
     }
+    // A `<goal_round>` AFTER the previous completion starts a new goal (a
+    // second /goal with no chat message in between): scanning past it matched
+    // the previous goal's completion and short-circuited the new goal's first
+    // rounds as empty turns (issue #233).
+    if (src && typeof src === 'object' && src.kind === 'goal') {
+      return false
+    }
     const text = textOf(m)
     // Only a user-role message can be DSH's deferred notice; a tool result or an
     // assistant transcript merely *quoting* the marker must not short-circuit.
@@ -236,6 +243,54 @@ export function isGoalToolContinuation(messages: readonly Message[]): boolean {
     }
   }
   return false
+}
+
+/** How a host tool can be reached from a model-facing tool call in this deployment. */
+export type HostToolAccess = 'direct' | 'run_code' | 'unavailable'
+
+/**
+ * What the event mapper receives: `false` when the tool cannot be reached at
+ * all, `true` / `'direct'` for a direct call, `'run_code'` under PTC.
+ */
+export type HostToolSupport = boolean | Exclude<HostToolAccess, 'unavailable'>
+
+/**
+ * True when the PTC tools SDK names `toolName` (issue #233).
+ *
+ * DSH's PTC preset exposes ONE direct tool, `run_code`; everything else is
+ * declared in the TypeScript SDK it renders into the system prompt
+ * (`renderToolsSdk`), where every tool is a key of `interface ToolArgsMap`.
+ * Looking for the key inside that block — and only there — is what keeps a
+ * tool that the prompt merely MENTIONS from counting as available.
+ */
+export function sdkDeclaresTool(system: string | undefined, toolName: string): boolean {
+  if (!system || toolName === '') return false
+  const open = system.indexOf('interface ToolArgsMap {')
+  if (open < 0) return false
+  const end = system.indexOf('\n}', open)
+  const body = end < 0 ? system.slice(open) : system.slice(open, end)
+  const escaped = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^\\s*(?:${escaped}|"${escaped}")\\s*:`, 'm').test(body)
+}
+
+/**
+ * Decide how the bridge may call a host tool.
+ *
+ * `direct` when the tool is in the model-facing list. `run_code` when it is
+ * not, but the list is PTC's (`run_code` without the `agy_tool` mirror) and
+ * the tools SDK declares it: the call then has to travel inside a program.
+ * Otherwise `unavailable` — calling anyway would be rejected by the PTC
+ * executor ("only run_code is callable directly").
+ */
+export function resolveHostToolAccess(
+  toolName: string,
+  tools: readonly { name: string }[] | undefined,
+  system: string | undefined,
+): HostToolAccess {
+  const names = new Set((tools ?? []).map((t) => t.name))
+  if (names.has(toolName)) return 'direct'
+  if (names.has('run_code') && !names.has('agy_tool') && sdkDeclaresTool(system, toolName)) return 'run_code'
+  return 'unavailable'
 }
 
 export type PlanToolContinuation = 'none' | 'dismissed' | 'continue'
@@ -275,9 +330,14 @@ function nextBridgeCallId(prefix: string): ToolCallId {
 /**
  * Build the synthetic `update_goal` tool-call chunk that marks the goal complete on DSH.
  */
-export function buildGoalCompleteToolCallBlock(goalContext: GoalContext, blockIdx: number): StreamChunk[] {
+export function buildGoalCompleteToolCallBlock(
+  goalContext: GoalContext,
+  blockIdx: number,
+  access: Exclude<HostToolAccess, 'unavailable'> = 'direct',
+): StreamChunk[] {
   const goalId = goalContext.goalId || 'active-goal'
   const revision = goalContext.revision ?? 1
+  const args = { goal_id: goalId, revision, action: 'complete' }
   return [
     { type: 'block-start', index: blockIdx, blockType: 'tool-call' },
     {
@@ -285,23 +345,50 @@ export function buildGoalCompleteToolCallBlock(goalContext: GoalContext, blockId
       index: blockIdx,
       block: {
         type: 'tool-call',
+        // The prefix is the continuation scan's key in BOTH shapes.
         id: nextBridgeCallId(`agytc-bridge-goal-${goalId}-${revision}`),
-        name: 'update_goal',
-        arguments: JSON.stringify({
-          goal_id: goalId,
-          revision,
-          action: 'complete',
-        }),
+        ...bridgeCall('update_goal', args, access, `complete goal ${goalId}`),
       },
     },
   ]
 }
 
 /**
+ * Shape of a bridge-emitted host tool call: the direct call, or a `run_code`
+ * program that makes it from inside the tools SDK (issue #233).
+ *
+ * The program logs the call's JSON result instead of returning it: no
+ * top-level `return` (a `vm-script` / `repl` host rejects it, issue #103), and
+ * the result lands in the tool-result text, which is where the plan
+ * continuation reads `"approved": true|false` from.
+ */
+function bridgeCall(
+  toolName: string,
+  args: Record<string, unknown>,
+  access: Exclude<HostToolAccess, 'unavailable'>,
+  purpose: string,
+): { name: string; arguments: string } {
+  if (access === 'direct') return { name: toolName, arguments: JSON.stringify(args) }
+  return {
+    name: 'run_code',
+    arguments: JSON.stringify({
+      code:
+        `// dsh-agy-link bridge: ${purpose} through the tools SDK (only run_code is callable directly)\n`
+        + `console.log(JSON.stringify(await tools['${toolName}'](${JSON.stringify(args)})))`,
+      description: `${purpose} · ${toolName}`,
+    }),
+  }
+}
+
+/**
  * Build the synthetic `exit_plan_mode` tool-call chunk that presents the generated plan to DSH.
  * DSH's `exit_plan_mode` requires markdown starting with a `#` heading (`/^#\s+\S/`).
  */
-export function buildPlanExitToolCallBlock(planMarkdown: string, blockIdx: number): StreamChunk[] {
+export function buildPlanExitToolCallBlock(
+  planMarkdown: string,
+  blockIdx: number,
+  access: Exclude<HostToolAccess, 'unavailable'> = 'direct',
+): StreamChunk[] {
   const trimmed = planMarkdown.trim()
   const plan = trimmed === ''
     ? '# Plan Completed\n\nPlan generated and ready for review.'
@@ -316,8 +403,7 @@ export function buildPlanExitToolCallBlock(planMarkdown: string, blockIdx: numbe
       block: {
         type: 'tool-call',
         id: nextBridgeCallId('agytc-bridge-plan'),
-        name: 'exit_plan_mode',
-        arguments: JSON.stringify({ plan }),
+        ...bridgeCall('exit_plan_mode', { plan }, access, 'present the plan for review'),
       },
     },
   ]
