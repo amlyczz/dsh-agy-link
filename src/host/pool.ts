@@ -27,6 +27,7 @@ import { PoolAdmin } from '../domain/accounts/admin.ts'
 import { earliestAvailableCountdown, earliestResetCountdown, sweepOldAgyLogs } from '../domain/accounts/countdown.ts'
 import { PoolStore } from '../domain/accounts/store.ts'
 import { reconcileCooldownsFromQuota } from '../domain/accounts/cooldown-reconcile.ts'
+import { freshlyExhaustedFamilies } from '../domain/accounts/quota-exhaustion.ts'
 import {
   LOW_QUOTA_5H,
   LOW_QUOTA_WEEKLY,
@@ -395,31 +396,19 @@ export class AccountPoolManager {
     const healed = resolveAccountPlanTier(acc)
     if (healed !== undefined && acc.planTier !== healed) acc.planTier = healed
 
-    // Reconcile superseded cooldowns and proactively advance exhausted families.
+    // Reconcile superseded cooldowns and proactively advance exhausted families
+    // (a snapshot the user already overrode never rotates the pool).
     const now = Date.now()
     reconcileCooldownsFromQuota(acc, prevQuotas, quotas, now)
-    for (const [famKey, info] of Object.entries(quotas) as [ModelFamily, FamilyQuotaInfo][]) {
-      if (!info) continue
-      const isExhausted5h = typeof info.remainingFraction === 'number' && info.remainingFraction <= LOW_QUOTA_5H &&
-        (!info.resetTime || Number.isNaN(Date.parse(info.resetTime)) || Date.parse(info.resetTime) > now)
-      const isExhaustedWeekly = typeof info.weeklyFraction === 'number' && info.weeklyFraction <= LOW_QUOTA_WEEKLY &&
-        (!info.weeklyResetTime || Number.isNaN(Date.parse(info.weeklyResetTime)) || Date.parse(info.weeklyResetTime) > now)
-      if (isExhausted5h || isExhaustedWeekly) {
-        // A snapshot the user already overrode must not rotate the pool: the
-        // override is only meant to bridge the gap until fresher data arrives.
-        const clearedAt = acc.quotaGateClearedAt?.[famKey]
-        const gateCleared = clearedAt !== undefined && (info.updatedAt ?? 0) <= clearedAt
-        const famPinned = this.data.activeAccountIds?.[famKey]
-        const ownsFamily = famPinned === id || (famPinned === undefined && this.data.lastActiveAccountId === id)
-        if (!gateCleared && ownsFamily) {
-          this.advanceAccount(id, famKey)
-        }
-        // Folded/shared Argon pool rides the Gemini bucket when no dedicated argon row exists.
-        const argonPinned = this.data.activeAccountIds?.argon
-        const ownsArgon = argonPinned === id || (argonPinned === undefined && this.data.lastActiveAccountId === id)
-        if (!gateCleared && famKey === 'google' && argonSharesGoogleGroup(acc) && ownsArgon) {
-          this.advanceAccount(id, 'argon')
-        }
+    for (const famKey of freshlyExhaustedFamilies(acc, quotas, now)) {
+      const famPinned = this.data.activeAccountIds?.[famKey]
+      if (famPinned === id || (famPinned === undefined && this.data.lastActiveAccountId === id)) {
+        this.advanceAccount(id, famKey)
+      }
+      // Folded/shared Argon pool rides the Gemini bucket when no dedicated argon row exists.
+      const argonPinned = this.data.activeAccountIds?.argon
+      if (famKey === 'google' && argonSharesGoogleGroup(acc) && (argonPinned === id || (argonPinned === undefined && this.data.lastActiveAccountId === id))) {
+        this.advanceAccount(id, 'argon')
       }
     }
 
