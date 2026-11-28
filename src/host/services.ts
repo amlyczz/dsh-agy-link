@@ -301,12 +301,11 @@ export function createHostServices(ctx: Context, entryConfig: Record<string, unk
 
   pool.setCatalog(catalog)
   pool.onAccountSwitch = (newActiveId: string) => {
-    if (process.platform === 'win32' && !supportsSshIsolation(version())) {
-      acpPool.evictOtherAccounts(newActiveId)
-    }
+    if (process.platform === 'win32' && !supportsSshIsolation(version())) acpPool.evictOtherAccounts(newActiveId)
     notifyPicker()
     void catalog.forceRefreshAndNotify(newActiveId).catch(() => undefined)
   }
+  pool.onAccountRemoved = (removedId: string) => { acpPool.evictAccount(removedId, true) }
 
   const bridgeSteps = new BridgeSteps()
   const bridgeState: BridgeRegistryState = { bridge: null, restores: [], log }

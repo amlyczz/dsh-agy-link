@@ -74,6 +74,8 @@ export class AccountPoolManager {
   recoveredFromLastGood = false
   /** Callback fired whenever the active/primary account changes. */
   onAccountSwitch?: (accountId: string, family?: ModelFamily) => void
+  /** Callback fired whenever an account is deleted from the pool. */
+  onAccountRemoved?: (accountId: string) => void
 
   setCatalog(catalog: {
     get(accountId?: string): { models?: readonly { id: string }[]; source?: string }
@@ -204,8 +206,9 @@ export class AccountPoolManager {
   deleteAccount(id: string): boolean {
     const wasActive = this.data.activeAccountIds?.google === id || this.data.lastActiveAccountId === id
     const ok = this.admin.deleteAccount(id)
-    if (ok && wasActive) {
-      const next = this.data.accounts.find((a) => a.enabled && !a.authRequired)?.id
+    if (ok) {
+      this.onAccountRemoved?.(id)
+      const next = wasActive ? this.data.accounts.find((a) => a.enabled && !a.authRequired)?.id : undefined
       if (next) this.onAccountSwitch?.(next)
     }
     return ok

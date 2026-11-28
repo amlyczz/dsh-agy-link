@@ -17,6 +17,8 @@ import { logSize, readLogSlice } from '../../host/agy-log.ts'
 import type { RunRecording } from '../../host/recording.ts'
 import { ensureIsolatedKeychain } from '../../host/runner.ts'
 import { resolveModelSlug } from '../../host/models.ts'
+import { readAccountCredential } from '../../domain/credentials/backup.ts'
+import { accountTokenFilePath } from '../../domain/credentials/docs.ts'
 
 import { supportsSshIsolation } from '../../runtime/agy/env.ts'
 import { accountHome, buildAgyEnv } from '../../runtime/net/account-env.ts'
@@ -372,7 +374,10 @@ export async function runAcpAttempt(
     return settleEarlyAbort(deps, input, slot, input.binding?.conversationId ?? null, 'request aborted before ACP session opened')
   }
 
-  if (account && account.dir) ensureIsolatedKeychain(account.dir)
+  if (account && account.dir) {
+    ensureIsolatedKeychain(account.dir)
+    if (!account.systemHome) readAccountCredential(accountTokenFilePath(account, account.dir), deps.log)
+  }
   const env = buildAgyEnv({
     ...(account === undefined ? {} : { account }),
     cfg,

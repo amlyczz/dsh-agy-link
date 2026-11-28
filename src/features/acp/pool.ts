@@ -343,10 +343,29 @@ export class AcpSessionPool {
     return this.evictMatching((k) => !k.startsWith(prefix), 'account-switch')
   }
 
-  /** Evict cached ACP processes belonging to a specific account (e.g. after re-auth). */
-  evictAccount(accountId?: string): number {
+  /**
+   * Evict cached ACP processes belonging to a specific account (e.g. after
+   * re-auth or deletion). With `force = true`, both live (including retained)
+   * and already-draining processes are closed immediately.
+   */
+  evictAccount(accountId?: string, force = false): number {
     const prefix = `${accountId || 'primary'}|`
-    return this.evictMatching((k) => k.startsWith(prefix), 'reauth')
+    if (!force) return this.evictMatching((k) => k.startsWith(prefix), 'reauth')
+    let evicted = 0
+    for (const [k, p] of [...this.procs.entries()]) {
+      if (!k.startsWith(prefix)) continue
+      this.procs.delete(k)
+      this.closeProc(p, true)
+      evicted++
+    }
+    for (const [id, entry] of [...this.draining.entries()]) {
+      if (!entry.key.startsWith(prefix)) continue
+      this.draining.delete(id)
+      this.closeProc(entry.proc, true)
+      evicted++
+    }
+    this.stopSweepTimerIfEmpty()
+    return evicted
   }
 
   /**
