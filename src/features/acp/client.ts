@@ -214,7 +214,8 @@ export class AcpProcess extends EventEmitter {
       this.appendStderr(errDec.flush())
       this.alive = false
       this.child = null
-      const err = new Error(`agy acp exited (code=${String(code)}, signal=${String(sig)}): ${this.stderr.slice(-240)}`)
+      const tail = this.stderr.slice(-240).trim()
+      const err = new Error(`agy acp exited (code=${String(code)}, signal=${String(sig)})${tail !== '' ? `: ${tail}` : ''}`)
       for (const [, p] of this.pending) {
         if (p.timer) clearTimeout(p.timer)
         p.reject(err)

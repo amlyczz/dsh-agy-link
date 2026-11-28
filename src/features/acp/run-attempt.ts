@@ -78,6 +78,7 @@ async function runAcpPrompt(opts: {
   let sawText = false
   let sawThinking = false
   let sawTools = false
+  let trailingFailureBanner: string | null = null
   const stderrOffset = proc.stderrOffset()
   const logFile = proc.logFilePath
   const logOffset = logSize(logFile)
@@ -202,9 +203,13 @@ async function runAcpPrompt(opts: {
           // instrument.ts).
           wiring.noteUpdate(update)
           for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
+            const isBannerChunk = ev.kind === 'step' && ev.stepKind === 'text' && isAgyFailureBanner(ev.text)
+            if (isBannerChunk) trailingFailureBanner = ev.text.trim()
+            else if (ev.kind !== 'init') trailingFailureBanner = null
             if (
               !sawRealOutput &&
               ev.kind !== 'init' &&
+              !isBannerChunk &&
               !isAgyFailureBanner(streamState.accumulatedText) &&
               extractAgyQuotaBanner(streamState.accumulatedText) === undefined
             ) {
@@ -213,13 +218,15 @@ async function runAcpPrompt(opts: {
             }
             emittedAny = true
             if (ev.kind === 'step') {
-              if (ev.stepKind === 'text' && ev.text.trim() !== '') sawText = true
+              if (ev.stepKind === 'text' && ev.text.trim() !== '' && !isBannerChunk) sawText = true
               else if (ev.stepKind === 'thinking' && ev.text.trim() !== '') sawThinking = true
               else if (ev.stepKind === 'tool') sawTools = true
             }
-            recorder.rec.append(ev)
-            bgWait?.noteEvent(ev)
-            wiring.noteStep(ev, update)
+            if (!isBannerChunk) {
+              recorder.rec.append(ev)
+              bgWait?.noteEvent(ev)
+              wiring.noteStep(ev, update)
+            }
             input.agyOnEvent?.(ev)
             reportDirectToolQuota(quotaCtrl, ev)
           }
@@ -250,6 +257,7 @@ async function runAcpPrompt(opts: {
       selfHealed = true
       deps.log?.(`acp self-heal: retrying empty/invalid model output on same session ${sid}`)
       streamState.accumulatedText = ''
+      trailingFailureBanner = null
       result = await runOnePrompt('Continue and provide your response.', false)
       subTracker?.flush()
       flushTranscriptUsage()
@@ -280,6 +288,9 @@ async function runAcpPrompt(opts: {
     }
     if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
       throw new Error(resEv.error ?? 'ACP prompt returned error without response')
+    }
+    if (sawRealOutput && trailingFailureBanner !== null) {
+      throw new Error(`ACP prompt ended with upstream error banner: ${firstLine(trailingFailureBanner)}`)
     }
     recorder.rec.append(resEv)
     input.agyOnEvent?.(resEv)
