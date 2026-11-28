@@ -14,9 +14,11 @@ import test from 'node:test'
 import {
   Err,
   isAuthoritativeAuthError,
+  isTransportFailure,
   looksLikeAuthFailure,
   looksLikeAuthVerificationJitter,
   looksLikeNetworkError,
+  shouldMarkAuthRequired,
 } from '../../src/common/types.ts'
 import { AUTH_CONFIRM_STRIKES } from '../../src/common/pool-types.ts'
 import { AccountPoolManager } from '../../src/host/pool.ts'
@@ -52,6 +54,14 @@ test('looksLikeAuthVerificationJitter: keyring timeout / userinfo transport fail
 test('looksLikeAuthVerificationJitter: genuine sign-out log (no keyring activity) is NOT jitter', () => {
   assert.equal(looksLikeAuthVerificationJitter(SIGNOUT_LOG), false)
   assert.equal(looksLikeAuthVerificationJitter(''), false)
+})
+
+test('isTransportFailure: genuine sign-out with bare "silent auth failed" is AUTH, not NETWORK', () => {
+  const banner = 'Authentication required. Please visit the URL to log in:'
+  assert.equal(looksLikeNetworkError('Print mode: silent auth failed'), false)
+  assert.equal(isTransportFailure({ rawErrText: banner, runLogText: SIGNOUT_LOG }), false)
+  assert.equal(isTransportFailure({ rawErrText: banner, runLogText: JITTER_LOG }), true)
+  assert.equal(shouldMarkAuthRequired('AUTH', 'Print mode: silent auth failed'), true)
 })
 
 test('looksLikeAuthVerificationJitter: an authoritative token error always wins over jitter', () => {
