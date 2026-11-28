@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { defaultConfig, Err } from '../../../src/common/types.ts'
 import { AcpProcess, AcpSessionPool, runAcpAttempt } from '../../../src/features/acp/index.ts'
-import { isAgyFailureBanner } from '../../../src/features/acp/settle.ts'
+import { failureBannerAfter, isAgyFailureBanner } from '../../../src/features/acp/settle.ts'
 import { buildPromptFailure } from '../../../src/features/acp/prompt-failure.ts'
 import { RunRecording, RunRegistry } from '../../../src/host/recording.ts'
 import { SessionStore } from '../../../src/host/sessions.ts'
@@ -205,6 +205,51 @@ test('trailing 401/503/504 banner after tool calls fails cleanly without leaking
       rmSync(dir, { recursive: true, force: true })
     }
   }
+})
+
+test('a transient banner split across two chunks is one banner, never a green reply', async () => {
+  // agy may stream the banner in pieces; the second piece alone is plain prose
+  // and used to settle the turn green with "…currently unavailable." as the reply.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-acp-banner-split-'))
+  try {
+    const store = new SessionStore(join(dir, 'sessions.json'))
+    const logs: string[] = []
+    let proc!: AcpProcess & { closed: boolean }
+    const pool = new AcpSessionPool({
+      bin: () => 'agy',
+      cfg: () => defaultConfig(),
+      createProcess: () => {
+        proc = makeFakeProc([
+          { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ UNAVAILABLE (code 503): The service is' } },
+          { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: ' currently unavailable.' } },
+        ])
+        return proc
+      },
+    })
+    try {
+      const rec = await runAcpAttempt(pool, makeDeps(store, { log: (m) => logs.push(m) }), makeInput(dir), makeSlot())
+      assert.equal(rec, null, 'a split banner-only turn must fall back to CLI')
+      assert.equal(proc.closed, true, 'the broken ACP process must be discarded')
+    } finally {
+      pool.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('failureBannerAfter: a chunk starts a banner, continues one, or is not banner text', () => {
+  const head = '⚠ UNAVAILABLE (code 503): The service is'
+  assert.equal(failureBannerAfter(null, head), head)
+  // Continuation: the whole is still at most two lines starting with the status glyph.
+  assert.equal(failureBannerAfter(head, ' currently unavailable.'), head + '\ncurrently unavailable.')
+  // Within one turn text after an upstream error is part of that error, but a
+  // banner is never more than two lines: a third piece is not absorbed.
+  assert.equal(failureBannerAfter(head + '\nline two.', ' a third line'), null)
+  // Prose that merely mentions the status is not a banner.
+  assert.equal(failureBannerAfter(null, 'The proxy returned UNAVAILABLE (code 503) upstream; retrying.'), null)
+  // Plain prose with no banner before it is not a banner.
+  assert.equal(failureBannerAfter(null, 'All good, here is the summary.'), null)
 })
 
 test('buildPromptFailure preserves empty-stderr exit cause and deduplicates repeated error fragments', () => {

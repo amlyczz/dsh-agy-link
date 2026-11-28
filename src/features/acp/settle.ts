@@ -43,6 +43,49 @@ export function isAgyFailureBanner(text: string): boolean {
   return lines.length <= 2 && (AGY_INFRA_BANNER.test(body) || AGY_TRANSIENT_STATUS_BANNER.test(body))
 }
 
+/**
+ * The trailing banner after one more text chunk, or null when the chunk is not
+ * banner text. A chunk starts a banner when it is one by itself; it CONTINUES a
+ * pending one when the two together are still a single banner — at most two
+ * lines, status glyph first — so a banner agy streams in pieces never has its
+ * tail mistaken for a reply. Within one prompt, text that follows an upstream
+ * error is part of that error.
+ */
+export function failureBannerAfter(previous: string | null, chunk: string): string | null {
+  const text = chunk.trim()
+  if (isAgyFailureBanner(text)) return text
+  if (previous !== null && isAgyFailureBanner(`${previous}\n${text}`)) return `${previous}\n${text}`
+  return null
+}
+
+/**
+ * Whether the stream currently ENDS on a failure banner. Any event that is not
+ * banner text clears it, so only a banner left dangling at the very end counts:
+ * a real reply that merely quotes one earlier in the turn is untouched.
+ */
+export class TrailingBannerTracker {
+  private banner: string | null = null
+  /** Record one event; true when it is (a continuation of) the trailing banner. */
+  note(ev: { kind: string; stepKind?: string; text?: string }): boolean {
+    if (ev.kind === 'step' && ev.stepKind === 'text') {
+      const next = failureBannerAfter(this.banner, ev.text ?? '')
+      if (next !== null) {
+        this.banner = next
+        return true
+      }
+    }
+    if (ev.kind !== 'init') this.banner = null
+    return false
+  }
+  /** The banner the stream ends on, or null. */
+  get current(): string | null {
+    return this.banner
+  }
+  reset(): void {
+    this.banner = null
+  }
+}
+
 export interface AcpPromptOutcome {
   failure: AttemptFailure | null
   durationMs: number

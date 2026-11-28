@@ -50,6 +50,7 @@ import {
   settleIdentityFailure,
   shouldSelfHealAcpResult,
   type AcpPromptOutcome,
+  TrailingBannerTracker,
 } from './settle.ts'
 export { isAgyFailureBanner, shouldSelfHealAcpResult } from './settle.ts'
 import { AcpTranscriptUsageTailer } from './transcript-usage.ts'
@@ -80,7 +81,7 @@ async function runAcpPrompt(opts: {
   let sawText = false
   let sawThinking = false
   let sawTools = false
-  let trailingFailureBanner: string | null = null
+  const banners = new TrailingBannerTracker()
   const stderrOffset = proc.stderrOffset()
   const logFile = proc.logFilePath
   const logOffset = logSize(logFile)
@@ -205,9 +206,7 @@ async function runAcpPrompt(opts: {
           // instrument.ts).
           wiring.noteUpdate(update)
           for (const ev of acpUpdateToAgyEvents(sid, update, streamState)) {
-            const isBannerChunk = ev.kind === 'step' && ev.stepKind === 'text' && isAgyFailureBanner(ev.text)
-            if (isBannerChunk) trailingFailureBanner = ev.text.trim()
-            else if (ev.kind !== 'init') trailingFailureBanner = null
+            const isBannerChunk = banners.note(ev)
             if (
               !sawRealOutput &&
               ev.kind !== 'init' &&
@@ -259,7 +258,7 @@ async function runAcpPrompt(opts: {
       selfHealed = true
       deps.log?.(`acp self-heal: retrying empty/invalid model output on same session ${sid}`)
       streamState.accumulatedText = ''
-      trailingFailureBanner = null
+      banners.reset()
       result = await runOnePrompt('Continue and provide your response.', false)
       subTracker?.flush()
       flushTranscriptUsage()
@@ -291,8 +290,9 @@ async function runAcpPrompt(opts: {
     if (resEv.kind === 'result' && !resEv.ok && (resEv.response === '' || isNonConsumableResultError(resEv.ok, resEv.error, resEv.response))) {
       throw new Error(resEv.error ?? 'ACP prompt returned error without response')
     }
-    if (sawRealOutput && trailingFailureBanner !== null) {
-      throw new Error(`ACP prompt ended with upstream error banner: ${firstLine(trailingFailureBanner)}`)
+    const danglingBanner = banners.current
+    if (sawRealOutput && danglingBanner !== null) {
+      throw new Error(`ACP prompt ended with upstream error banner: ${firstLine(danglingBanner)}`)
     }
     recorder.rec.append(resEv)
     input.agyOnEvent?.(resEv)
